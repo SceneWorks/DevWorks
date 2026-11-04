@@ -193,7 +193,7 @@ fn version(
 fn versions(conn: &Connection, pkg: &str) -> Result<Vec<StoredPackageVersion>, StorageError> {
     let rows: Vec<VersionRaw> = db(conn
         .prepare_cached(&format!(
-            "SELECT {VERSION} FROM package_versions WHERE package_id=?1 ORDER BY created_at, manifest_digest LIMIT 512"
+            "SELECT * FROM (SELECT {VERSION} FROM package_versions WHERE package_id=?1 ORDER BY created_at DESC, manifest_digest DESC LIMIT 512) ORDER BY created_at, manifest_digest"
         ))
         .and_then(|mut s| s.query_map([pkg], version_row)?.collect()))?;
     rows.into_iter().map(version_of).collect()

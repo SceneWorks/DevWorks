@@ -223,7 +223,7 @@ impl Registry<'_> {
         if let Some(f) = p
             .failure
             .as_ref()
-            .filter(|f| f["digest"].as_str() == Some(v.manifest_digest.as_str()))
+            .filter(|f| failure_applies(f, p, &v.manifest_digest))
         {
             return (
                 PackageAvailability::Failed,
@@ -391,6 +391,19 @@ pub fn auto_update(
         ));
     }
     Ok(())
+}
+
+/// Whether a failure record marks `digest` failed as `p` stands now: it names that version and,
+/// when it records them, the configuration revision and state generation it failed under (a
+/// new configuration or generation is a new instance, with a new budget).
+pub fn failure_applies(f: &Value, p: &StoredPackage, digest: &str) -> bool {
+    f["digest"].as_str() == Some(digest)
+        && f["configRevision"]
+            .as_i64()
+            .is_none_or(|c| c == p.config_revision)
+        && f["stateGeneration"]
+            .as_i64()
+            .is_none_or(|g| g == p.state_generation)
 }
 
 /// Whether activating `next` as `package_id`'s active version would regress anything that runs

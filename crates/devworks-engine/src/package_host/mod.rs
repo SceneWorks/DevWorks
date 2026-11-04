@@ -201,6 +201,10 @@ impl Instance {
             .unwrap_or_else(|p| p.into_inner())
             .clone()
     }
+    /// Whether it admits work: ready, with its protocol session still open.
+    fn serving(&self) -> bool {
+        self.status() == InstanceStatus::Ready && self.session().is_some_and(|s| !s.is_closed())
+    }
     /// The instance's full identity for the service's host seams.
     fn helper_key(&self) -> HelperKey {
         HelperKey {
@@ -602,6 +606,13 @@ impl PackageHost {
             .filter(|i| i.status() != InstanceStatus::Stopped)
             .map(|i| (i.package_id.clone(), i.key.digest.clone()))
             .collect()
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.barriers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .stopping
     }
 
     /// The instances of a package (current and retiring), for inspection.
@@ -1067,6 +1078,12 @@ impl PackageHost {
             .push(("DEVWORKS_PACKAGE_SESSION".into(), session_id.clone()));
         spec.capture_output = true;
         spec.pipe_stdin = true;
+        // Never launched once shutdown (or abandon) began: it may already have taken its
+        // snapshot of the instances to stop.
+        if self.is_stopping() {
+            inst.set(InstanceStatus::Stopped);
+            return;
+        }
         let ctx = self.host_ctx();
         let policy = LaunchPolicy {
             fs: &*self.launch.fs,
@@ -1098,7 +1115,25 @@ impl PackageHost {
             self.supervisor.take_input(&owned),
             self.supervisor.take_output(&owned),
         );
-        *inst.process.lock().unwrap_or_else(|p| p.into_inner()) = Some(owned);
+        // Registered under the barrier lock shutdown sets `stopping` under: either shutdown's
+        // snapshot sees this process, or the launch completed after stopping began and its tree
+        // is killed here.
+        let registered = {
+            let b = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+            if b.stopping {
+                false
+            } else {
+                *inst.process.lock().unwrap_or_else(|p| p.into_inner()) = Some(owned.clone());
+                true
+            }
+        };
+        if !registered {
+            let _ = self
+                .supervisor
+                .cancel(&owned, Duration::ZERO, Duration::from_millis(500));
+            inst.set(InstanceStatus::Stopped);
+            return;
+        }
         let (Some(stdin), Some((stdout, stderr))) = streams else {
             self.start_failed(
                 inst,
@@ -1439,9 +1474,9 @@ impl PackageHost {
                         .unwrap_or_else(|p| p.into_inner())
                         .get(&req.package_id)
                         .and_then(|v| {
-                            // A ready instance of the key first; a failed one only when no other.
+                            // A serving instance of the key first; a failed one only when no other.
                             v.iter()
-                                .find(|i| i.key == key && i.status() == InstanceStatus::Ready)
+                                .find(|i| i.key == key && i.serving())
                                 .or_else(|| {
                                     v.iter().find(|i| {
                                         i.key == key
@@ -1458,10 +1493,13 @@ impl PackageHost {
                             continue;
                         }
                         Some(inst)
-                            if inst.status() == InstanceStatus::Ready
+                            if inst.serving()
                                 && inst.in_flight.load(Ordering::SeqCst)
                                     >= self.concurrency(&inst) => {}
-                        Some(inst) if inst.status() == InstanceStatus::Ready => {
+                        // A ready instance whose session already closed (its process just ended
+                        // and the watcher has not recorded it yet) is not admitted to: the
+                        // admission waits for its restart like for any instance not yet ready.
+                        Some(inst) if inst.serving() => {
                             if !inst
                                 .inspection
                                 .contributions

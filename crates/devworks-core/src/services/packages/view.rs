@@ -1,8 +1,10 @@
 //! Wire records of the package registry: `PackageRecord` (with the revision-2 availability,
 //! prerequisite, access, pending and rollback members), `ProposalRecord`, the catalog page and the
 //! package log page.
+use super::COMPONENT;
+#[cfg(doc)]
+use super::MAX_PACKAGES;
 use super::policy::{self, Registry};
-use super::{COMPONENT, MAX_PACKAGES};
 use crate::context::InvocationContext;
 use crate::operations::addons as ops;
 use crate::ports::packages::{HostPlatform, Inspection, RuntimeProbe};
@@ -26,7 +28,8 @@ use std::collections::BTreeMap;
 /// Every package with its active version.
 pub type RegistryView = BTreeMap<String, (StoredPackage, Option<StoredPackageVersion>)>;
 
-/// Loads the whole registry (bounded by [`MAX_PACKAGES`]).
+/// Loads the whole registry. Its size is bounded on admission ([`MAX_PACKAGES`] identities, a
+/// new one beyond it is refused), never by cutting the view short.
 pub fn load(read: &dyn PackageRegistryRead) -> Result<RegistryView, StorageError> {
     let mut out = RegistryView::new();
     let mut after: Option<String> = None;
@@ -40,9 +43,6 @@ pub fn load(read: &dyn PackageRegistryRead) -> Result<RegistryView, StorageError
                 None => None,
             };
             out.insert(p.package_id.clone(), (p, active));
-            if out.len() >= MAX_PACKAGES {
-                return Ok(out);
-            }
         }
         if done {
             return Ok(out);
@@ -233,10 +233,7 @@ pub fn package_record(
             .and_then(|v| v.signer_key.as_ref())
             .map(|k| label(k, "-")),
         // Only the active version's failure (another version's record guards rollback).
-        failure_code: p
-            .active_digest
-            .as_deref()
-            .and_then(|d| super::failure_of(p, d))
+        failure_code: super::active_failure(p)
             .and_then(|f| f["code"].as_str())
             .map(|c| label(c, "Failed")),
         available: None,

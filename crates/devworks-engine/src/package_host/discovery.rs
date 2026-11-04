@@ -182,6 +182,10 @@ impl PackageHost {
         spec.clear_env = true;
         spec.env = env;
         spec.capture_output = true;
+        // No probe is launched once shutdown began (its snapshot of owned trees may be taken).
+        if self.is_stopping() {
+            return RuntimeObservation::Missing("the host is stopping".into());
+        }
         let ctx = self.host_ctx();
         let policy = LaunchPolicy {
             fs: &*self.launch.fs,

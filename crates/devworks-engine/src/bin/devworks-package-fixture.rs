@@ -8,7 +8,8 @@
 //! * `mode`: `normal`, `hang-initialize` (never answers), `wrong-digest`, `wrong-inventory`,
 //!   `exit-on-activate` (exits 3), `exit-after-ready` (exits 4 shortly after activation) or
 //!   `deaf-after-ready` (stops reading its input after activation, without exiting) or
-//!   `slow-handshake` (answers `host.initialize` and `host.activate` after 1 s each);
+//!   `slow-handshake` (answers `host.initialize` and `host.activate` after 1 s each) or
+//!   `slow-initialize` (answers `host.initialize` after 1.2 s);
 //! * `inventory`: the contribution IDs it reports.
 //!
 //! On `host.shutdown` it writes the deadline it was given to
@@ -25,7 +26,10 @@
 //! broker.state compare-and-set and an HTTP broker.call, then broker.commit_event with the
 //! commit read from `devworks-fixture-<package>-commit.json` in the temporary directory),
 //! `config` (reports the configuration `host.activate` delivered as progress `config:<json>`,
-//! or `config:none`) and `crash` (exits 5 mid-invocation).
+//! or `config:none`), `late-state` (reads its state, answers the invocation, then tries a
+//! compare-and-set under the finished invocation's token and writes the answer's class to
+//! `devworks-fixture-<package>-late-state` in the temporary directory) and `crash` (exits 5
+//! mid-invocation).
 use devworks_extension_protocol::frame::{MAX_FRAME_BYTES, read_frame, write_frame};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -131,6 +135,29 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
         "stubborn" => {
             let _ = cancel.recv();
             std::thread::sleep(Duration::from_secs(3600));
+        }
+        "late-state" => {
+            let base = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"],
+                "invocationToken": inv["invocationToken"], "stateGeneration": inv["stateGeneration"]});
+            let mut read = base.clone();
+            read["actionKey"] = json!("read-1");
+            read["action"] = json!({"kind": "Read"});
+            let snap = st.call("broker.state", read);
+            finished(
+                &st,
+                &id,
+                &inv,
+                json!({"kind": "Completed", "artifacts": []}),
+            );
+            let mut cas = base;
+            cas["actionKey"] = json!("cas-late");
+            cas["action"] = json!({"kind": "CompareAndSet",
+                "expectedRevision": snap["result"]["revision"].as_str().unwrap_or("1"), "proposal": inv["input"]});
+            let late = st.call("broker.state", cas);
+            let _ = std::fs::write(
+                std::env::temp_dir().join(format!("devworks-fixture-{package}-late-state")),
+                class(&late),
+            );
         }
         "config" => {
             let c = st.configuration.lock().unwrap().clone();
@@ -305,6 +332,9 @@ fn main() {
                 }
                 if mode == "slow-handshake" {
                     std::thread::sleep(Duration::from_secs(1));
+                }
+                if mode == "slow-initialize" {
+                    std::thread::sleep(Duration::from_millis(1200));
                 }
                 let p = &msg["params"];
                 *st.session.lock().unwrap() =

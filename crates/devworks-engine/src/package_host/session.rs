@@ -551,6 +551,9 @@ impl Session {
                 Reply::Error(_) => {}
                 _ => return Err("a host.invoke answer does not finish its invocation".into()),
             }
+            // Terminal: the token is revoked before anything else is read, so a broker request
+            // the package sends after its answer can never act for the finished invocation.
+            slot.revoked.store(true, Ordering::SeqCst);
             slot.finish(reply);
             return Ok(());
         }

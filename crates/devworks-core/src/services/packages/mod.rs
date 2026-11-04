@@ -584,6 +584,30 @@ impl PackageService {
     // -----------------------------------------------------------------------------------------
     // Shared rules
 
+    /// Admits a new package identity, in the unit of work that records it: the registry holds
+    /// at most [`MAX_PACKAGES`] identities, and one beyond them is refused (the registry is
+    /// always read whole, never as a prefix).
+    fn admit_identity(read: &dyn PackageRegistryRead, package_id: &str) -> Result<(), Failure> {
+        let mut count = 0usize;
+        let mut after: Option<String> = None;
+        loop {
+            let page = read.packages(after.as_deref(), 500)?;
+            count += page.len();
+            if count >= MAX_PACKAGES {
+                return Err(Refusal::new(
+                    DomainErrorCode::Conflict,
+                    "package_registry_capacity",
+                    Id::new(package_id).ok(),
+                )
+                .into());
+            }
+            if page.len() < 500 {
+                return Ok(());
+            }
+            after = page.last().map(|p| p.package_id.clone());
+        }
+    }
+
     fn package_or_new(
         read: &dyn PackageRegistryRead,
         package_id: &str,
@@ -720,6 +744,9 @@ impl PackageService {
         Self::check_registry(tx, expected_registry)?;
         let now = tx.now_ms();
         let (mut p, fresh) = Self::package_or_new(&*tx.packages(), &i.package_id, now)?;
+        if fresh {
+            Self::admit_identity(&*tx.packages(), &i.package_id)?;
+        }
         if update && (!p.installed || p.active_digest.is_none()) {
             return Err(not_found("package", &i.package_id).into());
         }
@@ -1077,11 +1104,7 @@ impl PackageService {
             .package(package_id.as_str())?
             .filter(|p| p.installed && p.active_digest.is_some())
             .ok_or_else(|| not_found("package", package_id.as_str()))?;
-        if p.enabled
-            && p.active_digest
-                .as_deref()
-                .is_none_or(|d| failure_of(&p, d).is_none())
-        {
+        if p.enabled && active_failure(&p).is_none() {
             return Ok(DomainDecision::NoChange {
                 result: self.result(tx, &p, "addons.enable")?,
             });
@@ -1545,6 +1568,9 @@ impl PackageService {
         }
         let now = tx.now_ms();
         let (mut p, fresh) = Self::package_or_new(&*tx.packages(), &candidate.package_id, now)?;
+        if fresh {
+            Self::admit_identity(&*tx.packages(), &candidate.package_id)?;
+        }
         if let Some(expected) = &i.expected_revision
             && p.revision != expected.get()
         {
@@ -1943,8 +1969,12 @@ impl PackageService {
                     }
                 }
             }
+            // Bound to the instance that failed: a new configuration or state generation is a new
+            // instance and starts again.
             p.failure = Some(
-                json!({"code": code, "message": message, "atMs": tx.now_ms(), "attempts": attempts, "digest": digest}),
+                json!({"code": code, "message": message, "atMs": tx.now_ms(),
+                "attempts": attempts, "digest": digest, "configRevision": key.config_revision,
+                "stateGeneration": key.state_generation}),
             );
             Self::save(tx, &mut p, false)?;
             event(
@@ -2345,6 +2375,14 @@ pub(crate) fn failure_of<'a>(p: &'a StoredPackage, digest: &str) -> Option<&'a V
     p.failure
         .as_ref()
         .filter(|f| f["digest"].as_str() == Some(digest))
+}
+
+/// The failure that marks the active version unavailable now (its whole instance key).
+pub(crate) fn active_failure(p: &StoredPackage) -> Option<&Value> {
+    let d = p.active_digest.as_deref()?;
+    p.failure
+        .as_ref()
+        .filter(|f| policy::failure_applies(f, p, d))
 }
 
 /// Whether a staged version's remaining waits are ones the host clears by itself (quiescence,

@@ -238,3 +238,28 @@ fn migration_15_adds_the_package_registry_to_a_version_14_store() {
     .unwrap();
     assert_eq!(head, 1);
 }
+
+#[test]
+fn a_packages_version_list_always_includes_its_newest_version() {
+    let h = Harness::new();
+    let s = h.store();
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.packages().insert_package(&package("many"))?;
+        for n in 0..520i64 {
+            let mut v = version("many", &format!("{n:064x}"));
+            v.created_at_ms = n + 1;
+            v.updated_at_ms = n + 1;
+            tx.packages().insert_version(&v)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let all = run_write(&s, WriteOptions::default(), |tx| {
+        tx.packages().package_versions("many")
+    })
+    .unwrap();
+    assert_eq!(all.len(), 512);
+    // The bound keeps the newest, oldest first: the last one is the newest version.
+    assert_eq!(all.last().unwrap().manifest_digest, format!("{:064x}", 519));
+    assert_eq!(all[0].manifest_digest, format!("{:064x}", 8));
+}

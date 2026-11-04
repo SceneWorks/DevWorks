@@ -38,7 +38,8 @@ use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
 use devworks_core::services::packages::{
-    HelperKey, PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA, host_schema_ref,
+    HelperKey, MAX_PACKAGES, PROJECT_ENABLEMENT_SCHEMA, PackageService, UPDATE_POLICY_SCHEMA,
+    host_schema_ref,
 };
 use devworks_core::services::resources::ResourceService;
 use devworks_core::settings::catalog::AgentRole;
@@ -3347,4 +3348,207 @@ fn only_the_current_state_generation_and_its_seed_are_retained() {
         })
         .collect();
     assert_eq!(kept, vec![3, 4]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 5: launches overtaken by shutdown, configuration retries, terminal revocation,
+// registry capacity
+
+#[test]
+fn launches_queued_in_a_reconciliation_pass_never_outlive_shutdown() {
+    let _s = serial();
+    let a = App::new();
+    // A pass busy starting a slow helper...
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "slow-initialize".into(),
+            ..Spec::new("a-slow", "1.0.0")
+        },
+    ));
+    let host = a.app().packages().unwrap().clone();
+    let until = Instant::now() + Duration::from_secs(10);
+    while !host
+        .instance_status("a-slow")
+        .iter()
+        .any(|(_, s)| *s == InstanceStatus::Starting)
+    {
+        assert!(Instant::now() < until, "a-slow never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // ...while two more arrive: the next pass starts them in one loop, the slow one first.
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "slow-initialize".into(),
+            ..Spec::new("m-slow", "1.0.0")
+        },
+    ));
+    package(a.install(&a.user, &Spec::new("z-normal", "1.0.0")));
+    // Usually that pass is still starting m-slow (on a loaded machine the installs may take
+    // longer than its handshake: then it is already running).
+    let until = Instant::now() + Duration::from_secs(30);
+    while !host
+        .instance_status("m-slow")
+        .iter()
+        .any(|(_, s)| matches!(s, InstanceStatus::Starting | InstanceStatus::Ready))
+    {
+        assert!(Instant::now() < until, "m-slow never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Shutdown overtakes the pass; whatever z-normal did before it, nothing launches after it.
+    let before = helper_ready_events(&*a.store, "z-normal");
+    host.shutdown(Duration::from_millis(200));
+    // A pass still under way goes on with z-normal: it must not launch (or is killed at once).
+    // Another pass waits for that one to finish (passes are serialized) and does nothing itself.
+    host.reconcile();
+    assert_eq!(
+        helper_ready_events(&*a.store, "z-normal"),
+        before,
+        "z-normal started after shutdown"
+    );
+}
+
+#[test]
+fn a_corrected_configuration_restarts_a_helper_whose_budget_was_spent() {
+    let _s = serial();
+    let fail = Marker::absent("reconfig-pack", "fail-on-activate");
+    let a = App::new();
+    let spec = Spec {
+        config_schema: Some(json!({"type": "object"})),
+        ..Spec::new("reconfig-pack", "1.0.0")
+    };
+    let rec = package(a.install(&a.user, &spec));
+    a.ready("reconfig-pack");
+    // Under its current configuration the helper fails until its budget is spent.
+    fail.set();
+    let schema = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    let configure = |value: Value| {
+        let body = json!({"kind": "addons.configure", "packageId": "reconfig-pack",
+            "expectedRevision": a.record("reconfig-pack").revision.get().to_string(),
+            "config": {"schema": schema, "value": value}});
+        package(a.domain(&a.user, "addons.configure", body))
+    };
+    configure(json!({"mode": "broken"}));
+    a.until("reconfig-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    // A corrected configuration is a new instance: it starts again.
+    drop(fail);
+    let rec = configure(json!({"mode": "fixed"}));
+    assert_ne!(availability(&rec), "Failed");
+    a.until("reconfig-pack", "the corrected configuration runs", |r| {
+        matches!(r.availability, Some(PackageAvailability::Ready))
+    });
+    a.ready("reconfig-pack");
+}
+
+#[test]
+fn a_finished_invocation_can_no_longer_change_state() {
+    let _s = serial();
+    let a = App::new();
+    let mut spec = Spec::new("late-pack", "1.0.0");
+    spec.contributions.push("late-state");
+    package(a.install(&a.user, &spec));
+    a.ready("late-pack");
+    let answer = Marker::absent("late-pack", "late-state");
+    let before = read(&*a.store, |s| s.packages().package_state("late-pack")).unwrap();
+    let h = a
+        .invoke("late-pack", "late-state", InvocationKind::Ordinary)
+        .unwrap();
+    assert!(matches!(
+        finished(h.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    let until = Instant::now() + Duration::from_secs(10);
+    while !answer.0.exists() {
+        assert!(
+            Instant::now() < until,
+            "the late compare-and-set never answered"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The token was revoked with the terminal answer: the compare-and-set was refused.
+    assert_eq!(
+        std::fs::read_to_string(&answer.0).unwrap(),
+        "PermissionDenied"
+    );
+    let after = read(&*a.store, |s| s.packages().package_state("late-pack")).unwrap();
+    assert_eq!(after.revision, before.revision);
+}
+
+#[test]
+fn the_registry_is_read_whole_and_a_new_identity_beyond_capacity_is_refused() {
+    let _s = serial();
+    let a = App::new();
+    // Sorts after every other identity below.
+    package(a.install(&a.user, &Spec::new("zz-last", "1.0.0")));
+    a.ready("zz-last");
+    // Past capacity (written directly, as an earlier build might have left it).
+    let c = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch("BEGIN;").unwrap();
+    for n in 0..(MAX_PACKAGES + 4) {
+        c.execute(
+            "INSERT INTO packages(package_id,revision,enabled,installed,state_generation,config_revision,created_at,updated_at) VALUES(?1,1,0,0,0,0,1,1)",
+            [format!("filler-{n:05}")],
+        )
+        .unwrap();
+    }
+    c.execute_batch("COMMIT;").unwrap();
+    drop(c);
+    // The package that sorts last is still in the catalog (read page by page to its end) and
+    // keeps running.
+    a.app().packages().unwrap().reconcile();
+    let mut cursor: Option<String> = None;
+    let mut all = Vec::new();
+    loop {
+        let mut page = json!({"limit": 500});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": "q-all", "schemaRevision": 2,
+            "body": {"kind": "addons.catalog", "page": page}});
+        match a
+            .app()
+            .query(&a.user, "addons.catalog", frame.to_string().as_bytes())
+            .unwrap()
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::AddonsCatalog { value },
+                ..
+            } => {
+                all.extend(value.items.0);
+                match value.next_cursor {
+                    Some(c) => cursor = Some(c.0),
+                    None => break,
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(all.len(), MAX_PACKAGES + 5);
+    let rec = all
+        .into_iter()
+        .find(|r| r.id.as_str() == "zz-last")
+        .expect("the last identity is listed");
+    assert_eq!(availability(&rec), "Ready");
+    a.ready("zz-last");
+    assert!(
+        a.app()
+            .packages()
+            .unwrap()
+            .instance_status("zz-last")
+            .iter()
+            .any(|(_, s)| *s == InstanceStatus::Ready)
+    );
+    // A new identity is refused, with the reason.
+    let refused_install = a.install(&a.user, &Spec::new("zz-new", "1.0.0"));
+    assert_eq!(
+        refused(refused_install),
+        (
+            DomainErrorCode::Conflict,
+            Some("package_registry_capacity".into())
+        )
+    );
 }

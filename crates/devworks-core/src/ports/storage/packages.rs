@@ -185,7 +185,8 @@ pub trait PackageRegistryRead {
         package_id: &str,
         manifest_digest: &str,
     ) -> Result<Option<StoredPackageVersion>, StorageError>;
-    /// Every version of a package, oldest first (bounded by the repository).
+    /// The newest versions of a package (at most 512; the newest is always included), oldest
+    /// first.
     fn package_versions(&self, package_id: &str)
     -> Result<Vec<StoredPackageVersion>, StorageError>;
     fn proposal(&self, id: &Id) -> Result<Option<StoredProposal>, StorageError>;
