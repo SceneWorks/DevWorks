@@ -313,6 +313,12 @@
       "owner": "Architecture and module owners",
       "validationFamily": "Editable diagram rendering and contract/source consistency",
       "gate": "G05"
+    },
+    "EVAL": {
+      "section": "testing-and-evidence",
+      "owner": "Evaluation services, grader adapters and trial runner",
+      "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
+      "gate": "G11"
     }
   },
   "overrides": {
