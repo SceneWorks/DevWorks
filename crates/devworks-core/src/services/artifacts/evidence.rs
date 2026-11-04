@@ -218,7 +218,7 @@ impl ArtifactService {
     /// artifact is live and visible, the version is live and belongs to it, and the reference's
     /// digest, length and media type match. Anything else is `NotFound` (existence is not
     /// disclosed). The stream is bounded to the version's length.
-    pub fn read_exact(
+    pub fn open_exact_version(
         &self,
         store: &dyn ApplicationStore,
         ctx: &InvocationContext,

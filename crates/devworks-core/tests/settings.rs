@@ -360,3 +360,36 @@ fn view_model_distinguishes_inherited_overridden_and_health() {
         "a cleared override shows the inherited value"
     );
 }
+
+#[test]
+fn package_index_sources_default_to_none_and_need_a_location_and_key() {
+    let d = descriptor("packages.indexSources").unwrap();
+    assert_eq!((d.default)(), json!([]));
+    assert_eq!(d.scopes, &[ScopeKind::Workspace]);
+    let key = "0123456789abcdef".repeat(4);
+    // An absolute directory on this platform (a drive letter on Windows).
+    let dir = if cfg!(windows) {
+        r"C:\srv\packs"
+    } else {
+        "/srv/packs"
+    };
+    for ok in [
+        json!([]),
+        json!([{"location": "https://packs.example.test/index.json", "publicKey": key}]),
+        json!([{"location": dir, "publicKey": key}]),
+    ] {
+        assert!(check_value(d, &ok).is_empty(), "{ok}");
+    }
+    for bad in [
+        json!([{"location": "http://packs.example.test/index.json", "publicKey": key}]),
+        json!([{"location": "relative/packs", "publicKey": key}]),
+        json!([{"location": dir, "publicKey": key.to_uppercase()}]),
+        json!([{"location": dir, "publicKey": "abc"}]),
+        json!([{"location": dir}]),
+        json!([{"location": dir, "publicKey": key, "extra": 1}]),
+        json!("https://packs.example.test/index.json"),
+        Value::Array(vec![json!({"location": dir, "publicKey": key}); 17]),
+    ] {
+        assert!(!check_value(d, &bad).is_empty(), "{bad}");
+    }
+}

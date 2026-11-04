@@ -3,7 +3,7 @@ use devworks_core::ports::process::ControlChannel;
 use devworks_core::ports::process::{
     NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -27,7 +27,11 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     if let Some(dir) = &spec.cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(Stdio::null());
+    cmd.stdin(if spec.pipe_stdin || spec.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     let out = || {
         if spec.capture_output {
             Stdio::piped()
@@ -70,8 +74,13 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         )
     });
     let mut child = spawned.map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    super::feed_stdin(&mut child, spec);
     let pid = child.id();
     let birth = start_time(pid as i32, true).unwrap_or_else(|| UNAVAILABLE.into());
+    let input = child
+        .stdin
+        .take()
+        .map(|i| Box::new(i) as Box<dyn Write + Send>);
     let output = match (child.stdout.take(), child.stderr.take()) {
         (Some(o), Some(e)) => Some((
             Box::new(o) as Box<dyn Read + Send>,
@@ -90,6 +99,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         exit_code: None,
         output,
         control,
+        input,
     }))
 }
 
@@ -135,6 +145,7 @@ struct UnixTree {
     exit_code: Option<i32>,
     output: Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>,
     control: Option<ControlChannel>,
+    input: Option<Box<dyn Write + Send>>,
 }
 
 impl UnixTree {
@@ -227,6 +238,9 @@ impl ProcessTree for UnixTree {
     }
     fn take_control(&mut self) -> Option<ControlChannel> {
         self.control.take()
+    }
+    fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.input.take()
     }
 }
 

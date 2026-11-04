@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 4;
+pub const CATALOG_REVISION: i64 = 7;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -131,6 +131,10 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
+    /// Signed package index sources: at most 16 `{"location", "publicKey"}` objects, the
+    /// location an `https://` index URL or an absolute local directory, the key 64 hex digits
+    /// of an Ed25519 public key.
+    PackageIndexSources,
     /// A host-minted secret-store reference `{"secretRef": "dwsecret-<opaque id>"}` (see
     /// [`super::validate::is_secret_ref`]); never a credential value.
     SecretRef,
@@ -267,6 +271,14 @@ impl SettingDescriptor {
             ValueKind::ModelList => json!({
                 "type": "array", "maxItems": 32, "uniqueItems": true,
                 "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+            }),
+            ValueKind::PackageIndexSources => json!({
+                "type": "array", "maxItems": 16,
+                "items": {"type": "object", "required": ["location", "publicKey"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "location": {"type": "string", "minLength": 1, "maxLength": 2048},
+                        "publicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
             }),
             ValueKind::SecretRef => json!({
                 "type": "object", "required": ["secretRef"], "additionalProperties": false,
@@ -466,6 +478,16 @@ fn build() -> Vec<SettingDescriptor> {
             WORKSPACE,
             ValueKind::Bool,
             false,
+            NextAdmission
+        ),
+        setting!(
+            PACKAGE_INDEX_SOURCES_KEY,
+            "Package index sources",
+            "Signed publisher indexes the Add-ons screen lists available packs from: an https index URL or a local directory holding devworks-index.json, each with the publisher's Ed25519 public key (hex) the index must be signed with. Only a person applies a change (an agent's change is a proposal). None by default.",
+            Tools,
+            WORKSPACE,
+            ValueKind::PackageIndexSources,
+            Vec::<serde_json::Value>::new(),
             NextAdmission
         ),
         setting!(
@@ -680,6 +702,16 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
+            "knowledge.lessonRecurrenceThreshold",
+            "Lesson recurrence threshold",
+            "Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer { min: 2, max: 20 },
+            3,
+            NextAdmission
+        ),
+        setting!(
             "power.keepAwake",
             "Keep the computer awake while DevWorks is open",
             "While DevWorks is open, ask the operating system not to sleep when idle, even with no active work; the display may still turn off. It does not prevent explicit sleep, closing the lid, shutdown or every power policy. Closing DevWorks or turning this off releases the request.",
@@ -771,6 +803,26 @@ fn build() -> Vec<SettingDescriptor> {
             50_000,
             NextAdmission
         ),
+        setting!(
+            OVERLAY_RECORD_RETENTION_DAYS_KEY,
+            "Ended ref overlay retention (days)",
+            "An ended ref overlay (expired, retired or failed) is pruned once it ended longer ago than this and is beyond the newest records kept per repository: its record, layers and graph data go, while its runs, history and logs stay. Live overlays and any still named by a view are never pruned. Separate from artifact retention. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer { min: 1, max: 365 },
+            14,
+            NextAdmission
+        ),
+        setting!(
+            OVERLAY_RECORDS_KEPT_KEY,
+            "Ended ref overlays kept per repository",
+            "The most recently ended ref overlays each repository keeps whatever their age; older ones past the retention window are pruned. Engineering default.",
+            Storage,
+            WORKSPACE,
+            ValueKind::Integer { min: 0, max: 10_000 },
+            32,
+            NextAdmission
+        ),
     ]);
     all
 }
@@ -783,10 +835,16 @@ pub const ARTIFACT_RETENTION_KEY: &str = "storage.artifactRetention";
 pub const ARTIFACT_QUOTA_KEY: &str = "storage.artifactQuotaBytes";
 /// Largest single artifact source file.
 pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
+/// Signed publisher index sources of available packages.
+pub const PACKAGE_INDEX_SOURCES_KEY: &str = "packages.indexSources";
 /// Days a diagnostic log record is retained.
 pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
 /// Most diagnostic log records retained.
 pub const LOG_MAX_RECORDS_KEY: &str = "diagnostics.logMaxRecords";
+/// Days an ended ref overlay's record is kept before record retention may prune it.
+pub const OVERLAY_RECORD_RETENTION_DAYS_KEY: &str = "indexing.overlayRecordRetentionDays";
+/// Ended ref overlays each repository keeps regardless of age.
+pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
 /// The configured external search provider (`none` or a provider ID).

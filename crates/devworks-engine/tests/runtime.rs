@@ -244,11 +244,13 @@ fn composition(
             ),
         ),
         browser: None,
+        packages: None,
         use_cases: UseCases::new()
             .with_queue()
             .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store)))
             .with_history(Arc::new(HistoryService::new(h.ids.clone()))),
         consumers: Vec::new(),
+        indexing: None,
         config,
     }
 }

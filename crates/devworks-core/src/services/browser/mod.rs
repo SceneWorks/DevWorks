@@ -3258,7 +3258,7 @@ impl CommandHandler for BrowserService {
         let batch = format!("upload-{}", self.ids.next_id(IdKind::SourceHandle).as_str());
         let mut paths = Vec::new();
         for (n, f) in files.iter().enumerate() {
-            let read = match self.artifacts.read_exact(&*self.store, ctx, f) {
+            let read = match self.artifacts.open_exact_version(&*self.store, ctx, f) {
                 Ok(r) => r,
                 Err(r) => {
                     let _ = self.platform.remove_staged(&profile, &batch);

@@ -217,6 +217,8 @@ pub enum StopScope {
     /// later epoch, after a restore.
     ProjectBefore(ProjectId, i64),
     Lease(Id),
+    /// The trees launched for one journaled operation (a scheduled job run's operation).
+    Operation(OperationId),
 }
 
 struct Live {
@@ -471,6 +473,13 @@ impl ProcessSupervisor {
         live.tree.root_exited().unwrap_or(false)
     }
 
+    /// The stdin pipe of a tree launched with `pipe_stdin`, once.
+    pub fn take_input(&self, p: &OwnedProcess) -> Option<Box<dyn std::io::Write + Send>> {
+        let entry = self.entry(&p.id)?;
+        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        live.tree.take_input()
+    }
+
     /// Observes a tree without blocking; a tree found empty is settled `Reaped`.
     pub fn poll(&self, p: &OwnedProcess) -> Result<Option<StopOutcome>, StorageError> {
         let Some(entry) = self.entry(&p.id) else {
@@ -655,6 +664,7 @@ impl ProcessSupervisor {
                                 && live.epoch.is_some_and(|e| e < *epoch)
                         }
                         StopScope::Lease(lease) => r.lease_id.as_ref() == Some(lease),
+                        StopScope::Operation(op) => r.operation_id.as_ref() == Some(op),
                     };
                     hit.then(|| r.id.clone())
                 })

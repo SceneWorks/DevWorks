@@ -1340,7 +1340,7 @@ impl Fx {
         let mut read = self
             .app()
             .artifacts()
-            .read_exact(&**self.app().store(), &self.user, r)
+            .open_exact_version(&**self.app().store(), &self.user, r)
             .expect("readable");
         let mut out = vec![];
         std::io::Read::read_to_end(&mut read.reader, &mut out).unwrap();
@@ -1436,6 +1436,8 @@ fn composition(
     // Supervision passes run only when a test asks (BrowserService::tick).
     config.browser_interval = Duration::from_secs(3600);
     Composition {
+        packages: None,
+        indexing: None,
         store: store.clone(),
         clock: h.clock(),
         ids: h.ids.clone(),

@@ -28,6 +28,12 @@ impl From<Digest> for String {
         v.0
     }
 }
+impl Digest {
+    /// The lower-case hex digest.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 impl JsonSchema for Digest {
     fn schema_name() -> Cow<'static, str> {
         "Digest".into()

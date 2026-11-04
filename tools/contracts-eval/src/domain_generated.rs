@@ -746,6 +746,41 @@ pub struct WorkRecord {
     pub manual_order: Option<Counter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_issue: Option<GithubIssueTracking>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
+    pub readiness: Option<ReadinessAssessment>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub queue_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub workflow_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<AcceptanceCriterion>", extend("x-since" = 2))]
+    pub acceptance_tests: Option<Items<AcceptanceCriterion>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
+    pub pending_readiness: Option<ReadinessAssessment>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -785,11 +820,36 @@ impl Check for WorkRecord {
         self.dependent_ids.check()?;
         self.manual_order.check()?;
         self.github_issue.check()?;
+        self.readiness.check()?;
+        self.queue_revision.check()?;
+        self.workflow_revision.check()?;
+        self.acceptance_tests.check()?;
+        self.pending_readiness.check()?;
         super::domain_rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for WorkRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.readiness = None;
+        }
+        if revision < 2 {
+            self.queue_revision = None;
+        }
+        if revision < 2 {
+            self.workflow_revision = None;
+        }
+        if revision < 2 {
+            self.acceptance_tests = None;
+        }
+        if revision < 2 {
+            self.pending_readiness = None;
+        }
     }
 }
 
@@ -1744,6 +1804,13 @@ pub struct SourceEvidence {
     pub snippet: Content,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SchemaValue>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub source_revision: Option<Text>,
 }
 impl Check for SourceEvidence {
     fn check(&self) -> Result<(), String> {
@@ -1752,11 +1819,20 @@ impl Check for SourceEvidence {
         self.source.check()?;
         self.snippet.check()?;
         self.metadata.check()?;
+        self.source_revision.check()?;
         super::domain_rules::record(
             "SourceEvidence",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SourceEvidence {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.source_revision = None;
+        }
     }
 }
 
@@ -1769,6 +1845,55 @@ pub struct KnowledgeEntity {
     pub entity_type: Label,
     pub aliases: Items<Label>,
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub canonical_name: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub external_id: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub source: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub author_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub deleted: Option<bool>,
 }
 impl Check for KnowledgeEntity {
     fn check(&self) -> Result<(), String> {
@@ -1778,11 +1903,44 @@ impl Check for KnowledgeEntity {
         self.entity_type.check()?;
         self.aliases.check()?;
         self.scope.check()?;
+        self.canonical_name.check()?;
+        self.external_id.check()?;
+        self.source.check()?;
+        self.author_id.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.deleted.check()?;
         super::domain_rules::record(
             "KnowledgeEntity",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeEntity {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.canonical_name = None;
+        }
+        if revision < 2 {
+            self.external_id = None;
+        }
+        if revision < 2 {
+            self.source = None;
+        }
+        if revision < 2 {
+            self.author_id = None;
+        }
+        if revision < 2 {
+            self.created_at_ms = None;
+        }
+        if revision < 2 {
+            self.updated_at_ms = None;
+        }
+        if revision < 2 {
+            self.deleted = None;
+        }
     }
 }
 
@@ -1813,6 +1971,104 @@ pub struct KnowledgeClaim {
     pub supersedes: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "KnowledgeEntryKind", extend("x-since" = 2))]
+    pub entry_kind: Option<KnowledgeEntryKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "KnowledgeLifecycle", extend("x-since" = 2))]
+    pub lifecycle: Option<KnowledgeLifecycle>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "KnowledgeOrigin", extend("x-since" = 2))]
+    pub origin: Option<KnowledgeOrigin>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub origin_ref: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub autonomous: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 2))]
+    pub author_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub verified_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub verified_source_revision: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub stale: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub superseded_by: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LessonRecord", extend("x-since" = 2))]
+    pub lesson: Option<LessonRecord>,
 }
 impl Check for KnowledgeClaim {
     fn check(&self) -> Result<(), String> {
@@ -1833,11 +2089,72 @@ impl Check for KnowledgeClaim {
         self.effective_at_ms.check()?;
         self.supersedes.check()?;
         self.source.check()?;
+        self.entry_kind.check()?;
+        self.lifecycle.check()?;
+        self.origin.check()?;
+        self.origin_ref.check()?;
+        self.autonomous.check()?;
+        self.author_id.check()?;
+        self.session_id.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.verified_at_ms.check()?;
+        self.verified_source_revision.check()?;
+        self.stale.check()?;
+        self.superseded_by.check()?;
+        self.lesson.check()?;
         super::domain_rules::record(
             "KnowledgeClaim",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeClaim {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.entry_kind = None;
+        }
+        if revision < 2 {
+            self.lifecycle = None;
+        }
+        if revision < 2 {
+            self.origin = None;
+        }
+        if revision < 2 {
+            self.origin_ref = None;
+        }
+        if revision < 2 {
+            self.autonomous = None;
+        }
+        if revision < 2 {
+            self.author_id = None;
+        }
+        if revision < 2 {
+            self.session_id = None;
+        }
+        if revision < 2 {
+            self.created_at_ms = None;
+        }
+        if revision < 2 {
+            self.updated_at_ms = None;
+        }
+        if revision < 2 {
+            self.verified_at_ms = None;
+        }
+        if revision < 2 {
+            self.verified_source_revision = None;
+        }
+        if revision < 2 {
+            self.stale = None;
+        }
+        if revision < 2 {
+            self.superseded_by = None;
+        }
+        if revision < 2 {
+            self.lesson = None;
+        }
     }
 }
 
@@ -1864,6 +2181,41 @@ pub struct ClaimDraft {
     pub supersedes: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "KnowledgeEntryKind", extend("x-since" = 2))]
+    pub entry_kind: Option<KnowledgeEntryKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "KnowledgeOrigin", extend("x-since" = 2))]
+    pub origin: Option<KnowledgeOrigin>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub origin_ref: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LessonDraft", extend("x-since" = 2))]
+    pub lesson: Option<LessonDraft>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub source_revision: Option<Text>,
 }
 impl Check for ClaimDraft {
     fn check(&self) -> Result<(), String> {
@@ -1880,11 +2232,36 @@ impl Check for ClaimDraft {
         self.effective_at_ms.check()?;
         self.supersedes.check()?;
         self.source.check()?;
+        self.entry_kind.check()?;
+        self.origin.check()?;
+        self.origin_ref.check()?;
+        self.lesson.check()?;
+        self.source_revision.check()?;
         super::domain_rules::record(
             "ClaimDraft",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ClaimDraft {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.entry_kind = None;
+        }
+        if revision < 2 {
+            self.origin = None;
+        }
+        if revision < 2 {
+            self.origin_ref = None;
+        }
+        if revision < 2 {
+            self.lesson = None;
+        }
+        if revision < 2 {
+            self.source_revision = None;
+        }
     }
 }
 
@@ -1905,6 +2282,13 @@ impl Check for KnowledgeBatch {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeBatch {
+    fn retain_revision(&mut self, revision: u32) {
+        self.claims.retain_revision(revision);
+        self.evidence.retain_revision(revision);
     }
 }
 
@@ -1953,6 +2337,27 @@ pub struct KnowledgeBundle {
     pub supersession_ids: Items<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<KnowledgeRelation>", extend("x-since" = 2))]
+    pub relations: Option<Rows<KnowledgeRelation>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<KnowledgeRevisionEntry>", extend("x-since" = 2))]
+    pub revisions: Option<Rows<KnowledgeRevisionEntry>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub scope_revision: Option<Revision>,
 }
 impl Check for KnowledgeBundle {
     fn check(&self) -> Result<(), String> {
@@ -1965,11 +2370,31 @@ impl Check for KnowledgeBundle {
         self.conflicts.check()?;
         self.supersession_ids.check()?;
         self.summary.check()?;
+        self.relations.check()?;
+        self.revisions.check()?;
+        self.scope_revision.check()?;
         super::domain_rules::record(
             "KnowledgeBundle",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeBundle {
+    fn retain_revision(&mut self, revision: u32) {
+        self.entities.retain_revision(revision);
+        self.claims.retain_revision(revision);
+        self.evidence.retain_revision(revision);
+        if revision < 2 {
+            self.relations = None;
+        }
+        if revision < 2 {
+            self.revisions = None;
+        }
+        if revision < 2 {
+            self.scope_revision = None;
+        }
     }
 }
 
@@ -2032,6 +2457,27 @@ pub struct KnowledgeWriteReceipt {
     pub claim_ids: Items<Id>,
     pub revision: Revision,
     pub diagnostics: Items<Diagnostic>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub entity_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub claim_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub next_cursor: Option<Cursor>,
 }
 impl Check for KnowledgeWriteReceipt {
     fn check(&self) -> Result<(), String> {
@@ -2041,11 +2487,28 @@ impl Check for KnowledgeWriteReceipt {
         self.claim_ids.check()?;
         self.revision.check()?;
         self.diagnostics.check()?;
+        self.entity_count.check()?;
+        self.claim_count.check()?;
+        self.next_cursor.check()?;
         super::domain_rules::record(
             "KnowledgeWriteReceipt",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeWriteReceipt {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.entity_count = None;
+        }
+        if revision < 2 {
+            self.claim_count = None;
+        }
+        if revision < 2 {
+            self.next_cursor = None;
+        }
     }
 }
 
@@ -3549,6 +4012,90 @@ pub struct JobRecord {
     pub interrupted_run_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub next_run_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub last_run_started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub last_run_finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobRunStatus", extend("x-since" = 2))]
+    pub last_run_status: Option<JobRunStatus>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub last_error: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub active_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobHold", extend("x-since" = 2))]
+    pub hold: Option<JobHold>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub authorized: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub deleted_at_ms: Option<Counter>,
 }
 impl Check for JobRecord {
     fn check(&self) -> Result<(), String> {
@@ -3560,11 +4107,64 @@ impl Check for JobRecord {
         self.enabled.check()?;
         self.interrupted_run_id.check()?;
         self.last_run_id.check()?;
+        self.scope.check()?;
+        self.next_run_at_ms.check()?;
+        self.last_run_started_at_ms.check()?;
+        self.last_run_finished_at_ms.check()?;
+        self.last_run_status.check()?;
+        self.last_error.check()?;
+        self.active_run_id.check()?;
+        self.hold.check()?;
+        self.authorized.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.deleted_at_ms.check()?;
         super::domain_rules::record(
             "JobRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.scope = None;
+        }
+        if revision < 2 {
+            self.next_run_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_started_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_status = None;
+        }
+        if revision < 2 {
+            self.last_error = None;
+        }
+        if revision < 2 {
+            self.active_run_id = None;
+        }
+        if revision < 2 {
+            self.hold = None;
+        }
+        if revision < 2 {
+            self.authorized = None;
+        }
+        if revision < 2 {
+            self.created_at_ms = None;
+        }
+        if revision < 2 {
+            self.updated_at_ms = None;
+        }
+        if revision < 2 {
+            self.deleted_at_ms = None;
+        }
     }
 }
 
@@ -3579,6 +4179,90 @@ pub struct JobRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
     pub usage: UsageReport,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobRunStatus", extend("x-since" = 2))]
+    pub status: Option<JobRunStatus>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobTrigger", extend("x-since" = 2))]
+    pub trigger: Option<JobTrigger>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurrence_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub hold: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub cancel_requested: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub resumptions: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RootId>", extend("x-since" = 2))]
+    pub linked_root_ids: Option<Items<RootId>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub skipped_for_run_id: Option<Id>,
 }
 impl Check for JobRun {
     fn check(&self) -> Result<(), String> {
@@ -3589,11 +4273,64 @@ impl Check for JobRun {
         self.state.check()?;
         self.operation_id.check()?;
         self.usage.check()?;
+        self.status.check()?;
+        self.trigger.check()?;
+        self.occurrence_at_ms.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.reason.check()?;
+        self.hold.check()?;
+        self.cancel_requested.check()?;
+        self.resumptions.check()?;
+        self.session_id.check()?;
+        self.linked_root_ids.check()?;
+        self.skipped_for_run_id.check()?;
         super::domain_rules::record(
             "JobRun",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.status = None;
+        }
+        if revision < 2 {
+            self.trigger = None;
+        }
+        if revision < 2 {
+            self.occurrence_at_ms = None;
+        }
+        if revision < 2 {
+            self.started_at_ms = None;
+        }
+        if revision < 2 {
+            self.finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.reason = None;
+        }
+        if revision < 2 {
+            self.hold = None;
+        }
+        if revision < 2 {
+            self.cancel_requested = None;
+        }
+        if revision < 2 {
+            self.resumptions = None;
+        }
+        if revision < 2 {
+            self.session_id = None;
+        }
+        if revision < 2 {
+            self.linked_root_ids = None;
+        }
+        if revision < 2 {
+            self.skipped_for_run_id = None;
+        }
     }
 }
 
@@ -3710,6 +4447,20 @@ pub struct RouteModel {
     pub image_input: bool,
     pub tools: bool,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 2))]
+    pub context_tokens: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub connection_id: Option<Id>,
 }
 impl Check for RouteModel {
     fn check(&self) -> Result<(), String> {
@@ -3723,11 +4474,24 @@ impl Check for RouteModel {
         self.image_input.check()?;
         self.tools.check()?;
         self.revision.check()?;
+        self.context_tokens.check()?;
+        self.connection_id.check()?;
         super::domain_rules::record(
             "RouteModel",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RouteModel {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.context_tokens = None;
+        }
+        if revision < 2 {
+            self.connection_id = None;
+        }
     }
 }
 
@@ -3744,6 +4508,97 @@ pub struct ConnectionRecord {
     pub subscription_risk_accepted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_notice_sha256: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Url", extend("x-since" = 2))]
+    pub endpoint: Option<Url>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ConnectionLifecycle", extend("x-since" = 2))]
+    pub lifecycle: Option<ConnectionLifecycle>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub state_reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub credential_revision: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub healthy: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub checked_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub discovered_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub discovered_model_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Text>", extend("x-since" = 2))]
+    pub discovered_model_ids: Option<Items<Text>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub access_expires_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SignInChallenge", extend("x-since" = 2))]
+    pub sign_in: Option<SignInChallenge>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
+    pub open_router: Option<OpenRouterConstraints>,
 }
 impl Check for ConnectionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3755,11 +4610,68 @@ impl Check for ConnectionRecord {
         self.credential_ref.check()?;
         self.subscription_risk_accepted.check()?;
         self.risk_notice_sha256.check()?;
+        self.endpoint.check()?;
+        self.lifecycle.check()?;
+        self.state_reason.check()?;
+        self.credential_revision.check()?;
+        self.healthy.check()?;
+        self.checked_at_ms.check()?;
+        self.discovered_at_ms.check()?;
+        self.discovered_model_count.check()?;
+        self.discovered_model_ids.check()?;
+        self.access_expires_at_ms.check()?;
+        self.sign_in.check()?;
+        self.enabled.check()?;
+        self.open_router.check()?;
         super::domain_rules::record(
             "ConnectionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConnectionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.endpoint = None;
+        }
+        if revision < 2 {
+            self.lifecycle = None;
+        }
+        if revision < 2 {
+            self.state_reason = None;
+        }
+        if revision < 2 {
+            self.credential_revision = None;
+        }
+        if revision < 2 {
+            self.healthy = None;
+        }
+        if revision < 2 {
+            self.checked_at_ms = None;
+        }
+        if revision < 2 {
+            self.discovered_at_ms = None;
+        }
+        if revision < 2 {
+            self.discovered_model_count = None;
+        }
+        if revision < 2 {
+            self.discovered_model_ids = None;
+        }
+        if revision < 2 {
+            self.access_expires_at_ms = None;
+        }
+        if revision < 2 {
+            self.sign_in = None;
+        }
+        if revision < 2 {
+            self.enabled = None;
+        }
+        if revision < 2 {
+            self.open_router = None;
+        }
     }
 }
 
@@ -4389,6 +5301,188 @@ pub struct PackageRecord {
     pub enabled: bool,
     pub trust_state: Label,
     pub contribution_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub registry_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PackageAvailability", extend("x-since" = 2))]
+    pub availability: Option<PackageAvailability>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub availability_reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub package_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub languages: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub targets: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub host_target_supported: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackagePrerequisite>", extend("x-since" = 2))]
+    pub prerequisites: Option<Items<PackagePrerequisite>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub requested_access: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub effective_access: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub configuration_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaRef", extend("x-since" = 2))]
+    pub configuration_schema: Option<SchemaRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub state_generation: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub pending_version: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub pending_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackageWaitReason>", extend("x-since" = 2))]
+    pub pending_waits: Option<Items<PackageWaitReason>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub pending_proposal_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub predecessor_version: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub predecessor_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub publisher_trusted: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub signer_key: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub failure_code: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<Label>", extend("x-since" = 2))]
+    pub contributions: Option<Rows<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 2))]
+    pub pending_bundle: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackageOffer>", extend("x-since" = 2))]
+    pub available: Option<Items<PackageOffer>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub installed: Option<bool>,
 }
 impl Check for PackageRecord {
     fn check(&self) -> Result<(), String> {
@@ -4400,11 +5494,122 @@ impl Check for PackageRecord {
         self.enabled.check()?;
         self.trust_state.check()?;
         self.contribution_ids.check()?;
+        self.registry_revision.check()?;
+        self.availability.check()?;
+        self.availability_reason.check()?;
+        self.package_kind.check()?;
+        self.languages.check()?;
+        self.targets.check()?;
+        self.host_target_supported.check()?;
+        self.prerequisites.check()?;
+        self.requested_access.check()?;
+        self.effective_access.check()?;
+        self.configuration_revision.check()?;
+        self.configuration_schema.check()?;
+        self.state_generation.check()?;
+        self.pending_version.check()?;
+        self.pending_digest.check()?;
+        self.pending_waits.check()?;
+        self.pending_proposal_id.check()?;
+        self.predecessor_version.check()?;
+        self.predecessor_digest.check()?;
+        self.publisher_trusted.check()?;
+        self.signer_key.check()?;
+        self.failure_code.check()?;
+        self.contributions.check()?;
+        self.pending_bundle.check()?;
+        self.available.check()?;
+        self.installed.check()?;
         super::domain_rules::record(
             "PackageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PackageRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.registry_revision = None;
+        }
+        if revision < 2 {
+            self.availability = None;
+        }
+        if revision < 2 {
+            self.availability_reason = None;
+        }
+        if revision < 2 {
+            self.package_kind = None;
+        }
+        if revision < 2 {
+            self.languages = None;
+        }
+        if revision < 2 {
+            self.targets = None;
+        }
+        if revision < 2 {
+            self.host_target_supported = None;
+        }
+        if revision < 2 {
+            self.prerequisites = None;
+        } else {
+            self.prerequisites.retain_revision(revision);
+        }
+        if revision < 2 {
+            self.requested_access = None;
+        }
+        if revision < 2 {
+            self.effective_access = None;
+        }
+        if revision < 2 {
+            self.configuration_revision = None;
+        }
+        if revision < 2 {
+            self.configuration_schema = None;
+        }
+        if revision < 2 {
+            self.state_generation = None;
+        }
+        if revision < 2 {
+            self.pending_version = None;
+        }
+        if revision < 2 {
+            self.pending_digest = None;
+        }
+        if revision < 2 {
+            self.pending_waits = None;
+        }
+        if revision < 2 {
+            self.pending_proposal_id = None;
+        }
+        if revision < 2 {
+            self.predecessor_version = None;
+        }
+        if revision < 2 {
+            self.predecessor_digest = None;
+        }
+        if revision < 2 {
+            self.publisher_trusted = None;
+        }
+        if revision < 2 {
+            self.signer_key = None;
+        }
+        if revision < 2 {
+            self.failure_code = None;
+        }
+        if revision < 2 {
+            self.contributions = None;
+        }
+        if revision < 2 {
+            self.pending_bundle = None;
+        }
+        if revision < 2 {
+            self.available = None;
+        }
+        if revision < 2 {
+            self.installed = None;
+        }
     }
 }
 
@@ -5066,6 +6271,20 @@ pub enum RouterConfigAction {
         endpoint: Url,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         credential_ref: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2))]
+        enabled: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
+        open_router: Option<OpenRouterConstraints>,
     },
     Model {
         model: RouteModel,
@@ -5109,6 +6328,8 @@ impl Check for RouterConfigAction {
                 profile,
                 endpoint,
                 credential_ref,
+                enabled,
+                open_router,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
@@ -5116,6 +6337,8 @@ impl Check for RouterConfigAction {
                 profile.check()?;
                 endpoint.check()?;
                 credential_ref.check()?;
+                enabled.check()?;
+                open_router.check()?;
             }
             Self::Model {
                 model,
@@ -5169,6 +6392,29 @@ impl Check for RouterConfigAction {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for RouterConfigAction {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Connection {
+                enabled,
+                open_router,
+                ..
+            } => {
+                if revision < 2 {
+                    *enabled = None;
+                }
+                if revision < 2 {
+                    *open_router = None;
+                }
+            }
+            Self::Model { model, .. } => {
+                model.retain_revision(revision);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -5320,16 +6566,47 @@ pub struct JobInspection {
     pub job: JobRecord,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<JobRun>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<JobRun>", extend("x-since" = 2))]
+    pub runs: Option<Rows<JobRun>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub runs_next_cursor: Option<Cursor>,
 }
 impl Check for JobInspection {
     fn check(&self) -> Result<(), String> {
         self.job.check()?;
         self.run.check()?;
+        self.runs.check()?;
+        self.runs_next_cursor.check()?;
         super::domain_rules::record(
             "JobInspection",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobInspection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.job.retain_revision(revision);
+        self.run.retain_revision(revision);
+        if revision < 2 {
+            self.runs = None;
+        } else {
+            self.runs.retain_revision(revision);
+        }
+        if revision < 2 {
+            self.runs_next_cursor = None;
+        }
     }
 }
 
@@ -5341,6 +6618,34 @@ pub struct RepositoryIndexStatus {
     pub coverage: Coverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<IndexRunRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "IndexFreshness", extend("x-since" = 2))]
+    pub freshness: Option<IndexFreshness>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LanguageCoverage>", extend("x-since" = 2))]
+    pub languages: Option<Items<LanguageCoverage>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<SemanticPackStatus>", extend("x-since" = 2))]
+    pub semantic_packs: Option<Items<SemanticPackStatus>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<OverlayStatus>", extend("x-since" = 2))]
+    pub overlays: Option<Items<OverlayStatus>>,
 }
 impl Check for RepositoryIndexStatus {
     fn check(&self) -> Result<(), String> {
@@ -5348,11 +6653,32 @@ impl Check for RepositoryIndexStatus {
         self.current_view_ids.check()?;
         self.coverage.check()?;
         self.last_run.check()?;
+        self.freshness.check()?;
+        self.languages.check()?;
+        self.semantic_packs.check()?;
+        self.overlays.check()?;
         super::domain_rules::record(
             "RepositoryIndexStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RepositoryIndexStatus {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.freshness = None;
+        }
+        if revision < 2 {
+            self.languages = None;
+        }
+        if revision < 2 {
+            self.semantic_packs = None;
+        }
+        if revision < 2 {
+            self.overlays = None;
+        }
     }
 }
 
@@ -6088,6 +7414,20 @@ pub struct FeaturePatch {
     pub remove_link_ids: Option<Items<Id>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add_comment: Option<WorkComment>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReadinessChange", extend("x-since" = 2))]
+    pub readiness: Option<ReadinessChange>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "NonEmpty<AcceptanceCriterion>", extend("x-since" = 2))]
+    pub acceptance_evidence: Option<NonEmpty<AcceptanceCriterion>>,
 }
 impl Check for FeaturePatch {
     fn check(&self) -> Result<(), String> {
@@ -6099,11 +7439,24 @@ impl Check for FeaturePatch {
         self.add_links.check()?;
         self.remove_link_ids.check()?;
         self.add_comment.check()?;
+        self.readiness.check()?;
+        self.acceptance_evidence.check()?;
         super::domain_rules::record(
             "FeaturePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for FeaturePatch {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.readiness = None;
+        }
+        if revision < 2 {
+            self.acceptance_evidence = None;
+        }
     }
 }
 
@@ -6527,6 +7880,1283 @@ impl Check for ReviewSourceEvidence {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PackageAvailability {
+    NotInstalled,
+    Disabled,
+    MissingDependency,
+    Incompatible,
+    Ready,
+    Failed,
+}
+impl Check for PackageAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PackageWaitReason {
+    TrustApproval,
+    ExactVersionApproval,
+    AccessApproval,
+    Compatibility,
+    Quiescence,
+}
+impl Check for PackageWaitReason {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackagePrerequisite {
+    pub kind: Label,
+    pub id: Label,
+    pub requirement: Label,
+    pub required: bool,
+    pub satisfied: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PrerequisiteState", extend("x-since" = 2))]
+    pub state: Option<PrerequisiteState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub detected_version: Option<Label>,
+}
+impl Check for PackagePrerequisite {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.id.check()?;
+        self.requirement.check()?;
+        self.required.check()?;
+        self.satisfied.check()?;
+        self.state.check()?;
+        self.detected_version.check()?;
+        super::domain_rules::record(
+            "PackagePrerequisite",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for PackagePrerequisite {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.state = None;
+        }
+        if revision < 2 {
+            self.detected_version = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PrerequisiteState {
+    Missing,
+    Incompatible,
+    Ready,
+}
+impl Check for PrerequisiteState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageOffer {
+    pub version: Label,
+    pub manifest_digest: Digest,
+    pub bundle_digest: Digest,
+    pub bundle_bytes: Counter,
+    pub publisher_id: Id,
+    pub source: Label,
+    pub host_target_supported: bool,
+    pub newer: bool,
+}
+impl Check for PackageOffer {
+    fn check(&self) -> Result<(), String> {
+        self.version.check()?;
+        self.manifest_digest.check()?;
+        self.bundle_digest.check()?;
+        self.bundle_bytes.check()?;
+        self.publisher_id.check()?;
+        self.source.check()?;
+        self.host_target_supported.check()?;
+        self.newer.check()?;
+        super::domain_rules::record(
+            "PackageOffer",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexFreshnessState {
+    Current,
+    Stale,
+    Indexing,
+    NotIndexed,
+    Failed,
+}
+impl Check for IndexFreshnessState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexFreshness {
+    pub state: IndexFreshnessState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<Counter>,
+    pub configuration_current: bool,
+    pub reasons: Items<Label>,
+}
+impl Check for IndexFreshness {
+    fn check(&self) -> Result<(), String> {
+        self.state.check()?;
+        self.indexed_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.indexed_at_ms.check()?;
+        self.observed_at_ms.check()?;
+        self.configuration_current.check()?;
+        self.reasons.check()?;
+        super::domain_rules::record(
+            "IndexFreshness",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LanguageCoverageMode {
+    Structural,
+    TextFallback,
+    NotSelected,
+}
+impl Check for LanguageCoverageMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanguageCoverage {
+    pub language_id: Label,
+    pub name: Label,
+    pub mode: LanguageCoverageMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammar: Option<Label>,
+    pub files: Counter,
+    pub structural_files: Counter,
+    pub text_files: Counter,
+    pub parse_error_files: Counter,
+    pub skipped_files: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for LanguageCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.language_id.check()?;
+        self.name.check()?;
+        self.mode.check()?;
+        self.grammar.check()?;
+        self.files.check()?;
+        self.structural_files.check()?;
+        self.text_files.check()?;
+        self.parse_error_files.check()?;
+        self.skipped_files.check()?;
+        self.note.check()?;
+        super::domain_rules::record(
+            "LanguageCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SemanticPackState {
+    NotInstalled,
+    Unavailable,
+    Enabled,
+    Applied,
+    Disabled,
+}
+impl Check for SemanticPackState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticPackStatus {
+    pub pack_id: Id,
+    pub state: SemanticPackState,
+    pub languages: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for SemanticPackStatus {
+    fn check(&self) -> Result<(), String> {
+        self.pack_id.check()?;
+        self.state.check()?;
+        self.languages.check()?;
+        self.note.check()?;
+        super::domain_rules::record(
+            "SemanticPackStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OverlayState {
+    Queued,
+    Indexing,
+    Ready,
+    Failed,
+    Stale,
+    Expired,
+    Unavailable,
+}
+impl Check for OverlayState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OverlayStatus {
+    pub overlay_id: Id,
+    pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
+    pub state: OverlayState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_digest: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub updated_at_ms: Counter,
+    pub expires_at_ms: Counter,
+}
+impl Check for OverlayStatus {
+    fn check(&self) -> Result<(), String> {
+        self.overlay_id.check()?;
+        self.revision.check()?;
+        self.worktree_id.check()?;
+        self.state.check()?;
+        self.view_id.check()?;
+        self.base_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.capture_digest.check()?;
+        self.run_id.check()?;
+        self.reason.check()?;
+        self.updated_at_ms.check()?;
+        self.expires_at_ms.check()?;
+        super::domain_rules::record(
+            "OverlayStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+impl Check for IndexRunState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunKind {
+    Index,
+    Reindex,
+    Overlay,
+}
+impl Check for IndexRunKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterDataCollection {
+    #[serde(rename = "allow")]
+    Allow,
+    #[serde(rename = "deny")]
+    Deny,
+}
+impl Check for OpenRouterDataCollection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterQuantization {
+    #[serde(rename = "int4")]
+    Int4,
+    #[serde(rename = "int8")]
+    Int8,
+    #[serde(rename = "fp4")]
+    Fp4,
+    #[serde(rename = "mxfp4")]
+    Mxfp4,
+    #[serde(rename = "nvfp4")]
+    Nvfp4,
+    #[serde(rename = "fp6")]
+    Fp6,
+    #[serde(rename = "fp8")]
+    Fp8,
+    #[serde(rename = "mxfp8")]
+    Mxfp8,
+    #[serde(rename = "fp16")]
+    Fp16,
+    #[serde(rename = "bf16")]
+    Bf16,
+    #[serde(rename = "fp32")]
+    Fp32,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+impl Check for OpenRouterQuantization {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterSortBy {
+    #[serde(rename = "price")]
+    Price,
+    #[serde(rename = "throughput")]
+    Throughput,
+    #[serde(rename = "latency")]
+    Latency,
+}
+impl Check for OpenRouterSortBy {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterPartition {
+    #[serde(rename = "model")]
+    Model,
+    #[serde(rename = "none")]
+    None,
+}
+impl Check for OpenRouterPartition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterCostTier {
+    #[serde(rename = "low")]
+    Low,
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "xhigh")]
+    Xhigh,
+    #[serde(rename = "max")]
+    Max,
+}
+impl Check for OpenRouterCostTier {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterSort {
+    pub by: OpenRouterSortBy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<OpenRouterPartition>,
+}
+impl Check for OpenRouterSort {
+    fn check(&self) -> Result<(), String> {
+        self.by.check()?;
+        self.partition.check()?;
+        super::domain_rules::record(
+            "OpenRouterSort",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterPercentiles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p75: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p90: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p99: Option<Finite>,
+}
+impl Check for OpenRouterPercentiles {
+    fn check(&self) -> Result<(), String> {
+        self.p50.check()?;
+        self.p75.check()?;
+        self.p90.check()?;
+        self.p99.check()?;
+        super::domain_rules::record(
+            "OpenRouterPercentiles",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterMaxPrice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Money>,
+}
+impl Check for OpenRouterMaxPrice {
+    fn check(&self) -> Result<(), String> {
+        self.prompt.check()?;
+        self.completion.check()?;
+        self.request.check()?;
+        self.image.check()?;
+        super::domain_rules::record(
+            "OpenRouterMaxPrice",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterProviderRouting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_fallbacks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_parameters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_collection: Option<OpenRouterDataCollection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zdr: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_distillable_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantizations: Option<Items<OpenRouterQuantization>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<OpenRouterSort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_min_throughput: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_max_latency: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_price: Option<OpenRouterMaxPrice>,
+}
+impl Check for OpenRouterProviderRouting {
+    fn check(&self) -> Result<(), String> {
+        self.order.check()?;
+        self.allow_fallbacks.check()?;
+        self.require_parameters.check()?;
+        self.data_collection.check()?;
+        self.zdr.check()?;
+        self.enforce_distillable_text.check()?;
+        self.only.check()?;
+        self.ignore.check()?;
+        self.quantizations.check()?;
+        self.sort.check()?;
+        self.preferred_min_throughput.check()?;
+        self.preferred_max_latency.check()?;
+        self.max_price.check()?;
+        super::domain_rules::record(
+            "OpenRouterProviderRouting",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterConstraints {
+    pub allowed_models: Items<Text>,
+    pub excluded_models: Items<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_tier: Option<OpenRouterCostTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OpenRouterProviderRouting>,
+}
+impl Check for OpenRouterConstraints {
+    fn check(&self) -> Result<(), String> {
+        self.allowed_models.check()?;
+        self.excluded_models.check()?;
+        self.cost_tier.check()?;
+        self.provider.check()?;
+        super::domain_rules::record(
+            "OpenRouterConstraints",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConnectionLifecycle {
+    Disconnected,
+    Authorizing,
+    Connected,
+    Refreshing,
+    ReauthenticationRequired,
+    Unavailable,
+    Disabled,
+}
+impl Check for ConnectionLifecycle {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SignInMethod {
+    DeviceCode,
+    AuthorizationCode,
+}
+impl Check for SignInMethod {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignInChallenge {
+    pub flow_id: Id,
+    pub method: SignInMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<Url>,
+    pub expires_at_ms: Counter,
+}
+impl Check for SignInChallenge {
+    fn check(&self) -> Result<(), String> {
+        self.flow_id.check()?;
+        self.method.check()?;
+        self.user_code.check()?;
+        self.verification_url.check()?;
+        self.authorize_url.check()?;
+        self.expires_at_ms.check()?;
+        super::domain_rules::record(
+            "SignInChallenge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeEntryKind {
+    Goal,
+    Decision,
+    Constraint,
+    Fact,
+    Gotcha,
+    Attempt,
+    Architecture,
+    Lesson,
+    Finding,
+    Proposal,
+}
+impl Check for KnowledgeEntryKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeLifecycle {
+    Active,
+    Superseded,
+    Retracted,
+    Deleted,
+}
+impl Check for KnowledgeLifecycle {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeOrigin {
+    User,
+    Agent,
+}
+impl Check for KnowledgeOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LessonSource {
+    Prompt,
+    Review,
+    RelayedPrompt,
+    RelayedReview,
+    Agent,
+    Subagent,
+    BotReview,
+}
+impl Check for LessonSource {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RuleState {
+    Candidate,
+    Proposed,
+    Effective,
+    Rejected,
+    Retired,
+}
+impl Check for RuleState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RuleEffect {
+    UserInstruction,
+    Recurrence,
+    Promoted,
+}
+impl Check for RuleEffect {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LessonAddressKind {
+    Code,
+    Instruction,
+    Skill,
+    Documentation,
+    Test,
+}
+impl Check for LessonAddressKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ChallengeOutcome {
+    Uphold,
+    Retire,
+}
+impl Check for ChallengeOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ChallengeState {
+    Open,
+    Upheld,
+    Retired,
+}
+impl Check for ChallengeState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PromoteAction {
+    Effective,
+    Propose,
+    Reject,
+    Address,
+}
+impl Check for PromoteAction {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LessonView {
+    All,
+    RecentlyLearned,
+    Recurring,
+    Unaddressed,
+    Undelivered,
+}
+impl Check for LessonView {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Applicability {
+    pub activities: Items<Label>,
+    pub paths: Items<RelativePath>,
+    pub tools: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<Label>,
+    pub repository_ids: Items<Id>,
+}
+impl Check for Applicability {
+    fn check(&self) -> Result<(), String> {
+        self.activities.check()?;
+        self.paths.check()?;
+        self.tools.check()?;
+        self.harness.check()?;
+        self.repository_ids.check()?;
+        super::domain_rules::record(
+            "Applicability",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonDraft {
+    pub source: LessonSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_words: Option<Content>,
+    pub applicability: Applicability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_as: Option<Id>,
+}
+impl Check for LessonDraft {
+    fn check(&self) -> Result<(), String> {
+        self.source.check()?;
+        self.source_ref.check()?;
+        self.quoted_words.check()?;
+        self.applicability.check()?;
+        self.same_as.check()?;
+        super::domain_rules::record(
+            "LessonDraft",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonAddress {
+    pub kind: LessonAddressKind,
+    pub name: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Text>,
+}
+impl Check for LessonAddress {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.name.check()?;
+        self.reference.check()?;
+        super::domain_rules::record(
+            "LessonAddress",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonChallenge {
+    pub id: Id,
+    pub state: ChallengeState,
+    pub reason: Content,
+    pub evidence_ids: Items<Id>,
+    pub author_id: ActorId,
+    pub opened_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Content>,
+}
+impl Check for LessonChallenge {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.state.check()?;
+        self.reason.check()?;
+        self.evidence_ids.check()?;
+        self.author_id.check()?;
+        self.opened_at_ms.check()?;
+        self.resolved_at_ms.check()?;
+        self.resolution.check()?;
+        super::domain_rules::record(
+            "LessonChallenge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonRecord {
+    pub rule_state: RuleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<RuleEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_at_ms: Option<Counter>,
+    pub source: LessonSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_words: Option<Content>,
+    pub applicability: Applicability,
+    pub recurrence: Counter,
+    pub recurrence_threshold: Counter,
+    pub challenges: Items<LessonChallenge>,
+    pub addressed_by: Items<LessonAddress>,
+    pub delivered_sessions: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delivered_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for LessonRecord {
+    fn check(&self) -> Result<(), String> {
+        self.rule_state.check()?;
+        self.effect.check()?;
+        self.effective_at_ms.check()?;
+        self.source.check()?;
+        self.source_ref.check()?;
+        self.quoted_words.check()?;
+        self.applicability.check()?;
+        self.recurrence.check()?;
+        self.recurrence_threshold.check()?;
+        self.challenges.check()?;
+        self.addressed_by.check()?;
+        self.delivered_sessions.check()?;
+        self.last_delivered_at_ms.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "LessonRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeRelation {
+    pub id: Id,
+    pub subject_id: Id,
+    pub predicate: Label,
+    pub object_id: Id,
+    pub evidence_ids: Items<Id>,
+    pub author_id: ActorId,
+    pub created_at_ms: Counter,
+}
+impl Check for KnowledgeRelation {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.subject_id.check()?;
+        self.predicate.check()?;
+        self.object_id.check()?;
+        self.evidence_ids.check()?;
+        self.author_id.check()?;
+        self.created_at_ms.check()?;
+        super::domain_rules::record(
+            "KnowledgeRelation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeRevisionEntry {
+    pub revision: Revision,
+    pub change: Label,
+    pub author_id: ActorId,
+    pub at_ms: Counter,
+    pub lifecycle: KnowledgeLifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Content>,
+}
+impl Check for KnowledgeRevisionEntry {
+    fn check(&self) -> Result<(), String> {
+        self.revision.check()?;
+        self.change.check()?;
+        self.author_id.check()?;
+        self.at_ms.check()?;
+        self.lifecycle.check()?;
+        self.write_id.check()?;
+        self.value.check()?;
+        super::domain_rules::record(
+            "KnowledgeRevisionEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobRunStatus {
+    Queued,
+    Running,
+    Holding,
+    Succeeded,
+    Failed,
+    Skipped,
+    Cancelled,
+    OutcomeUnknown,
+}
+impl Check for JobRunStatus {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobTrigger {
+    Scheduled,
+    Manual,
+}
+impl Check for JobTrigger {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobHold {
+    ReactivationRequired,
+    AuthorizationRequired,
+    ProjectClosed,
+}
+impl Check for JobHold {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ReadinessDisposition {
+    ResolvedDecision,
+    BoundedInvestigation,
+    NeedsUserDecision,
+}
+impl Check for ReadinessDisposition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum FindingState {
+    Open,
+    Resolved,
+    RiskAccepted,
+}
+impl Check for FindingState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConfidenceLevel {
+    High,
+    Medium,
+    Low,
+}
+impl Check for ConfidenceLevel {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ReadinessFreshness {
+    Current,
+    Stale,
+}
+impl Check for ReadinessFreshness {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadinessFinding {
+    pub id: Id,
+    pub disposition: ReadinessDisposition,
+    pub blocking: bool,
+    pub prerequisite: bool,
+    pub state: FindingState,
+    pub requirement_ids: Items<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_key: Option<Id>,
+    pub affected_work_ids: Items<Id>,
+    pub summary: Content,
+    pub missing: Content,
+    pub consequence: Content,
+    pub attempts: Items<Content>,
+    pub insufficiency: Content,
+    pub closure_condition: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<ConfidenceLevel>,
+    pub evidence: Items<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_note: Option<Content>,
+    pub closure_evidence: Items<ArtifactRef>,
+}
+impl Check for ReadinessFinding {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.disposition.check()?;
+        self.blocking.check()?;
+        self.prerequisite.check()?;
+        self.state.check()?;
+        self.requirement_ids.check()?;
+        self.scope_key.check()?;
+        self.affected_work_ids.check()?;
+        self.summary.check()?;
+        self.missing.check()?;
+        self.consequence.check()?;
+        self.attempts.check()?;
+        self.insufficiency.check()?;
+        self.closure_condition.check()?;
+        self.decision.check()?;
+        self.confidence.check()?;
+        self.evidence.check()?;
+        self.objective.check()?;
+        self.limits.check()?;
+        self.question.check()?;
+        self.recommendation.check()?;
+        self.closure_note.check()?;
+        self.closure_evidence.check()?;
+        super::domain_rules::record(
+            "ReadinessFinding",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadinessAssessment {
+    pub id: Id,
+    pub revision: Revision,
+    pub plan_revision: Revision,
+    pub plan_digest: Digest,
+    pub reviewed_pending: bool,
+    pub freshness: ReadinessFreshness,
+    pub stale_scope_keys: Items<Id>,
+    pub ready: bool,
+    pub summary: Content,
+    pub findings: Items<ReadinessFinding>,
+    pub assessed_by: ActorId,
+    pub assessed_at_ms: Counter,
+}
+impl Check for ReadinessAssessment {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.plan_revision.check()?;
+        self.plan_digest.check()?;
+        self.reviewed_pending.check()?;
+        self.freshness.check()?;
+        self.stale_scope_keys.check()?;
+        self.ready.check()?;
+        self.summary.check()?;
+        self.findings.check()?;
+        self.assessed_by.check()?;
+        self.assessed_at_ms.check()?;
+        super::domain_rules::record(
+            "ReadinessAssessment",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ReadinessChange {
+    Assess {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_assessment_revision: Option<Revision>,
+        plan_revision: Revision,
+        plan_digest: Digest,
+        summary: Content,
+        findings: Items<ReadinessFinding>,
+    },
+    CloseFinding {
+        expected_assessment_revision: Revision,
+        finding_id: Id,
+        note: Content,
+        evidence: Items<ArtifactRef>,
+    },
+}
+impl Check for ReadinessChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Assess {
+                expected_assessment_revision,
+                plan_revision,
+                plan_digest,
+                summary,
+                findings,
+            } => {
+                expected_assessment_revision.check()?;
+                plan_revision.check()?;
+                plan_digest.check()?;
+                summary.check()?;
+                findings.check()?;
+            }
+            Self::CloseFinding {
+                expected_assessment_revision,
+                finding_id,
+                note,
+                evidence,
+            } => {
+                expected_assessment_revision.check()?;
+                finding_id.check()?;
+                note.check()?;
+                evidence.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueuePlacement {
+    pub work_id: Id,
+    pub anchor_id: Id,
+    pub side: QueueSide,
+}
+impl Check for QueuePlacement {
+    fn check(&self) -> Result<(), String> {
+        self.work_id.check()?;
+        self.anchor_id.check()?;
+        self.side.check()?;
+        super::domain_rules::record(
+            "QueuePlacement",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum QueueSide {
+    Before,
+    After,
+}
+impl Check for QueueSide {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -6683,12 +9313,38 @@ pub enum DomainQuery {
         page: PageRequest,
     },
     #[serde(rename = "indexing.status")]
-    IndexingStatus { repository_id: Id },
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId"]}, {"required": ["kind", "overlayId"], "x-since": 2}]))]
+    IndexingStatus {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Id")]
+        repository_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        overlay_id: Option<Id>,
+    },
     #[serde(rename = "indexing.runs")]
     IndexingRuns {
         scope: DataScope,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repository_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "NonEmpty<IndexRunState>", extend("x-since" = 2))]
+        states: Option<NonEmpty<IndexRunState>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "NonEmpty<IndexRunKind>", extend("x-since" = 2))]
+        kinds: Option<NonEmpty<IndexRunKind>>,
         page: PageRequest,
     },
     #[serde(rename = "analysis.health")]
@@ -6810,6 +9466,34 @@ pub enum DomainQuery {
         page: PageRequest,
         entity_limit: Limit,
         claim_limit: Limit,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<KnowledgeLifecycle>", extend("x-since" = 2))]
+        states: Option<Items<KnowledgeLifecycle>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<KnowledgeEntryKind>", extend("x-since" = 2))]
+        entry_kinds: Option<Items<KnowledgeEntryKind>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        source: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2))]
+        stale: Option<bool>,
     },
     #[serde(rename = "knowledge.read")]
     KnowledgeRead {
@@ -6819,9 +9503,41 @@ pub enum DomainQuery {
         revision: Option<Revision>,
     },
     #[serde(rename = "knowledge.diagnostics")]
-    KnowledgeDiagnostics { scope: DataScope },
+    KnowledgeDiagnostics {
+        scope: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        source_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ArtifactRef", extend("x-since" = 2))]
+        import_source: Option<ArtifactRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SchemaRef", extend("x-since" = 2))]
+        import_schema: Option<SchemaRef>,
+    },
     #[serde(rename = "knowledge.write_status")]
-    KnowledgeWriteStatus { write_id: Id },
+    KnowledgeWriteStatus {
+        write_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Cursor", extend("x-since" = 2))]
+        cursor: Option<Cursor>,
+    },
     #[serde(rename = "knowledge.subgraph")]
     KnowledgeSubgraph {
         scope: DataScope,
@@ -6862,6 +9578,27 @@ pub enum DomainQuery {
         scope: DataScope,
         tags: NonEmpty<Label>,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<RuleState>", extend("x-since" = 2))]
+        rule_states: Option<Items<RuleState>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 2))]
+        activity: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LessonView", extend("x-since" = 2))]
+        view: Option<LessonView>,
     },
     #[serde(rename = "dreaming.runs")]
     DreamingRuns { scope: DataScope, page: PageRequest },
@@ -7106,6 +9843,20 @@ pub enum DomainQuery {
         job_id: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 2))]
+        history: Option<PageRequest>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 2))]
+        usage: Option<PageRequest>,
     },
     #[serde(rename = "settings.read_effective")]
     SettingsReadEffective {
@@ -7679,16 +10430,24 @@ impl Check for DomainQuery {
                 roots.check()?;
                 page.check()?;
             }
-            Self::IndexingStatus { repository_id } => {
+            Self::IndexingStatus {
+                repository_id,
+                overlay_id,
+            } => {
                 repository_id.check()?;
+                overlay_id.check()?;
             }
             Self::IndexingRuns {
                 scope,
                 repository_id,
+                states,
+                kinds,
                 page,
             } => {
                 scope.check()?;
                 repository_id.check()?;
+                states.check()?;
+                kinds.check()?;
                 page.check()?;
             }
             Self::AnalysisHealth {
@@ -7873,6 +10632,10 @@ impl Check for DomainQuery {
                 page,
                 entity_limit,
                 claim_limit,
+                states,
+                entry_kinds,
+                source,
+                stale,
             } => {
                 scope.check()?;
                 text.check()?;
@@ -7881,6 +10644,10 @@ impl Check for DomainQuery {
                 page.check()?;
                 entity_limit.check()?;
                 claim_limit.check()?;
+                states.check()?;
+                entry_kinds.check()?;
+                source.check()?;
+                stale.check()?;
             }
             Self::KnowledgeRead {
                 scope,
@@ -7891,11 +10658,20 @@ impl Check for DomainQuery {
                 claim_id.check()?;
                 revision.check()?;
             }
-            Self::KnowledgeDiagnostics { scope } => {
+            Self::KnowledgeDiagnostics {
+                scope,
+                source_id,
+                import_source,
+                import_schema,
+            } => {
                 scope.check()?;
+                source_id.check()?;
+                import_source.check()?;
+                import_schema.check()?;
             }
-            Self::KnowledgeWriteStatus { write_id } => {
+            Self::KnowledgeWriteStatus { write_id, cursor } => {
                 write_id.check()?;
+                cursor.check()?;
             }
             Self::KnowledgeSubgraph { scope, query } => {
                 scope.check()?;
@@ -7925,10 +10701,20 @@ impl Check for DomainQuery {
                 scope.check()?;
                 query.check()?;
             }
-            Self::KnowledgeTaggedLessons { scope, tags, page } => {
+            Self::KnowledgeTaggedLessons {
+                scope,
+                tags,
+                page,
+                rule_states,
+                activity,
+                view,
+            } => {
                 scope.check()?;
                 tags.check()?;
                 page.check()?;
+                rule_states.check()?;
+                activity.check()?;
+                view.check()?;
             }
             Self::DreamingRuns { scope, page } => {
                 scope.check()?;
@@ -8251,9 +11037,16 @@ impl Check for DomainQuery {
                 page.check()?;
                 enabled.check()?;
             }
-            Self::JobsInspect { job_id, run_id } => {
+            Self::JobsInspect {
+                job_id,
+                run_id,
+                history,
+                usage,
+            } => {
                 job_id.check()?;
                 run_id.check()?;
+                history.check()?;
+                usage.check()?;
             }
             Self::SettingsReadEffective { scope, keys, page } => {
                 scope.check()?;
@@ -8537,6 +11330,84 @@ impl Revisioned for DomainQuery {
                     *workspace = None;
                 }
             }
+            Self::IndexingStatus { overlay_id, .. } => {
+                if revision < 2 {
+                    *overlay_id = None;
+                }
+            }
+            Self::IndexingRuns { states, kinds, .. } => {
+                if revision < 2 {
+                    *states = None;
+                }
+                if revision < 2 {
+                    *kinds = None;
+                }
+            }
+            Self::KnowledgeSearch {
+                states,
+                entry_kinds,
+                source,
+                stale,
+                ..
+            } => {
+                if revision < 2 {
+                    *states = None;
+                }
+                if revision < 2 {
+                    *entry_kinds = None;
+                }
+                if revision < 2 {
+                    *source = None;
+                }
+                if revision < 2 {
+                    *stale = None;
+                }
+            }
+            Self::KnowledgeDiagnostics {
+                source_id,
+                import_source,
+                import_schema,
+                ..
+            } => {
+                if revision < 2 {
+                    *source_id = None;
+                }
+                if revision < 2 {
+                    *import_source = None;
+                }
+                if revision < 2 {
+                    *import_schema = None;
+                }
+            }
+            Self::KnowledgeWriteStatus { cursor, .. } => {
+                if revision < 2 {
+                    *cursor = None;
+                }
+            }
+            Self::KnowledgeTaggedLessons {
+                rule_states,
+                activity,
+                view,
+                ..
+            } => {
+                if revision < 2 {
+                    *rule_states = None;
+                }
+                if revision < 2 {
+                    *activity = None;
+                }
+                if revision < 2 {
+                    *view = None;
+                }
+            }
+            Self::JobsInspect { history, usage, .. } => {
+                if revision < 2 {
+                    *history = None;
+                }
+                if revision < 2 {
+                    *usage = None;
+                }
+            }
             Self::RouterAvailability { session_id, .. } => {
                 if revision < 2 {
                     *session_id = None;
@@ -8689,16 +11560,36 @@ pub enum DomainCommand {
         changes: TaskPatch,
     },
     #[serde(rename = "features.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "orderedWorkIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "placement"], "x-since": 2}]))]
     FeaturesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        ordered_work_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_work_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "issues.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "orderedWorkIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "placement"], "x-since": 2}]))]
     IssuesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        ordered_work_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_work_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "features.edit_plan")]
     FeaturesEditPlan {
@@ -9041,6 +11932,13 @@ pub enum DomainCommand {
         expected_revision: Revision,
         reason: Content,
         evidence_ids: Items<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Text", extend("x-since" = 2))]
+        source_revision: Option<Text>,
     },
     #[serde(rename = "knowledge.retract")]
     KnowledgeRetract {
@@ -9057,6 +11955,20 @@ pub enum DomainCommand {
         expected_revision: Revision,
         reason: Content,
         evidence_ids: Items<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        resolve_challenge_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ChallengeOutcome", extend("x-since" = 2))]
+        outcome: Option<ChallengeOutcome>,
     },
     #[serde(rename = "knowledge.scope")]
     KnowledgeScope {
@@ -9093,6 +12005,27 @@ pub enum DomainCommand {
         destination: DataScope,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PromoteAction", extend("x-since" = 2))]
+        action: Option<PromoteAction>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LessonAddress", extend("x-since" = 2))]
+        address: Option<LessonAddress>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 2))]
+        reason: Option<Content>,
     },
     #[serde(rename = "dreaming.run")]
     DreamingRun {
@@ -9845,13 +12778,23 @@ pub enum DomainCommand {
     #[serde(rename = "mcp_server.set_client_access")]
     McpServerSetClientAccess { action: McpClientAccessAction },
     #[serde(rename = "tasks.prioritize")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "projectId", "expectedQueueRevision", "priority", "orderedTaskIds"]}, {"required": ["kind", "projectId", "expectedQueueRevision", "priority", "placement"], "x-since": 2}]))]
     TasksPrioritize {
         project_id: ProjectId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feature_id: Option<RootId>,
         expected_queue_revision: Revision,
         priority: i32,
-        ordered_task_ids: NonEmpty<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "NonEmpty<Id>")]
+        ordered_task_ids: Option<NonEmpty<Id>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "QueuePlacement", extend("x-since" = 2))]
+        placement: Option<QueuePlacement>,
     },
     #[serde(rename = "tasks.set_feature")]
     TasksSetFeature {
@@ -10172,19 +13115,23 @@ impl Check for DomainCommand {
                 project_id,
                 expected_queue_revision,
                 ordered_work_ids,
+                placement,
             } => {
                 project_id.check()?;
                 expected_queue_revision.check()?;
                 ordered_work_ids.check()?;
+                placement.check()?;
             }
             Self::IssuesPrioritize {
                 project_id,
                 expected_queue_revision,
                 ordered_work_ids,
+                placement,
             } => {
                 project_id.check()?;
                 expected_queue_revision.check()?;
                 ordered_work_ids.check()?;
+                placement.check()?;
             }
             Self::FeaturesEditPlan {
                 feature_id,
@@ -10685,12 +13632,14 @@ impl Check for DomainCommand {
                 expected_revision,
                 reason,
                 evidence_ids,
+                source_revision,
             } => {
                 scope.check()?;
                 claim_id.check()?;
                 expected_revision.check()?;
                 reason.check()?;
                 evidence_ids.check()?;
+                source_revision.check()?;
             }
             Self::KnowledgeRetract {
                 scope,
@@ -10711,12 +13660,16 @@ impl Check for DomainCommand {
                 expected_revision,
                 reason,
                 evidence_ids,
+                resolve_challenge_id,
+                outcome,
             } => {
                 scope.check()?;
                 claim_id.check()?;
                 expected_revision.check()?;
                 reason.check()?;
                 evidence_ids.check()?;
+                resolve_challenge_id.check()?;
+                outcome.check()?;
             }
             Self::KnowledgeScope {
                 claim_ids,
@@ -10763,11 +13716,17 @@ impl Check for DomainCommand {
                 expected_revision,
                 destination,
                 proposal_id,
+                action,
+                address,
+                reason,
             } => {
                 claim_id.check()?;
                 expected_revision.check()?;
                 destination.check()?;
                 proposal_id.check()?;
+                action.check()?;
+                address.check()?;
+                reason.check()?;
             }
             Self::DreamingRun {
                 scope,
@@ -11716,12 +14675,14 @@ impl Check for DomainCommand {
                 expected_queue_revision,
                 priority,
                 ordered_task_ids,
+                placement,
             } => {
                 project_id.check()?;
                 feature_id.check()?;
                 expected_queue_revision.check()?;
                 priority.check()?;
                 ordered_task_ids.check()?;
+                placement.check()?;
             }
             Self::TasksSetFeature {
                 task_id,
@@ -11755,6 +14716,60 @@ impl Check for DomainCommand {
 impl Revisioned for DomainCommand {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::FeaturesEdit { changes, .. } => {
+                changes.retain_revision(revision);
+            }
+            Self::FeaturesPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
+                }
+            }
+            Self::IssuesPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
+                }
+            }
+            Self::KnowledgeRecord { batch, .. } => {
+                batch.retain_revision(revision);
+            }
+            Self::KnowledgeRevise { replacement, .. } => {
+                replacement.retain_revision(revision);
+            }
+            Self::KnowledgeVerify {
+                source_revision, ..
+            } => {
+                if revision < 2 {
+                    *source_revision = None;
+                }
+            }
+            Self::KnowledgeChallenge {
+                resolve_challenge_id,
+                outcome,
+                ..
+            } => {
+                if revision < 2 {
+                    *resolve_challenge_id = None;
+                }
+                if revision < 2 {
+                    *outcome = None;
+                }
+            }
+            Self::KnowledgePromote {
+                action,
+                address,
+                reason,
+                ..
+            } => {
+                if revision < 2 {
+                    *action = None;
+                }
+                if revision < 2 {
+                    *address = None;
+                }
+                if revision < 2 {
+                    *reason = None;
+                }
+            }
             Self::ResourcesAcquire {
                 purpose,
                 priority,
@@ -11774,6 +14789,9 @@ impl Revisioned for DomainCommand {
                 if revision < 2 {
                     *labels = None;
                 }
+            }
+            Self::RouterConfigure { action, .. } => {
+                action.retain_revision(revision);
             }
             Self::WorkspaceRecordDiagnostic {
                 operation,
@@ -11833,6 +14851,11 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *output = None;
+                }
+            }
+            Self::TasksPrioritize { placement, .. } => {
+                if revision < 2 {
+                    *placement = None;
                 }
             }
             _ => {}
@@ -13323,6 +16346,25 @@ impl Check for OperationResult {
 impl Revisioned for OperationResult {
     fn retain_revision(&mut self, revision: u32) {
         match self {
+            Self::FeaturesList { value } => value.retain_revision(revision),
+            Self::FeaturesGet { value } => value.retain_revision(revision),
+            Self::FeaturesCreate { value } => value.retain_revision(revision),
+            Self::FeaturesEdit { value } => value.retain_revision(revision),
+            Self::IssuesList { value } => value.retain_revision(revision),
+            Self::IssuesGet { value } => value.retain_revision(revision),
+            Self::IssuesCreate { value } => value.retain_revision(revision),
+            Self::IssuesEdit { value } => value.retain_revision(revision),
+            Self::TasksList { value } => value.retain_revision(revision),
+            Self::TasksGet { value } => value.retain_revision(revision),
+            Self::TasksCreate { value } => value.retain_revision(revision),
+            Self::TasksEdit { value } => value.retain_revision(revision),
+            Self::FeaturesEditPlan { value } => value.retain_revision(revision),
+            Self::FeaturesDependencies { value } => value.retain_revision(revision),
+            Self::TasksMove { value } => value.retain_revision(revision),
+            Self::TasksAssign { value } => value.retain_revision(revision),
+            Self::TasksDependencyLinks { value } => value.retain_revision(revision),
+            Self::TasksAcceptanceEvidence { value } => value.retain_revision(revision),
+            Self::TasksSyncPlan { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsStart { value } => value.retain_revision(revision),
@@ -13331,6 +16373,28 @@ impl Revisioned for OperationResult {
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
+            Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::KnowledgeSearch { value } => value.retain_revision(revision),
+            Self::KnowledgeRead { value } => value.retain_revision(revision),
+            Self::KnowledgeRecord { value } => value.retain_revision(revision),
+            Self::KnowledgeRevise { value } => value.retain_revision(revision),
+            Self::KnowledgeRelate { value } => value.retain_revision(revision),
+            Self::KnowledgeTag { value } => value.retain_revision(revision),
+            Self::KnowledgeVerify { value } => value.retain_revision(revision),
+            Self::KnowledgeRetract { value } => value.retain_revision(revision),
+            Self::KnowledgeChallenge { value } => value.retain_revision(revision),
+            Self::KnowledgeScope { value } => value.retain_revision(revision),
+            Self::KnowledgeWriteStatus { value } => value.retain_revision(revision),
+            Self::KnowledgeSubgraph { value } => value.retain_revision(revision),
+            Self::KnowledgeEntityBundle { value } => value.retain_revision(revision),
+            Self::KnowledgeEntityGraph { value } => value.retain_revision(revision),
+            Self::KnowledgeClaimBundle { value } => value.retain_revision(revision),
+            Self::KnowledgeExpandFrontier { value } => value.retain_revision(revision),
+            Self::KnowledgeQuery { value } => value.retain_revision(revision),
+            Self::KnowledgeImportUserData { value } => value.retain_revision(revision),
+            Self::KnowledgePromote { value } => value.retain_revision(revision),
+            Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingRevert { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -13339,12 +16403,32 @@ impl Revisioned for OperationResult {
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
             Self::WebSearch { value } => value.retain_revision(revision),
             Self::WebFetch { value } => value.retain_revision(revision),
+            Self::JobsList { value } => value.retain_revision(revision),
+            Self::JobsCreate { value } => value.retain_revision(revision),
+            Self::JobsEdit { value } => value.retain_revision(revision),
+            Self::JobsEnable { value } => value.retain_revision(revision),
+            Self::JobsDisable { value } => value.retain_revision(revision),
+            Self::JobsDelete { value } => value.retain_revision(revision),
+            Self::JobsRunNow { value } => value.retain_revision(revision),
+            Self::JobsInspect { value } => value.retain_revision(revision),
+            Self::JobsCancel { value } => value.retain_revision(revision),
+            Self::RouterCatalog { value } => value.retain_revision(revision),
+            Self::RouterConnections { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
+            Self::AddonsCatalog { value } => value.retain_revision(revision),
+            Self::AddonsConfigure { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
+            Self::TasksSetFeature { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
+            Self::AddonsInstall { value } => value.retain_revision(revision),
+            Self::AddonsUpdate { value } => value.retain_revision(revision),
+            Self::AddonsEnable { value } => value.retain_revision(revision),
+            Self::AddonsDisable { value } => value.retain_revision(revision),
+            Self::AddonsRollback { value } => value.retain_revision(revision),
+            Self::AddonsUninstall { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             _ => {}

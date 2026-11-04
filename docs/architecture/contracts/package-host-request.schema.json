@@ -4,6 +4,17 @@
     "Activate": {
       "additionalProperties": false,
       "properties": {
+        "configuration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActivateConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The package's committed configuration (absent when none was saved)."
+        },
         "configurationRevision": {
           "$ref": "#/$defs/Revision"
         },
@@ -22,6 +33,21 @@
         "registryRevision",
         "stateGeneration",
         "configurationRevision"
+      ],
+      "type": "object"
+    },
+    "ActivateConfiguration": {
+      "additionalProperties": false,
+      "description": "A package's committed configuration: the value and the schema it was validated against.",
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "value": true
+      },
+      "required": [
+        "schema",
+        "value"
       ],
       "type": "object"
     },
@@ -290,6 +316,26 @@
         "2.0"
       ],
       "type": "string"
+    },
+    "SchemaRef": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "schemaId": {
+          "$ref": "#/$defs/QualifiedId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "schemaId",
+        "revision",
+        "sha256"
+      ],
+      "type": "object"
     },
     "Shutdown": {
       "additionalProperties": false,

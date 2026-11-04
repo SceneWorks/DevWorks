@@ -28,6 +28,12 @@ pub struct ProcessSpec {
     /// Give the child a private control channel ([`ProcessTree::take_control`]) that no other
     /// process can reach: anonymous pipes, never a name or a port.
     pub control_pipe: Option<ControlPipe>,
+    /// Give the child a stdin pipe ([`ProcessTree::take_input`]); otherwise stdin is null. A
+    /// package helper's control channel is its stdin and stdout.
+    pub pipe_stdin: bool,
+    /// Bytes written to the child's stdin and then closed (a request list such as
+    /// `git cat-file --batch` reads); `None` gives the child no stdin.
+    pub stdin: Option<Vec<u8>>,
 }
 
 /// A private bidirectional control channel of a child. On Unix the child reads what the host
@@ -54,6 +60,8 @@ impl ProcessSpec {
             clear_env: false,
             capture_output: false,
             control_pipe: None,
+            pipe_stdin: false,
+            stdin: None,
         })
     }
     /// The program followed by its arguments.
@@ -138,6 +146,10 @@ pub trait ProcessTree: Send {
     /// the tree's emptiness.
     fn root_exited(&mut self) -> Result<bool, ProcessError> {
         self.poll().map(|s| s.empty)
+    }
+    /// The stdin pipe of a tree launched with `pipe_stdin`, once.
+    fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
+        None
     }
 }
 

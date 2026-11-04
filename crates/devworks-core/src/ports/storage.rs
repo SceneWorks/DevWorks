@@ -51,10 +51,10 @@
 //! repository ([`ConfigurationRepository`]), the host authority ledger ([`AuthorityLedger`]), the
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
-//! ([`ResourceRepository`]), the run root control records ([`RunRepository`]), the retained
-//! diagnostic log ([`DiagnosticRepository`]), the project and repository registration records
-//! ([`ProjectRepository`]) and the owned browser sessions with their observation index
-//! ([`BrowserRepository`]).
+//! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
+//! diagnostic log ([`DiagnosticRepository`]), the project and repository registration
+//! records ([`ProjectRepository`]) and the repository indexing records ([`IndexRepository`]).
+//! Owned browser sessions and observations use BrowserRepository.
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -75,21 +75,31 @@ mod authority;
 mod browser;
 mod configuration;
 mod diagnostics;
+mod indexing;
+mod jobs;
+mod knowledge;
+mod packages;
 mod projects;
 mod resources;
 mod router;
 mod runs;
 mod sessions;
+mod work;
 pub use artifacts::*;
 pub use authority::*;
 pub use browser::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use indexing::*;
+pub use jobs::*;
+pub use knowledge::*;
+pub use packages::*;
 pub use projects::*;
 pub use resources::*;
 pub use router::*;
 pub use runs::*;
 pub use sessions::*;
+pub use work::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -483,6 +493,10 @@ pub trait WriteTransaction {
     fn browser(&mut self) -> &mut dyn BrowserRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
+    fn indexing(&mut self) -> &mut dyn IndexRepository;
+    fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
+    fn jobs(&mut self) -> &mut dyn JobRepository;
+    fn work(&mut self) -> &mut dyn WorkRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -526,6 +540,10 @@ pub trait ReadSnapshot {
     fn browser(&self) -> &dyn BrowserRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
+    fn indexing(&self) -> &dyn IndexRead;
+    fn knowledge(&self) -> &dyn KnowledgeRead;
+    fn jobs(&self) -> &dyn JobRead;
+    fn work(&self) -> &dyn WorkRead;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1177,7 +1195,8 @@ pub struct ProcessingRecord {
     /// `[{"actionKey", "operationId"}]` in submission order.
     pub intents: Value,
 }
-pub trait PackageHandlerRead {
+/// Handler state and processing receipts plus the package registry ([`PackageRegistryRead`]).
+pub trait PackageHandlerRead: PackageRegistryRead {
     fn package_state(&self, package_id: &str) -> Result<Option<PackageState>, StorageError>;
     fn processing(
         &self,
@@ -1186,7 +1205,7 @@ pub trait PackageHandlerRead {
         event_id: &EventId,
     ) -> Result<Option<ProcessingRecord>, StorageError>;
 }
-pub trait PackageHandlerLedger: PackageHandlerRead {
+pub trait PackageHandlerLedger: PackageHandlerRead + PackageRegistry {
     /// Compare-and-set of the package state. `expected_revision` 0 creates it at revision 1. A
     /// different stored generation is [`StorageError::LeaseLost`]; a different revision is a
     /// [`StorageError::RevisionConflict`].

@@ -1,8 +1,8 @@
-//! Migration 16 and the SQLite browser session repository: lifecycle compare-and-set, the
+//! Migration 21 and the SQLite browser session repository: lifecycle compare-and-set, the
 //! fields that never change, settled finality, observation sequences that never reuse a value
 //! and do not change the session revision, and bounded records. No browser.
 use super::{Harness, through};
-use crate::storage::sqlite::{MIGRATION_0016_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0021_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::context::PrincipalKind;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, OperationId};
@@ -79,19 +79,19 @@ fn get(s: &SqliteStore) -> StoredBrowserSession {
 fn migration_16_adds_browser_sessions_on_top_of_version_12() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 16)
-        .expect("migration 16");
+        .find(|m| m.version == 21)
+        .expect("migration 21");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0016_SHA256,
+        MIGRATION_0021_SHA256,
         "an applied migration was edited"
     );
-    // The writer floor keeps migration 14's: applying 16 must not lower it.
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
+    // The writer floor keeps migration 14's: applying 21 must not lower it.
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 19));
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(12)).unwrap());
-    let s = SqliteStore::open_with(h.config(), &through(16)).unwrap();
+    let s = SqliteStore::open_with(h.config(), &through(21)).unwrap();
     let report = s.compatibility().unwrap();
     assert_eq!(
         (
@@ -99,7 +99,7 @@ fn migration_16_adds_browser_sessions_on_top_of_version_12() {
             report.minimum_reader,
             report.minimum_writer
         ),
-        (16, 8, 14)
+        (21, 8, 19)
     );
 }
 

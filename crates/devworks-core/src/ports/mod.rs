@@ -8,7 +8,11 @@
 pub mod browser;
 pub mod diagnostics;
 pub mod files;
+pub mod http;
+pub mod indexing;
+pub mod packages;
 pub mod process;
+pub mod retrieval;
 pub mod router;
 pub mod secrets;
 pub mod storage;
@@ -62,6 +66,36 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Exact-version package approval proposals.
+    Proposal,
+    /// Package process sessions (the protocol nonce of one helper instance).
+    PackageSession,
+    /// Package invocations and their short-lived tokens.
+    Invocation,
+    /// Repository registrations (discovery).
+    Repository,
+    /// Index graph generations.
+    Generation,
+    /// Immutable index views.
+    View,
+    /// Worktree overlays.
+    Overlay,
+    /// Knowledge entities, claims, evidence, relations, challenges and writes.
+    KnowledgeEntity,
+    KnowledgeClaim,
+    KnowledgeEvidence,
+    KnowledgeRelation,
+    KnowledgeChallenge,
+    KnowledgeWrite,
+    /// Schedules (jobs) and their runs.
+    Job,
+    JobRun,
+    /// Provider connections.
+    Connection,
+    /// Secret-store credential handles (immutable; a replacement gets a new one).
+    Credential,
+    /// In-process sign-in flows.
+    SignInFlow,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

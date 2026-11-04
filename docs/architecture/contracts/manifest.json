@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-03",
+  "date": "2026-11-04",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -81,7 +81,7 @@
     },
     {
       "file": "domain-command-reply.r2.schema.json",
-      "sha256": "55eff05362ac4be4f1651f1800dc8580e76b20946872daa2364608397b240d19"
+      "sha256": "d7666bd89d271aa272e349cee79c199739cf81b259f99f4fda2281fa4942785e"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -89,7 +89,7 @@
     },
     {
       "file": "domain-query-reply.r2.schema.json",
-      "sha256": "c49692cff95664f2c2e08500354d598f0e13e82ae7326d6bf5c187b213df8414"
+      "sha256": "9880085eebc8e477ad6479205da5e6a09087352da9db7df2e82493b84ad53271"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -97,7 +97,7 @@
     },
     {
       "file": "domain-request.r2.schema.json",
-      "sha256": "f6a834b30ddf8725608e115ce94cb90afc54d96e8ce3dca57901189c344ccf06"
+      "sha256": "3c207eb42ae8d8c3eef1883f72ebb06d81dafa55675e24fa4783515b41ea609a"
     },
     {
       "file": "domain-request.schema.json",
@@ -124,6 +124,10 @@
       "sha256": "1eece9e6fd9260c3af95fe787623839c7bfa72ade43ab97bf7337121b5bf133c"
     },
     {
+      "file": "index-command-request.r2.schema.json",
+      "sha256": "5d7eb87ee89c8b15b5d5f79183593f73d2a9a10bfe08297463728c8cabb751f3"
+    },
+    {
       "file": "index-command-request.schema.json",
       "sha256": "eb2bfdf772de716567bb0a6aaf11a1e0810a9cefa2d147a44b461d5045092845"
     },
@@ -137,7 +141,7 @@
     },
     {
       "file": "operation-completion.r2.schema.json",
-      "sha256": "7f28163e4bd028ed5ec91180e3573b12e661d8eff6fb9bf8bc3597177239deef"
+      "sha256": "2d28e277e94ab7b77166a19398f0ce11d3bc2bcd65a0512ac8d57e9650071ce2"
     },
     {
       "file": "operation-completion.schema.json",
@@ -145,7 +149,7 @@
     },
     {
       "file": "operation-result.r2.schema.json",
-      "sha256": "c045f9cd77b8238fb743d86495aee2d4c4641b0196d68fdb344491b6c66f58cb"
+      "sha256": "795a3986b4ef180cc923c1e0ba717668d03170f7d6ae665f6593cc2ab52f01b6"
     },
     {
       "file": "operation-result.schema.json",
@@ -153,7 +157,7 @@
     },
     {
       "file": "package-host-request.schema.json",
-      "sha256": "190beae90c974720523774ca4cb366033ba74ba104dc46dbcdd780b30811f5b9"
+      "sha256": "166f62f1500f9c014b66b002b79d800e0e9616ef12a8ddf96d5ac5a0be65f0b3"
     },
     {
       "file": "package-manifest.schema.json",

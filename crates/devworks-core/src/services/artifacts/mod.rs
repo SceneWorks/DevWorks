@@ -118,6 +118,7 @@
 //! (the source's quirk: I/O failures were reported as not found), and an unavailable store is
 //! `StorageUnavailable`.
 pub mod evidence;
+pub mod host;
 pub mod lifecycle;
 pub mod observed;
 pub mod preview;
@@ -444,8 +445,54 @@ pub(crate) fn visible_in(
         (Some(p), ArtifactScope::Project(owner)) => {
             owner == p || read.shares(&artifact.id)?.contains(p)
         }
-        (Some(p), ArtifactScope::Workspace) => read.shares(&artifact.id)?.contains(p),
+        // A host-published repository text is readable where its repository is: by every
+        // project that has the repository as a member (CODE-07; no share to maintain).
+        (Some(p), ArtifactScope::Workspace) => {
+            read.shares(&artifact.id)?.contains(p)
+                || read.repository_text_readers(&artifact.id)?.contains(p)
+        }
     })
+}
+
+/// Shares the artifact of `reference` with `project` for a workspace-authorized caller that
+/// sees it at workspace level and names it in that project's work (a project's initial plan
+/// names content written before the project existed: its agents must read it there). A live,
+/// explicitly retained artifact only; the share is recorded like `ArtifactShared` of the share
+/// path. Returns whether it was shared (nothing changes otherwise).
+pub(crate) fn share_named_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+    project: &ProjectId,
+) -> Result<bool, StorageError> {
+    let viewer = Viewer::resolve(tx.authority(), ctx)?;
+    if viewer.authorized != Some(AuthorizedScope::Workspace) {
+        return Ok(false);
+    }
+    let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+        return Ok(false);
+    };
+    if artifact.state != ArtifactState::Live
+        || artifact.retention != ArtifactRetention::Explicit
+        || artifact.scope.project() == Some(project)
+        || !visible_in(tx.artifacts(), &viewer, &artifact, None)?
+        || !tx.artifacts().add_share(&artifact.id, project)?
+    {
+        return Ok(false);
+    }
+    artifact.scope_revision += 1;
+    artifact.reference_revision += 1;
+    tx.artifacts().update_artifact(&artifact)?;
+    event(
+        tx,
+        ctx,
+        &artifact,
+        None,
+        None,
+        "ArtifactShared",
+        json!({"projectId": project.0.as_str(), "scopeRevision": artifact.scope_revision}),
+    )?;
+    Ok(true)
 }
 
 /// A request naming `project` must match the invocation's project, when it has one.

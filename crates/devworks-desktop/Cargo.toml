@@ -39,3 +39,5 @@ libc = "=0.2.191"
 egui_kittest = "=0.37.0"
 # Seeds a work root the desktop does not create yet (the close-lifecycle test).
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
+# Signs a test publisher index (the Add-ons catalog paging test).
+ed25519-dalek = "=2.2.0"

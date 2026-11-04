@@ -227,6 +227,7 @@ pub fn record_boot_failure(service: &DiagnosticService, error: &BootError) {
         BootError::Settings(e) => ("settings", e),
         BootError::Runs(e) => ("runs", e),
         BootError::Browser(e) => ("browser", e),
+        BootError::Packages(e) => ("packages", e),
     };
     let class = match cause {
         StorageError::Busy | StorageError::CommitUnknown => DiagnosticErrorClass::Transient,
@@ -441,6 +442,7 @@ mod tests {
             runs,
             keep_awake: KeepAwakeStatus::Off,
             browser: None,
+            index_runs_resumed: 0,
         }
     }
 

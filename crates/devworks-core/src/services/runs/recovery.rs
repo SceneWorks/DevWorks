@@ -433,9 +433,39 @@ impl ControlService {
         // the root while it still carries the stop; after a Continue only the trees this stop
         // already holds for reconciliation (newer trees belong to the newer generation).
         let named = stop_reconciliation_targets(tx.runs(), root_id, op)?;
+        // A feature's stop covers its linked cards' retained work as well, each fenced to the
+        // generation it covered: once a card moved past it (unlinked and continued), its newer
+        // work is never stopped, waited for or held here.
+        let mut linked = Vec::new();
+        for card in super::stop_linked_roots(tx, op)? {
+            let moved = card.superseded(&super::control_of(tx.runs(), &card.root)?);
+            linked.push((card, moved));
+        }
+        for (card, _) in &linked {
+            if let Some(a) = tx.runs().live_activation(&card.root)?
+                && a.phase == ActivationPhase::Stopping
+                && a.owner.is_none()
+                && a.generation <= card.generation
+                && let Some(c) = tx.sessions().work_root(&card.root)?
+            {
+                self.stop_activation(tx, &c, &a, ActivationOutcome::Cancelled, Some("stopped"))?;
+            }
+        }
         let mut all: Vec<(Id, String)> = uncertain.to_vec();
-        for p in unsettled_processes(tx, root_id)? {
-            let counts = !superseded || named.iter().any(|n| n == &p.0);
+        let mut trees: Vec<((Id, String), bool)> = unsettled_processes(tx, root_id)?
+            .into_iter()
+            .map(|p| (p, superseded))
+            .collect();
+        for (card, moved) in &linked {
+            let fenced = superseded || *moved;
+            trees.extend(
+                unsettled_processes(tx, &card.root)?
+                    .into_iter()
+                    .map(|p| (p, fenced)),
+            );
+        }
+        for (p, fenced) in trees {
+            let counts = !fenced || named.iter().any(|n| n == &p.0);
             if counts && !all.iter().any(|(i, _)| i == &p.0) {
                 all.push(p);
             }
@@ -446,13 +476,24 @@ impl ControlService {
         // claimed, keeps the stop pending (it is executed and settled again once quiesced). The
         // trees it could not verify stopped are held for reconciliation now, so a later pass —
         // also one superseded by a Continue — still requires them reconciled.
-        let quiesced = if superseded {
+        let mut quiesced = if superseded {
             !tx.runs()
                 .live_activation(root_id)?
                 .is_some_and(|a| a.owner.is_some() && a.generation <= covered)
         } else {
             root_quiesced(tx, root_id)?
         };
+        // The linked cards' retained activations were asked to stop with the feature: the stop
+        // is complete only once they ended (a Continue of the feature resumes none of them).
+        for (card, moved) in &linked {
+            quiesced &= if superseded || *moved {
+                !tx.runs()
+                    .live_activation(&card.root)?
+                    .is_some_and(|a| a.owner.is_some() && a.generation <= card.generation)
+            } else {
+                root_quiesced(tx, &card.root)?
+            };
+        }
         if !quiesced {
             if !uncertain.is_empty() {
                 self.hold_uncertain(tx, &root, op, uncertain)?;

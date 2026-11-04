@@ -1,6 +1,7 @@
 //! SQLite inference router records (migration 13): `router_models`, `router_tier_cursors`,
 //! `router_pins`, `router_cooldowns` and `router_requests`.
 use super::conn::db;
+use super::connections::{connection, decision_model};
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, OperationId, ProjectId, Revision, RevisionDimension};
@@ -49,52 +50,56 @@ const PURPOSES: [&str; 6] = [
 // ---------------------------------------------------------------------------------------------
 // Models
 
-const MODEL_COLUMNS: &str = "id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at";
+const MODEL_COLUMNS: &str = "id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at,connection_id";
 
-type RawModel = (
-    String,
-    String,
-    String,
-    String,
-    bool,
-    String,
-    bool,
-    bool,
-    Option<i64>,
-    i64,
-    i64,
-    i64,
-);
+/// A stored catalog row before its identifiers and lists are validated.
+struct RawModel {
+    id: String,
+    display_name: String,
+    endpoint_profile: String,
+    upstream_model_id: String,
+    enabled: bool,
+    efforts: String,
+    image_input: bool,
+    tools: bool,
+    context_tokens: Option<i64>,
+    position: i64,
+    revision: i64,
+    updated_at_ms: i64,
+    connection_id: Option<String>,
+}
 fn raw_model(r: &Row<'_>) -> rusqlite::Result<RawModel> {
-    Ok((
-        r.get(0)?,
-        r.get(1)?,
-        r.get(2)?,
-        r.get(3)?,
-        r.get(4)?,
-        r.get(5)?,
-        r.get(6)?,
-        r.get(7)?,
-        r.get(8)?,
-        r.get(9)?,
-        r.get(10)?,
-        r.get(11)?,
-    ))
+    Ok(RawModel {
+        id: r.get(0)?,
+        display_name: r.get(1)?,
+        endpoint_profile: r.get(2)?,
+        upstream_model_id: r.get(3)?,
+        enabled: r.get(4)?,
+        efforts: r.get(5)?,
+        image_input: r.get(6)?,
+        tools: r.get(7)?,
+        context_tokens: r.get(8)?,
+        position: r.get(9)?,
+        revision: r.get(10)?,
+        updated_at_ms: r.get(11)?,
+        connection_id: r.get(12)?,
+    })
 }
 fn model_of(r: RawModel) -> Result<StoredRouteModel, StorageError> {
     Ok(StoredRouteModel {
-        id: id_of(r.0)?,
-        display_name: r.1,
-        endpoint_profile: r.2,
-        upstream_model_id: r.3,
-        enabled: r.4,
-        efforts: strings(&r.5)?,
-        image_input: r.6,
-        tools: r.7,
-        context_tokens: r.8,
-        position: r.9,
-        revision: r.10,
-        updated_at_ms: r.11,
+        id: id_of(r.id)?,
+        display_name: r.display_name,
+        endpoint_profile: r.endpoint_profile,
+        upstream_model_id: r.upstream_model_id,
+        enabled: r.enabled,
+        efforts: strings(&r.efforts)?,
+        image_input: r.image_input,
+        tools: r.tools,
+        context_tokens: r.context_tokens,
+        connection_id: opt_id(r.connection_id)?,
+        position: r.position,
+        revision: r.revision,
+        updated_at_ms: r.updated_at_ms,
     })
 }
 fn model(conn: &Connection, id: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
@@ -309,6 +314,26 @@ macro_rules! router_reads {
             fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
                 model(self.conn, id)
             }
+            fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError> {
+                connection(self.conn, id)
+            }
+            fn connections(
+                &self,
+                after: Option<&str>,
+                limit: u16,
+            ) -> Result<Vec<StoredConnection>, StorageError> {
+                super::connections::connections(self.conn, after, limit)
+            }
+            fn decision_model(&self, id: &Id) -> Result<Option<StoredDecisionModel>, StorageError> {
+                decision_model(self.conn, id)
+            }
+            fn decision_models(
+                &self,
+                after: Option<&str>,
+                limit: u16,
+            ) -> Result<Vec<StoredDecisionModel>, StorageError> {
+                super::connections::decision_models(self.conn, after, limit)
+            }
             fn route_models(
                 &self,
                 after: Option<(i64, &str)>,
@@ -373,13 +398,30 @@ impl RouterRepository for Unit<'_> {
             }
             (Some(e), Some(_)) => e + 1,
         };
+        if decision_model(self.conn, &m.id)?.is_some() {
+            return Err(invalid(
+                "a decision model's ID cannot also be a conversational model",
+            ));
+        }
+        if let Some(c) = &m.connection_id {
+            match connection(self.conn, c)? {
+                None => return Err(invalid("the model's connection does not exist")),
+                Some(conn) if conn.profile != m.endpoint_profile => {
+                    return Err(invalid(
+                        "the model's connection serves another endpoint profile",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         db(self.conn.execute(
-            "INSERT INTO router_models(id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+            "INSERT INTO router_models(id,display_name,endpoint_profile,upstream_model_id,enabled,efforts_json,image_input,tools,context_tokens,position,revision,updated_at,connection_id) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
              ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, endpoint_profile=excluded.endpoint_profile, \
              upstream_model_id=excluded.upstream_model_id, enabled=excluded.enabled, efforts_json=excluded.efforts_json, \
              image_input=excluded.image_input, tools=excluded.tools, context_tokens=excluded.context_tokens, \
-             position=excluded.position, revision=excluded.revision, updated_at=excluded.updated_at",
+             position=excluded.position, revision=excluded.revision, updated_at=excluded.updated_at, \
+             connection_id=excluded.connection_id",
             params![
                 m.id.as_str(),
                 m.display_name,
@@ -393,6 +435,7 @@ impl RouterRepository for Unit<'_> {
                 m.position,
                 next,
                 m.updated_at_ms,
+                m.connection_id.as_ref().map(Id::as_str),
             ],
         ))?;
         model(self.conn, &m.id)?.ok_or_else(|| corrupt("model vanished inside its transaction"))
@@ -535,5 +578,25 @@ impl RouterRepository for Unit<'_> {
             ],
         ))?;
         Ok(())
+    }
+
+    fn put_connection(
+        &mut self,
+        c: &StoredConnection,
+        expected_revision: Option<i64>,
+    ) -> Result<StoredConnection, StorageError> {
+        super::connections::put_connection(self.conn, c, expected_revision)
+    }
+
+    fn delete_connection(&mut self, id: &Id, expected_revision: i64) -> Result<(), StorageError> {
+        super::connections::delete_connection(self.conn, id, expected_revision)
+    }
+
+    fn put_decision_model(
+        &mut self,
+        m: &StoredDecisionModel,
+        expected_revision: Option<i64>,
+    ) -> Result<StoredDecisionModel, StorageError> {
+        super::connections::put_decision_model(self.conn, m, expected_revision)
     }
 }

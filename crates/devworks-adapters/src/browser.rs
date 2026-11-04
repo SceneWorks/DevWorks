@@ -344,6 +344,8 @@ impl BrowserPlatform for NativeBrowserPlatform {
 
     fn command(&self, asset: &BrowserAsset, profile: &Profile, args: &[String]) -> ProcessSpec {
         ProcessSpec {
+            pipe_stdin: false,
+            stdin: None,
             program: asset
                 .program
                 .as_ref()

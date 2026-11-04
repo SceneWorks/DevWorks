@@ -3,7 +3,7 @@
 use devworks_core::ports::process::{
     ControlChannel, NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -155,7 +155,11 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     if let Some(dir) = &spec.cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(Stdio::null());
+    cmd.stdin(if spec.pipe_stdin || spec.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     let out = || {
         if spec.capture_output {
             Stdio::piped()
@@ -195,6 +199,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     });
     drop(serial);
     let mut child = spawned.map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    super::feed_stdin(&mut child, spec);
     let process = child.as_raw_handle() as HANDLE;
     let pid = child.id();
     let fail = |child: &mut Child, e: String| {
@@ -213,6 +218,10 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         unsafe { TerminateJobObject(job.0, 1) };
         return fail(&mut child, e);
     }
+    let input = child
+        .stdin
+        .take()
+        .map(|i| Box::new(i) as Box<dyn Write + Send>);
     let output = match (child.stdout.take(), child.stderr.take()) {
         (Some(o), Some(e)) => Some((
             Box::new(o) as Box<dyn Read + Send>,
@@ -232,6 +241,7 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         exit_code: None,
         output,
         control,
+        input,
     }))
 }
 
@@ -243,6 +253,7 @@ struct JobTree {
     exit_code: Option<i32>,
     output: Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>,
     control: Option<ControlChannel>,
+    input: Option<Box<dyn Write + Send>>,
 }
 // SAFETY: the job handle is a kernel object handle usable from any thread.
 unsafe impl Send for JobTree {}
@@ -311,6 +322,9 @@ impl ProcessTree for JobTree {
         // The job keeps descendants alive after the root's exit; the root's own handle (held
         // by `child`, so its pid cannot be reused) tells whether it ended.
         Ok(self.empty || matches!(self.child.try_wait(), Ok(Some(_))))
+    }
+    fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.input.take()
     }
 }
 

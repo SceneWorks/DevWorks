@@ -103,17 +103,32 @@ impl Revisioned for RetireViewInput {
 /// `indexing.status` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["repositoryId"]}, {"required": ["overlayId"], "x-since": 2}]))]
 pub struct StatusInput {
-    pub repository_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Id")]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub overlay_id: Option<Id>,
 }
 impl Check for StatusInput {
     fn check(&self) -> Result<(), String> {
         self.repository_id.check()?;
+        self.overlay_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for StatusInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.overlay_id = None;
+        }
+    }
 }
 
 /// `indexing.runs` Query input.
@@ -123,18 +138,41 @@ pub struct RunsInput {
     pub scope: DataScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "NonEmpty<IndexRunState>", extend("x-since" = 2))]
+    pub states: Option<NonEmpty<IndexRunState>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "NonEmpty<IndexRunKind>", extend("x-since" = 2))]
+    pub kinds: Option<NonEmpty<IndexRunKind>>,
     pub page: PageRequest,
 }
 impl Check for RunsInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
         self.repository_id.check()?;
+        self.states.check()?;
+        self.kinds.check()?;
         self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for RunsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.states = None;
+        }
+        if revision < 2 {
+            self.kinds = None;
+        }
+    }
 }
 
 /// `indexing.configure_sources` Command input.
