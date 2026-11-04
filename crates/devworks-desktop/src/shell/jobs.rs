@@ -692,9 +692,7 @@ impl Shell {
                 };
                 match page {
                     Ok((items, cursor)) => {
-                        let Some(mut refresh) = self.jobs.list_refresh.take() else {
-                            return None;
-                        };
+                        let mut refresh = self.jobs.list_refresh.take()?;
                         append_jobs(&mut refresh.items, items);
                         refresh.pages += 1;
                         // Up to the pages shown now (More jobs may have added one meanwhile).
