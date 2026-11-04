@@ -18,10 +18,11 @@ pub mod resources;
 pub mod router;
 pub mod runs;
 pub mod sessions;
+pub mod web;
 
 use crate::context::InvocationContext;
 use crate::gateway::{CommandOutcome, Gateway, GatewayFailure, QueryOutcome};
-use crate::ports::storage::WriteOptions;
+use crate::ports::storage::{ReadOptions, WriteOptions};
 use crate::ports::{CommandHandler, QueryHandler};
 use crate::protocol::support::BoundedList;
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, RetryAdvice};
@@ -170,6 +171,14 @@ impl UseCases {
         self
     }
 
+    /// Registers the shared web tools (`WebAdapter`): `web.search` and `web.fetch`.
+    pub fn with_web(mut self, service: Arc<web::WebService>) -> Self {
+        for op in web::OPERATIONS {
+            self.register(op, Some(service.clone()), None);
+        }
+        self
+    }
+
     /// Registers the projects family (`WorkService` projects).
     pub fn with_projects(mut self, service: Arc<projects::ProjectService>) -> Self {
         for op in projects::PROJECT_OPERATIONS {
@@ -200,8 +209,20 @@ impl UseCases {
         operation: &str,
         raw: &[u8],
     ) -> QueryOutcome {
+        self.query_with(gateway, ctx, operation, raw, ReadOptions::default())
+    }
+
+    /// [`UseCases::query`] with the caller's cancellation and deadline.
+    pub fn query_with(
+        &self,
+        gateway: &Gateway<'_>,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: ReadOptions,
+    ) -> QueryOutcome {
         match self.queries.get(operation) {
-            Some(handler) => gateway.query(ctx, operation, raw, handler.as_ref()),
+            Some(handler) => gateway.query_with(ctx, operation, raw, handler.as_ref(), options),
             None => Err(GatewayFailure::NoUseCase(operation.to_owned())),
         }
     }

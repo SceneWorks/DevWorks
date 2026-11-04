@@ -43,7 +43,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.claim_bundle', 'knowledge.expand_frontier', 'knowledge.query',
             'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate', 'knowledge.tag',
             'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
-            'knowledge.import_user_data', 'dreaming.revert'})
+            'knowledge.import_user_data', 'dreaming.revert', 'web.search', 'web.fetch'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
         # Knowledge revision 2 reaches every operation whose input or result carries a gated
@@ -53,6 +53,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['knowledge.tag'], {2})
         self.assertEqual(carried['dreaming.revert'], {2})
         self.assertEqual(carried['knowledge.delete_by_source'], set())
+        self.assertEqual(carried['web.search'], {2})
+        self.assertEqual(carried['web.fetch'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
