@@ -260,6 +260,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "history.tool_usage",
             "history.work_lineage",
             "knowledge.challenge",
+            "knowledge.delete_by_source",
             "knowledge.claim_bundle",
             "knowledge.diagnostics",
             "knowledge.entity_bundle",
