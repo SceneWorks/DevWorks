@@ -11,6 +11,7 @@ use crate::route::{NAV_ORDER, NavGroup, Route};
 use crate::settings_screen::{KEEP_AWAKE, SettingsAction, SettingsScreen};
 use crate::theme;
 use crate::virtual_list::{self, Scrolls};
+use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
@@ -1526,6 +1527,35 @@ impl Shell {
                 // The view moved to another revision meanwhile: explain it at that one.
                 self.explain(key);
             }
+            (Slot::WebFetch, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.fetching = false;
+                match ops::web_document(q) {
+                    Ok(doc) => {
+                        web.document = Some(doc);
+                        web.error = None;
+                    }
+                    Err(e) => web.error = Some(e.describe()),
+                }
+                self.web_action(WebAction::LoadActivity);
+            }
+            (Slot::WebSearch, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.searching = false;
+                match ops::web_results(q) {
+                    Ok(results) => {
+                        web.results = Some(results);
+                        web.error = None;
+                    }
+                    Err(e) => web.error = Some(e.describe()),
+                }
+                self.web_action(WebAction::LoadActivity);
+            }
+            (Slot::WebActivity, Reply::Query(q)) => {
+                let web = &mut self.settings.web;
+                web.activity_loading = false;
+                web.activity = Some(ops::web_entries(q).map_err(|e| e.describe()));
+            }
             (Slot::SettingsExplain(key), Reply::Query(q)) => match ops::settings_chain(q) {
                 Ok(chain) => {
                     if let Some(v) = &mut self.settings.view {
@@ -1823,6 +1853,37 @@ impl Shell {
                     }
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
+                SettingsAction::Web(action) => self.web_action(action),
+            }
+        }
+    }
+
+    /// Runs a web fetch, search or activity load through the same use cases agents call.
+    fn web_action(&mut self, action: WebAction) {
+        match action {
+            WebAction::Fetch(url) => {
+                if !self.query(Slot::WebFetch, "Fetching a page", "web.fetch", |b| {
+                    ops::web_fetch(b, &url)
+                }) {
+                    self.settings.web.fetching = false;
+                }
+            }
+            WebAction::Search { query, provider } => {
+                if !self.query(Slot::WebSearch, "Searching the web", "web.search", |b| {
+                    ops::web_search(b, &query, &provider)
+                }) {
+                    self.settings.web.searching = false;
+                }
+            }
+            WebAction::LoadActivity => {
+                if !self.query(
+                    Slot::WebActivity,
+                    "Loading web activity",
+                    "workspace.logs",
+                    ops::web_activity,
+                ) {
+                    self.settings.web.activity_loading = false;
+                }
             }
         }
     }

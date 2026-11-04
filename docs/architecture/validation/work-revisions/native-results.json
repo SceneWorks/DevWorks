@@ -30229,6 +30229,188 @@
       "normalized": null,
       "passed": true,
       "typedValid": false
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-web.search",
+      "normalized": {
+        "body": {
+          "kind": "web.search",
+          "page": {
+            "limit": 20
+          },
+          "providerId": "id-a",
+          "query": "fixture",
+          "scope": {
+            "kind": "Workspace"
+          }
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-input-web.fetch",
+      "normalized": {
+        "body": {
+          "kind": "web.fetch",
+          "maxBytes": 4096,
+          "scope": {
+            "kind": "Workspace"
+          },
+          "timeoutMs": "1",
+          "url": "https://fixture.invalid/path"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 2
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.search",
+      "normalized": {
+        "kind": "web.search",
+        "value": {
+          "hasMore": true,
+          "items": [
+            {
+              "observedAtMs": "0",
+              "providerId": "brave",
+              "snippet": "Fixture content",
+              "title": "fixture",
+              "trust": "Untrusted",
+              "url": "https://fixture.invalid/path"
+            }
+          ],
+          "nextCursor": "cursor-a"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-web-result-trust",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.fetch",
+      "normalized": {
+        "kind": "web.fetch",
+        "value": {
+          "content": {
+            "artifactId": "artifact-a",
+            "byteLength": "8",
+            "mediaType": "text/plain",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "versionId": "version-a"
+          },
+          "finalUrl": "https://fixture.invalid/path",
+          "mediaType": "fixture",
+          "observedAtMs": "0",
+          "redirects": [
+            {
+              "status": 301,
+              "url": "https://fixture.invalid/old"
+            },
+            {
+              "status": 308,
+              "url": "https://fixture.invalid/moved"
+            }
+          ],
+          "sourceByteLength": "4096",
+          "sourceSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "status": 200,
+          "truncated": false,
+          "trust": "Untrusted",
+          "url": "https://fixture.invalid/path"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r2-result-web.fetch-plain",
+      "normalized": {
+        "kind": "web.fetch",
+        "value": {
+          "content": {
+            "artifactId": "artifact-a",
+            "byteLength": "8",
+            "mediaType": "text/plain",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "versionId": "version-a"
+          },
+          "finalUrl": "https://fixture.invalid/path",
+          "mediaType": "fixture",
+          "observedAtMs": "0",
+          "truncated": false,
+          "url": "https://fixture.invalid/path"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-web-document-provenance",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a fetched document is a 2xx answer",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-result-web-document-not-2xx",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a redirect hop is a 3xx answer",
+      "expectedSchemaValid": true,
+      "id": "reject-r2-result-web-redirect-not-3xx",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "unknown variant `Verified`, expected one of `Trusted`, `Untrusted`, `Inferred`, `Unresolved`",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-result-web-document-unknown-trust",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
     }
   ],
   "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"

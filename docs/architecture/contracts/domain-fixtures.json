@@ -7047,5 +7047,75 @@
     "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"readiness\":{\"id\":\"assessment-a\",\"revision\":\"1\",\"planRevision\":\"2\",\"planDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"reviewedPending\":false,\"freshness\":\"Fresh\",\"staleScopeKeys\":[\"E1\"],\"ready\":false,\"summary\":\"assessed\",\"findings\":[{\"id\":\"F1\",\"disposition\":\"NeedsUserDecision\",\"blocking\":true,\"prerequisite\":false,\"state\":\"Open\",\"requirementIds\":[\"E1\"],\"scopeKey\":\"E1\",\"affectedWorkIds\":[\"task-a\"],\"summary\":\"processor unknown\",\"missing\":\"which payment processor\",\"consequence\":\"refunds cannot be verified\",\"attempts\":[\"read the repository conventions\"],\"insufficiency\":\"a product choice\",\"closureCondition\":\"the processor is named\",\"evidence\":[],\"question\":\"Stripe or Adyen?\",\"recommendation\":\"Stripe\",\"closureEvidence\":[]}],\"assessedBy\":\"actor-a\",\"assessedAtMs\":\"1793570000000\"},\"queueRevision\":\"3\",\"workflowRevision\":\"1\",\"acceptanceTests\":[]}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-web.search",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"web.search\",\"scope\":{\"kind\":\"Workspace\"},\"query\":\"fixture\",\"providerId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-web.fetch",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"web.fetch\",\"scope\":{\"kind\":\"Workspace\"},\"url\":\"https://fixture.invalid/path\",\"maxBytes\":4096,\"timeoutMs\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-web.search",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.search\",\"value\":{\"items\":[{\"title\":\"fixture\",\"url\":\"https://fixture.invalid/path\",\"snippet\":\"Fixture content\",\"observedAtMs\":\"0\",\"trust\":\"Untrusted\",\"providerId\":\"brave\"}],\"hasMore\":true,\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-web-result-trust",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"web.search\",\"value\":{\"items\":[{\"title\":\"fixture\",\"url\":\"https://fixture.invalid/path\",\"snippet\":\"Fixture content\",\"observedAtMs\":\"0\",\"trust\":\"Untrusted\",\"providerId\":\"brave\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-web.fetch",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-web.fetch-plain",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-web-document-provenance",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-web-document-not-2xx",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":404,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-web-redirect-not-3xx",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Untrusted\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":200}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-web-document-unknown-trust",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"web.fetch\",\"value\":{\"url\":\"https://fixture.invalid/path\",\"finalUrl\":\"https://fixture.invalid/path\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"mediaType\":\"fixture\",\"observedAtMs\":\"0\",\"truncated\":false,\"trust\":\"Verified\",\"status\":200,\"redirects\":[{\"url\":\"https://fixture.invalid/old\",\"status\":301},{\"url\":\"https://fixture.invalid/moved\",\"status\":308}],\"sourceSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceByteLength\":\"4096\"}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

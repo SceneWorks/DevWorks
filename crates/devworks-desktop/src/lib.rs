@@ -47,6 +47,7 @@ pub mod settings_screen;
 pub mod shell;
 pub mod theme;
 pub mod virtual_list;
+pub mod web_panel;
 pub mod widgets;
 pub mod work_ops;
 

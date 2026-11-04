@@ -12608,11 +12608,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "ExternalRead",
-          "semanticRules": "",
+          "semanticRules": "Searches the configured external search provider (Settings web.searchProvider; its credential is a native secret-store reference); providerId must name it. No configured provider is UnsupportedCapability, a missing or unavailable credential CredentialsRequired; never fake or empty-as-success results. Pages are bounded by the provider's page size, and the cursor binds the query, provider, scope, principal and configuration revision. A request sent without a complete answer is OutcomeUnknown (the provider may have counted it). Results are untrusted data. Schema revision 2: each result carries trust (Untrusted) and the providerId that produced it.",
           "familyRules": "Native bounded untrusted retrieval with outbound/redirect/credential policy. Website content never authorizes tools.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -12654,11 +12662,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "ExternalRead",
-          "semanticRules": "Authorize redirects and outbound credentials at each hop. Bounded untrusted source; no tool authority from web instructions.",
+          "semanticRules": "Authorize redirects and outbound credentials at each hop. Bounded untrusted source; no tool authority from web instructions. A URL carrying credentials is refused; no cookie or DevWorks credential is ever sent. Each hop resolves once, every address is checked (loopback, private, link-local, metadata and other non-global ranges are refused unless private networks are allowed in Settings; link-local and metadata never) and the connection goes to the checked address; redirects are bounded and rechecked per hop. HTML is reduced to text, plain text and JSON pass through, other media types are refused; the stored content is a bounded, redacted artifact. A failure after the request was sent is OutcomeUnknown, never success. Schema revision 2: trust (Untrusted), the final status (2xx), the redirect chain (each hop's URL and 3xx status) and the digest and length of the bytes received.",
           "familyRules": "Native bounded untrusted retrieval with outbound/redirect/credential policy. Website content never authorizes tools.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

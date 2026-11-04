@@ -36,7 +36,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic', 'router.availability',
+            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'web.search',
+            'web.fetch',
             # Feature readiness and queue/workflow revisions on every work record result.
             'features.list', 'features.get', 'features.create', 'features.edit_plan',
             'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
@@ -48,6 +49,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
+        self.assertEqual(carried['web.search'], {2})
+        self.assertEqual(carried['web.fetch'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the

@@ -503,8 +503,8 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `web.search` | **Query**<br>`scope`: `DataScope`<br>`query`: `Text`<br>`providerId`: `Id`<br>`page`: `PageRequest` | `Page<WebResult>` |
-| `web.fetch` | **Query**<br>`scope`: `DataScope`<br>`url`: `Url`<br>`maxBytes`: `ByteLimit`<br>`timeoutMs`: `PositiveCounter` | `WebDocument` |
+| `web.search` | **Query**<br>`scope`: `DataScope`<br>`query`: `Text`<br>`providerId`: `Id`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<WebResult>` |
+| `web.fetch` | **Query**<br>`scope`: `DataScope`<br>`url`: `Url`<br>`maxBytes`: `ByteLimit`<br>`timeoutMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `WebDocument` |
 
 ### Containers
 
@@ -1862,6 +1862,15 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `url` | `Url` |
 | `snippet` | `Content` |
 | `observedAtMs` | `Counter` |
+| `trust` | `?TrustLevel` · *revision 2+* |
+| `providerId` | `?Id` · *revision 2+* |
+
+### WebRedirect
+
+| Field | Type |
+| --- | --- |
+| `url` | `Url` |
+| `status` | `i32` |
 
 ### WebDocument
 
@@ -1873,6 +1882,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `mediaType` | `Label` |
 | `observedAtMs` | `Counter` |
 | `truncated` | `bool` |
+| `trust` | `?TrustLevel` · *revision 2+* |
+| `status` | `?i32` · *revision 2+* |
+| `redirects` | `?Items<WebRedirect>` · *revision 2+* |
+| `sourceSha256` | `?Digest` · *revision 2+* |
+| `sourceByteLength` | `?Counter` · *revision 2+* |
 
 ### ContainerCapability
 

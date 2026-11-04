@@ -45,7 +45,7 @@ use devworks_engine::{
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------------------------
@@ -1531,6 +1531,8 @@ struct FakeHost {
     /// Trees that ignore stop and kill (never verifiably gone).
     stubborn: Arc<AtomicBool>,
     stopped: Arc<AtomicUsize>,
+    /// Every cooperative stop and kill requested of any tree (stubborn or not).
+    stop_requests: Arc<AtomicUsize>,
     /// Runs inside the next spawn: after the launch intent committed, before the tree exists.
     on_spawn: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
@@ -1539,12 +1541,14 @@ struct FakeTree {
     gone: bool,
     stubborn: Arc<AtomicBool>,
     stopped: Arc<AtomicUsize>,
+    stop_requests: Arc<AtomicUsize>,
 }
 impl ProcessTree for FakeTree {
     fn identity(&self) -> &NativeIdentity {
         &self.identity
     }
     fn request_stop(&mut self) -> Result<bool, ProcessError> {
+        self.stop_requests.fetch_add(1, Ordering::SeqCst);
         if !self.stubborn.load(Ordering::SeqCst) {
             self.gone = true;
             self.stopped.fetch_add(1, Ordering::SeqCst);
@@ -1552,6 +1556,7 @@ impl ProcessTree for FakeTree {
         Ok(true)
     }
     fn kill(&mut self) -> Result<(), ProcessError> {
+        self.stop_requests.fetch_add(1, Ordering::SeqCst);
         if !self.stubborn.load(Ordering::SeqCst) {
             self.gone = true;
         }
@@ -1589,6 +1594,7 @@ impl ProcessHost for FakeHost {
             gone: false,
             stubborn: self.stubborn.clone(),
             stopped: self.stopped.clone(),
+            stop_requests: self.stop_requests.clone(),
         }))
     }
     fn probe(&self, _: &NativeIdentity) -> Probe {
@@ -1975,7 +1981,7 @@ fn a_pending_archive_stop_starts_no_kill_once_shutdown_began() {
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     host.stubborn.store(true, Ordering::SeqCst);
-    let (sup, processes) = supervisor(&fx, host, None);
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
     let mut sup = sup;
     if let Some(s) = Arc::get_mut(&mut sup) {
         s.stop_bound = Duration::from_secs(5);
@@ -1996,15 +2002,15 @@ fn a_pending_archive_stop_starts_no_kill_once_shutdown_began() {
     // Shutdown begins (the supervisor stops admitting work).
     sup.stop();
     let rt = runtime();
-    let started = std::time::Instant::now();
+    let requested = host.stop_requests.load(Ordering::SeqCst);
     let tick = rt.block_on(sup.tick()).unwrap();
     let direct = rt
         .block_on(sup.stop_archived_project(&ProjectId(id("project-a"))))
         .unwrap();
-    let took = started.elapsed();
-    assert!(
-        took < Duration::from_secs(2),
-        "no stop of the stubborn tree was started: {took:?}"
+    assert_eq!(
+        host.stop_requests.load(Ordering::SeqCst),
+        requested,
+        "no stop or kill of the stubborn tree was started"
     );
     assert!(tick.archived.is_empty() && direct.is_empty());
     assert_eq!(pending().len(), 1, "left for the next boot");
@@ -3809,6 +3815,13 @@ fn supervision_commits_that_unblock_a_root_wake_the_dispatcher() {
     );
 }
 
+/// Shutdown starts none of the root stops still pending when it began (each could hold its own
+/// bound on a tree that will not stop, one after the other): the stop already executing ends,
+/// the others stay journaled for the next boot, and shutdown's own stop of owned trees covers
+/// their trees. The bound is far longer than the test so that a further stop, if one were
+/// started, would run and be seen; the executing stop's tree gives way only once shutdown is
+/// stopping work. (That shutdown abandons what it waits for at its bound is
+/// `shutdown_abandons_a_blocked_monitor_pass_at_its_bound`.)
 #[test]
 fn shutdown_respects_its_bound_while_root_stops_are_pending() {
     let fx = Fx::new();
@@ -3821,7 +3834,7 @@ fn shutdown_respects_its_bound_while_root_stops_are_pending() {
         Arc::new(Authority),
         host.clone(),
     );
-    let bound = Duration::from_secs(2);
+    let bound = Duration::from_secs(3600);
     composition.config.shutdown_bound = bound;
     composition.config.shutdown_grace = Duration::from_millis(100);
     let rt = runtime();
@@ -3859,13 +3872,380 @@ fn shutdown_respects_its_bound_while_root_stops_are_pending() {
             tokio::task::yield_now().await;
         }
     }));
-    let started = std::time::Instant::now();
-    rt.block_on(app.shutdown());
-    let took = started.elapsed();
+    let state = |root: &str| {
+        let o = fx.control(root).stop_operation_id.unwrap();
+        read(&*fx.store, move |s| s.operations().operation(&o))
+            .unwrap()
+            .state
+    };
+    std::thread::scope(|scope| {
+        // The tree gives way once shutdown is stopping work. Run supervision resumes on the
+        // runtime's one thread only after shutdown's next await, so it already sees the stop.
+        scope.spawn(|| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while app.shutdown_stage() < ShutdownStage::StoppingWork
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::yield_now();
+            }
+            host.stubborn.store(false, Ordering::SeqCst);
+        });
+        rt.block_on(within("shutdown", app.shutdown()));
+    });
+    assert_ne!(state("root-b"), OperationState::IntentRecorded);
+    for r in ["root-f", "root-g", "root-i"] {
+        assert_eq!(
+            state(r),
+            OperationState::IntentRecorded,
+            "{r}: no pending stop is started once shutdown began"
+        );
+    }
     assert!(
-        took < bound + Duration::from_secs(1),
-        "shutdown took {took:?} with a {bound:?} bound"
+        app.processes().owned().is_empty(),
+        "shutdown stopped every tree"
     );
+}
+
+/// A step that does not return until released.
+#[derive(Default)]
+struct Gate {
+    entered: AtomicBool,
+    returned: AtomicBool,
+    open: Mutex<bool>,
+    opened: Condvar,
+}
+impl Gate {
+    fn pass(&self) {
+        self.entered.store(true, Ordering::SeqCst);
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.opened.wait(open).unwrap();
+        }
+        self.returned.store(true, Ordering::SeqCst);
+    }
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+/// A monitor probe whose integrity check (of a large store, say) waits on its gate.
+struct BlockingProbe(Arc<Gate>);
+impl devworks_core::ports::diagnostics::StorageHealthProbe for BlockingProbe {
+    fn files(&self) -> devworks_core::ports::diagnostics::StorageFiles {
+        let none = || devworks_core::ports::diagnostics::Metric::Unavailable("test".into());
+        devworks_core::ports::diagnostics::StorageFiles {
+            database_bytes: none(),
+            wal_bytes: none(),
+            free_bytes: none(),
+            total_bytes: none(),
+        }
+    }
+    fn database(&self) -> Result<devworks_core::ports::diagnostics::StorageDatabase, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+    fn integrity(&self) -> Result<IntegrityReport, StorageError> {
+        self.0.pass();
+        Ok(IntegrityReport { problems: vec![] })
+    }
+}
+/// Releases a gate when dropped (before the runtime, which waits for its blocking threads).
+struct Release(Arc<Gate>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// A runtime whose boot monitor pass is blocked in its integrity check, with one live root.
+fn blocked_monitor(
+    fx: &Fx,
+    bound: Duration,
+) -> (
+    tokio::runtime::Runtime,
+    devworks_engine::Runtime,
+    Arc<Gate>,
+    Arc<devworks_core::services::diagnostics::DiagnosticService>,
+) {
+    let probe = Arc::new(Gate::default());
+    let mut composition = composition_with(
+        fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(Authority),
+        Arc::new(FakeHost::default()),
+    );
+    composition.config.shutdown_bound = bound;
+    let diagnostics = Arc::new(
+        devworks_core::services::diagnostics::DiagnosticService::new(
+            fx.store.clone(),
+            fx.h.ids.clone(),
+            fx.h.clock(),
+            Some(Arc::new(BlockingProbe(probe.clone()))),
+        ),
+    );
+    composition.diagnostics = diagnostics.clone();
+    let rt = runtime();
+    let app = rt
+        .block_on(boot(composition))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    rt.block_on(within(
+        "the boot monitor pass is in its integrity check",
+        async {
+            while !probe.entered.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        },
+    ));
+    (rt, app, probe, diagnostics)
+}
+
+fn held_for_continue(fx: &Fx, root: &str) -> bool {
+    fx.holds(root)
+        .iter()
+        .any(|b| b.cause == HoldCause::RestartContinue)
+}
+
+/// A monitor pass in progress at shutdown never delays holding the live work for Continue: the
+/// hold commits while the pass is still blocked, under a bound so long that waiting for the
+/// pass first would never get there. Once signalled, the pass starts no further probe: its
+/// write-owner probe (a write) never runs after the admission fence closed.
+#[test]
+fn a_blocked_monitor_pass_never_delays_holding_live_work_for_continue() {
+    let fx = Fx::new();
+    let (rt, app, probe, diagnostics) = blocked_monitor(&fx, Duration::from_secs(3600));
+    let _release = Release(probe.clone());
+    let held_while_blocked = std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            // Failure-only bound: waiting for the pass first would wait the whole hour.
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while app.shutdown_stage() < ShutdownStage::StoppingWork
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::yield_now();
+            }
+            let held = app.shutdown_stage() >= ShutdownStage::StoppingWork
+                && !probe.returned.load(Ordering::SeqCst);
+            probe.release();
+            held
+        });
+        rt.block_on(within("shutdown", app.shutdown()));
+        watcher.join().unwrap()
+    });
+    assert!(
+        held_while_blocked,
+        "run control was held while the monitor pass was still blocked"
+    );
+    assert!(held_for_continue(&fx, "root-i"), "{:?}", fx.holds("root-i"));
+    let monitor = diagnostics.monitor();
+    assert!(monitor.integrity.is_some(), "the pass was joined");
+    assert!(
+        monitor.write_probe.is_none(),
+        "no probe started once the monitor was signalled"
+    );
+}
+
+/// Shutdown keeps its bound when the monitor pass in progress does not return: the pass is
+/// abandoned at the deadline (still blocked when shutdown returns), and the live work was held.
+#[test]
+fn shutdown_abandons_a_blocked_monitor_pass_at_its_bound() {
+    let fx = Fx::new();
+    let (rt, app, probe, _) = blocked_monitor(&fx, Duration::from_millis(200));
+    let _release = Release(probe.clone());
+    rt.block_on(within("shutdown", app.shutdown()));
+    assert!(
+        !probe.returned.load(Ordering::SeqCst),
+        "the blocked pass was abandoned, not awaited"
+    );
+    assert!(held_for_continue(&fx, "root-i"), "{:?}", fx.holds("root-i"));
+}
+
+/// The artifact file store, with its derived-cache collection waiting on a gate.
+struct BlockingFiles(NativeArtifactFiles, Arc<Gate>);
+impl devworks_core::ports::files::ArtifactFiles for BlockingFiles {
+    fn publish(
+        &self,
+        staging_name: &str,
+        source: &mut dyn std::io::Read,
+        expected_digest: &str,
+        expected_bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
+    ) -> Result<devworks_core::ports::files::PublishedBlob, devworks_core::ports::files::FileFault>
+    {
+        self.0.publish(
+            staging_name,
+            source,
+            expected_digest,
+            expected_bytes,
+            reuse,
+            generation,
+        )
+    }
+    fn managed_path(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<String, devworks_core::ports::files::FileFault> {
+        self.0.managed_path(digest, generation)
+    }
+    fn present(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<bool, devworks_core::ports::files::FileFault> {
+        self.0.present(digest, generation, byte_count)
+    }
+    fn inspect(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<Option<u64>, devworks_core::ports::files::FileFault> {
+        self.0.inspect(digest, generation)
+    }
+    fn read_range(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        offset: u64,
+        max: usize,
+    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
+        self.0
+            .read_range(digest, generation, byte_count, offset, max)
+    }
+    fn open(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+    ) -> Result<Box<dyn std::io::Read + Send>, devworks_core::ports::files::FileFault> {
+        self.0.open(digest, generation, byte_count)
+    }
+    fn unlink(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.0.unlink(digest, generation)
+    }
+    fn quarantine(
+        &self,
+        digest: &str,
+        generation: &str,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.0.quarantine(digest, generation)
+    }
+    fn staged(&self) -> Result<Vec<String>, devworks_core::ports::files::FileFault> {
+        self.0.staged()
+    }
+    fn remove_staged(&self, name: &str) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.0.remove_staged(name)
+    }
+    fn stored_files(
+        &self,
+    ) -> Result<Vec<(String, String)>, devworks_core::ports::files::FileFault> {
+        self.0.stored_files()
+    }
+    fn write_derived(
+        &self,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.0.write_derived(key, bytes)
+    }
+    fn read_derived(
+        &self,
+        key: &str,
+        max: usize,
+    ) -> Result<Option<Vec<u8>>, devworks_core::ports::files::FileFault> {
+        self.0.read_derived(key, max)
+    }
+    fn collect_derived(&self) -> Result<u64, devworks_core::ports::files::FileFault> {
+        self.1.pass();
+        self.0.collect_derived()
+    }
+    fn export(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        destination: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<(), devworks_core::ports::files::FileFault> {
+        self.0
+            .export(digest, generation, byte_count, destination, overwrite)
+    }
+}
+
+/// A delivery handler that never returns and ignores the request to stop.
+struct Stuck(Arc<Gate>);
+impl devworks_engine::dispatch::AsyncDeliveryHandler for Stuck {
+    fn start(
+        &self,
+        _: devworks_engine::dispatch::AsyncDelivery,
+    ) -> devworks_engine::dispatch::AsyncFuture {
+        self.0.entered.store(true, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Shutdown keeps its one bound when work it waits for after the hold does not finish
+/// (CONTROL-09): a delivery whose handler never returns (its stop grace is longer than the test,
+/// so the dispatcher keeps supervising it) and a collection pass blocked in the file store are
+/// abandoned at the deadline, still blocked when shutdown returns, and the live work was held.
+#[test]
+fn shutdown_abandons_a_blocked_delivery_and_collection_pass_at_its_bound() {
+    let fx = Fx::new();
+    let (collection, delivery) = (Arc::new(Gate::default()), Arc::new(Gate::default()));
+    let mut composition = composition_with(
+        &fx,
+        None,
+        Arc::new(FakePower::default()),
+        Arc::new(Authority),
+        Arc::new(FakeHost::default()),
+    );
+    composition.config.shutdown_bound = Duration::from_millis(200);
+    let h = &fx.h;
+    composition.artifacts = Arc::new(ArtifactService::new(
+        Arc::new(BlockingFiles(
+            NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("cache")),
+            collection.clone(),
+        )),
+        Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
+        Arc::new(NativeFilesystem::new()),
+        h.clock(),
+        h.ids.clone(),
+    ));
+    let mut stuck = consumer("stuck-work", Recorder::ok());
+    stuck.async_handler = Some(Arc::new(Stuck(delivery.clone())));
+    stuck.stop_grace_ms = 3_600_000;
+    composition.consumers = vec![stuck];
+    let rt = runtime();
+    let _release = Release(collection.clone());
+    let app = rt
+        .block_on(boot(composition))
+        .unwrap_or_else(|e| panic!("boot: {e:?}"));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    enqueue(&*fx.store, "stuck-work", None, json!({}));
+    app.dispatcher().wakeup().wake();
+    rt.block_on(within(
+        "the delivery and the collection pass are blocked",
+        async {
+            while !(collection.entered.load(Ordering::SeqCst)
+                && delivery.entered.load(Ordering::SeqCst))
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        },
+    ));
+    rt.block_on(within("shutdown", app.shutdown()));
+    assert!(
+        !collection.returned.load(Ordering::SeqCst),
+        "the blocked collection pass was abandoned, not awaited"
+    );
+    assert!(held_for_continue(&fx, "root-i"), "{:?}", fx.holds("root-i"));
 }
 
 #[test]

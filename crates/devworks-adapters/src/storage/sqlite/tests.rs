@@ -115,6 +115,7 @@ mod router;
 mod runs;
 mod sessions;
 mod settings;
+mod web;
 mod work;
 
 mod contract {

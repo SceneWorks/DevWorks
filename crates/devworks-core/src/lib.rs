@@ -3,8 +3,9 @@
 //!
 //! # Boundary rationale (ARCH-07, ARCH-08)
 //!
-//! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars and sha2.
-//!   It has no UI, database-driver, HTTP or async-runtime dependency; persistence, authority,
+//! * **Dependencies point inward.** Core depends only on serde, serde_json, schemars, sha2 and
+//!   the WHATWG URL parser (`url`, for the web tools' egress decisions; it parses, it never
+//!   connects). It has no UI, database-driver, HTTP or async-runtime dependency; persistence, authority,
 //!   clocks and identifiers are reached through the object-safe `Send + Sync` traits in [`ports`].
 //!   `devworks-adapters::storage::sqlite` implements [`ports::storage`]; [`authority::HostAuthority`]
 //!   is the host authority port over those records; tests replace both with deterministic
