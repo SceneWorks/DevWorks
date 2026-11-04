@@ -140,6 +140,9 @@ pub trait BrowserPlatform: Send + Sync {
     fn remove_staged(&self, profile: &Profile, batch: &str) -> Result<(), BrowserFault>;
 }
 
+/// The longest staged file or batch name a platform accepts, in UTF-8 bytes.
+pub const STAGED_NAME_MAX_BYTES: usize = 128;
+
 /// The profile directory a session root holds.
 pub fn user_data_of(root: &Path) -> PathBuf {
     root.join("profile")

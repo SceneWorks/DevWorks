@@ -108,6 +108,8 @@ struct Page {
     focused: Option<i64>,
     values: HashMap<i64, String>,
     files: HashMap<i64, Vec<String>>,
+    /// Total wheel delta its own document received.
+    scrolled: f64,
 }
 
 /// An out-of-process frame of a fake page: its own session and document.
@@ -118,6 +120,8 @@ struct FakeChild {
     clicked: u32,
     focused: bool,
     value: String,
+    /// Total wheel delta its document received.
+    scrolled: f64,
 }
 
 /// A deterministic browser model speaking the CDP shapes the client relies on.
@@ -139,6 +143,10 @@ struct FakeBrowser {
     protocol: String,
     /// A response withheld until the open dialog is answered.
     blocked: Option<Value>,
+    /// An element covers every out-of-process frame owner (hit-testing finds it instead).
+    frame_covered: bool,
+    /// Out-of-process frame owners are laid out below the viewport.
+    frame_hidden: bool,
 }
 
 impl FakeBrowser {
@@ -180,6 +188,7 @@ impl FakeBrowser {
             focused: None,
             values: HashMap::new(),
             files: HashMap::new(),
+            scrolled: 0.0,
         });
         let i = self.pages.len() - 1;
         if let Some(o) = opener {
@@ -258,6 +267,7 @@ impl FakeBrowser {
                 clicked: 0,
                 focused: false,
                 value: String::new(),
+                scrolled: 0.0,
             });
             if self.auto_attach.contains(&s) {
                 self.attach_children(i);
@@ -292,10 +302,11 @@ impl FakeBrowser {
             ),
             "Accessibility.getFullAXTree" => {
                 let value = self.children[k].value.clone();
+                let focused = self.children[k].focused;
                 self.reply(
                     id,
                     json!({"nodes": [
-                        {"nodeId": "c1", "ignored": false, "role": {"value": "RootWebArea"}, "name": {"value": "Inner"}, "backendDOMNodeId": 1},
+                        {"nodeId": "c1", "ignored": false, "role": {"value": "RootWebArea"}, "name": {"value": "Inner"}, "properties": [{"name": "focused", "value": {"value": focused}}], "backendDOMNodeId": 1},
                         {"nodeId": "c5", "ignored": false, "parentId": "c1", "role": {"value": "button"}, "name": {"value": "Inside"}, "backendDOMNodeId": 5},
                         {"nodeId": "c6", "ignored": false, "parentId": "c1", "role": {"value": "textbox"}, "name": {"value": "Partner field"}, "value": {"value": value}, "backendDOMNodeId": 6},
                     ]}),
@@ -309,6 +320,15 @@ impl FakeBrowser {
                 self.children[k].focused = true;
                 self.reply(id, json!({}))
             }
+            // The frame's document is 100 x 50 at its own origin.
+            "DOM.getNodeForLocation" => {
+                let (x, y) = (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap());
+                if (0.0..100.0).contains(&x) && (0.0..50.0).contains(&y) {
+                    self.reply(id, json!({"backendNodeId": 1, "frameId": frame}))
+                } else {
+                    self.error(id, "No node found at given location")
+                }
+            }
             "DOM.scrollIntoViewIfNeeded" | "DOM.getContentQuads" | "DOM.focus" | "DOM.describeNode"
                 if !matches!(p["backendNodeId"].as_i64(), Some(5 | 6)) =>
             {
@@ -319,6 +339,16 @@ impl FakeBrowser {
     }
     fn centre(k: usize) -> (f64, f64) {
         (50.0, 100.0 * (k as f64 + 1.0) + 25.0)
+    }
+    /// The boxed node of page `i` under a viewport point (each is 100 x 50 at its centre).
+    fn hit(&self, i: usize, x: f64, y: f64) -> Option<i64> {
+        self.pages[i].nodes.iter().enumerate().find_map(|(k, n)| {
+            let (cx, mut cy) = Self::centre(k);
+            if n.backend == 20 && self.frame_hidden {
+                cy += 1000.0;
+            }
+            (n.boxed && (x - cx).abs() < 50.0 && (y - cy).abs() < 25.0).then_some(n.backend)
+        })
     }
     fn handle(&mut self, raw: &str) {
         let m: Value = serde_json::from_str(raw).unwrap();
@@ -430,7 +460,9 @@ impl FakeBrowser {
             }
             "Accessibility.getFullAXTree" => {
                 let i = page.unwrap();
-                let mut nodes = vec![json!({"nodeId": "ax1", "ignored": false, "role": {"value": "RootWebArea"}, "name": {"value": self.pages[i].title}, "backendDOMNodeId": 1})];
+                // The page's document holds keyboard focus unless one of its frames does.
+                let focused = !self.children.iter().any(|c| c.page == i && c.focused);
+                let mut nodes = vec![json!({"nodeId": "ax1", "ignored": false, "role": {"value": "RootWebArea"}, "name": {"value": self.pages[i].title}, "properties": [{"name": "focused", "value": {"value": focused}}], "backendDOMNodeId": 1})];
                 nodes.push(json!({"nodeId": "ax-ignored", "ignored": true, "role": {"value": "none"}, "parentId": "ax1"}));
                 for n in &self.pages[i].nodes {
                     let value = self.pages[i].values.get(&n.backend).cloned();
@@ -469,7 +501,10 @@ impl FakeBrowser {
                         self.reply(&id, json!({}))
                     }
                     "DOM.getBoxModel" => {
-                        let (x, y) = Self::centre(k);
+                        let (x, mut y) = Self::centre(k);
+                        if b == 20 && self.frame_hidden {
+                            y += 1000.0;
+                        }
                         let content = [x - 50.0, y - 25.0, x + 50.0, y - 25.0, x + 50.0, y + 25.0, x - 50.0, y + 25.0];
                         self.reply(&id, json!({"model": {"content": content}}))
                     }
@@ -497,6 +532,29 @@ impl FakeBrowser {
                     }
                     _ => self.reply(&id, json!({})),
                 }
+            }
+            "DOM.getNodeForLocation" => {
+                let i = page.unwrap();
+                let (x, y) = (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap());
+                let frame = self.pages[i].frame.clone();
+                let hit = self.hit(i, x, y);
+                let backend = match hit {
+                    Some(20) if self.frame_covered => 99,
+                    Some(b) => b,
+                    None => 1,
+                };
+                self.reply(&id, json!({"backendNodeId": backend, "frameId": frame}))
+            }
+            "Input.dispatchMouseEvent" if p["type"] == "mouseWheel" => {
+                let i = page.unwrap();
+                let (x, y) = (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap());
+                let delta = p["deltaY"].as_f64().unwrap_or(0.0);
+                let inside = self.hit(i, x, y) == Some(20) && !self.frame_covered;
+                match self.children.iter_mut().find(|c| c.page == i) {
+                    Some(c) if inside => c.scrolled += delta,
+                    _ => self.pages[i].scrolled += delta,
+                }
+                self.reply(&id, json!({}))
             }
             "Input.insertText" => {
                 let i = page.unwrap();
@@ -2317,6 +2375,269 @@ fn out_of_process_frames_are_inspected_driven_and_revisioned_on_their_own_sessio
     fx.svc().tick();
     let fault = fx.fault(&user, "browser.inspect", json!({"target": target}));
     assert_eq!(fault.code, DomainErrorCode::SourceChanged);
+}
+
+/// The page and its out-of-process partner frame, as wire targets.
+fn oopif_targets(fx: &Fx, user: &InvocationContext, session: &Id) -> (Value, Value) {
+    let snap = fx.snapshot(fx.navigate(user, session, Some("t1"), "https://app.test/oopif"));
+    let ax = fx.json(&snap.accessibility);
+    let frame = ax["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["outOfProcess"] == true)
+        .unwrap()
+        .clone();
+    let page = target_json(&snap);
+    let mut target = page.clone();
+    target["frameId"] = frame["frameId"].clone();
+    (page, target)
+}
+
+fn failed_kind(c: OperationCompletion) -> String {
+    match c {
+        OperationCompletion::Failed { fault, .. } => fault.target_kind.unwrap().0,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_scroll_reaches_the_requested_frame_or_is_refused_where_it_cannot() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let (page, frame) = oopif_targets(&fx, &user, &session);
+    let b = fx.platform.browser(&session);
+    // The frame's own document scrolls, not the page around it.
+    fx.observation(fx.input(
+        &user,
+        &session,
+        json!({"kind": "Scroll", "target": frame, "x": 0, "y": 300}),
+    ));
+    {
+        let br = b.lock().unwrap();
+        assert_eq!(
+            (br.children[0].scrolled, br.pages[0].scrolled),
+            (300.0, 0.0)
+        );
+    }
+    // The page scrolls at a point no frame covers.
+    fx.observation(fx.input(
+        &user,
+        &session,
+        json!({"kind": "Scroll", "target": page, "x": 0, "y": 200}),
+    ));
+    {
+        let br = b.lock().unwrap();
+        assert_eq!(
+            (br.children[0].scrolled, br.pages[0].scrolled),
+            (300.0, 200.0)
+        );
+    }
+    // A covered frame and a frame out of view are refused before any wheel event is sent.
+    let wheels = || {
+        b.lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|m| m["params"]["type"] == "mouseWheel")
+            .count()
+    };
+    let before = wheels();
+    b.lock().unwrap().frame_covered = true;
+    let scroll = json!({"kind": "Scroll", "target": frame, "x": 0, "y": 300});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, scroll.clone())),
+        "browser_frame"
+    );
+    {
+        let mut br = b.lock().unwrap();
+        br.frame_covered = false;
+        br.frame_hidden = true;
+    }
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, scroll)),
+        "browser_frame"
+    );
+    assert_eq!(wheels(), before);
+    assert_eq!(b.lock().unwrap().children[0].scrolled, 300.0);
+}
+
+#[test]
+fn a_key_reaches_only_the_frame_holding_keyboard_focus() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let (page, frame) = oopif_targets(&fx, &user, &session);
+    let b = fx.platform.browser(&session);
+    let inner = fx.inspect(&user, &frame);
+    let inner_ax = fx.json(&inner.accessibility);
+    // Typing into the partner field moves keyboard focus into the frame.
+    fx.observation(fx.input(
+        &user,
+        &session,
+        json!({"kind": "Text", "node": node(&inner, &inner_ax, "Partner field"), "text": "x"}),
+    ));
+    let before = requests(&b, "Input.dispatchKeyEvent");
+    // A key aimed at the page is refused unsent: the page's document no longer holds focus.
+    let key =
+        |target: &Value| json!({"kind": "Key", "target": target, "key": "Enter", "modifiers": []});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, key(&page))),
+        "browser_focus"
+    );
+    assert_eq!(requests(&b, "Input.dispatchKeyEvent"), before);
+    // Aimed at the frame holding focus, it is sent.
+    fx.observation(fx.input(&user, &session, key(&frame)));
+    assert_eq!(requests(&b, "Input.dispatchKeyEvent"), before + 2);
+}
+
+#[test]
+fn a_long_multibyte_file_name_is_staged_within_the_platform_name_bound() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    // Fifty three-byte characters: 50 characters, but 154 bytes with the extension.
+    let title = format!("{}.txt", "報".repeat(50));
+    let e = Evidence {
+        scope: ArtifactScope::Workspace,
+        producer: user.principal().clone(),
+        principal_kind: "Human".into(),
+        agent_session: None,
+        root: None,
+        assignment: None,
+        title: title.clone(),
+        media_type: "text/plain".into(),
+        tags: vec![],
+        source: json!({"kind": "Fixture"}),
+    };
+    let file = fx
+        .app()
+        .artifacts()
+        .publish_evidence(&**fx.app().store(), e, b"wide name", |_, _| Ok(()))
+        .unwrap()
+        .0;
+    let op = fx.accepted(
+        &user,
+        "browser.upload",
+        json!({"node": node(&snap, &ax, "Attachment"), "files": [file]}),
+    );
+    fx.observation(fx.completion(&user, &op));
+    let b = fx.platform.browser(&session);
+    let staged = PathBuf::from(&b.lock().unwrap().pages[0].files[&12][0]);
+    let name = staged.file_name().unwrap().to_str().unwrap().to_owned();
+    assert!(name.len() <= 128, "{} bytes: {name}", name.len());
+    assert!(name.starts_with("1-報") && name.ends_with(".txt"), "{name}");
+    assert_eq!(std::fs::read(&staged).unwrap(), b"wide name");
+}
+
+#[test]
+fn actions_waiting_on_a_predecessor_hold_no_dispatch_capacity_so_close_is_never_starved() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    // A navigation that never finishes loading runs for the whole (long) navigation bound.
+    let fx = Fx::boot_with(
+        h,
+        platform,
+        real,
+        BrowserConfig {
+            navigation_timeout: Duration::from_secs(8),
+            order_bound: Duration::from_secs(30),
+            ..config()
+        },
+    );
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let rev = fx.session(&session).revision.to_string();
+    fx.accepted(
+        &user,
+        "browser.navigate",
+        json!({"sessionId": session.as_str(), "expectedRevision": rev, "targetId": "t1", "location": {"kind": "Remote", "url": "https://app.test/slow"}}),
+    );
+    // As many actions queued behind it as the dispatcher has workers.
+    let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Tab", "modifiers": []});
+    for _ in 0..4 {
+        fx.accepted(
+            &user,
+            "browser.input",
+            json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": key}),
+        );
+    }
+    fx.drive(300);
+    // Close is dispatched at once and ends the running navigation; nothing waits it out.
+    let started = std::time::Instant::now();
+    let closed = fx.close(&user, &session);
+    assert_eq!(closed.phase, BrowserPhase::Closed);
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "close waited {:?} behind actions holding every worker",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn an_action_never_overtakes_a_predecessor_that_outlasts_the_order_bound() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let real: Arc<dyn BrowserPlatform> = platform.clone();
+    // The predecessor (text input that is never answered) runs far longer than the order bound.
+    let fx = Fx::boot_with(
+        h,
+        platform,
+        real,
+        BrowserConfig {
+            call_timeout: Duration::from_secs(3),
+            order_bound: Duration::from_millis(200),
+            ..config()
+        },
+    );
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let rev = fx.session(&session).revision.to_string();
+    fx.platform
+        .browser(&session)
+        .lock()
+        .unwrap()
+        .hang
+        .insert("Input.insertText".into());
+    let slow = fx.accepted(
+        &user,
+        "browser.input",
+        json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": {"kind": "Text", "node": node(&snap, &ax, "Name"), "text": "a"}}),
+    );
+    let key = json!({"kind": "Key", "target": target_json(&snap), "key": "Tab", "modifiers": []});
+    fx.accepted(
+        &user,
+        "browser.input",
+        json!({"sessionId": session.as_str(), "expectedRevision": rev, "action": key}),
+    );
+    // Past the order bound, with the text input still running, the key has not been sent.
+    fx.drive(1500);
+    let b = fx.platform.browser(&session);
+    assert_eq!(
+        read(&**fx.app().store(), move |s| s
+            .operations()
+            .operation(&slow))
+        .map(|o| o.state),
+        Some(OperationState::Dispatching),
+        "the predecessor is still running"
+    );
+    assert_eq!(
+        requests(&b, "Input.dispatchKeyEvent"),
+        0,
+        "the successor overtook its running predecessor"
+    );
 }
 
 #[test]

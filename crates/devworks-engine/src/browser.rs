@@ -2,8 +2,9 @@
 //! consumer that executes journaled browser effects, the supervision loop and the composition
 //! the runtime builds the one [`BrowserService`] from.
 //!
-//! * **Effects.** Create, Close, navigation, input and upload commit an operation and an ordered
-//!   delivery (one partition per session). The dispatcher commits `Dispatching` before the
+//! * **Effects.** Create, Close, navigation, input and upload commit an operation and a
+//!   delivery; an action names the session's previous one and is parked (claimed, without a
+//!   worker permit) until that one settled. The dispatcher commits `Dispatching` before the
 //!   effect runs, so an interruption leaves `OutcomeUnknown`, which is held for reconciliation
 //!   and never re-executed; the effect itself runs on a blocking thread through
 //!   [`BrowserService::execute`].
@@ -13,7 +14,7 @@
 //!   target periodically.
 use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
-    RetryPolicy,
+    ReadyFuture, RetryPolicy,
 };
 use devworks_core::authority::destructive::FilesystemResolver;
 use devworks_core::ports::browser::BrowserPlatform;
@@ -67,6 +68,25 @@ impl EffectExecutor for Effects {
                 Err(_) => EffectResult::Unknown("the browser observation panicked".into()),
             }
         })
+    }
+    /// An action ordered behind another waits (bounded by the order bound) until that one
+    /// settled, parked without a worker permit; Create and Close are never ordered.
+    fn ready(&self, operation: &OperationRecord) -> Option<ReadyFuture> {
+        operation.payload.get("after")?;
+        let (svc, op) = (self.0.clone(), operation.clone());
+        Some(Box::pin(async move {
+            let deadline = std::time::Instant::now() + svc.order_bound();
+            loop {
+                let (s, o) = (svc.clone(), op.clone());
+                let pending = tokio::task::spawn_blocking(move || s.predecessor_pending(&o))
+                    .await
+                    .unwrap_or(false);
+                if !pending || std::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }))
     }
 }
 

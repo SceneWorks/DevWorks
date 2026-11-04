@@ -1444,13 +1444,15 @@ impl Live {
                 key,
                 modifiers,
             } => {
-                let (i, _) = self.resolve(target)?;
+                let (i, frame) = self.resolve(target)?;
                 let Some(k) = key_of(&key.0) else {
                     return Err(ActionError::Refused {
                         kind: "browser_key",
                         detail: format!("unsupported key {}", text(&key.0)),
                     });
                 };
+                // Keys reach the frame holding keyboard focus, which must be the targeted one.
+                self.require_focus(&frame, bounds)?;
                 let mask = modifiers.0.iter().fold(0, |m, x| {
                     m | match x {
                         KeyModifier::Alt => 1,
@@ -1481,35 +1483,263 @@ impl Live {
                 Ok(i)
             }
             BrowserInput::Scroll { target, x, y } => {
-                let (i, _) = self.resolve(target)?;
+                let (i, frame) = self.resolve(target)?;
                 let s = self.targets[i].cdp_session.clone();
-                let m = self
-                    .call(Some(&s), "Page.getLayoutMetrics", json!({}), bounds.call)
-                    .map_err(before_or_after)?;
-                let vp = m
-                    .get("cssLayoutViewport")
-                    .or_else(|| m.get("layoutViewport"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let w = vp
-                    .get("clientWidth")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(800.0);
-                let h = vp
-                    .get("clientHeight")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(600.0);
+                // A point of the top-level viewport whose hit lands in the requested frame.
+                let (px, py) = self.scroll_point(i, &frame, bounds)?;
                 self.resolve(target)?;
                 self.call(
                     Some(&s),
                     "Input.dispatchMouseEvent",
-                    json!({"type": "mouseWheel", "x": w / 2.0, "y": h / 2.0, "deltaX": x, "deltaY": y}),
+                    json!({"type": "mouseWheel", "x": px, "y": py, "deltaX": x, "deltaY": y}),
                     bounds.call,
                 )
                 .map_err(ActionError::After)?;
                 Ok(i)
             }
         }
+    }
+
+    /// Refuses unless keyboard focus is in `frame`: the root of its accessibility tree is
+    /// `focused` exactly while its document is the focused one (a frame nested in it holding
+    /// focus leaves it unfocused). Nothing is sent to the page.
+    fn require_focus(&mut self, frame: &Frame, bounds: &Bounds) -> Result<(), ActionError> {
+        let tree = self
+            .call(
+                Some(&frame.session),
+                "Accessibility.getFullAXTree",
+                json!({"depth": 0, "frameId": frame.cdp}),
+                bounds.call,
+            )
+            .map_err(ActionError::Before)?;
+        let focused = tree
+            .get("nodes")
+            .and_then(Value::as_array)
+            .and_then(|ns| ns.iter().find(|n| n.get("parentId").is_none()))
+            .and_then(|root| root.get("properties").and_then(Value::as_array))
+            .is_some_and(|ps| {
+                ps.iter().any(|p| {
+                    p.get("name").and_then(Value::as_str) == Some("focused")
+                        && p.pointer("/value/value").and_then(Value::as_bool) == Some(true)
+                })
+            });
+        if focused {
+            Ok(())
+        } else {
+            Err(ActionError::Refused {
+                kind: "browser_focus",
+                detail: format!(
+                    "keyboard focus is not in frame {}; focus a node in it first",
+                    frame.host
+                ),
+            })
+        }
+    }
+
+    /// The out-of-process frames between `session` and its target's page, nearest first: each
+    /// hop's own session, owner element and owner content quad (in the embedding document's
+    /// local-root viewport). `reveal` scrolls each owner into view first (a click); a scroll reveals
+    /// nothing it was not asked to move.
+    fn hops(
+        &mut self,
+        i: usize,
+        session: &str,
+        reveal: bool,
+        bounds: &Bounds,
+    ) -> Result<Vec<Hop>, ActionError> {
+        let mut out = Vec::new();
+        let mut current = session.to_owned();
+        for _ in 0..16 {
+            if self.targets[i].is_page(Some(&current)) {
+                return Ok(out);
+            }
+            let Some(child) = self.targets[i].child_of_session(&current).cloned() else {
+                return Err(ActionError::Stale {
+                    kind: "browser_frame",
+                    detail: "the node's out-of-process frame is no longer attached".into(),
+                });
+            };
+            let (owner, content) = self.owner_box(&child.parent, &child.frame, reveal, bounds)?;
+            out.push(Hop {
+                session: current,
+                owner,
+                content,
+            });
+            current = child.parent;
+        }
+        Err(ActionError::Refused {
+            kind: "browser_frame",
+            detail: "out-of-process frames nest too deeply".into(),
+        })
+    }
+
+    /// The owner element of `frame` in the document hosted by `session`, and its content quad.
+    fn owner_box(
+        &mut self,
+        session: &str,
+        frame: &str,
+        reveal: bool,
+        bounds: &Bounds,
+    ) -> Result<(i64, Vec<f64>), ActionError> {
+        // Reading moves nothing: only a revealing scroll makes a lost answer an unknown outcome.
+        let err = if reveal {
+            before_or_after
+        } else {
+            ActionError::Before
+        };
+        let owner = self
+            .call(
+                Some(session),
+                "DOM.getFrameOwner",
+                json!({"frameId": frame}),
+                bounds.call,
+            )
+            .map_err(err)?;
+        let Some(owner) = owner.get("backendNodeId").and_then(Value::as_i64) else {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: "the frame has no owner element".into(),
+            });
+        };
+        if reveal {
+            self.call(
+                Some(session),
+                "DOM.scrollIntoViewIfNeeded",
+                json!({"backendNodeId": owner}),
+                bounds.call,
+            )
+            .map_err(err)?;
+        }
+        let model = self
+            .call(
+                Some(session),
+                "DOM.getBoxModel",
+                json!({"backendNodeId": owner}),
+                bounds.call,
+            )
+            .map_err(err)?;
+        let content: Vec<f64> = model
+            .pointer("/model/content")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_f64).collect())
+            .unwrap_or_default();
+        if content.len() != 8 {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: "the frame owner has no box".into(),
+            });
+        }
+        Ok((owner, content))
+    }
+
+    /// A top-level viewport point at which a wheel event reaches `frame`: inside the visible
+    /// part of the frame (the viewport intersected with each owner box on the way down), and
+    /// confirmed by hit-testing every local root on the way (each must hit the next owner, the
+    /// last the frame itself). A frame scrolled out of view, clipped or covered is refused;
+    /// only reads are sent.
+    fn scroll_point(
+        &mut self,
+        i: usize,
+        frame: &Frame,
+        bounds: &Bounds,
+    ) -> Result<(f64, f64), ActionError> {
+        let page = self.targets[i].cdp_session.clone();
+        let m = self
+            .call(Some(&page), "Page.getLayoutMetrics", json!({}), bounds.call)
+            .map_err(ActionError::Before)?;
+        let vp = m
+            .get("cssLayoutViewport")
+            .or_else(|| m.get("layoutViewport"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let w = vp
+            .get("clientWidth")
+            .and_then(Value::as_f64)
+            .unwrap_or(800.0);
+        let h = vp
+            .get("clientHeight")
+            .and_then(Value::as_f64)
+            .unwrap_or(600.0);
+        // Local roots from the page down to the frame's session, each with its offset and the
+        // owner element (in its parent) through which it is entered.
+        let mut hops = self.hops(i, &frame.session, false, bounds)?;
+        hops.reverse();
+        let mut visible = (0.0, 0.0, w, h);
+        let mut roots = vec![(page, (0.0, 0.0), None::<i64>)];
+        for hop in hops {
+            let (ox, oy) = roots.last().map(|r| r.1).unwrap_or((0.0, 0.0));
+            let r = rect(&hop.content, ox, oy);
+            visible = intersect(visible, r);
+            roots.last_mut().expect("a root").2 = Some(hop.owner);
+            roots.push((hop.session, (r.0, r.1), None));
+        }
+        // A frame inside its local root's document (not the root's own frame) has an owner there.
+        let root_frame = match self.targets[i].child_of_session(&frame.session) {
+            Some(c) => c.frame.clone(),
+            None => self.targets[i].frames[0].cdp.clone(),
+        };
+        if frame.cdp != root_frame {
+            let (_, content) = self.owner_box(&frame.session, &frame.cdp, false, bounds)?;
+            let (ox, oy) = roots.last().map(|r| r.1).unwrap_or((0.0, 0.0));
+            visible = intersect(visible, rect(&content, ox, oy));
+        }
+        let (x0, y0, x1, y1) = visible;
+        if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+            return Err(ActionError::Refused {
+                kind: "browser_frame",
+                detail: format!("frame {} is not visible in the viewport", frame.host),
+            });
+        }
+        let (cx, cy, qw, qh) = (
+            (x0 + x1) / 2.0,
+            (y0 + y1) / 2.0,
+            (x1 - x0) / 4.0,
+            (y1 - y0) / 4.0,
+        );
+        for (px, py) in [
+            (cx, cy),
+            (cx - qw, cy - qh),
+            (cx + qw, cy - qh),
+            (cx - qw, cy + qh),
+            (cx + qw, cy + qh),
+        ] {
+            if self.reaches(&roots, &frame.cdp, px, py, bounds)? {
+                return Ok((px, py));
+            }
+        }
+        Err(ActionError::Refused {
+            kind: "browser_frame",
+            detail: format!("frame {} is covered where it is visible", frame.host),
+        })
+    }
+
+    /// Whether a top-level point hits through each local root's next owner into `frame`.
+    fn reaches(
+        &mut self,
+        roots: &[(String, (f64, f64), Option<i64>)],
+        frame: &str,
+        x: f64,
+        y: f64,
+        bounds: &Bounds,
+    ) -> Result<bool, ActionError> {
+        for (session, (ox, oy), next) in roots {
+            let hit = self
+                .call(
+                    Some(session),
+                    "DOM.getNodeForLocation",
+                    json!({"x": (x - ox).floor(), "y": (y - oy).floor(), "includeUserAgentShadowDOM": false, "ignorePointerEventsNone": true}),
+                    bounds.call,
+                )
+                .map_err(ActionError::Before)?;
+            let ok = match next {
+                Some(owner) => hit.get("backendNodeId").and_then(Value::as_i64) == Some(*owner),
+                None => hit.get("frameId").and_then(Value::as_str) == Some(frame),
+            };
+            if !ok {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// The offset of a document hosted by `session` within its target's top-level viewport: the
@@ -1521,66 +1751,10 @@ impl Live {
         session: &str,
         bounds: &Bounds,
     ) -> Result<(f64, f64), ActionError> {
-        let (mut x, mut y) = (0.0, 0.0);
-        let mut current = session.to_owned();
-        for _ in 0..16 {
-            if self.targets[i].is_page(Some(&current)) {
-                return Ok((x, y));
-            }
-            let Some(child) = self.targets[i].child_of_session(&current).cloned() else {
-                return Err(ActionError::Stale {
-                    kind: "browser_frame",
-                    detail: "the node's out-of-process frame is no longer attached".into(),
-                });
-            };
-            let owner = self
-                .call(
-                    Some(&child.parent),
-                    "DOM.getFrameOwner",
-                    json!({"frameId": child.frame}),
-                    bounds.call,
-                )
-                .map_err(before_or_after)?;
-            let Some(owner) = owner.get("backendNodeId").and_then(Value::as_i64) else {
-                return Err(ActionError::Refused {
-                    kind: "browser_frame",
-                    detail: "the frame has no owner element".into(),
-                });
-            };
-            self.call(
-                Some(&child.parent),
-                "DOM.scrollIntoViewIfNeeded",
-                json!({"backendNodeId": owner}),
-                bounds.call,
-            )
-            .map_err(before_or_after)?;
-            let model = self
-                .call(
-                    Some(&child.parent),
-                    "DOM.getBoxModel",
-                    json!({"backendNodeId": owner}),
-                    bounds.call,
-                )
-                .map_err(before_or_after)?;
-            let content: Vec<f64> = model
-                .pointer("/model/content")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_f64).collect())
-                .unwrap_or_default();
-            if content.len() != 8 {
-                return Err(ActionError::Refused {
-                    kind: "browser_frame",
-                    detail: "the frame owner has no box".into(),
-                });
-            }
-            x += content[0];
-            y += content[1];
-            current = child.parent;
-        }
-        Err(ActionError::Refused {
-            kind: "browser_frame",
-            detail: "out-of-process frames nest too deeply".into(),
-        })
+        let hops = self.hops(i, session, true, bounds)?;
+        Ok(hops
+            .iter()
+            .fold((0.0, 0.0), |(x, y), h| (x + h.content[0], y + h.content[1])))
     }
 
     /// Scrolls a node into view and computes its click point in the top-level viewport.
@@ -1739,6 +1913,28 @@ pub fn post_dispatch(e: ActionError) -> ActionError {
             ActionError::After(CdpError::Protocol(format!("after the action: {detail}")))
         }
     }
+}
+
+/// One out-of-process frame boundary on the way from a document up to its page.
+struct Hop {
+    /// The frame's own session.
+    session: String,
+    owner: i64,
+    /// The owner's content quad in the parent's local-root viewport.
+    content: Vec<f64>,
+}
+
+/// The bounding rectangle `(x0, y0, x1, y1)` of a quad, offset by `(ox, oy)`.
+fn rect(quad: &[f64], ox: f64, oy: f64) -> (f64, f64, f64, f64) {
+    let xs = [quad[0], quad[2], quad[4], quad[6]];
+    let ys = [quad[1], quad[3], quad[5], quad[7]];
+    let min = |v: [f64; 4]| v.into_iter().fold(f64::INFINITY, f64::min);
+    let max = |v: [f64; 4]| v.into_iter().fold(f64::NEG_INFINITY, f64::max);
+    (min(xs) + ox, min(ys) + oy, max(xs) + ox, max(ys) + oy)
+}
+
+fn intersect(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> (f64, f64, f64, f64) {
+    (a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3))
 }
 
 fn before_or_after(e: CdpError) -> ActionError {

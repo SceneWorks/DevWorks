@@ -64,7 +64,9 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, browser as ops};
-use crate::ports::browser::{BrowserAsset, BrowserPlatform, Profile, Qualification};
+use crate::ports::browser::{
+    BrowserAsset, BrowserPlatform, Profile, Qualification, STAGED_NAME_MAX_BYTES,
+};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, BrowserChannel, BrowserFilter, BrowserPhase, MAX_PAGE,
     NewEvent, NewOperation, NewQueueEntry, OperationRecord, ReadOptions, ReadSnapshot,
@@ -1086,10 +1088,11 @@ impl BrowserService {
     // -----------------------------------------------------------------------------------------
     // Actions
 
-    /// Waits (bounded) until the session's previous action settled, so actions run in commit
-    /// order. A predecessor whose outcome is unknown stops this one (nothing is sent after an
-    /// uncertain navigation or submission).
-    fn after_predecessor(&self, op: &OperationRecord) -> Result<(), EffectOutcome> {
+    /// The state of the action `op` is ordered behind (its recorded predecessor), if any.
+    fn predecessor_state(
+        &self,
+        op: &OperationRecord,
+    ) -> Result<Option<Option<OperationState>>, StorageError> {
         let Some(before) = op
             .payload
             .get("after")
@@ -1097,36 +1100,60 @@ impl BrowserService {
             .and_then(|o| Id::new(o).ok())
             .map(OperationId)
         else {
-            return Ok(());
+            return Ok(None);
         };
-        let deadline = std::time::Instant::now() + self.config.order_bound;
-        loop {
-            let b = before.clone();
-            let state = read_snapshot(&*self.store, &ReadOptions::default(), move |s| {
-                Ok(s.operations().operation(&b)?.map(|o| o.state))
-            })
-            .map_err(|e| EffectOutcome::NotApplied(e.to_string()))?;
-            match state {
+        read_snapshot(&*self.store, &ReadOptions::default(), move |s| {
+            Ok(Some(s.operations().operation(&before)?.map(|o| o.state)))
+        })
+    }
+
+    /// Whether `op` is ordered behind an action that is still queued or running. The
+    /// dispatcher waits for this to clear before dispatching `op`, holding no worker capacity
+    /// (see [`Self::order_bound`]); a read failure counts as settled, so the execution check
+    /// decides.
+    pub fn predecessor_pending(&self, op: &OperationRecord) -> bool {
+        matches!(
+            self.predecessor_state(op),
+            Ok(Some(Some(
+                OperationState::IntentRecorded
+                    | OperationState::RetryPending
+                    | OperationState::Preflighted
+                    | OperationState::Dispatching
+            )))
+        )
+    }
+
+    /// How long an action waits for its predecessor before it is retried.
+    pub fn order_bound(&self) -> Duration {
+        self.config.order_bound
+    }
+
+    /// Runs actions in commit order: the session's previous action must have settled (the
+    /// dispatcher waited for it without holding capacity). A predecessor whose outcome is
+    /// unknown stops this one (nothing is sent after an uncertain navigation or submission);
+    /// one still pending (the wait ran out) is retried, never overtaken.
+    fn after_predecessor(&self, op: &OperationRecord) -> Result<(), EffectOutcome> {
+        match self
+            .predecessor_state(op)
+            .map_err(|e| EffectOutcome::NotApplied(e.to_string()))?
+        {
+            None
+            | Some(
                 None
                 | Some(
                     OperationState::ObservedComplete
                     | OperationState::Failed
                     | OperationState::CancelledBeforeDispatch,
-                ) => return Ok(()),
-                Some(OperationState::OutcomeUnknown | OperationState::NeedsInput) => {
-                    return Err(failed(
-                        DomainErrorCode::Conflict,
-                        "browser_action_order",
-                        "an earlier action of this session has an unknown outcome",
-                    ));
-                }
-                Some(_) if std::time::Instant::now() >= deadline => {
-                    return Err(EffectOutcome::NotApplied(
-                        "an earlier action of this session is still pending".into(),
-                    ));
-                }
-                Some(_) => std::thread::sleep(Duration::from_millis(5)),
-            }
+                ),
+            ) => Ok(()),
+            Some(Some(OperationState::OutcomeUnknown | OperationState::NeedsInput)) => Err(failed(
+                DomainErrorCode::Conflict,
+                "browser_action_order",
+                "an earlier action of this session has an unknown outcome",
+            )),
+            Some(Some(_)) => Err(EffectOutcome::NotApplied(
+                "an earlier action of this session is still pending".into(),
+            )),
         }
     }
 
@@ -2731,6 +2758,29 @@ impl BrowserService {
 }
 
 /// Whether an uncertain action's outcome is still not established.
+/// The staged file name of the `n`th file: `<n>-<safe name>`, at most
+/// [`STAGED_NAME_MAX_BYTES`] UTF-8 bytes. A longer name loses the end of its stem (cut on a
+/// character boundary) and keeps a short extension, so the platform never refuses it.
+fn staged_name(n: usize, name: &str) -> String {
+    let prefix = format!("{n}-");
+    let base = safe_name(name);
+    let budget = STAGED_NAME_MAX_BYTES - prefix.len();
+    if base.len() <= budget {
+        return prefix + &base;
+    }
+    let (stem, ext) = match base.rfind('.') {
+        Some(d) if d > 0 && base.len() - d <= 16 => base.split_at(d),
+        _ => (base.as_str(), ""),
+    };
+    let mut end = budget - ext.len();
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    let stem = stem[..end].trim_end_matches(['.', ' ']);
+    let stem = if stem.is_empty() { "file" } else { stem };
+    format!("{prefix}{stem}{ext}")
+}
+
 fn unresolved(state: Option<OperationState>) -> bool {
     matches!(
         state,
@@ -2935,7 +2985,7 @@ impl CommandHandler for BrowserService {
                     )))));
                 }
             };
-            let name = format!("{}-{}", n + 1, safe_name(&read.name));
+            let name = staged_name(n + 1, &read.name);
             let mut reader = read.reader;
             match self.platform.stage_file(
                 &profile,

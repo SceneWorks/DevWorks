@@ -23,7 +23,8 @@
 //! No socket, port or name exists, so no other local process can attach. The channel closes
 //! when the browser exits.
 use devworks_core::ports::browser::{
-    BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, Profile, Qualification, user_data_of,
+    BrowserAsset, BrowserFault, BrowserPlatform, CdpTransport, Profile, Qualification,
+    STAGED_NAME_MAX_BYTES, user_data_of,
 };
 use devworks_core::ports::process::{ControlChannel, ControlPipe, ProcessSpec};
 use devworks_core::protocol::Id;
@@ -126,7 +127,7 @@ fn io(e: std::io::Error) -> BrowserFault {
 /// control character.
 fn component(name: &str) -> Result<&str, BrowserFault> {
     let ok = !name.is_empty()
-        && name.len() <= 128
+        && name.len() <= STAGED_NAME_MAX_BYTES
         && !name.starts_with('.')
         && !name
             .chars()
