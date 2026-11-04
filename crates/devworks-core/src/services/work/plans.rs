@@ -1,10 +1,9 @@
 //! Feature creation, the feature-owned plan slot, plan-approval requests and their decision
 //! seam, atomic plans and re-planning by reference.
-use super::deps::closes_cycle;
 use super::items::{
     NewCard, bump, check_evidence, completion_for, feature_scope, open_feature, tx_record,
 };
-use super::model::{ActivePlan, PendingPlan, WorkBrief, active_of, dropped, pending_of};
+use super::model::{ActivePlan, PendingPlan, WorkBrief, active_of, pending_of};
 use super::workflow::{self, CLOSED, finished, semantic_of};
 use super::{
     PLAN_ITEMS, PLAN_LINKS, R, WorkService, check_artifact, check_revision, conflict, event,
@@ -127,7 +126,9 @@ fn check_draft(
             .feature_plan(&f.id)?
             .and_then(|s| active_of(s.approved.as_ref()))
     {
-        for r in active.draft.requirements.0.iter().filter(|r| !dropped(r)) {
+        // Every requirement of the active plan stays in a replacement: a live one until it is
+        // dropped with a decision, a dropped one with its recorded decision.
+        for r in &active.draft.requirements.0 {
             if !d.requirements.0.iter().any(|x| x.id == r.id) {
                 return Err(conflict("requirement_missing", &r.id));
             }
@@ -155,6 +156,33 @@ fn proposal_record(p: &StoredProposal, artifact: Option<ArtifactRef>) -> R<Propo
         summary: content(&p.summary),
         artifact,
     })
+}
+
+/// `given` with the recorded state of each criterion kept from the draft it revises (the
+/// pending draft, else the active plan): a criterion keeping its ID and text keeps its state and
+/// evidence (retained re-plan behavior), so a revision never silently resets met criteria.
+fn keep_plan_state(tx: &mut dyn WriteTransaction, feature: &Id, given: &PlanDraft) -> R<PlanDraft> {
+    let slot = tx.work().feature_plan(feature)?;
+    let base = slot.as_ref().and_then(|s| {
+        pending_of(s.pending.as_ref())
+            .map(|p| p.draft)
+            .or_else(|| active_of(s.approved.as_ref()).map(|a| a.draft))
+    });
+    let Some(base) = base else {
+        return Ok(given.clone());
+    };
+    let keep = |list: &[AcceptanceCriterion], from: &[AcceptanceCriterion]| {
+        list.iter()
+            .map(|c| match from.iter().find(|b| b.id == c.id) {
+                Some(b) if b.text.0 == c.text.0 => b.clone(),
+                _ => c.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut out = given.clone();
+    out.acceptance = BoundedList(keep(&given.acceptance.0, &base.acceptance.0));
+    out.acceptance_tests = BoundedList(keep(&given.acceptance_tests.0, &base.acceptance_tests.0));
+    Ok(out)
 }
 
 /// Marks the feature's pending request superseded (its draft changed or was replaced).
@@ -452,54 +480,29 @@ impl WorkService {
                 entry.push(p);
             }
         }
-        self.write_links(tx, project, &incoming)?;
+        self.write_links(tx, ctx, project, &incoming)?;
         out.extend(planned.into_iter().map(|p| p.work));
         Ok(out)
     }
 
-    /// Writes the incoming links of each target and refuses any cycle they close (checked
-    /// after every write, inside the unit of work, so links within the plan are covered).
+    /// Writes the incoming links of each target through the one link writer
+    /// ([`super::deps::set_links`]: kinds, project, self, duplicates and completed work) and
+    /// then refuses any cycle they close, checked after every write of the unit of work so
+    /// links within the plan are covered.
     fn write_links(
         &self,
         tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
         project: &ProjectId,
         incoming: &BTreeMap<String, Vec<Id>>,
     ) -> R<()> {
-        let incoming: Vec<(Id, &Vec<Id>)> = incoming
-            .iter()
-            .map(|(k, v)| Id::new(k.clone()).map(|id| (id, v)))
-            .collect::<Result<_, _>>()
-            .map_err(|_| invalid("work_id", None))?;
-        for (target, deps) in &incoming {
-            let t = tx
-                .work()
-                .work(target)?
-                .ok_or_else(|| not_found("work", target))?;
-            let set = id_set(deps, "duplicate_link")?;
-            for d in &set {
-                if d == target {
-                    return Err(conflict("self_link", target));
-                }
-                match tx.work().work(d)? {
-                    Some(w)
-                        if &w.project_id == project
-                            && (w.kind == FEATURE) == (t.kind == FEATURE) => {}
-                    Some(w) if &w.project_id == project => {
-                        return Err(conflict("link_kind", &w.id));
-                    }
-                    _ => return Err(not_found("work", d).into()),
-                }
-            }
-            tx.work().set_prerequisites(target, &set)?;
+        let mut targets = Vec::with_capacity(incoming.len());
+        for (target, deps) in incoming {
+            let target = Id::new(target.clone()).map_err(|_| invalid("work_id", None))?;
+            super::deps::set_links(tx, ctx, project, &target, deps)?;
+            targets.push(target);
         }
-        for (target, deps) in &incoming {
-            match closes_cycle(tx.work(), target, deps) {
-                Ok(None) => {}
-                Ok(Some(p)) => return Err(conflict("dependency_cycle", &p)),
-                Err(_) => return Err(conflict("dependency_graph_bound", target)),
-            }
-        }
-        Ok(())
+        super::deps::check_cycles(tx, &targets)
     }
 
     fn plan_feature(
@@ -522,9 +525,10 @@ impl WorkService {
                 };
                 check_revision(&f, expected.get())?;
                 open_feature(tx, &f)?;
-                check_draft(tx, ctx, project, Some(&f), &fd.plan)?;
+                let draft = keep_plan_state(tx, &f.id, &fd.plan)?;
+                check_draft(tx, ctx, project, Some(&f), &draft)?;
                 // Saving a draft never touches the active plan or its approval.
-                let (_, superseded) = save_pending(tx, &f, &fd.plan)?;
+                let (_, superseded) = save_pending(tx, &f, &draft)?;
                 let f = touch(tx, ctx, &f)?;
                 event(
                     tx,
@@ -602,9 +606,13 @@ impl WorkService {
                         // Membership changes only through tasks.set_feature.
                         return Err(conflict("feature_membership", &w.id));
                     }
-                    if let Some(r) = &e.expected_revision {
-                        check_revision(&w, r.get())?;
-                    }
+                    // Every existing entry names the revision it was planned from: a card's own
+                    // edits advance only its revision, so without it a re-plan would overwrite a
+                    // newer title, description, repositories or criteria.
+                    let Some(r) = &e.expected_revision else {
+                        return Err(invalid("expected_revision", Some(&w.id)));
+                    };
+                    check_revision(&w, r.get())?;
                     if !matched.insert(w.id.clone()) {
                         return Err(invalid("duplicate_entry", Some(&w.id)));
                     }
@@ -817,19 +825,7 @@ impl WorkService {
             }
             incoming.insert(p.work.id.as_str().to_owned(), deps);
         }
-        // Completed cards are not reopened by link editing.
-        let statuses = tx.work().statuses(&project)?;
-        for (t, deps) in &incoming {
-            let t = Id::new(t.clone()).map_err(|_| invalid("work_id", None))?;
-            let t = &t;
-            let w = tx.work().work(t)?.ok_or_else(|| not_found("work", t))?;
-            let done = w.status_id.as_ref().and_then(|s| semantic_of(&statuses, s))
-                == Some(workflow::DONE);
-            if done && id_set(deps, "duplicate_link")? != tx.work().prerequisites(t)? {
-                return Err(conflict("work_completed", t));
-            }
-        }
-        self.write_links(tx, &project, &incoming)?;
+        self.write_links(tx, ctx, &project, &incoming)?;
         let project_plan = match (&i.project_plan, &i.staged_project_plan) {
             (Some(p), None) => Some(p.clone()),
             (None, Some(a)) => Some(self.staged_plan(tx, ctx, &project, a)?),
@@ -873,9 +869,10 @@ impl WorkService {
         let f = visible_feature(tx.work(), ctx, &i.feature_id.0)?;
         check_revision(&f, i.expected_revision.get())?;
         open_project(tx, ctx, &f.project_id)?;
-        check_draft(tx, ctx, &f.project_id, Some(&f), &i.plan)?;
+        let draft = keep_plan_state(tx, &f.id, &i.plan)?;
+        check_draft(tx, ctx, &f.project_id, Some(&f), &draft)?;
         let before = slot(tx, &f.id)?;
-        let (after_slot, superseded) = save_pending(tx, &f, &i.plan)?;
+        let (after_slot, superseded) = save_pending(tx, &f, &draft)?;
         if after_slot.revision == before.revision {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesEditPlan {

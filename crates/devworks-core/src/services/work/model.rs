@@ -209,6 +209,7 @@ pub fn record(
     let (mut plan, mut approval, mut pending_plan) = (None, None, None);
     let (mut goals, mut requirements, mut acceptance) =
         (brief.goals.clone(), Vec::new(), brief.acceptance.clone());
+    let mut acceptance_tests: Option<Vec<AcceptanceCriterion>> = feature.then(Vec::new);
     if feature && let Some(slot) = read.feature_plan(&w.id)? {
         if let Some(a) = active_of(slot.approved.as_ref()) {
             plan = Some(a.draft.content.clone());
@@ -223,6 +224,7 @@ pub fn record(
             goals = a.draft.goals.0.iter().map(|g| g.0.clone()).collect();
             requirements = a.draft.requirements.0.clone();
             acceptance = a.draft.acceptance.0.clone();
+            acceptance_tests = Some(a.draft.acceptance_tests.0.clone());
         }
         if let (Some(p), Some(prev)) = (pending_of(slot.pending.as_ref()), slot.pending_revision) {
             let latest = read.latest_proposal(&w.id)?;
@@ -324,6 +326,7 @@ pub fn record(
         manual_order: Counter::new(w.manual_order.max(0)).ok(),
         github_issue: None,
         readiness: extras.readiness,
+        acceptance_tests: acceptance_tests.map(|t| BoundedList(t.into_iter().take(128).collect())),
         queue_revision: Some(rev(queue_revision)),
         workflow_revision: Some(rev(workflow_revision)),
     })

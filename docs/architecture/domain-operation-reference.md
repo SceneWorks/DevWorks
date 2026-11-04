@@ -962,6 +962,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `readiness` | `?ReadinessAssessment` · *revision 2+* |
 | `queueRevision` | `?Revision` · *revision 2+* |
 | `workflowRevision` | `?Revision` · *revision 2+* |
+| `acceptanceTests` | `?Items<AcceptanceCriterion>` · *revision 2+* |
 
 ### ReadinessDisposition
 

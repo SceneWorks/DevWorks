@@ -741,9 +741,22 @@ impl WorkService {
         let statuses_changed = if let Some(s) = &patch.status_id
             && Some(s) != before.status_id.as_ref()
         {
+            // A patch carries no workflow revision, so it may change the status only while the
+            // project's workflow is the one every client knows (the default, revision 1); once
+            // the workflow changed, a status change goes through tasks.move, which checks it.
+            if tx
+                .work()
+                .queue_revision(&before.project_id, WORKFLOW_QUEUE)?
+                != 1
+            {
+                return Err(conflict("use_tasks_move", &before.id));
+            }
             let (status, _) = status_of(tx, &before.project_id, s)?;
             after.status_id = Some(status.id.clone());
             changed.push("statusId");
+            if before.parent_feature_id.is_some() {
+                queues.push(before.queue());
+            }
             Some(status)
         } else {
             None
@@ -1011,6 +1024,11 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        // A feature's task-set revision covers its cards' workflow status (a re-plan closes the
+        // unfinished cards it leaves out, so it must not act on a status it did not see).
+        if before.parent_feature_id.is_some() {
+            bump(tx, &before.project_id, &[before.queue()])?;
+        }
         // A workflow move never changes execution: no pause, start, stop or completion of a run.
         event(
             tx,

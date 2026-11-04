@@ -488,7 +488,7 @@ case('reject-r1-features.edit-readiness','domain-request',r1edit,False,False)
 bad=copy.deepcopy(edit);bad['body']['changes']['readiness']['findings'][0]['disposition']='Maybe'
 case('reject-r2-readiness-unknown-disposition','domain-request.r2',bad,False,False)
 readiness={'id':'assessment-a','revision':'1','planRevision':'2','planDigest':'b'*64,'reviewedPending':False,'freshness':'Stale','staleScopeKeys':['E1'],'ready':False,'summary':'assessed','findings':[finding],'assessedBy':'actor-a','assessedAtMs':'1793570000000'}
-feature_r2={**copy.deepcopy(POS['result-features.get']['value']),'readiness':readiness,'queueRevision':'3','workflowRevision':'1'}
+feature_r2={**copy.deepcopy(POS['result-features.get']['value']),'readiness':readiness,'queueRevision':'3','workflowRevision':'1','acceptanceTests':[]}
 case('r2-result-features.get','operation-result.r2',{'kind':'features.get','value':feature_r2})
 case('r2-result-features.get-unassessed','operation-result.r2',{'kind':'features.get','value':copy.deepcopy(POS['result-features.get']['value'])})
 case('r2-result-features.list','operation-result.r2',{'kind':'features.list','value':{'items':[feature_r2],'hasMore':False}})

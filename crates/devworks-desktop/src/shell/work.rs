@@ -21,8 +21,9 @@ use crate::widgets::{self, Header, Tone, ViewState, chip};
 use crate::work_ops as wops;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{
-    ApprovalState, CriterionState, FindingState, LifeState, ReadinessDisposition,
-    ReadinessFreshness, RootSnapshot, WorkKind, WorkRecord,
+    AcceptanceCriterion, ApprovalState, CriterionState, FindingState, LifeState,
+    ReadinessDisposition, ReadinessFreshness, RequirementItem, RequirementStatus, RootSnapshot,
+    WorkKind, WorkRecord,
 };
 use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id, ProjectId};
 use devworks_core::services::work::fold;
@@ -116,6 +117,137 @@ pub struct PlanForm {
     pub content: Option<ArtifactRef>,
     /// The text `content` holds (unchanged text keeps the content).
     pub original: String,
+    /// `T1: text` lines of the feature's acceptance tests.
+    pub acceptance_tests: String,
+    /// The draft the form started from: what the form does not show (requirement status, drop
+    /// decisions and coverage; criterion state and evidence) is kept from it, never dropped.
+    pub base: PlanBase,
+}
+/// The requirements and criteria a plan form started from.
+#[derive(Clone, Debug, Default)]
+pub struct PlanBase {
+    pub requirements: Vec<RequirementItem>,
+    pub acceptance: Vec<AcceptanceCriterion>,
+    pub acceptance_tests: Vec<AcceptanceCriterion>,
+}
+
+/// A plan form opened on feature `f`: its pending draft when it has one, otherwise its active
+/// plan (requirements, acceptance, acceptance tests, goals, repositories, content).
+pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
+    let (base, goals, repos, content) = match f.pending_plan.as_ref().map(|p| &p.draft) {
+        Some(d) => (
+            PlanBase {
+                requirements: d.requirements.0.clone(),
+                acceptance: d.acceptance.0.clone(),
+                acceptance_tests: d.acceptance_tests.0.clone(),
+            },
+            d.goals.0.iter().map(|g| g.0.clone()).collect::<Vec<_>>(),
+            d.repository_ids
+                .0
+                .iter()
+                .map(|r| r.as_str().to_owned())
+                .collect::<BTreeSet<_>>(),
+            Some(d.content.clone()),
+        ),
+        None => (
+            PlanBase {
+                requirements: f.requirements.0.clone(),
+                acceptance: f.acceptance.0.clone(),
+                acceptance_tests: f
+                    .acceptance_tests
+                    .as_ref()
+                    .map(|t| t.0.clone())
+                    .unwrap_or_default(),
+            },
+            f.goals.0.iter().map(|g| g.0.clone()).collect(),
+            f.repository_ids
+                .0
+                .iter()
+                .map(|r| r.as_str().to_owned())
+                .collect(),
+            f.plan.clone(),
+        ),
+    };
+    let criteria = |c: &[AcceptanceCriterion]| {
+        c.iter()
+            .map(|a| format!("{}: {}", a.id.as_str(), a.text.0))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    PlanForm {
+        snapshot: f.clone(),
+        text: String::new(),
+        requirements: base
+            .requirements
+            .iter()
+            .filter(|r| !matches!(r.status, RequirementStatus::Dropped))
+            .map(|r| format!("{}: {}", r.id.as_str(), r.statement.0))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        acceptance: criteria(&base.acceptance),
+        acceptance_tests: criteria(&base.acceptance_tests),
+        goals: goals.join("\n"),
+        repositories: repos,
+        original: String::new(),
+        content,
+        base,
+    }
+}
+
+/// The criteria of `text` (`ID: text` lines), keeping the stored state and evidence of each one
+/// whose ID and text are unchanged.
+fn merged_criteria(text: &str, base: &[AcceptanceCriterion]) -> Vec<Value> {
+    lines(text)
+        .into_iter()
+        .map(|(id, t)| match base.iter().find(|b| b.id.as_str() == id) {
+            Some(b) if b.text.0 == t => serde_json::to_value(b).unwrap_or(Value::Null),
+            _ => json!({"id": id, "text": t, "evidenceIds": [], "state": "Unmet"}),
+        })
+        .collect()
+}
+
+/// The `features.edit_plan` draft of a plan form: what the user wrote, with what the form does
+/// not show kept from the draft it started from — each requirement's status, drop decision and
+/// covering tasks, dropped requirements (their decision stays recorded), and each unchanged
+/// criterion's state and evidence.
+pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
+    let written = lines(&form.requirements);
+    let mut reqs: Vec<Value> = written
+        .iter()
+        .map(
+            |(id, t)| match form.base.requirements.iter().find(|b| b.id.as_str() == id) {
+                Some(b) => {
+                    let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
+                    v["statement"] = json!(t);
+                    v
+                }
+                None => json!({"id": id, "statement": t, "status": "Confirmed",
+                "coveredByTaskIds": []}),
+            },
+        )
+        .collect();
+    for b in &form.base.requirements {
+        if matches!(b.status, RequirementStatus::Dropped)
+            && !written.iter().any(|(id, _)| id == b.id.as_str())
+        {
+            reqs.push(serde_json::to_value(b).unwrap_or(Value::Null));
+        }
+    }
+    let goals: Vec<String> = form
+        .goals
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_owned())
+        .collect();
+    let repos: Vec<&String> = form.repositories.iter().collect();
+    json!({
+        "content": content,
+        "acceptance": merged_criteria(&form.acceptance, &form.base.acceptance),
+        "repositoryIds": repos,
+        "goals": goals,
+        "requirements": reqs,
+        "acceptanceTests": merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests),
+    })
 }
 /// The project's Activity: its change feed, read page by page to its full history.
 #[derive(Default)]
@@ -653,28 +785,9 @@ impl Shell {
     fn submit_plan(&mut self, form: &PlanForm, content: &ArtifactRef) {
         let w = &form.snapshot;
         // Every live requirement of the active plan stays in the draft (dropping one needs an
-        // explicit decision, which the draft states by keeping it).
-        let reqs: Vec<Value> = lines(&form.requirements)
-            .into_iter()
-            .map(|(id, t)| {
-                json!({"id": id, "statement": t, "status": "Confirmed",
-                "coveredByTaskIds": []})
-            })
-            .collect();
-        let acceptance: Vec<Value> = lines(&form.acceptance)
-            .into_iter()
-            .map(|(id, t)| json!({"id": id, "text": t, "evidenceIds": [], "state": "Unmet"}))
-            .collect();
-        let goals: Vec<String> = form
-            .goals
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.trim().to_owned())
-            .collect();
-        let repos: Vec<&String> = form.repositories.iter().collect();
-        let body = json!({"featureId": w.id, "expectedRevision": w.revision, "plan": {
-            "content": content, "acceptance": acceptance, "repositoryIds": repos,
-            "goals": goals, "requirements": reqs, "acceptanceTests": []}});
+        // explicit decision); what the form does not show is kept from its starting draft.
+        let body = json!({"featureId": w.id, "expectedRevision": w.revision,
+            "plan": plan_body(form, content)});
         self.command(
             Slot::WorkCommand(w.id.as_str().to_owned()),
             "Saving the plan draft",
@@ -2406,57 +2519,7 @@ fn plan_form(
             .add_enabled(enabled, egui::Button::new("Edit plan"))
             .clicked()
         {
-            let draft = f.pending_plan.as_ref().map(|p| &p.draft);
-            let (reqs, acc, goals, repos, content) = match draft {
-                Some(d) => (
-                    d.requirements
-                        .0
-                        .iter()
-                        .map(|r| format!("{}: {}", r.id.as_str(), r.statement.0))
-                        .collect::<Vec<_>>(),
-                    d.acceptance
-                        .0
-                        .iter()
-                        .map(|a| format!("{}: {}", a.id.as_str(), a.text.0))
-                        .collect::<Vec<_>>(),
-                    d.goals.0.iter().map(|g| g.0.clone()).collect::<Vec<_>>(),
-                    d.repository_ids
-                        .0
-                        .iter()
-                        .map(|r| r.as_str().to_owned())
-                        .collect::<BTreeSet<_>>(),
-                    Some(d.content.clone()),
-                ),
-                None => (
-                    f.requirements
-                        .0
-                        .iter()
-                        .map(|r| format!("{}: {}", r.id.as_str(), r.statement.0))
-                        .collect(),
-                    f.acceptance
-                        .0
-                        .iter()
-                        .map(|a| format!("{}: {}", a.id.as_str(), a.text.0))
-                        .collect(),
-                    f.goals.0.iter().map(|g| g.0.clone()).collect(),
-                    f.repository_ids
-                        .0
-                        .iter()
-                        .map(|r| r.as_str().to_owned())
-                        .collect(),
-                    f.plan.clone(),
-                ),
-            };
-            work.plan = Some(PlanForm {
-                snapshot: f.clone(),
-                text: String::new(),
-                requirements: reqs.join("\n"),
-                acceptance: acc.join("\n"),
-                goals: goals.join("\n"),
-                repositories: repos,
-                original: String::new(),
-                content,
-            });
+            work.plan = Some(open_plan_form(f));
         }
         return;
     }
@@ -2483,6 +2546,12 @@ fn plan_form(
             .desired_rows(2),
     );
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Acceptance"));
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut form.acceptance_tests)
+            .hint_text("T1: acceptance test")
+            .desired_rows(2),
+    );
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Acceptance tests"));
     let r = ui.add(
         egui::TextEdit::multiline(&mut form.goals)
             .hint_text("One goal per line")

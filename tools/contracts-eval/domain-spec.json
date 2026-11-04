@@ -469,12 +469,14 @@
         "github_issue": "?GithubIssueTracking",
         "readiness": "?ReadinessAssessment",
         "queue_revision": "?Revision",
-        "workflow_revision": "?Revision"
+        "workflow_revision": "?Revision",
+        "acceptance_tests": "?Items<AcceptanceCriterion>"
       },
       "since": {
         "readiness": 2,
         "queue_revision": 2,
-        "workflow_revision": 2
+        "workflow_revision": 2,
+        "acceptance_tests": 2
       }
     },
     "ReadinessDisposition": {
@@ -2886,7 +2888,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves."
+      "rules": "Read one feature at its work revision. Schema revision 2: the record carries the feature's current execution-readiness assessment (AGENT-12, AGENT-18-20): the reviewed plan revision and digest, freshness against the active approved plan (stale scope units by requirement ID; the absent key is feature-wide), whether it is ready (current with no open blocking finding) and every finding with its requirement links, disposition, affected work, attempts, closure condition, decision with confidence and evidence, investigation objective/limits, question/recommendation and closure evidence. Readiness is reported separately from plan approval. Every work record at revision 2 also carries the revision of the queue it is ranked in (queueRevision: the project queue for features and standalone issues, its feature queue for a card) and of its project workflow (workflowRevision), the expected revisions of prioritization and workflow moves. A feature record at revision 2 also carries its active plan's acceptance tests (acceptanceTests), so a client revising the plan keeps them."
     },
     "features.create": {
       "operation": "features.create",

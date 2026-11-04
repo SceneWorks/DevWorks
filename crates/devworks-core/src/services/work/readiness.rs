@@ -301,6 +301,36 @@ fn check_finding(
     Ok(())
 }
 
+/// Whether two statements of a finding are the same (a repeated, unchanged finding).
+fn same_finding(a: &ReadinessFinding, b: &ReadinessFinding) -> bool {
+    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+}
+
+/// A re-assessment cannot settle or weaken a finding that is still open: it stays open (closing
+/// is `CloseFinding`, with its note and evidence, or a human's risk acceptance), stays blocking
+/// and a prerequisite when it was, and keeps gating at least the scope and work it gated.
+fn keeps_gate(stored: &ReadinessFinding, given: &ReadinessFinding) -> R<()> {
+    if !matches!(stored.state, FindingState::Open) {
+        return Ok(());
+    }
+    let weakened = !matches!(given.state, FindingState::Open)
+        || (stored.blocking && !given.blocking)
+        || (stored.prerequisite && !given.prerequisite)
+        || (stored.scope_key.is_some()
+            && given.scope_key.is_some()
+            && stored.scope_key != given.scope_key)
+        || (stored.scope_key.is_none() && given.scope_key.is_some())
+        || !stored
+            .affected_work_ids
+            .0
+            .iter()
+            .all(|w| given.affected_work_ids.0.contains(w));
+    if weakened {
+        return Err(conflict("open_finding_needs_closure", &stored.id));
+    }
+    Ok(())
+}
+
 fn evidence_keys(f: &ReadinessFinding) -> BTreeSet<String> {
     f.evidence
         .0
@@ -398,7 +428,18 @@ pub(crate) fn apply_change(
             let ids: Vec<Id> = findings.0.iter().map(|f| f.id.clone()).collect();
             super::id_set(&ids, "finding_ids")?;
             for f in &findings.0 {
+                let stored = previous
+                    .as_ref()
+                    .and_then(|p| p.findings.iter().find(|o| o.id == f.id));
+                // A settled finding repeated unchanged is kept as it is (a human's risk
+                // acceptance included); anything else is validated as a new statement.
+                if stored.is_some_and(|o| same_finding(o, f)) {
+                    continue;
+                }
                 check_finding(f, &requirements, &work)?;
+                if let Some(o) = stored {
+                    keeps_gate(o, f)?;
+                }
                 for a in f.evidence.0.iter().chain(&f.closure_evidence.0) {
                     check_artifact(tx, ctx, &feature.project_id, a)?;
                 }
@@ -430,12 +471,14 @@ pub(crate) fn apply_change(
                         return Err(conflict("settled_without_new_evidence", &f.id));
                     }
                 }
-                // Settled findings the new assessment leaves out are kept with their closure.
+                // Every finding the new assessment leaves out is kept: a settled one with its
+                // closure, and an open one with its gate (an open finding leaves only through a
+                // validated closure or a human's finding-specific risk acceptance).
                 for o in &prev.findings {
-                    if !matches!(o.state, FindingState::Open)
-                        && !out.iter().any(|f| f.id == o.id)
-                        && out.len() < 128
-                    {
+                    if !out.iter().any(|f| f.id == o.id) {
+                        if out.len() >= 128 {
+                            return Err(invalid("finding_limit", Some(&o.id)));
+                        }
                         out.push(o.clone());
                     }
                 }

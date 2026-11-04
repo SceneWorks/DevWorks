@@ -16502,6 +16502,10 @@
             }
           ]
         },
+        "acceptanceTests": {
+          "$ref": "#/$defs/List_AcceptanceCriterion_0_128",
+          "x-since": 2
+        },
         "approval": {
           "anyOf": [
             {

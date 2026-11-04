@@ -29099,6 +29099,7 @@
         "kind": "features.get",
         "value": {
           "acceptance": [],
+          "acceptanceTests": [],
           "attemptCount": "0",
           "attempts": [],
           "commentCount": "0",
@@ -29231,6 +29232,7 @@
           "items": [
             {
               "acceptance": [],
+              "acceptanceTests": [],
               "attemptCount": "0",
               "attempts": [],
               "commentCount": "0",

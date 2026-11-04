@@ -769,6 +769,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "Revision", extend("x-since" = 2))]
     pub workflow_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<AcceptanceCriterion>", extend("x-since" = 2))]
+    pub acceptance_tests: Option<Items<AcceptanceCriterion>>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -811,6 +818,7 @@ impl Check for WorkRecord {
         self.readiness.check()?;
         self.queue_revision.check()?;
         self.workflow_revision.check()?;
+        self.acceptance_tests.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -829,6 +837,9 @@ impl Revisioned for WorkRecord {
         }
         if revision < 2 {
             self.workflow_revision = None;
+        }
+        if revision < 2 {
+            self.acceptance_tests = None;
         }
     }
 }

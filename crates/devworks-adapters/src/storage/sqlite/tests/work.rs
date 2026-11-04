@@ -1201,6 +1201,52 @@ fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
         vec![finding("F1", "E2", vec![]), finding("F2", "E1", vec![])],
     ));
     assert_eq!(kind_of(&fault), "settled_without_new_evidence");
+    // A re-assessment that leaves the open finding out keeps it (still open, still gating).
+    let f = work_of(applied(assess(
+        &f,
+        active.plan_revision.as_str(),
+        &String::from(active.plan_digest.clone()),
+        Some(r.revision.as_str()),
+        vec![],
+    )));
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    assert!(!r.ready);
+    assert!(r.findings.0.iter().any(|x| x.id.as_str() == "F1"
+        && matches!(
+            x.state,
+            devworks_core::protocol::records::FindingState::Open
+        )));
+    // It cannot be settled or weakened by restating it either.
+    let mut settled = finding("F1", "E2", vec![]);
+    settled["state"] = json!("Resolved");
+    settled["closureNote"] = json!("done");
+    let mut weaker = finding("F1", "E2", vec![]);
+    weaker["blocking"] = json!(false);
+    for restated in [settled, weaker] {
+        let fault = refused(assess(
+            &f,
+            active.plan_revision.as_str(),
+            &String::from(active.plan_digest.clone()),
+            Some(r.revision.as_str()),
+            vec![restated],
+        ));
+        assert_eq!(kind_of(&fault), "open_finding_needs_closure");
+    }
+    let plan = {
+        let (runs, fid) = (fx.runs.clone(), RootId(f.id.clone()));
+        fx.read(move |s| {
+            let w = s.sessions().work_root(&fid)?.unwrap();
+            runs.scope().plan(s.runs(), &w)
+        })
+    };
+    assert!(matches!(
+        plan.unit(Some("E2")).unwrap().readiness,
+        devworks_core::services::runs::scope::Readiness::Blocked { .. }
+    ));
     // Closing the finding needs a note; an agent's closure of a blocker needs evidence.
     let close = |f: &WorkRecord, rev: &str, evidence: Vec<ArtifactRef>| {
         fx.command_at(
@@ -1317,13 +1363,61 @@ fn sync_plan_replans_by_reference_and_never_deletes_or_completes() {
         other => panic!("{other:?}"),
     };
     assert_eq!(ids(&cards), ["A", "B"]);
-    let b = cards.iter().find(|c| c.title.0 == "B").unwrap();
+    let b = cards.iter().find(|c| c.title.0 == "B").unwrap().clone();
     assert_eq!(b.dependency_ids.0.len(), 1);
+    let at = |e: Value, w: &WorkRecord| {
+        let mut e = e;
+        e["expectedRevision"] = json!(w.revision.as_str());
+        e
+    };
+    // An existing entry must name the revision it was planned from.
+    let fault = refused(sync(
+        json!([entry("b", "B renamed", vec![], None)]),
+        slot(&f.id),
+        fx.queue(&p, &q),
+    ));
+    assert_eq!(
+        (fault.code, kind_of(&fault)),
+        (DomainErrorCode::InvalidArgument, "expected_revision")
+    );
+    // A newer edit of the card refuses a re-plan prepared before it (no silent overwrite).
+    let edited = work_of(applied(fx.edit(
+        &fx.user(),
+        &b,
+        json!({"title": "B by hand"}),
+    )));
+    let fault = refused(sync(
+        json!([at(entry("b", "B renamed", vec![], None), &b)]),
+        slot(&f.id),
+        fx.queue(&p, &q),
+    ));
+    assert_eq!(fault.code, DomainErrorCode::RevisionConflict);
+    assert_eq!(fx.fresh(&b).title.0, "B by hand");
+    // A status move of a card advances the task set: a re-plan that saw the old set (and would
+    // close the moved card) is refused.
+    let set = fx.queue(&p, &q);
+    let a_card = cards.iter().find(|c| c.title.0 == "A").unwrap().clone();
+    let wf = fx.queue(&p, WORKFLOW_QUEUE).to_string();
+    let a_card = work_of(applied(fx.command(
+        &fx.user(),
+        "tasks.move",
+        json!({"taskId": a_card.id.as_str(), "expectedRevision": a_card.revision.as_str(),
+            "statusId": Fx::status(&p, "in-progress"), "expectedWorkflowRevision": wf}),
+    )));
+    assert!(fx.queue(&p, &q) > set);
+    let fault = refused(sync(
+        json!([at(entry("b", "B renamed", vec![], None), &edited)]),
+        slot(&f.id),
+        set,
+    ));
+    assert_eq!(fault.code, DomainErrorCode::RevisionConflict);
+    assert_eq!(fx.fresh(&a_card).status_id, a_card.status_id);
+    let b = fx.fresh(&b);
     // A re-plan that omits A closes it (never deletes), keeps B's priority when omitted and
     // keeps a criterion's state while its ID and text are unchanged.
     let cards = match applied(sync(
         json!([
-            entry("b", "B renamed", vec![], None),
+            at(entry("b", "B renamed", vec![], None), &b),
             entry("c", "C", vec!["b"], Some(1))
         ]),
         slot(&f.id),
@@ -1345,15 +1439,16 @@ fn sync_plan_replans_by_reference_and_never_deletes_or_completes() {
     let fault = refused(sync(json!([out_of_scope]), slot(&f.id), fx.queue(&p, &q)));
     assert_eq!(kind_of(&fault), "plan_scope");
     // An existing card cannot be moved outside the scope by a re-plan either.
-    let mut existing = entry("b", "B renamed", vec![], None);
+    let mut existing = at(entry("b", "B renamed", vec![], None), b2);
     existing["repositoryIds"] = json!(["repo-2"]);
     let fault = refused(sync(json!([existing]), slot(&f.id), fx.queue(&p, &q)));
     assert_eq!(kind_of(&fault), "plan_scope");
     let before = fx.list("tasks.list", &p, 50, None, None).unwrap().0.len();
+    let c = cards.iter().find(|c| c.title.0 == "C").unwrap();
     let fault = refused(sync(
         json!([
-            entry("b", "B renamed", vec!["c"], None),
-            entry("c", "C", vec!["b"], Some(1)),
+            at(entry("b", "B renamed", vec!["c"], None), b2),
+            at(entry("c", "C", vec!["b"], Some(1)), c),
             entry("e", "E new", vec![], None)
         ]),
         slot(&f.id),
@@ -1395,6 +1490,35 @@ fn atomic_and_initial_plans_are_all_or_nothing() {
     let (cards, _) = fx.list("tasks.list", &p, 50, None, None).unwrap();
     assert_eq!(ids(&cards), ["T1", "T2"]);
     assert_eq!(cards[1].dependency_ids.0, vec![cards[0].id.clone()]);
+    // An atomic plan's explicit edge cannot give completed work a new prerequisite: the plan's
+    // links go through the same writer as tasks.dependency_links, and nothing is created.
+    let done = fx.task(&fx.user(), &p, None, "Shipped", 0);
+    let wf = fx.queue(&p, WORKFLOW_QUEUE).to_string();
+    applied(fx.command(
+        &fx.user(),
+        "tasks.move",
+        json!({"taskId": done.id.as_str(), "expectedRevision": done.revision.as_str(),
+            "statusId": Fx::status(&p, "done"), "expectedWorkflowRevision": wf}),
+    ));
+    let before = fx.list("tasks.list", &p, 50, None, None).unwrap().0.len();
+    let mut onto_done = plan("t1");
+    onto_done["callerRef"] = json!("plan-9");
+    onto_done["features"][0]["callerRef"] = json!("feat-9");
+    onto_done["features"][0]["tasks"][0]["clientKey"] = json!("t91");
+    onto_done["features"][0]["tasks"][1]["clientKey"] = json!("t92");
+    onto_done["features"][0]["tasks"][1]["dependencyKeys"] = json!(["t91"]);
+    onto_done["dependencyEdges"] = json!([{"predecessor": "t91", "successor": done.id.as_str()}]);
+    let fault = refused(fx.command(
+        &fx.agent(),
+        "features.create",
+        json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": onto_done}}),
+    ));
+    assert_eq!(kind_of(&fault), "work_completed");
+    assert_eq!(
+        fx.list("tasks.list", &p, 50, None, None).unwrap().0.len(),
+        before
+    );
+    assert!(fx.fresh(&done).dependency_ids.0.is_empty());
     // An unknown reference creates nothing.
     let before = fx.list("tasks.list", &p, 50, None, None).unwrap().0.len();
     let mut bad = plan("nope");
@@ -1714,4 +1838,68 @@ fn a_cards_assignment_is_fenced_by_its_holds_membership_findings_and_prerequisit
         fx.read(move |s| s.runs().project_roots(&p, None, 100))
     };
     assert!(roots.contains(&RootId(card.id.clone())));
+}
+
+// ---------------------------------------------------------------------------------------------
+// State a replacement does not restate is kept
+
+#[test]
+fn plan_revisions_keep_criterion_state_requirements_and_acceptance_tests() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let decision = fx.artifact(&p, 2);
+    let ev = fx.evidence(&f.id);
+    // A plan with a met, evidenced criterion, an acceptance test and a dropped requirement.
+    let mut plan = draft(&doc, &[("E1", "pay")], &[]);
+    plan["acceptance"] = json!([{"id": "A1", "text": "works", "evidenceIds": [ev.as_str()],
+        "state": "Met"}]);
+    plan["acceptanceTests"] =
+        json!([{"id": "T1", "text": "checkout e2e", "evidenceIds": [], "state": "Unmet"}]);
+    plan["requirements"].as_array_mut().unwrap().push(
+        json!({"id": "E2", "statement": "refunds", "status": "Dropped",
+            "dropDecision": decision, "coveredByTaskIds": []}),
+    );
+    let f = work_of(applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(), "plan": plan}),
+    )));
+    let f = fx.approve(&f);
+    // Revision 2 records carry the active plan's acceptance tests.
+    let rec = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    assert_eq!(rec.acceptance_tests.unwrap().0[0].id, id("T1"));
+    // A replacement restating A1 with the same text keeps its state and evidence.
+    let mut again = draft(&doc, &[("E1", "pay with cards")], &[]);
+    again["requirements"].as_array_mut().unwrap().push(
+        json!({"id": "E2", "statement": "refunds", "status": "Dropped",
+            "dropDecision": decision, "coveredByTaskIds": []}),
+    );
+    let f = work_of(applied(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(), "plan": again}),
+    )));
+    let kept = &f.pending_plan.clone().unwrap().draft.acceptance.0[0];
+    assert!(matches!(
+        kept.state,
+        devworks_core::protocol::records::CriterionState::Met
+    ));
+    assert_eq!(kept.evidence_ids.0, vec![ev.clone()]);
+    // A replacement that leaves out the dropped requirement (its recorded decision) is refused.
+    let fault = refused(fx.command(
+        &fx.user(),
+        "features.edit_plan",
+        json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "plan": draft(&doc, &[("E1", "pay")], &[])}),
+    ));
+    assert_eq!(kind_of(&fault), "requirement_missing");
+    // A card's patch may not change its status once the workflow changed: that is tasks.move,
+    // which checks the workflow revision.
+    let t = fx.task(&fx.user(), &p, None, "Card", 0);
+    let p2 = p.clone();
+    fx.write(move |tx| tx.work().bump_queue(&p2, WORKFLOW_QUEUE));
+    let fault = refused(fx.edit(&fx.user(), &t, json!({"statusId": Fx::status(&p, "ready")})));
+    assert_eq!(kind_of(&fault), "use_tasks_move");
 }
