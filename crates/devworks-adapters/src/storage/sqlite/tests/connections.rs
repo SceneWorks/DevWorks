@@ -2236,3 +2236,165 @@ fn a_refresh_overtaken_by_a_new_sign_in_uses_the_new_credential() {
         matches!(&a.credential, AccessCredential::Bearer { token, .. } if token.expose() == "at-new")
     );
 }
+
+#[test]
+fn signing_out_during_a_claude_code_exchange_leaves_the_connection_signed_out() {
+    let cx = Arc::new(Cx::new());
+    cx.add("claude", "ClaudeSubscriptionMessages", ANTHROPIC, None);
+    let c = cx.connection("claude");
+    summary(
+        cx.configure(json!({"kind": "SubscriptionRisk", "connectionId": "claude",
+        "expectedRevision": c.revision.get().to_string(), "noticeSha256": risk_notice_sha256(),
+        "accepted": true})),
+    );
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "claude", "action": "BeginSignIn"})),
+    );
+    let flow = cx.connection("claude").sign_in.unwrap();
+    let state = flow
+        .authorize_url
+        .unwrap()
+        .0
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    cx.svc
+        .submit_authorization_code(
+            &actor("user-a"),
+            &flow.flow_id,
+            Secret::new(format!("c#{state}")),
+        )
+        .unwrap();
+    cx.http.on(
+        Method::Post,
+        CLAUDE_TOKEN,
+        200,
+        json!({"access_token": "at-late",
+        "refresh_token": "rt-late", "expires_in": 3600}),
+    );
+    // The user signs out (no credential stored yet) while the pasted code is exchanged.
+    let inner = cx.clone();
+    cx.http.during(CLAUDE_TOKEN, move || {
+        let (_, _, changed) = summary(inner.configure(json!({"kind": "SignIn",
+            "connectionId": "claude", "action": "Disconnect"})));
+        assert!(changed, "cancelling a pending sign-in is recorded");
+    });
+    let f = refused(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "claude",
+        "action": "CompleteSignIn", "flowId": flow.flow_id.as_str()})),
+    );
+    assert_eq!(f.code, DomainErrorCode::SourceChanged);
+    let c = cx.connection("claude");
+    assert_eq!(c.credential_ref, None, "{c:?}");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(1));
+    assert!(c.sign_in.is_none());
+    assert_eq!(cx.secrets.len(), 0, "the exchanged tokens are discarded");
+}
+
+/// Starts a Codex device sign-in on `codex` whose approval arrives at the next poll.
+fn codex_device_approved(cx: &Cx) {
+    cx.http.on(
+        Method::Post,
+        &format!("{CODEX_ISSUER}/api/accounts/deviceauth/usercode"),
+        200,
+        json!({"device_auth_id": "dev-1", "user_code": "ABCD-EFGH", "interval": "5"}),
+    );
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "codex", "action": "BeginSignIn"})),
+    );
+    cx.http.on(
+        Method::Post,
+        &format!("{CODEX_ISSUER}/api/accounts/deviceauth/token"),
+        200,
+        json!({"authorization_code": "auth-1", "code_verifier": "ver-1"}),
+    );
+    let id_token = jwt(json!({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-9"}}));
+    cx.http.on(
+        Method::Post,
+        &format!("{CODEX_ISSUER}/oauth/token"),
+        200,
+        json!({
+        "access_token": "codex-at", "refresh_token": "codex-rt", "id_token": id_token,
+        "expires_in": 3600}),
+    );
+    cx.http.on(
+        Method::Get,
+        &format!("{CODEX_API}/models"),
+        200,
+        json!({"models": []}),
+    );
+}
+
+#[test]
+fn cancelling_a_first_device_sign_in_refuses_its_publication_durably() {
+    // Signed out while the approved code is exchanged.
+    let cx = Arc::new(Cx::new());
+    cx.add("codex", "CodexSubscriptionResponses", CODEX_API, None);
+    codex_device_approved(&cx);
+    let inner = cx.clone();
+    cx.http
+        .during(&format!("{CODEX_ISSUER}/oauth/token"), move || {
+            assert!(
+                summary(
+                    inner.configure(json!({"kind": "SignIn", "connectionId": "codex",
+            "action": "Disconnect"}))
+                )
+                .2
+            );
+        });
+    cx.advance(5_000);
+    cx.svc.tick();
+    let c = cx.connection("codex");
+    assert_eq!(c.credential_ref, None, "{c:?}");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(1));
+    assert_eq!(cx.secrets.len(), 0);
+
+    // The endpoint changed and changed back while the code was exchanged.
+    let cx = Arc::new(Cx::new());
+    cx.add("codex", "CodexSubscriptionResponses", CODEX_API, None);
+    codex_device_approved(&cx);
+    let inner = cx.clone();
+    cx.http
+        .during(&format!("{CODEX_ISSUER}/oauth/token"), move || {
+            for endpoint in ["https://chatgpt.test/backend-api/other", CODEX_API] {
+                assert!(
+                    summary(edit_connection(
+                        &inner,
+                        "codex",
+                        "CodexSubscriptionResponses",
+                        endpoint,
+                        json!({})
+                    ))
+                    .2
+                );
+            }
+        });
+    cx.advance(5_000);
+    cx.svc.tick();
+    let c = cx.connection("codex");
+    assert_eq!(c.credential_ref, None, "{c:?}");
+    // Each change advanced it: the cancelled exchange was still finishing.
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(2));
+
+    // Removed and created again under the same ID while the code was exchanged.
+    let cx = Arc::new(Cx::new());
+    cx.add("codex", "CodexSubscriptionResponses", CODEX_API, None);
+    codex_device_approved(&cx);
+    let inner = cx.clone();
+    cx.http
+        .during(&format!("{CODEX_ISSUER}/oauth/token"), move || {
+            let c = inner.connection("codex");
+            assert!(
+                summary(inner.configure(json!({"kind": "RemoveConnection",
+            "connectionId": "codex", "expectedRevision": c.revision.get().to_string()})))
+                .2
+            );
+            inner.add("codex", "CodexSubscriptionResponses", CODEX_API, None);
+        });
+    cx.advance(5_000);
+    cx.svc.tick();
+    let c = cx.connection("codex");
+    assert_eq!(c.credential_ref, None, "{c:?}");
+    assert_eq!(c.credential_revision.as_ref().map(Counter::get), Some(1));
+}

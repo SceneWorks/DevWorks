@@ -680,7 +680,7 @@ impl ConnectionsPanel {
                     }
                 }
             }
-            let key = (!e.key.trim().is_empty()).then(|| Secret::new(std::mem::take(&mut e.key)));
+            let key = submitted_key(p, &mut e.key);
             actions.push(ConnectionAction::Configure {
                 label: "Saving the connection".into(),
                 action,
@@ -703,6 +703,8 @@ impl ConnectionsPanel {
                         .clicked()
                     {
                         self.add_endpoint = p.default_endpoint.to_owned();
+                        // A key typed for another kind is never kept behind a hidden field.
+                        self.add_key.clear();
                     }
                 }
             });
@@ -743,8 +745,8 @@ impl ConnectionsPanel {
             .add_enabled(ready, egui::Button::new(ADD_LABEL))
             .clicked()
         {
-            let key = (!self.add_key.trim().is_empty())
-                .then(|| Secret::new(std::mem::take(&mut self.add_key)));
+            // Only a kind that takes a key sends one (and so writes it to the secret store).
+            let key = submitted_key(&p, &mut self.add_key);
             actions.push(ConnectionAction::Configure {
                 label: "Adding the connection".into(),
                 action: json!({"kind": "Connection", "name": self.add_name.trim(),
@@ -859,7 +861,10 @@ impl ConnectionsPanel {
                 .selected_text(current.label)
                 .show_ui(ui, |ui| {
                     for (i, p) in chat.iter().enumerate() {
-                        ui.selectable_value(&mut n.profile, i, p.label);
+                        if ui.selectable_value(&mut n.profile, i, p.label).clicked() {
+                            // A binding to another profile's connection is not offered here.
+                            n.connection.clear();
+                        }
                     }
                 })
                 .response;
@@ -899,7 +904,11 @@ impl ConnectionsPanel {
             if !n.context.trim().is_empty() {
                 model["contextTokens"] = json!(n.context.trim());
             }
-            if !n.connection.is_empty() {
+            // Only a binding the form offers for the chosen profile is sent.
+            if connections
+                .iter()
+                .any(|(id, _, p)| *id == n.connection && *p == current.name)
+            {
                 model["connectionId"] = json!(n.connection);
             }
             actions.push(ConnectionAction::Configure {
@@ -931,6 +940,13 @@ fn field(ui: &mut Ui, shown: &str, accessible: &str, text: &mut String, password
         let accessible = accessible.to_owned();
         r.widget_info(move || egui::WidgetInfo::labeled(egui::Role::TextInput, true, &accessible));
     });
+}
+
+/// The key a form sends: only for a profile that takes an API key; any other text in the
+/// field (typed before the kind changed) is discarded, never staged.
+fn submitted_key(p: &Profile, field: &mut String) -> Option<Secret> {
+    let typed = std::mem::take(field);
+    (matches!(p.auth, Auth::ApiKey { .. }) && !typed.trim().is_empty()).then(|| Secret::new(typed))
 }
 
 fn joined(l: &[devworks_core::protocol::support::Text]) -> String {

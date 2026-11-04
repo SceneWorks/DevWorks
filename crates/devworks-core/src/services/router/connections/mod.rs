@@ -1608,26 +1608,37 @@ impl ConnectionService {
                 account_digest,
                 expires_at_ms,
             } => {
-                let flow = self.live().flows.remove(flow_id.as_str());
-                // A flow cancelled while it was exchanging (its connection changed) never
-                // publishes.
-                let Some(flow) = flow.filter(|f| f.active) else {
+                // The flow stays registered (busy) until its publication is decided, so a
+                // cancellation meanwhile sees a pending sign-in and advances the credential
+                // revision the publication compares. A flow cancelled while it was exchanging
+                // never publishes.
+                let publish = self
+                    .live()
+                    .flows
+                    .get(flow_id.as_str())
+                    .filter(|f| f.active)
+                    .map(|f| PublishTokens {
+                        connection_id: f.connection_id.clone(),
+                        profile: f.profile.clone(),
+                        endpoint: f.endpoint.clone(),
+                        credential_revision: f.credential_revision,
+                        handle: handle.clone(),
+                        account_digest,
+                        expires_at_ms,
+                        restore_epoch: 0,
+                    });
+                let Some(mut publish) = publish else {
+                    self.live().flows.remove(flow_id.as_str());
                     self.discard(&handle);
                     return;
                 };
-                let publish = PublishTokens {
-                    connection_id: flow.connection_id.clone(),
-                    profile: flow.profile.clone(),
-                    endpoint: flow.endpoint.clone(),
-                    credential_revision: flow.credential_revision,
-                    handle: handle.clone(),
-                    account_digest,
-                    expires_at_ms,
-                    restore_epoch: self.restore_epoch(),
-                };
+                publish.restore_epoch = self.restore_epoch();
+                let connection = publish.connection_id.clone();
                 let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
                     publish_tokens(tx, &actor, &publish).map(|r| r.map(|(c, old)| (c.id, old)))
                 });
+                self.live().flows.remove(flow_id.as_str());
+                let flow_connection = connection;
                 match result {
                     Ok(Ok((id, old))) => {
                         self.unstage(&handle);
@@ -1640,7 +1651,7 @@ impl ConnectionService {
                     }
                     Ok(Err(_)) => {
                         self.live().failures.insert(
-                            flow.connection_id.as_str().to_owned(),
+                            flow_connection.as_str().to_owned(),
                             "the connection changed during the sign-in; sign in again".into(),
                         );
                         self.discard(&handle);
@@ -1692,6 +1703,28 @@ impl ConnectionService {
 
     /// Cancels every open sign-in of `connection` (its credential, profile or endpoint changed,
     /// or it was removed).
+    /// Whether a sign-in of `connection` is open or still finishing (exchanging or publishing).
+    /// Cancelling one must advance the durable credential revision its publication compares.
+    fn sign_in_pending(&self, connection: &Id) -> bool {
+        self.live()
+            .flows
+            .values()
+            .any(|f| &f.connection_id == connection)
+    }
+
+    /// The first credential revision of a connection created as `connection`: past every
+    /// sign-in still registered for that ID (one of a removed connection of the same ID may be
+    /// finishing), so none of them can publish to the new one.
+    fn first_credential_revision(&self, connection: &Id) -> i64 {
+        self.live()
+            .flows
+            .values()
+            .filter(|f| &f.connection_id == connection)
+            .map(|f| f.credential_revision + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn cancel_flows(&self, connection: &Id) {
         self.live()
             .flows
@@ -1940,7 +1973,7 @@ impl ConnectionService {
                 enabled: true,
                 open_router: None,
                 credential_ref: None,
-                credential_revision: 0,
+                credential_revision: self.first_credential_revision(&id),
                 credential_epoch: None,
                 lifecycle: without_credential(p).into(),
                 state_reason: None,
@@ -2033,6 +2066,12 @@ impl ConnectionService {
             if same {
                 return Ok(unchanged(&c.id, c.revision));
             }
+        }
+        if (profile_changed || endpoint_changed) && !credential_changed && self.sign_in_pending(&id)
+        {
+            // The open sign-in is cancelled below; its publication must fail even if the
+            // profile or endpoint changes back before it runs.
+            next.credential_revision += 1;
         }
         next.updated_at_ms = now;
         let saved = tx
@@ -2149,6 +2188,14 @@ impl ConnectionService {
                                 let f = live.flows.get(flow.as_str()).ok_or_else(|| {
                                     refuse(DomainErrorCode::NotFound, FLOW, Some(flow))
                                 })?;
+                                if !f.active {
+                                    // Cancelled while its code was exchanged.
+                                    return Err(refuse(
+                                        DomainErrorCode::SourceChanged,
+                                        CONNECTION,
+                                        Some(&c.id),
+                                    ));
+                                }
                                 (f.profile.clone(), f.endpoint.clone(), f.credential_revision)
                             };
                             let publish = PublishTokens {
@@ -2201,8 +2248,24 @@ impl ConnectionService {
             },
             AccountAction::Disconnect => {
                 if c.credential_ref.is_none() {
-                    self.cancel_flows(&c.id);
-                    return Ok(unchanged(&c.id, c.revision));
+                    if !self.sign_in_pending(&c.id) {
+                        return Ok(unchanged(&c.id, c.revision));
+                    }
+                    // A first sign-in is cancelled: its publication (which may already be
+                    // running) compares the credential revision, so it is advanced.
+                    let mut next = c.clone();
+                    next.credential_revision += 1;
+                    next.updated_at_ms = tx.now_ms();
+                    let saved = tx.router().put_connection(&next, Some(c.revision))?;
+                    self.cancel_flows(&saved.id);
+                    event(
+                        tx,
+                        actor,
+                        (CONNECTION_AGGREGATE, &saved.id, saved.revision),
+                        "SignInCancelled",
+                        connection_payload(&saved),
+                    )?;
+                    return Ok(applied(&saved.id, saved.revision));
                 }
                 let mut next = c.clone();
                 next.credential_ref = None;
@@ -2321,6 +2384,10 @@ impl ConnectionService {
             accepted_by: actor.0.as_str().to_owned(),
             accepted_at_ms: now,
         });
+        if !accepted && self.sign_in_pending(id) {
+            // The open sign-in is cancelled below: refuse its publication durably.
+            next.credential_revision += 1;
+        }
         next.updated_at_ms = now;
         let saved = tx.router().put_connection(&next, Some(c.revision))?;
         if !accepted {

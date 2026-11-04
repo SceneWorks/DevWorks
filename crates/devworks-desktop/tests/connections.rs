@@ -365,3 +365,115 @@ fn settings_edits_open_router_constraints_and_turns_a_connection_off() {
     );
     assert!(button(&h, "Turn on"));
 }
+
+/// Opens a combo box by its accessible label and picks an option.
+fn choose(h: &mut egui_kittest::Harness<'_, Panel>, combo: &str, option: &str) {
+    h.get_by_role_and_label(Role::ComboBox, combo).click();
+    h.run();
+    h.get_by_role_and_label(Role::Button, option).click();
+    h.run();
+}
+
+#[test]
+fn a_key_hidden_by_another_kind_is_never_sent_to_the_secret_store() {
+    let mut h = panel(Vec::new(), None);
+    choose(&mut h, "Kind", "OpenRouter");
+    type_in(
+        &mut h,
+        Role::TextInput,
+        NEW_KEY_LABEL,
+        "sk-typed-then-hidden",
+    );
+    // A subscription takes no key: the field is hidden and its text discarded.
+    choose(&mut h, "Kind", "Claude subscription");
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, NEW_KEY_LABEL)
+            .is_none()
+    );
+    type_in(&mut h, Role::TextInput, NEW_NAME_LABEL, "Claude");
+    match press_any(&mut h, ADD_LABEL) {
+        ConnectionAction::Configure { action, key, .. } => {
+            assert_eq!(action["profile"], "ClaudeSubscriptionMessages");
+            assert!(key.is_none(), "the hidden key is never staged");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A key hidden by a kind change and shown again by switching back is gone: it was
+    // discarded when it was hidden, not kept for a later submission.
+    let mut h = panel(Vec::new(), None);
+    choose(&mut h, "Kind", "OpenRouter");
+    type_in(
+        &mut h,
+        Role::TextInput,
+        NEW_KEY_LABEL,
+        "sk-hidden-then-shown",
+    );
+    choose(&mut h, "Kind", "Codex subscription");
+    choose(&mut h, "Kind", "OpenRouter");
+    type_in(&mut h, Role::TextInput, NEW_NAME_LABEL, "x");
+    match press_any(&mut h, ADD_LABEL) {
+        ConnectionAction::Configure { key, .. } => assert!(key.is_none()),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_model_binding_hidden_by_another_profile_is_not_sent() {
+    let lm = record(
+        serde_json::json!({"id": "lmstudio", "revision": "1", "name": "LM Studio",
+        "profile": "CompatibleChat", "state": "Enabled", "subscriptionRiskAccepted": false,
+        "endpoint": "http://localhost:1234/v1", "lifecycle": "Connected"}),
+    );
+    let mut h = panel(vec![lm], None);
+    choose(&mut h, "New model profile", "OpenAI-compatible endpoint");
+    choose(&mut h, "New model connection", "LM Studio");
+    // Another profile: the LM Studio binding is not offered for it, so it is not sent.
+    choose(&mut h, "New model profile", "OpenRouter");
+    type_in(&mut h, Role::TextInput, "New model ID", "m1");
+    match press_any(&mut h, "Add model") {
+        ConnectionAction::Configure { action, .. } => {
+            assert_eq!(action["model"]["endpointProfile"], "OpenRouterChat");
+            assert!(action["model"].get("connectionId").is_none(), "{action}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn press_any(h: &mut egui_kittest::Harness<'_, Panel>, label: &str) -> ConnectionAction {
+    h.state_mut().actions.clear();
+    h.get_by_role_and_label(Role::Button, label).click();
+    h.run();
+    let mut actions = std::mem::take(&mut h.state_mut().actions);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    actions.remove(0)
+}
+
+#[test]
+fn an_editor_key_hidden_by_a_profile_change_is_not_sent() {
+    let api = record(
+        serde_json::json!({"id": "c1", "revision": "1", "name": "Mine",
+        "profile": "AnthropicMessages", "state": "Enabled", "subscriptionRiskAccepted": false,
+        "endpoint": "https://api.anthropic.com", "lifecycle": "Connected"}),
+    );
+    let mut h = panel(vec![api], None);
+    h.get_by_role_and_label(Role::Button, "Edit").click();
+    h.run();
+    type_in(&mut h, Role::TextInput, "Mine key", "sk-ant-typed");
+    // Another window made it a subscription: the key field is hidden while the editor is open.
+    let sub = record(
+        serde_json::json!({"id": "c1", "revision": "2", "name": "Mine",
+        "profile": "CodexSubscriptionResponses", "state": "Partial",
+        "subscriptionRiskAccepted": false, "endpoint": "https://chatgpt.com/backend-api/codex",
+        "lifecycle": "Disconnected"}),
+    );
+    h.state_mut().panel.loaded(vec![sub]);
+    h.run();
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Mine key")
+            .is_none()
+    );
+    match press_any(&mut h, "Save connection") {
+        ConnectionAction::Configure { key, .. } => assert!(key.is_none(), "never staged"),
+        other => panic!("{other:?}"),
+    }
+}
