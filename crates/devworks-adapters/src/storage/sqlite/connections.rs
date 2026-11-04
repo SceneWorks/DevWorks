@@ -1,4 +1,4 @@
-//! SQLite provider connections and SystemOne decision models (migration 17):
+//! SQLite provider connections and SystemOne decision models (migration 15):
 //! `router_connections` and `router_decision_models`. No secret is ever stored: a connection
 //! names its credential by an opaque handle and a credential revision.
 use super::conn::db;

@@ -37,7 +37,7 @@ pub struct StoredRouteModel {
     pub tools: bool,
     /// The declared context window in tokens; `None` when it is unknown.
     pub context_tokens: Option<i64>,
-    /// The one connection that serves the model (migration 17); `None` lets any connection of
+    /// The one connection that serves the model (migration 15); `None` lets any connection of
     /// its endpoint profile serve it.
     pub connection_id: Option<Id>,
     /// Display order of the named-model group.
@@ -116,7 +116,7 @@ pub struct StoredRouteRequest {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Provider connections and decision models (migration 17, DW-18)
+// Provider connections and decision models (migration 15, DW-18)
 
 /// The stored authentication lifecycle of a connection. `Authorizing` and `Refreshing` exist
 /// only while a sign-in or refresh is running in this process, and `Disabled` is derived (an

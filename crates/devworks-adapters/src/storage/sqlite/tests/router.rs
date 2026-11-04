@@ -793,7 +793,7 @@ fn explicit_effort_constrains_eligibility_and_survives_failover() {
     assert_eq!(c.model_id.as_str(), "astra");
     assert_eq!(effort(&c.requested_effort), "Minimal");
     assert_eq!(effort(&c.effective_effort), "Minimal");
-    // XHigh in High: Opus declares it too since migration 17 corrected the Claude seed, so
+    // XHigh in High: Opus declares it too since migration 15 corrected the Claude seed, so
     // narrow the pool to show a member without XHigh is never a replacement.
     fx.add_model(custom("no-xhigh", CLAUDE, true, None));
     fx.set_members("High", &["sol", "no-xhigh"]);

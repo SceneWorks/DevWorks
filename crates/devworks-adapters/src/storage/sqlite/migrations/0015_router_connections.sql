@@ -1,6 +1,6 @@
 -- Provider connections and SystemOne decision models (ROUTE-09, ROUTE-10, ROUTE-18, SEC-01, DW-18).
 -- Additive: two new tables, one nullable column on router_models and a correction of the
--- untouched catalog seed; it references no table of migrations 14-16.
+-- untouched catalog seed; it references no table of migration 14.
 --
 -- No secret is ever stored here: a connection names its credential by an opaque SecretStore
 -- handle (credential_ref) and a credential revision. The authentication lifecycle stored here

@@ -3,7 +3,7 @@
 //! the same rows, credentials in a session-only secret store and every provider request answered
 //! by a scripted in-memory transport. Nothing here contacts a provider or runs inference.
 use super::{Harness, T0};
-use crate::storage::sqlite::{MIGRATION_0017_SHA256, MIGRATIONS, SqliteStore};
+use crate::storage::sqlite::{MIGRATION_0015_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::authority::HostAuthority;
 use devworks_core::authority::service as auth;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
@@ -1536,14 +1536,14 @@ fn concurrent_requests_share_one_token_refresh() {
 }
 
 #[test]
-fn migration_17_is_additive_and_corrects_only_unedited_seed_efforts() {
+fn migration_15_is_additive_and_corrects_only_unedited_seed_efforts() {
     let m = MIGRATIONS
         .iter()
-        .find(|m| m.version == 17)
-        .expect("migration 17");
+        .find(|m| m.version == 15)
+        .expect("migration 15");
     assert_eq!(
         m.checksum(),
-        MIGRATION_0017_SHA256,
+        MIGRATION_0015_SHA256,
         "an applied migration was edited"
     );
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
