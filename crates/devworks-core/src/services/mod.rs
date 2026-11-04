@@ -14,6 +14,7 @@ pub mod power;
 pub mod process;
 pub mod queue;
 pub mod resources;
+pub mod router;
 pub mod runs;
 pub mod sessions;
 
@@ -136,6 +137,15 @@ impl UseCases {
     /// Registers the runs family (`ControlService`).
     pub fn with_runs(mut self, service: Arc<runs::ControlService>) -> Self {
         for op in runs::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the router operations of the slice that resolves tiers, named models and
+    /// availability (`InferenceRouter`).
+    pub fn with_router(mut self, service: Arc<router::InferenceRouter>) -> Self {
+        for op in router::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

@@ -2248,6 +2248,9 @@ impl WriteTransaction for Lying<'_> {
     fn browser(&mut self) -> &mut dyn BrowserRepository {
         self.inner.browser()
     }
+    fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
+        self.inner.router()
+    }
 }
 
 fn seams_run(

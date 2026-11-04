@@ -1651,6 +1651,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn browser(&mut self) -> &mut dyn crate::ports::storage::BrowserRepository {
         self.inner.get_mut().browser()
     }
+    fn router(&mut self) -> &mut dyn crate::ports::storage::RouterRepository {
+        self.inner.get_mut().router()
+    }
 }
 
 /// Records one visible `ReceiptIncompatible` history entry per receipt identity. The stored

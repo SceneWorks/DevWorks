@@ -9,6 +9,7 @@ pub mod browser;
 pub mod diagnostics;
 pub mod files;
 pub mod process;
+pub mod router;
 pub mod storage;
 
 use crate::context::InvocationContext;
@@ -56,6 +57,8 @@ pub enum IdKind {
     Diagnostic,
     /// Owned browser sessions (DW-047).
     BrowserSession,
+    /// Router session pins.
+    RoutePin,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

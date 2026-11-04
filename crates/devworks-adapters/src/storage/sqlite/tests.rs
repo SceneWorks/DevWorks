@@ -111,6 +111,7 @@ mod browser;
 mod diagnostics;
 mod replies;
 mod resources;
+mod router;
 mod runs;
 mod sessions;
 mod settings;

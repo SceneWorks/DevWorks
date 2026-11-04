@@ -3700,6 +3700,27 @@ pub struct RouteAvailability {
     pub blocked_reason_codes: Items<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RouteChoice", extend("x-since" = 2))]
+    pub pin: Option<RouteChoice>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub pin_eligible: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub pin_reason: Option<Label>,
 }
 impl Check for RouteAvailability {
     fn check(&self) -> Result<(), String> {
@@ -3708,11 +3729,28 @@ impl Check for RouteAvailability {
         self.eligible_model_ids.check()?;
         self.blocked_reason_codes.check()?;
         self.retry_at_ms.check()?;
+        self.pin.check()?;
+        self.pin_eligible.check()?;
+        self.pin_reason.check()?;
         crate::protocol::rules::record(
             "RouteAvailability",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RouteAvailability {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.pin = None;
+        }
+        if revision < 2 {
+            self.pin_eligible = None;
+        }
+        if revision < 2 {
+            self.pin_reason = None;
+        }
     }
 }
 

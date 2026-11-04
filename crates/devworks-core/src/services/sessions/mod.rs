@@ -244,7 +244,7 @@ pub(crate) fn visible_root(
         _ => Err(not_found("root", &id.0).into()),
     }
 }
-fn visible_session(
+pub(crate) fn visible_session(
     read: &dyn crate::ports::storage::SessionRead,
     ctx: &InvocationContext,
     id: &Id,

@@ -23,6 +23,7 @@ use devworks_core::authority::HostRoles;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::ports::diagnostics::StorageHealthProbe;
+use devworks_core::ports::router::{ConnectionDirectory, NoConnections};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteOptions, run_write};
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
@@ -32,6 +33,7 @@ use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::history::HistoryService;
 use devworks_core::services::process::ShutdownReport;
 use devworks_core::services::resources::ResourceService;
+use devworks_core::services::router::InferenceRouter;
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::sessions::SessionService;
 use devworks_core::settings::service::SettingsService;
@@ -56,7 +58,7 @@ pub const UI_INGRESS: &str = "desktop-ui";
 pub const UPLOAD_TICKET_MS: i64 = 10 * 60 * 1000;
 
 /// What the composition root is configured with.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DesktopConfig {
     pub data_root: PathBuf,
     /// The user's display name for attribution.
@@ -68,6 +70,20 @@ pub struct DesktopConfig {
     /// An explicitly configured Chromium-family browser executable (`DEVWORKS_BROWSER`), offered
     /// as the `configured` browser asset beside the discovered Chrome, Chromium and Edge.
     pub browser_path: Option<PathBuf>,
+    /// The provider connections the router routes through. Until provider connections and
+    /// sign-in exist (DW-18) nothing is connected ([`NoConnections`]), so every route reports
+    /// `NoConnection` truthfully.
+    pub connections: Arc<dyn ConnectionDirectory>,
+}
+impl std::fmt::Debug for DesktopConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DesktopConfig")
+            .field("data_root", &self.data_root)
+            .field("user_name", &self.user_name)
+            .field("app_build", &self.app_build)
+            .field("shutdown_bound", &self.shutdown_bound)
+            .finish_non_exhaustive()
+    }
 }
 impl DesktopConfig {
     pub fn new(data_root: impl Into<PathBuf>) -> Self {
@@ -79,6 +95,7 @@ impl DesktopConfig {
             browser_path: std::env::var_os("DEVWORKS_BROWSER")
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
+            connections: Arc::new(NoConnections),
         }
     }
 }
@@ -168,7 +185,14 @@ async fn compose(
             id_source.clone(),
             store.clone(),
         )))
-        .with_history(Arc::new(HistoryService::new(id_source.clone())));
+        .with_history(Arc::new(HistoryService::new(id_source.clone())))
+        // The router resolves tiers, named models, effort and availability; provider
+        // connections plug in through `config.connections` (none until DW-18).
+        .with_router(Arc::new(InferenceRouter::new(
+            id_source.clone(),
+            clock.clone(),
+            config.connections.clone(),
+        )));
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
         clock: clock.clone(),

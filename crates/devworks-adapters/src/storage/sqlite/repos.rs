@@ -1053,6 +1053,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn browser(&self) -> &dyn BrowserRead {
         self
     }
+    fn router(&self) -> &dyn RouterRead {
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1264,6 +1267,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
+        self
+    }
+    fn router(&mut self) -> &mut dyn RouterRepository {
         self
     }
 }

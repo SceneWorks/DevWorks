@@ -13740,11 +13740,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Read-only truthful availability of an intent for an effort and required capabilities: eligible pool members, the distinct reason codes of the others (EmptyPool for an empty pool) and, when nothing is eligible and a cooldown is the only obstacle of some member, the earliest such cooldown expiry. Schema revision 2: with sessionId (a session the caller may see), the session's current pin, whether it is eligible for this intent, effort and capabilities, and why it was last set (Initial, Failover, SelectionChanged, EffortChanged or ConnectionChanged).",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

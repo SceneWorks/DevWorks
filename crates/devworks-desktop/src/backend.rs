@@ -70,6 +70,16 @@ pub enum Slot {
     BrowserSessions,
     /// Closing a browser session (its ID).
     BrowserClose(String),
+    /// A page of the router catalog for the composer's selectors (its load generation).
+    RouterCatalog(u64),
+    /// A conversation whose first route needs its session record (session ID).
+    RouteSession(String),
+    /// The availability (and pin) of a conversation's selection (conversation key).
+    RouteStatus(String),
+    /// An explicit route/effort change of a pinned conversation (session ID).
+    RoutePin(String),
+    /// The first routed request of a conversation (session ID): its selection becomes its pin.
+    RouteFirst(String),
 }
 
 /// A finished request.
@@ -130,11 +140,13 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 4] = [
+pub const COMMANDS: [&str; 6] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "router.pin",
+    "router.route",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.
@@ -348,18 +360,35 @@ impl Client {
         Some(ticket)
     }
 
-    pub fn query(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
+    /// Submits a query; `false` when the client is closed and nothing was submitted.
+    pub fn query(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
         self.submit(
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
             None,
-        );
+        )
+        .is_some()
     }
 
     /// Admits a command through [`resolve_command`]. If its outcome is still unknown, the exact
     /// frame is kept as [`Unresolved`] until [`Self::resubmit`] confirms it.
-    pub fn command(&mut self, slot: Slot, label: &str, operation: &'static str, frame: Vec<u8>) {
+    ///
+    /// Returns whether it was submitted now (`false`: the client is closed, and the command is
+    /// kept unresolved).
+    pub fn command(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
         let kept = frame.clone();
         let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
         if self
@@ -367,6 +396,7 @@ impl Client {
             .is_some()
         {
             self.unresolved.retain(|u| u.slot != slot);
+            return true;
         } else if !self.unresolved.iter().any(|u| u.slot == slot) {
             // Closed: nothing ran, so an unknown outcome stays unresolved (never dropped).
             self.unresolved.push(Unresolved {
@@ -376,6 +406,7 @@ impl Client {
                 frame: kept,
             });
         }
+        false
     }
 
     /// Keeps an unresolved command restored from a previous run.
