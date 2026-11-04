@@ -37,6 +37,9 @@ pub struct StoredRouteModel {
     pub tools: bool,
     /// The declared context window in tokens; `None` when it is unknown.
     pub context_tokens: Option<i64>,
+    /// The one connection that serves the model (migration 17); `None` lets any connection of
+    /// its endpoint profile serve it.
+    pub connection_id: Option<Id>,
     /// Display order of the named-model group.
     pub position: i64,
     /// Positive; advances on every change.
@@ -112,8 +115,112 @@ pub struct StoredRouteRequest {
     pub created_at_ms: i64,
 }
 
+// ---------------------------------------------------------------------------------------------
+// Provider connections and decision models (migration 17, DW-18)
+
+/// The stored authentication lifecycle of a connection. `Authorizing` and `Refreshing` exist
+/// only while a sign-in or refresh is running in this process, and `Disabled` is derived (an
+/// unaccepted or revoked subscription risk notice), so none of them is ever stored.
+pub const STORED_LIFECYCLES: [&str; 4] = [
+    "Disconnected",
+    "Connected",
+    "ReauthenticationRequired",
+    "Unavailable",
+];
+
+/// One model a connection's last successful discovery listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiscoveredModel {
+    pub id: String,
+    /// The context window the provider reported, when it reports one.
+    pub context_tokens: Option<i64>,
+}
+
+/// A human's acceptance of the subscription risk notice, bound to what it was accepted for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredRiskAcceptance {
+    /// SHA-256 of the exact notice text accepted.
+    pub notice_sha256: String,
+    /// Digest of the profile, endpoint and account the acceptance covers.
+    pub binding: String,
+    /// The store restore epoch it was accepted in (a restore revokes it).
+    pub restore_epoch: i64,
+    pub accepted_by: String,
+    pub accepted_at_ms: i64,
+}
+
+/// A provider connection. Never holds a secret: `credential_ref` names a `SecretStore` handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredConnection {
+    pub id: Id,
+    pub name: String,
+    /// `EndpointKind` wire name.
+    pub profile: String,
+    /// The inference base URL.
+    pub endpoint: String,
+    pub credential_ref: Option<Id>,
+    /// Advances with every credential publish, rotation or removal; 0 before the first.
+    pub credential_revision: i64,
+    /// The restore epoch the credential was published in (a restored reference needs a new
+    /// sign-in: the secret is not part of a backup).
+    pub credential_epoch: Option<i64>,
+    /// One of [`STORED_LIFECYCLES`].
+    pub lifecycle: String,
+    /// A safe, secret-free reason for the lifecycle or the last failure.
+    pub state_reason: Option<String>,
+    /// Digest of the provider account the credential acts for.
+    pub account_digest: Option<String>,
+    pub access_expires_at_ms: Option<i64>,
+    pub risk: Option<StoredRiskAcceptance>,
+    /// The last successful discovery (`None` before the first).
+    pub discovered: Option<Vec<DiscoveredModel>>,
+    pub discovered_at_ms: Option<i64>,
+    /// The latest test (or discovery) outcome; `None` before the first.
+    pub healthy: Option<bool>,
+    pub checked_at_ms: Option<i64>,
+    /// Positive; advances on every change.
+    pub revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// A SystemOne decision model (ROUTE-18): its own model ID, never a conversational catalog
+/// model or tier member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredDecisionModel {
+    pub id: Id,
+    pub display_name: String,
+    pub connection_id: Id,
+    pub upstream_model_id: String,
+    /// `DecisionQuestionType` wire names.
+    pub question_types: Vec<String>,
+    pub accepts_images: bool,
+    pub accepts_videos: bool,
+    pub enabled: bool,
+    /// Canonical JSON array of the extension question `SchemaRef`s.
+    pub extension_schemas: String,
+    /// Canonical JSON of the result `SchemaRef`.
+    pub result_schema: String,
+    pub revision: i64,
+    pub updated_at_ms: i64,
+}
+
 pub trait RouterRead {
     fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError>;
+    fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError>;
+    /// Connections in ID order strictly after `after`, at most `limit` (1..=500).
+    fn connections(
+        &self,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<StoredConnection>, StorageError>;
+    fn decision_model(&self, id: &Id) -> Result<Option<StoredDecisionModel>, StorageError>;
+    /// Decision models in ID order strictly after `after`, at most `limit` (1..=500).
+    fn decision_models(
+        &self,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<StoredDecisionModel>, StorageError>;
     /// Models in display order (`position`, then ID), strictly after `after`, at most `limit`
     /// (1..=500).
     fn route_models(
@@ -161,4 +268,24 @@ pub trait RouterRepository: RouterRead {
     /// Binds a logical request; a duplicate request or operation is
     /// [`StorageError::Duplicate`].
     fn record_route_request(&mut self, request: &StoredRouteRequest) -> Result<(), StorageError>;
+    /// Inserts a connection at revision 1 (`expected_revision` `None`; an existing ID is
+    /// [`StorageError::Duplicate`]) or replaces it at `expected_revision`, storing
+    /// `expected_revision + 1`. A stale revision is [`StorageError::RevisionConflict`]. Two
+    /// connections never share a credential handle.
+    fn put_connection(
+        &mut self,
+        connection: &StoredConnection,
+        expected_revision: Option<i64>,
+    ) -> Result<StoredConnection, StorageError>;
+    /// Removes a connection at `expected_revision` (a stale revision is
+    /// [`StorageError::RevisionConflict`]). A catalog or decision model still bound to it is
+    /// [`StorageError::InvalidRecord`]: it must be unbound first, never silently orphaned.
+    fn delete_connection(&mut self, id: &Id, expected_revision: i64) -> Result<(), StorageError>;
+    /// Inserts or replaces (compare-and-set, as [`Self::put_connection`]) a decision model. Its ID
+    /// is never a conversational catalog model's, and its connection is a `SystemOne` one.
+    fn put_decision_model(
+        &mut self,
+        model: &StoredDecisionModel,
+        expected_revision: Option<i64>,
+    ) -> Result<StoredDecisionModel, StorageError>;
 }

@@ -468,5 +468,23 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (provider connections, DW-18): the connection's endpoint, lifecycle, health,
+# discovery and sign-in challenge; a catalog model's context window and serving connection.
+conn_r2={**sample('ConnectionRecord'),'endpoint':'https://api.example.invalid','lifecycle':'Authorizing','stateReason':'Waiting for the device code','credentialRevision':'2','healthy':True,'checkedAtMs':'10','discoveredAtMs':'9','discoveredModelCount':'1','discoveredModelIds':['gpt-6-luna'],'accessExpiresAtMs':'99','signIn':{'flowId':'flow-a','method':'DeviceCode','userCode':'ABCD-EFGH','verificationUrl':'https://auth.example.invalid/codex/device','expiresAtMs':'100'}}
+case('r2-result-router.connections','operation-result.r2',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}})
+case('r2-result-router.connections-plain','operation-result.r2',{'kind':'router.connections','value':{'items':[sample('ConnectionRecord')],'hasMore':False}})
+case('reject-r1-result-connections-lifecycle','operation-result',{'kind':'router.connections','value':{'items':[conn_r2],'hasMore':False}},False,False)
+case('reject-r2-result-connections-unknown-lifecycle','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'lifecycle':'Pending'}],'hasMore':False}},False,False)
+case('reject-r2-result-connections-sign-in-method','operation-result.r2',{'kind':'router.connections','value':{'items':[{**conn_r2,'signIn':{**conn_r2['signIn'],'method':'Password'}}],'hasMore':False}},False,False)
+model_r2={**sample('RouteModel'),'contextTokens':'1000000','connectionId':'conn-a'}
+case('r2-result-router.catalog','operation-result.r2',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}})
+case('reject-r1-result-catalog-context','operation-result',{'kind':'router.catalog','value':{'items':[model_r2],'hasMore':False}},False,False)
+case('reject-r2-result-catalog-zero-context','operation-result.r2',{'kind':'router.catalog','value':{'items':[{**model_r2,'contextTokens':'0'}],'hasMore':False}},False,False)
+case('r2-input-router.configure','domain-request.r2',command_at('router.configure',action={'kind':'Model','model':model_r2}))
+case('r2-input-router.configure-plain','domain-request.r2',command_at('router.configure'))
+case('reject-r1-configure-model-context','domain-request',command_at('router.configure',None,action={'kind':'Model','model':model_r2}),False,False)
+case('r2-input-router.connections','domain-request.r2',domain('router.connections'))
+case('r2-input-router.catalog','domain-request.r2',domain('router.catalog'))
+case('r2-result-router.configure','operation-result.r2',{'kind':'router.configure','value':sample('MutationSummary')})
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

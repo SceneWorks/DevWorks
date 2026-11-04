@@ -197,6 +197,10 @@ def revisioned(name, fs, since, rc, union_variants=None):
                 arms.append(f'            Self::{v} {{ {", ".join(inner)}, .. }} => {{ {calls} }}')
         if not arms:
             return f'impl Revisioned for {name} {{\n    fn retain_revision(&mut self, _: u32) {{}}\n}}'
+        if len(arms) == 1 and len(union_variants) > 1:
+            # One revisioned alternative among several: an `if let`, not a single-arm match.
+            pattern, calls = arms[0].strip().split(' => ', 1)
+            return '\n'.join([head, f'        if let {pattern} = self {calls}', '    }', '}'])
         if len(arms) < len(union_variants):
             arms.append('            _ => {}')
         return '\n'.join([head, '        match self {', *arms, '        }', '    }', '}'])

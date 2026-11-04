@@ -911,9 +911,29 @@
       ],
       "type": "object"
     },
+    "ConnectionLifecycle": {
+      "enum": [
+        "Disconnected",
+        "Authorizing",
+        "Connected",
+        "Refreshing",
+        "ReauthenticationRequired",
+        "Unavailable",
+        "Disabled"
+      ],
+      "type": "string"
+    },
     "ConnectionRecord": {
       "additionalProperties": false,
       "properties": {
+        "accessExpiresAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "checkedAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "credentialRef": {
           "anyOf": [
             {
@@ -924,8 +944,36 @@
             }
           ]
         },
+        "credentialRevision": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "discoveredAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "discoveredModelCount": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "discoveredModelIds": {
+          "$ref": "#/$defs/List_Text1To4096_0_128",
+          "x-since": 2
+        },
+        "endpoint": {
+          "$ref": "#/$defs/Url",
+          "x-since": 2
+        },
+        "healthy": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ConnectionLifecycle",
+          "x-since": 2
         },
         "name": {
           "$ref": "#/$defs/Text1To256"
@@ -946,8 +994,16 @@
             }
           ]
         },
+        "signIn": {
+          "$ref": "#/$defs/SignInChallenge",
+          "x-since": 2
+        },
         "state": {
           "$ref": "#/$defs/ItemState"
+        },
+        "stateReason": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
         },
         "subscriptionRiskAccepted": {
           "type": "boolean"
@@ -4675,6 +4731,14 @@
     "List_Text1To256_0_128": {
       "items": {
         "$ref": "#/$defs/Text1To256"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Text1To4096_0_128": {
+      "items": {
+        "$ref": "#/$defs/Text1To4096"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -14626,6 +14690,14 @@
     "RouteModel": {
       "additionalProperties": false,
       "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "contextTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 2
+        },
         "displayName": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -15049,6 +15121,63 @@
         "Info",
         "Warning",
         "Error"
+      ],
+      "type": "string"
+    },
+    "SignInChallenge": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizeUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "flowId": {
+          "$ref": "#/$defs/Id"
+        },
+        "method": {
+          "$ref": "#/$defs/SignInMethod"
+        },
+        "userCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verificationUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "flowId",
+        "method",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
+    "SignInMethod": {
+      "enum": [
+        "DeviceCode",
+        "AuthorizationCode"
       ],
       "type": "string"
     },

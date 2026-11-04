@@ -202,10 +202,31 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive: provider connections and SystemOne decision models (two tables and their
+    // indexes), one nullable column on router_models and a correction of still-unedited seed
+    // rows; independent of every table of migrations 14-16 (numbered 17 while 15-16 are open;
+    // renumbered at integration). The writer floor stays at 14 (the highest so far): applying a
+    // migration overwrites the store's floors, so a lower value would re-admit the writers
+    // migration 14 refuses (they would dispatch the work of a deleted project). It need not
+    // rise: no earlier build writes the new tables, and the only earlier writer of router_models
+    // names its columns and leaves connection_id untouched, so a binding it does not know is
+    // kept, never cleared; a binding that no longer matches the model's profile only makes that
+    // model ineligible. The reader floor stays at 8: earlier readers select explicit columns, so
+    // the added column and tables leave every query they make unchanged.
+    Migration {
+        version: 17,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0017_router_connections.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
+/// Recorded checksum of migration 17; a test fails if the shipped text changes.
+pub const MIGRATION_0017_SHA256: &str =
+    "dc16286000b9a90054e7f1fb87e1049890f2d543666006216592995848a53c09";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";

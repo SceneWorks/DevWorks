@@ -76,7 +76,7 @@ for name,d in TYPES.items():
   lines += ['} Ok(()) }}','']
   if name in RC:
    arms=[f' Self::{v} {{'+','.join(n for n,t in fs.items() if tokens(t)&RC)+',..} => {'+''.join(retain({n:t for n,t in fs.items() if tokens(t)&RC},{},''))+'},' for v,fs in d['variants'].items() if any(tokens(t)&RC for t in fs.values())]
-   lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}}}','']
+   lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}}','']
 
 def included(d,mode): return d['mode'] in [mode,'Hybrid']
 def opfields(d,mode): return d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']

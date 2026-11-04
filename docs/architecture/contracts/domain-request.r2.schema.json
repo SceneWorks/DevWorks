@@ -11558,6 +11558,14 @@
     "RouteModel": {
       "additionalProperties": false,
       "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "contextTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 2
+        },
         "displayName": {
           "$ref": "#/$defs/Text1To256"
         },

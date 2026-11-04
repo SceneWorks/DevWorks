@@ -555,8 +555,8 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<RouteModel>` |
-| `router.connections` | **Query**<br>`page`: `PageRequest` | `Page<ConnectionRecord>` |
+| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<RouteModel>` |
+| `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ConnectionRecord>` |
 | `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>` | `RouteChoice` |
 | `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName` | `RouteChoice` |
 | `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RouteAvailability` |
@@ -565,7 +565,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<ModelPriceStatus>` |
 | `router.price_refresh` | **Command**<br>`providerIds`: `NonEmpty<Id>`<br>`expectedPriceRevision`: `Revision` | `OperationRef` |
 | `router.price_override` | **Command**<br>`modelId`: `Id`<br>`expectedRevision`: `Revision`<br>`price`: `PriceInput` | `PriceRecord` |
-| `router.configure` | **Command**<br>`action`: `RouterConfigAction` | `MutationSummary` |
+| `router.configure` | **Command**<br>`action`: `RouterConfigAction`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
 | `router.decision_models` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<DecisionModel>` |
 | `router.decide` | **Command**<br>`modelId`: `Id`<br>`expectedModelRevision`: `Revision`<br>`state`: `DynamicJson`<br>`questions`: `NonEmpty<NamedQuestion>`<br>`images`: `Items<MediaRef>`<br>`videos`: `Items<MediaRef>`<br>`timeoutMs`: `PositiveCounter` | `DecisionResult` |
 
@@ -1948,6 +1948,27 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `imageInput` | `bool` |
 | `tools` | `bool` |
 | `revision` | `Revision` |
+| `contextTokens` | `?PositiveCounter` · *revision 2+* |
+| `connectionId` | `?Id` · *revision 2+* |
+
+### ConnectionLifecycle
+
+`Disconnected`, `Authorizing`, `Connected`, `Refreshing`, `ReauthenticationRequired`, `Unavailable`, `Disabled`.
+
+### SignInMethod
+
+`DeviceCode`, `AuthorizationCode`.
+
+### SignInChallenge
+
+| Field | Type |
+| --- | --- |
+| `flowId` | `Id` |
+| `method` | `SignInMethod` |
+| `userCode` | `?Label` |
+| `verificationUrl` | `?Url` |
+| `authorizeUrl` | `?Url` |
+| `expiresAtMs` | `Counter` |
 
 ### ConnectionRecord
 
@@ -1961,6 +1982,17 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `credentialRef` | `?Id` |
 | `subscriptionRiskAccepted` | `bool` |
 | `riskNoticeSha256` | `?Digest` |
+| `endpoint` | `?Url` · *revision 2+* |
+| `lifecycle` | `?ConnectionLifecycle` · *revision 2+* |
+| `stateReason` | `?Text` · *revision 2+* |
+| `credentialRevision` | `?Counter` · *revision 2+* |
+| `healthy` | `?bool` · *revision 2+* |
+| `checkedAtMs` | `?Counter` · *revision 2+* |
+| `discoveredAtMs` | `?Counter` · *revision 2+* |
+| `discoveredModelCount` | `?Counter` · *revision 2+* |
+| `discoveredModelIds` | `?Items<Text>` · *revision 2+* |
+| `accessExpiresAtMs` | `?Counter` · *revision 2+* |
+| `signIn` | `?SignInChallenge` · *revision 2+* |
 
 ### RouteChoice
 

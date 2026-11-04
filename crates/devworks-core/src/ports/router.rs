@@ -1,15 +1,14 @@
 //! The provider connections the inference router routes through.
 //!
-//! Connection records, authentication and secret handles belong to the provider-connection item
-//! (DW-18), model discovery refreshes to it and the transports (DW-19). The router only needs to
-//! know, at selection time, which connections are usable, which endpoint profile each serves and
-//! (once discovered) which upstream models each lists, so it reads them through this port and
-//! never through a provider. The port is synchronous and in memory: it is consulted inside the
-//! routing unit of work, which must not touch the network.
-//!
-//! Until DW-18 plugs a directory in, the production composition uses [`NoConnections`]: nothing
-//! is connected, so every route reports `NoConnection` truthfully instead of pretending a model
-//! is reachable.
+//! Connection records, sign-in and secret handles belong to the provider-connection service
+//! (`crate::services::router::connections`, DW-18); the transports are DW-19. The router only
+//! needs to know, at selection time, which connections are usable, which endpoint profile each
+//! serves and (once discovered) which upstream models each lists, so it reads them through this
+//! port and never through a provider. The port is synchronous and reads the durable connection
+//! rows of the caller's own snapshot or unit of work (plus in-process sign-in/refresh state), so
+//! a route decided in a command sees exactly the connections committed with it: it never touches
+//! the network and never serves a cached copy that a later settings change made stale.
+use crate::ports::storage::{RouterRead, StorageError};
 use crate::protocol::Id;
 use std::collections::BTreeSet;
 
@@ -31,6 +30,20 @@ pub enum ConnectionState {
     /// Turned off by the user, or a subscription profile whose risk notice is not accepted.
     Disabled,
 }
+impl ConnectionState {
+    /// The wire `ConnectionLifecycle` name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "Connected",
+            Self::Disconnected => "Disconnected",
+            Self::Authorizing => "Authorizing",
+            Self::Refreshing => "Refreshing",
+            Self::ReauthenticationRequired => "ReauthenticationRequired",
+            Self::Unavailable => "Unavailable",
+            Self::Disabled => "Disabled",
+        }
+    }
+}
 
 /// One connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,15 +59,16 @@ pub struct ConnectionStatus {
 
 /// The connections the router may route through.
 pub trait ConnectionDirectory: Send + Sync {
-    /// Every configured connection, in a stable order.
-    fn connections(&self) -> Vec<ConnectionStatus>;
+    /// Every configured connection, in a stable order, as of `read` (the routing decision's own
+    /// snapshot or unit of work).
+    fn connections(&self, read: &dyn RouterRead) -> Result<Vec<ConnectionStatus>, StorageError>;
 }
 
-/// No provider connection is configured (the production state until DW-18).
+/// No provider connection is configured (compositions without the connection service).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoConnections;
 impl ConnectionDirectory for NoConnections {
-    fn connections(&self) -> Vec<ConnectionStatus> {
-        Vec::new()
+    fn connections(&self, _: &dyn RouterRead) -> Result<Vec<ConnectionStatus>, StorageError> {
+        Ok(Vec::new())
     }
 }

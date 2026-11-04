@@ -1480,6 +1480,8 @@ impl Revisioned for OperationResult {
             Self::ResourcesRelease { value } => value.retain_revision(revision),
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
+            Self::RouterCatalog { value } => value.retain_revision(revision),
+            Self::RouterConnections { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),

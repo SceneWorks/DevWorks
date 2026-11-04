@@ -293,10 +293,10 @@ pub fn effort_label(e: &EffortName) -> String {
 /// A blocker code in words.
 pub fn reason(code: &str) -> &'static str {
     match code {
-        "NoConnection" => "no provider connection (sign-in arrives with DW-18)",
+        "NoConnection" => "no provider connection (add one in Settings)",
         "CredentialsRequired" => "sign-in required",
         "ConnectionUnavailable" => "provider temporarily unavailable",
-        "ConnectionDisabled" => "connection turned off",
+        "ConnectionDisabled" => "connection disabled",
         "NotDiscovered" => "not offered by its connection",
         "Cooling" => "cooling down after a provider limit",
         "Disabled" => "turned off in the catalog",

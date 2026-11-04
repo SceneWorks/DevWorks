@@ -1566,7 +1566,43 @@
         "efforts": "Items<EffortName>",
         "image_input": "bool",
         "tools": "bool",
-        "revision": "Revision"
+        "revision": "Revision",
+        "context_tokens": "?PositiveCounter",
+        "connection_id": "?Id"
+      },
+      "since": {
+        "context_tokens": 2,
+        "connection_id": 2
+      }
+    },
+    "ConnectionLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Disconnected",
+        "Authorizing",
+        "Connected",
+        "Refreshing",
+        "ReauthenticationRequired",
+        "Unavailable",
+        "Disabled"
+      ]
+    },
+    "SignInMethod": {
+      "kind": "enum",
+      "values": [
+        "DeviceCode",
+        "AuthorizationCode"
+      ]
+    },
+    "SignInChallenge": {
+      "kind": "record",
+      "fields": {
+        "flow_id": "Id",
+        "method": "SignInMethod",
+        "user_code": "?Label",
+        "verification_url": "?Url",
+        "authorize_url": "?Url",
+        "expires_at_ms": "Counter"
       }
     },
     "ConnectionRecord": {
@@ -1579,7 +1615,31 @@
         "state": "ItemState",
         "credential_ref": "?Id",
         "subscription_risk_accepted": "bool",
-        "risk_notice_sha256": "?Digest"
+        "risk_notice_sha256": "?Digest",
+        "endpoint": "?Url",
+        "lifecycle": "?ConnectionLifecycle",
+        "state_reason": "?Text",
+        "credential_revision": "?Counter",
+        "healthy": "?bool",
+        "checked_at_ms": "?Counter",
+        "discovered_at_ms": "?Counter",
+        "discovered_model_count": "?Counter",
+        "discovered_model_ids": "?Items<Text>",
+        "access_expires_at_ms": "?Counter",
+        "sign_in": "?SignInChallenge"
+      },
+      "since": {
+        "endpoint": 2,
+        "lifecycle": 2,
+        "state_reason": 2,
+        "credential_revision": 2,
+        "healthy": 2,
+        "checked_at_ms": 2,
+        "discovered_at_ms": 2,
+        "discovered_model_count": 2,
+        "discovered_model_ids": 2,
+        "access_expires_at_ms": 2,
+        "sign_in": 2
       }
     },
     "RouteChoice": {
@@ -5737,7 +5797,7 @@
       "result": "Page<RouteModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it)."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -5748,7 +5808,7 @@
       "result": "Page<ConnectionRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL)."
     },
     "router.route": {
       "operation": "router.route",
@@ -5867,7 +5927,7 @@
       "result": "MutationSummary",
       "effect": "External",
       "authority": "HumanConfiguration",
-      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound."
+      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile."
     },
     "router.decision_models": {
       "operation": "router.decision_models",
@@ -6806,6 +6866,18 @@
       2
     ],
     "router.availability": [
+      1,
+      2
+    ],
+    "router.catalog": [
+      1,
+      2
+    ],
+    "router.connections": [
+      1,
+      2
+    ],
+    "router.configure": [
       1,
       2
     ]

@@ -3607,6 +3607,20 @@ pub struct RouteModel {
     pub image_input: bool,
     pub tools: bool,
     pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 2))]
+    pub context_tokens: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub connection_id: Option<Id>,
 }
 impl Check for RouteModel {
     fn check(&self) -> Result<(), String> {
@@ -3620,8 +3634,77 @@ impl Check for RouteModel {
         self.image_input.check()?;
         self.tools.check()?;
         self.revision.check()?;
+        self.context_tokens.check()?;
+        self.connection_id.check()?;
         crate::protocol::rules::record(
             "RouteModel",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for RouteModel {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.context_tokens = None;
+        }
+        if revision < 2 {
+            self.connection_id = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConnectionLifecycle {
+    Disconnected,
+    Authorizing,
+    Connected,
+    Refreshing,
+    ReauthenticationRequired,
+    Unavailable,
+    Disabled,
+}
+impl Check for ConnectionLifecycle {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SignInMethod {
+    DeviceCode,
+    AuthorizationCode,
+}
+impl Check for SignInMethod {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignInChallenge {
+    pub flow_id: Id,
+    pub method: SignInMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<Url>,
+    pub expires_at_ms: Counter,
+}
+impl Check for SignInChallenge {
+    fn check(&self) -> Result<(), String> {
+        self.flow_id.check()?;
+        self.method.check()?;
+        self.user_code.check()?;
+        self.verification_url.check()?;
+        self.authorize_url.check()?;
+        self.expires_at_ms.check()?;
+        crate::protocol::rules::record(
+            "SignInChallenge",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -3641,6 +3724,83 @@ pub struct ConnectionRecord {
     pub subscription_risk_accepted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk_notice_sha256: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Url", extend("x-since" = 2))]
+    pub endpoint: Option<Url>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ConnectionLifecycle", extend("x-since" = 2))]
+    pub lifecycle: Option<ConnectionLifecycle>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub state_reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub credential_revision: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub healthy: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub checked_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub discovered_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub discovered_model_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Text>", extend("x-since" = 2))]
+    pub discovered_model_ids: Option<Items<Text>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub access_expires_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SignInChallenge", extend("x-since" = 2))]
+    pub sign_in: Option<SignInChallenge>,
 }
 impl Check for ConnectionRecord {
     fn check(&self) -> Result<(), String> {
@@ -3652,11 +3812,60 @@ impl Check for ConnectionRecord {
         self.credential_ref.check()?;
         self.subscription_risk_accepted.check()?;
         self.risk_notice_sha256.check()?;
+        self.endpoint.check()?;
+        self.lifecycle.check()?;
+        self.state_reason.check()?;
+        self.credential_revision.check()?;
+        self.healthy.check()?;
+        self.checked_at_ms.check()?;
+        self.discovered_at_ms.check()?;
+        self.discovered_model_count.check()?;
+        self.discovered_model_ids.check()?;
+        self.access_expires_at_ms.check()?;
+        self.sign_in.check()?;
         crate::protocol::rules::record(
             "ConnectionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConnectionRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.endpoint = None;
+        }
+        if revision < 2 {
+            self.lifecycle = None;
+        }
+        if revision < 2 {
+            self.state_reason = None;
+        }
+        if revision < 2 {
+            self.credential_revision = None;
+        }
+        if revision < 2 {
+            self.healthy = None;
+        }
+        if revision < 2 {
+            self.checked_at_ms = None;
+        }
+        if revision < 2 {
+            self.discovered_at_ms = None;
+        }
+        if revision < 2 {
+            self.discovered_model_count = None;
+        }
+        if revision < 2 {
+            self.discovered_model_ids = None;
+        }
+        if revision < 2 {
+            self.access_expires_at_ms = None;
+        }
+        if revision < 2 {
+            self.sign_in = None;
+        }
     }
 }
 
@@ -5066,6 +5275,14 @@ impl Check for RouterConfigAction {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for RouterConfigAction {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Model { model, .. } = self {
+            model.retain_revision(revision);
+        }
     }
 }
 

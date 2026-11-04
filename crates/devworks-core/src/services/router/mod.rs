@@ -49,6 +49,7 @@
 //! `LlmProvidersController.ListProviderModels` maps to `router.catalog`; its provider and
 //! analysis/review/assistant configuration endpoints map to `router.connections` and
 //! `router.configure` (the provider-connection item) and to the routing settings.
+pub mod connections;
 pub mod select;
 
 use crate::context::{InvocationContext, PrincipalKind};
@@ -251,6 +252,11 @@ pub fn route_model(
         image_input: m.image_input,
         tools: m.tools,
         revision: rev(m.revision),
+        context_tokens: m
+            .context_tokens
+            .filter(|n| *n > 0)
+            .map(|n| crate::protocol::support::PositiveCounter(n.to_string())),
+        connection_id: m.connection_id.clone(),
     })
 }
 
@@ -534,7 +540,7 @@ impl InferenceRouter {
         let key = intent_key(intent);
         let members = tier_members(tx.configuration())?;
         let f = facts_with(members, tx.router(), now)?;
-        let connections = self.connections.connections();
+        let connections = self.connections.connections(tx.router())?;
         let same_intent = current.as_ref().is_some_and(|p| p.intent == key);
         let same_effort = current
             .as_ref()
@@ -864,7 +870,7 @@ impl InferenceRouter {
         let need = Need::parse(&wire(effort), capabilities.iter().copied())
             .map_err(|_| invalid(CAPABILITY))?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
-        let connections = self.connections.connections();
+        let connections = self.connections.connections(snapshot.router())?;
         let pool = f.assess_pool(intent, &connections, &need, None);
         let eligible: Vec<Id> = pool
             .iter()
@@ -968,7 +974,7 @@ impl InferenceRouter {
         )
         .map_err(StorageError::InvalidRecord)?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
-        let connections = self.connections.connections();
+        let connections = self.connections.connections(snapshot.router())?;
         if let Some(session) = &request.session_id
             && let Some(pin) = snapshot.router().session_pin(session)?
         {

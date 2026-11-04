@@ -64,8 +64,8 @@ impl Directory {
     }
 }
 impl ConnectionDirectory for Directory {
-    fn connections(&self) -> Vec<ConnectionStatus> {
-        self.0.lock().unwrap().clone()
+    fn connections(&self, _: &dyn RouterRead) -> Result<Vec<ConnectionStatus>, StorageError> {
+        Ok(self.0.lock().unwrap().clone())
     }
 }
 const CLAUDE: &str = "ClaudeSubscriptionMessages";
@@ -398,6 +398,7 @@ fn custom(model_id: &str, profile: &str, vision: bool, context: Option<i64>) -> 
         image_input: vision,
         tools: true,
         context_tokens: context,
+        connection_id: None,
         position: 1_000,
         revision: 1,
         updated_at_ms: T0,
@@ -790,7 +791,11 @@ fn explicit_effort_constrains_eligibility_and_survives_failover() {
     assert_eq!(c.model_id.as_str(), "astra");
     assert_eq!(effort(&c.requested_effort), "Minimal");
     assert_eq!(effort(&c.effective_effort), "Minimal");
-    // XHigh in High is Sol only; when Sol cools, Opus (no XHigh) is not a replacement.
+    // XHigh in High: Opus declares it too since migration 17 corrected the Claude seed, so
+    // narrow the pool to show a member without XHigh is never a replacement.
+    fx.add_model(custom("no-xhigh", CLAUDE, true, None));
+    fx.set_members("High", &["sol", "no-xhigh"]);
+    // XHigh in High is Sol only; when Sol cools, a member without XHigh is not a replacement.
     let (x, _) = chosen(fx.route("s2", tier("High"), "XHigh", &[]));
     assert_eq!(x.model_id.as_str(), "sol");
     fx.cool("sol", T0 + 5_000);
