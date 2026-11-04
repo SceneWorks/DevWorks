@@ -1740,7 +1740,7 @@ fn migration_17_is_additive_and_enforces_one_active_run() {
         MIGRATION_0017_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 16));
     assert!(!m.rebuilds_tables);
     let fx = Fx::new();
     let job = fx.job(
