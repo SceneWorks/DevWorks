@@ -58,7 +58,13 @@ impl Fx {
         let cases = UseCases::new()
             .with_runs(runs.clone())
             .with_projects(Arc::new(ProjectService::new(h.ids.clone(), runs.clone())))
-            .with_repositories(Arc::new(RepositoryService::new(h.ids.clone())));
+            .with_repositories(Arc::new(RepositoryService::new(h.ids.clone())))
+            .with_resources(Arc::new(
+                devworks_core::services::resources::ResourceService::new(
+                    h.ids.clone(),
+                    h.clock.clone(),
+                ),
+            ));
         let fx = Self {
             h,
             store,
@@ -281,6 +287,14 @@ impl Fx {
             "kind": "runs.start", "rootId": root, "expectedWorkRevision": "1",
             "expectedControlRevision": self.control(root).revision.to_string()}});
         self.submit(ctx, "runs.start", &frame.to_string())
+    }
+    /// What the engine does after an archival commits: its project-wide stop ran.
+    fn stop_ran(&self, p: &ProjectId) {
+        let p = p.clone();
+        self.write(move |tx| {
+            let epoch = tx.projects().project(&p)?.expect("project").archive_epoch;
+            tx.projects().finish_archive_stop(&p, epoch)
+        });
     }
     fn control(&self, root: &str) -> StoredRootControl {
         let root = RootId(id(root));
@@ -764,6 +778,24 @@ fn archival_fences_and_stops_every_root_in_its_own_unit_of_work() {
         ))),
         (DomainErrorCode::Conflict, "project_archived".into())
     );
+    // Nor a shared resource: an archived project allocates nothing.
+    let in_a = fx.ctx("user-a", PrincipalKind::Human, Some(&a.id));
+    let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "acquire-a",
+        "schemaRevision": 2, "body": {"kind": "resources.acquire", "resourceId": "gpu",
+        "expectedRevision": "1", "units": 1, "leaseMs": "60000"}});
+    assert_eq!(
+        kind(&refused(fx.submit(
+            &in_a,
+            "resources.acquire",
+            &frame.to_string()
+        ))),
+        (DomainErrorCode::Conflict, "archived_project".into())
+    );
+    let in_b = fx.ctx("user-a", PrincipalKind::Human, Some(&b.id));
+    let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": "acquire-b",
+        "schemaRevision": 2, "body": {"kind": "resources.acquire", "resourceId": "gpu",
+        "expectedRevision": "1", "units": 1, "leaseMs": "60000"}});
+    let _ = applied(fx.submit(&in_b, "resources.acquire", &frame.to_string()));
     // Archiving again changes nothing; the listing filters by lifecycle.
     assert!(matches!(
         project_of(unchanged(fx.lifecycle(
@@ -789,6 +821,24 @@ fn restore_returns_the_project_but_leaves_its_work_stopped() {
     fx.seed_roots(&a.id, &["issue-a1"]);
     let user = fx.user();
     let archived = project_of(applied(fx.lifecycle(&user, "projects.archive", &a)));
+    // Until the archival's project-wide stop has run, restore waits for it (a restore before
+    // that stop read the lifecycle would let the archived epoch's trees run on).
+    let waiting = refused(fx.lifecycle(&user, "projects.restore", &archived));
+    assert_eq!(
+        kind(&waiting),
+        (DomainErrorCode::Conflict, "project_stopping".into())
+    );
+    assert!(matches!(
+        waiting.retry,
+        devworks_core::protocol::RetryAdvice::AfterBlockerClears
+    ));
+    let pending = fx.read(|s| s.projects().pending_archive_stops(10));
+    assert_eq!(pending, std::slice::from_ref(&a.id));
+    fx.stop_ran(&a.id);
+    assert!(
+        fx.read(|s| s.projects().pending_archive_stops(10))
+            .is_empty()
+    );
     let restored = project_of(applied(fx.lifecycle(&user, "projects.restore", &archived)));
     assert!(matches!(restored.lifecycle, LifeState::Active));
     assert_eq!(restored.revision.as_str(), "3");
@@ -833,6 +883,7 @@ fn deletion_follows_archival_and_quiescence_and_tombstones_only_app_records() {
         Ok(())
     });
     let busy = project_of(applied(fx.lifecycle(&user, "projects.archive", &busy)));
+    fx.stop_ran(&busy.id);
     let pending = refused(fx.lifecycle(&user, "projects.delete", &busy));
     assert_eq!(
         kind(&pending),
@@ -843,6 +894,12 @@ fn deletion_follows_archival_and_quiescence_and_tombstones_only_app_records() {
         devworks_core::protocol::RetryAdvice::AfterBlockerClears
     ));
     let archived = project_of(applied(fx.lifecycle(&user, "projects.archive", &a)));
+    // Deletion waits for the archival's stop too.
+    assert_eq!(
+        kind(&refused(fx.lifecycle(&user, "projects.delete", &archived))),
+        (DomainErrorCode::Conflict, "project_stopping".into())
+    );
+    fx.stop_ran(&a.id);
     let deleted = project_of(applied(fx.lifecycle(&user, "projects.delete", &archived)));
     assert!(matches!(deleted.lifecycle, LifeState::Deleted));
     assert!(deleted.repository_ids.0.is_empty());
@@ -896,6 +953,7 @@ fn a_deleted_projects_work_stays_closed_to_dispatch() {
     fx.seed_roots(&a.id, &["issue-a1"]);
     let user = fx.user();
     let archived = project_of(applied(fx.lifecycle(&user, "projects.archive", &a)));
+    fx.stop_ran(&a.id);
     let _ = applied(fx.lifecycle(&user, "projects.delete", &archived));
     assert!(!fx.eligible("issue-a1"));
     let (code, target) = kind(&refused(fx.start(&user, "issue-a1")));
@@ -990,6 +1048,7 @@ fn agents_archive_delete_and_remove_indexes_only_with_an_exact_approval() {
         .unwrap();
     let approved = agent.clone().with_authority_source(grant.id.clone());
     let archived = project_of(applied(fx.submit(&approved, "projects.archive", &frame)));
+    fx.stop_ran(&a.id);
     assert!(matches!(archived.lifecycle, LifeState::Archived));
     // Restore is not destructive: the agent may restore within its scope.
     assert!(matches!(
@@ -1226,6 +1285,48 @@ fn repository_listing_and_search_filter_page_and_never_show_credentials() {
         Vec::<String>::new()
     );
     assert_eq!(search("acme", json!([])), ["repo-4", "repo-5"]);
+    // Case folding is the same Unicode folding on the query and on every stored value (SQLite's
+    // own lower() and LIKE fold only ASCII).
+    fx.register("repo-6", "/Users/me/src/Äpp-tool", None, &["Rust"]);
+    let r6 = fx.read(|s| s.projects().repository(&id("repo-6"))).unwrap();
+    assert_eq!(r6.name, "repo-6");
+    for q in ["äpp", "ÄPP", "äPp-TOOL"] {
+        assert_eq!(list(json!({"text": q})), ["repo-6"], "{q}");
+        assert_eq!(search(q, json!(["RUST"])), ["repo-6"], "{q}");
+    }
+    // A pathless remote keeps no query in its authority: the token is neither stored nor shown.
+    let pathless = StoredRepository {
+        id: id("repo-7"),
+        location: "/Users/me/src/pathless".into(),
+        name: "pathless".into(),
+        remote_url: Some("https://git.example.com?access_token=secret".into()),
+        primary: true,
+        lifecycle: "Active".into(),
+        languages: Vec::new(),
+        revision: 1,
+        registered_at_ms: T0,
+    };
+    assert!(matches!(
+        run_write(&*fx.store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_repository(&pathless)),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO repositories VALUES('repo-8','/Users/me/src/legacy-pathless',1);
+                 INSERT INTO repository_details VALUES('repo-8','pathless',
+                   'https://git.example.com?access_token=secret',1,'Active','[]',1);",
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        fx.repo(&user, "repo-8").unwrap().remote_url.unwrap().0,
+        "https://git.example.com"
+    );
+    // The stored secret cannot be probed through the search text either.
+    assert!(list(json!({"text": "access_token"})).is_empty());
     // Pages continue with a cursor bound to the query and the principal.
     let first = page_ids(fx.query(
         &user,

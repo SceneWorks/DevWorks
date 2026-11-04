@@ -55,6 +55,28 @@ fn type_into(
     h.step();
 }
 
+/// Waits (bounded) until the engine ran every pending archival stop (restore and delete wait for
+/// it).
+fn wait_archival_stop(engine: &devworks_desktop::host::Engine) {
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let pending = devworks_core::ports::storage::read_snapshot(
+            &**engine.host().runtime().store(),
+            &Default::default(),
+            |s| s.projects().pending_archive_stops(10),
+        )
+        .unwrap();
+        if pending.is_empty() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the archival stop never ran"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Clicks the first node whose label starts with `prefix` (a list row).
 fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, prefix: &str) {
     h.query_all_by_label_contains(prefix)
@@ -138,6 +160,7 @@ fn a_project_is_created_changed_archived_and_deleted_through_the_shared_commands
     ));
     click(&mut h, Role::Button, "Archive…");
     click(&mut h, Role::Button, "Archive project");
+    wait_archival_stop(&engine);
     assert!(matches!(
         listed(&*backend, None)[0].lifecycle,
         LifeState::Archived
@@ -155,6 +178,7 @@ fn a_project_is_created_changed_archived_and_deleted_through_the_shared_commands
     click_row(&mut h, "Engine work 2  ·");
     click(&mut h, Role::Button, "Archive…");
     click(&mut h, Role::Button, "Archive project");
+    wait_archival_stop(&engine);
     click(&mut h, Role::Button, "Archived");
     click_row(&mut h, "Engine work 2  ·");
     click(&mut h, Role::Button, "Delete…");
@@ -303,5 +327,69 @@ fn an_unknown_archive_at_close_is_confirmed_at_the_next_launch_and_archives_once
     assert!(
         again.request_keys().len() == 1,
         "confirmed with one resubmission"
+    );
+}
+
+#[test]
+fn a_form_opened_before_a_concurrent_change_is_refused_rather_than_overwriting_it() {
+    let root = Root::new("projects-concurrent");
+    let engine = start(&root);
+    register(&engine, "repo-a", "engine");
+    register(&engine, "repo-b", "tools");
+    let backend = engine.backend();
+    let made = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Engine", "first", &["repo-a".into()]),
+    ))
+    .unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "All projects");
+    click_row(&mut h, "Engine  ·");
+    // The edit form is opened on revision 1; someone else changes the description meanwhile and
+    // the list refreshes.
+    click(&mut h, Role::Button, "Edit");
+    let changed = ops::project_changed(backend.command(
+        "projects.edit",
+        &ops::project_edit(&*backend, &made, None, Some("theirs"), None),
+    ))
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh");
+    h.get_by_role_and_label(Role::TextInput, "Project name")
+        .focus();
+    h.step();
+    h.key_press(egui::Key::End);
+    h.get_by_role_and_label(Role::TextInput, "Project name")
+        .type_text(" 2");
+    h.step();
+    click(&mut h, Role::Button, "Save");
+    assert!(has_text(&h, "the project changed meanwhile"));
+    let now = listed(&*backend, None).remove(0);
+    assert_eq!(now.description.0, "theirs", "the concurrent change is kept");
+    assert_eq!(now.name.0, "Engine");
+    assert_eq!(now.revision, changed.revision);
+    // The same for a membership change opened before a concurrent one.
+    click_row(&mut h, "Engine  ·");
+    click(&mut h, Role::Button, "Repositories…");
+    let _ = ops::project_changed(backend.command(
+        "projects.membership",
+        &ops::project_membership(&*backend, &now, &["repo-a".into(), "repo-b".into()]),
+    ))
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh");
+    click(&mut h, Role::CheckBox, "engine");
+    click(&mut h, Role::Button, "Save repositories");
+    assert!(has_text(&h, "the project changed meanwhile"));
+    let members: Vec<String> = listed(&*backend, None)
+        .remove(0)
+        .repository_ids
+        .0
+        .iter()
+        .map(|r| r.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        members,
+        ["repo-a", "repo-b"],
+        "the concurrent membership is kept"
     );
 }

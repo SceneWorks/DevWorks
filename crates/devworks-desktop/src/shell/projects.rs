@@ -39,19 +39,23 @@ pub struct CreateForm {
     pub repositories: BTreeSet<String>,
 }
 
-/// An edit of one project's name, description and access mode.
+/// An edit of one project's name, description and access mode. It keeps the record it was
+/// opened on: changes are detected against it and submitted at its revision, so a concurrent
+/// change is a revision conflict, never silently overwritten.
 #[derive(Clone, Debug)]
 pub struct EditForm {
     pub project: String,
+    pub snapshot: ProjectRecord,
     pub name: String,
     pub description: String,
     pub access: AccessMode,
 }
 
-/// A membership change being chosen for one project.
+/// A membership change being chosen for one project, against the record it was opened on.
 #[derive(Clone, Debug)]
 pub struct MembershipForm {
     pub project: String,
+    pub snapshot: ProjectRecord,
     pub repositories: BTreeSet<String>,
 }
 
@@ -117,8 +121,8 @@ pub struct ProjectsUi {
 enum Action {
     Reload,
     Create(CreateForm),
-    Edit(ProjectRecord, EditForm),
-    Membership(ProjectRecord, Vec<String>),
+    Edit(EditForm),
+    Membership(MembershipForm),
     Lifecycle(&'static str, ProjectRecord),
     Open(String),
     LoadBase(String),
@@ -279,7 +283,8 @@ impl Shell {
                         move |b| ops::project_create(b, &name, &description, &repos),
                     );
                 }
-                Action::Edit(p, form) => {
+                Action::Edit(form) => {
+                    let p = form.snapshot.clone();
                     let name = (form.name != p.name.0).then_some(form.name.clone());
                     let description =
                         (form.description != p.description.0).then_some(form.description.clone());
@@ -300,7 +305,9 @@ impl Shell {
                         )
                     });
                 }
-                Action::Membership(p, repos) => {
+                Action::Membership(form) => {
+                    let p = form.snapshot.clone();
+                    let repos: Vec<String> = form.repositories.iter().cloned().collect();
                     let slot = Slot::ProjectCommand(p.id.0.as_str().to_owned());
                     self.command(
                         slot,
@@ -680,6 +687,9 @@ impl Shell {
                         "the project's work still names that repository.".to_owned()
                     }
                     "project_archived" => "restore the project first.".to_owned(),
+                    "project_stopping" => {
+                        "its archival is still stopping its work. Try again in a moment.".to_owned()
+                    }
                     _ => e.describe(),
                 };
                 (Tone::Bad, format!("{what} was not applied: {why}"))
@@ -1391,6 +1401,7 @@ fn project_detail(
                 if ui.add_enabled(enabled, egui::Button::new("Edit")).clicked() {
                     projects.edit = Some(EditForm {
                         project: id.clone(),
+                        snapshot: p.clone(),
                         name: p.name.0.clone(),
                         description: p.description.0.clone(),
                         access: p.access_mode.clone(),
@@ -1402,6 +1413,7 @@ fn project_detail(
                 {
                     projects.membership = Some(MembershipForm {
                         project: id.clone(),
+                        snapshot: p.clone(),
                         repositories: p
                             .repository_ids
                             .0
@@ -1469,7 +1481,7 @@ fn edit_form(
     ui.horizontal(|ui| {
         let ok = enabled && !form.name.trim().is_empty();
         if ui.add_enabled(ok, egui::Button::new("Save")).clicked() {
-            actions.push(Action::Edit(p.clone(), form.clone()));
+            actions.push(Action::Edit(form.clone()));
         }
         if widgets::secondary_button(ui, "Cancel").clicked() {
             close = true;
@@ -1508,10 +1520,7 @@ fn membership_form(
             .add_enabled(enabled, egui::Button::new("Save repositories"))
             .clicked()
         {
-            actions.push(Action::Membership(
-                p.clone(),
-                form.repositories.iter().cloned().collect(),
-            ));
+            actions.push(Action::Membership(form.clone()));
         }
         if widgets::secondary_button(ui, "Cancel").clicked() {
             close = true;

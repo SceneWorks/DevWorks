@@ -1,5 +1,5 @@
 -- Projects, memberships and repository registrations (DW-011). Additive: four new tables and
--- three indexes. The migration 1 `projects`, `repositories` and `project_repositories` tables
+-- four indexes. The migration 1 `projects`, `repositories` and `project_repositories` tables
 -- keep their exact shape; what they lack lives in side tables keyed by the same identity, and a
 -- row without its side row reads with the documented defaults (an empty description; a primary,
 -- active registration named after its location with no recorded languages).
@@ -9,8 +9,14 @@ CREATE TABLE project_details (
  description TEXT NOT NULL CHECK(length(description) <= 65536),
  updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
  archived_at INTEGER CHECK(archived_at IS NULL OR archived_at >= 0),
- deleted_at INTEGER CHECK(deleted_at IS NULL OR deleted_at >= 0)
+ deleted_at INTEGER CHECK(deleted_at IS NULL OR deleted_at >= 0),
+ -- Advances with every archival; a launch recorded under an earlier epoch was stopped by one.
+ archive_epoch INTEGER NOT NULL CHECK(archive_epoch >= 0),
+ -- The archival's immediate project-wide stop has not run yet (restore and delete wait).
+ archive_stop_pending INTEGER NOT NULL CHECK(archive_stop_pending IN (0,1))
 ) STRICT;
+CREATE INDEX project_details_pending_stop ON project_details(project_id)
+ WHERE archive_stop_pending = 1;
 CREATE TABLE repository_details (
  repository_id TEXT PRIMARY KEY REFERENCES repositories,
  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 256),

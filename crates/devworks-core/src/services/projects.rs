@@ -36,9 +36,15 @@
 //!   stop epoch with a manual-resume hold, its activation asked to stop and its root-scoped
 //!   deliveries cancelled, one journaled stop each). The engine then kills the project's owned
 //!   process trees without cooperative grace and executes those stops; a stop it cannot verify
-//!   stays an uncertain, held stop rather than a fabricated cancellation.
-//! * **Restore** returns an archived project to `Active`. Its work stays stopped: each root keeps
-//!   the hold the archival left until an explicit Continue.
+//!   stays an uncertain, held stop rather than a fabricated cancellation. The archival also
+//!   starts a new archival epoch and marks its project-wide stop pending; the engine clears the
+//!   mark only after that stop ran (run supervision retries it after a crash). A launch whose
+//!   intent was recorded before the archival but whose tree registers after the stop's snapshot
+//!   rechecks the epoch once registered and is killed at once.
+//! * **Restore** returns an archived project to `Active` once its archival stop ran (until then
+//!   it is `Conflict`, `project_stopping`, retry after the blocker clears: restoring earlier would
+//!   let the archived epoch's trees run on). Its work stays stopped: each root keeps the hold the
+//!   archival left until an explicit Continue.
 //! * **Delete** tombstones an archived, quiescent project (no live activation, unfinished stop or
 //!   unsettled owned process): `Deleted`, membership cleared, every other app record retained.
 //!   It never touches source Git resources: no repository registration, checkout, branch,
@@ -237,54 +243,114 @@ fn tx_record(
     Ok(project_record(p, members, access))
 }
 
-/// A remote URL as it may be shown: `http(s)` with any user information, query and fragment
-/// removed, and SSH remotes (`ssh://` or `user@host:path`) as the equivalent `https` address.
-/// Anything else is not shown. Credentials embedded in a registered remote never leave the store.
-pub fn display_remote(remote: &str) -> Option<Url> {
-    let r = remote.trim();
-    let (scheme, rest) = if let Some(rest) = r.strip_prefix("https://") {
-        ("https://", rest)
-    } else if let Some(rest) = r.strip_prefix("http://") {
-        ("http://", rest)
-    } else if let Some(rest) = r.strip_prefix("ssh://") {
-        ("https://", rest)
-    } else if !r.contains("://")
-        && let Some((authority, path)) = r.split_once(':')
-        && !authority.contains('/')
-    {
-        let host = authority.rsplit('@').next().unwrap_or("");
-        // A one-letter "host" is a Windows drive (`C:\src`), not an SSH remote.
-        if host.chars().count() < 2 {
-            return None;
-        }
-        return url_of(
-            "https://",
-            host,
-            &format!("/{}", path.trim_start_matches('/')),
-        );
-    } else {
-        return None;
-    };
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, ""),
-    };
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let host = if scheme == "https://" && r.starts_with("ssh://") {
-        host.split(':').next().unwrap_or("")
-    } else {
-        host
-    };
-    url_of(scheme, host, path)
+/// A registered remote, split into the parts display and the credential refusal look at.
+#[derive(Debug, PartialEq, Eq)]
+struct Remote<'a> {
+    /// `https`, `http`, `ssh`, `git`, `file`, ... (lowercase); `None` for the scp-like form.
+    scheme: Option<String>,
+    /// User information before `@` (user name and optional `:password`).
+    user: Option<&'a str>,
+    /// Host with its port, or an IPv6 literal in brackets with its port.
+    host: &'a str,
+    /// The path, without query and fragment.
+    path: &'a str,
+    /// A query or fragment was present.
+    extra: bool,
 }
-fn url_of(scheme: &str, host: &str, path: &str) -> Option<Url> {
-    let path = path.split(['?', '#']).next().unwrap_or("");
+
+/// Parses `scheme://[user@]host[:port][/path][?query][#fragment]` (the authority ends at the
+/// first `/`, `?` or `#`, so a pathless URL never keeps its query in the authority) and the
+/// scp-like `[user@]host:path` (an IPv6 host in brackets). A one-letter "host" is a Windows
+/// drive (`C:\src`), not a remote.
+fn parse_remote(remote: &str) -> Option<Remote<'_>> {
+    let r = remote.trim();
+    let extra = r.contains(['?', '#']);
+    let base = r.split(['?', '#']).next().unwrap_or("");
+    if let Some((scheme, rest)) = base.split_once("://") {
+        let end = rest.find('/').unwrap_or(rest.len());
+        let (authority, path) = rest.split_at(end);
+        let (user, host) = match authority.rsplit_once('@') {
+            Some((u, h)) => (Some(u), h),
+            None => (None, authority),
+        };
+        return Some(Remote {
+            scheme: Some(scheme.to_ascii_lowercase()),
+            user,
+            host,
+            path,
+            extra,
+        });
+    }
+    // scp-like: the user part (possibly with a password) ends at the first '@' before any '/'.
+    let at = base.find('@').filter(|i| !base[..*i].contains('/'));
+    let (user, rest) = match at {
+        Some(i) => (Some(&base[..i]), &base[i + 1..]),
+        None => (None, base),
+    };
+    let (host, path) = if rest.starts_with('[') {
+        let close = rest.find(']')?;
+        let (h, p) = rest.split_at(close + 1);
+        (h, p.strip_prefix(':')?)
+    } else {
+        let (h, p) = rest.split_once(':')?;
+        (h, p)
+    };
+    if host.chars().count() < 2 || host.contains(['/', '\\']) {
+        return None;
+    }
+    Some(Remote {
+        scheme: None,
+        user,
+        host,
+        path,
+        extra,
+    })
+}
+
+/// Whether a remote URL embeds credentials or may carry a secret: any user information of an
+/// `http(s)` URL (a token is often the user name alone), a password of any other form, or any
+/// query or fragment (`?access_token=...`). An SSH user name (`git@host:path`,
+/// `ssh://git@host/path`) is not a secret. A registration never stores such a remote.
+pub fn carries_credentials(remote: &str) -> bool {
+    let Some(r) = parse_remote(remote) else {
+        // Not a remote we can read (a local path): only an explicit query or fragment counts.
+        return remote.contains(['?', '#']) && remote.contains("://");
+    };
+    let http = matches!(r.scheme.as_deref(), Some("http" | "https"));
+    r.extra || r.user.is_some_and(|u| http || u.contains(':'))
+}
+
+/// A remote URL as it may be shown: `http(s)` with any user information, query and fragment
+/// removed, and SSH remotes (`ssh://` or `user@host:path`) as the equivalent `https` address
+/// (an SSH port is dropped; an IPv6 literal keeps its brackets). Anything else (`file://`,
+/// `git://`, a local path) is not shown. Credentials embedded in a registered remote never leave
+/// the store.
+pub fn display_remote(remote: &str) -> Option<Url> {
+    let r = parse_remote(remote)?;
+    let (scheme, host) = match r.scheme.as_deref() {
+        Some("https") => ("https://", r.host),
+        Some("http") => ("http://", r.host),
+        Some("ssh") | None => ("https://", without_port(r.host)),
+        Some(_) => return None,
+    };
+    let path = if r.scheme.is_none() {
+        format!("/{}", r.path.trim_start_matches('/'))
+    } else {
+        r.path.to_owned()
+    };
     if host.is_empty() || host.contains(['@', '\\']) || path.contains('\\') {
         return None;
     }
     let s = format!("{scheme}{host}{path}");
     let ok = s.len() <= 4096 && !s.chars().any(|c| c.is_whitespace() || c == '\0');
     ok.then_some(Url(s))
+}
+/// A host without its port (`[::1]:22` keeps `[::1]`).
+fn without_port(host: &str) -> &str {
+    if host.starts_with('[') {
+        return host.find(']').map_or(host, |i| &host[..=i]);
+    }
+    host.split(':').next().unwrap_or("")
 }
 
 fn coverage(state: &str) -> Coverage {
@@ -395,6 +461,17 @@ fn revision_conflict(p: &StoredProject, expected: i64) -> Result<(), Failure> {
         )));
     }
     Ok(())
+}
+
+/// The archival's immediate stop has not run yet: retry once it has.
+fn stopping(p: &ProjectId) -> Failure {
+    let mut r = Refusal::new(
+        DomainErrorCode::Conflict,
+        "project_stopping",
+        Some(p.0.clone()),
+    );
+    r.retry = RetryAdvice::AfterBlockerClears;
+    r.into()
 }
 
 /// Approval proposals arrive with the approvals item: none can be found yet.
@@ -538,6 +615,8 @@ impl ProjectService {
             updated_at_ms: now,
             archived_at_ms: None,
             deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
         };
         tx.projects().insert_project(&p)?;
         tx.projects().set_members(&p.id, &members)?;
@@ -720,6 +799,11 @@ impl ProjectService {
         after.revision = before.revision + 1;
         after.updated_at_ms = now;
         after.archived_at_ms = Some(now);
+        // A new archival epoch whose immediate stop the engine still has to run: a launch
+        // recorded under the previous epoch is killed when it registers, and restore and delete
+        // wait until the project-wide stop has run.
+        after.archive_epoch = before.archive_epoch + 1;
+        after.archive_stop_pending = true;
         // The fence and the stops commit together: from this commit no root of the project is
         // eligible, and each is paused under a new stop epoch with its stop journaled.
         tx.projects().update_project(&after, before.revision)?;
@@ -761,6 +845,12 @@ impl ProjectService {
                 });
             }
             _ => {}
+        }
+        // Restore waits for the archival's immediate stop: otherwise a restore committed
+        // before the engine's stop read the lifecycle would let trees of the archived epoch run
+        // on (and a stop run after restore could kill work started since).
+        if before.archive_stop_pending {
+            return Err(stopping(&before.id));
         }
         let mut after = before.clone();
         after.lifecycle = ACTIVE.into();
@@ -852,6 +942,9 @@ impl ProjectService {
             // Deletion follows archival: work is fenced and stopped first.
             ACTIVE => return Err(conflict("project_active", &before.id.0)),
             _ => {}
+        }
+        if before.archive_stop_pending {
+            return Err(stopping(&before.id));
         }
         let live = self.activity(tx, &before.id)?;
         if !live.is_empty() {
@@ -1295,21 +1388,94 @@ mod tests {
     #[test]
     fn remotes_are_shown_without_credentials() {
         let shown = |r: &str| display_remote(r).map(|u| u.0);
-        assert_eq!(
-            shown("https://user:ghp_secret@github.com/acme/tools.git?token=x#frag"),
-            Some("https://github.com/acme/tools.git".into())
-        );
-        assert_eq!(
-            shown("git@github.com:acme/tools.git"),
-            Some("https://github.com/acme/tools.git".into())
-        );
-        assert_eq!(
-            shown("ssh://git:pw@example.com:2222/acme/tools"),
-            Some("https://example.com/acme/tools".into())
-        );
-        assert_eq!(shown("file:///Users/me/src"), None);
-        assert_eq!(shown("/Users/me/src"), None);
-        assert_eq!(shown("C:\\src\\tools"), None);
+        // (remote, shown, refused at registration)
+        let cases: [(&str, Option<&str>, bool); 20] = [
+            (
+                "https://github.com/acme/tools.git",
+                Some("https://github.com/acme/tools.git"),
+                false,
+            ),
+            (
+                "https://user:ghp_secret@github.com/acme/tools.git?token=x#frag",
+                Some("https://github.com/acme/tools.git"),
+                true,
+            ),
+            (
+                "https://ghp_token@github.com/acme/x.git",
+                Some("https://github.com/acme/x.git"),
+                true,
+            ),
+            (
+                "https://git.example.com?access_token=secret",
+                Some("https://git.example.com"),
+                true,
+            ),
+            (
+                "https://git.example.com#access_token=secret",
+                Some("https://git.example.com"),
+                true,
+            ),
+            (
+                "https://git.example.com/x?ref=a@b",
+                Some("https://git.example.com/x"),
+                true,
+            ),
+            (
+                "https://git.example.com:8443/acme/x",
+                Some("https://git.example.com:8443/acme/x"),
+                false,
+            ),
+            (
+                "https://[2001:db8::1]:8443/acme/x",
+                Some("https://[2001:db8::1]:8443/acme/x"),
+                false,
+            ),
+            ("http://example.com/x", Some("http://example.com/x"), false),
+            (
+                "git@github.com:acme/tools.git",
+                Some("https://github.com/acme/tools.git"),
+                false,
+            ),
+            (
+                "git:pw@github.com:acme/tools.git",
+                Some("https://github.com/acme/tools.git"),
+                true,
+            ),
+            (
+                "git@[2001:db8::1]:acme/x.git",
+                Some("https://[2001:db8::1]/acme/x.git"),
+                false,
+            ),
+            (
+                "github.com:acme/x.git?t=1",
+                Some("https://github.com/acme/x.git"),
+                true,
+            ),
+            (
+                "ssh://git@example.com:2222/acme/tools",
+                Some("https://example.com/acme/tools"),
+                false,
+            ),
+            (
+                "ssh://git:pw@example.com:2222/acme/tools",
+                Some("https://example.com/acme/tools"),
+                true,
+            ),
+            (
+                "ssh://git@[2001:db8::1]:22/x",
+                Some("https://[2001:db8::1]/x"),
+                false,
+            ),
+            ("file:///Users/me/src", None, false),
+            ("git://example.com/x", None, false),
+            ("/Users/me/src", None, false),
+            ("C:\\src\\tools", None, false),
+        ];
+        for (remote, want, refused) in cases {
+            assert_eq!(shown(remote).as_deref(), want, "{remote}");
+            assert_eq!(super::carries_credentials(remote), refused, "{remote}");
+        }
         assert_eq!(shown("C:/src/tools"), None);
+        assert!(super::carries_credentials("file:///x?token=1"));
     }
 }

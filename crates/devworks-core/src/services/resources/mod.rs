@@ -571,6 +571,20 @@ impl ResourceService {
         ctx: &InvocationContext,
         i: &ops::AcquireInput,
     ) -> Result<DomainDecision, Failure> {
+        // An archived (or deleted) project allocates nothing, a shared resource included.
+        if let Some(p) = ctx.project_id()
+            && tx
+                .runs()
+                .project_lifecycle(p)?
+                .is_some_and(|l| crate::services::runs::closed_to_work(&l))
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "archived_project",
+                Some(p.0.clone()),
+            )
+            .into());
+        }
         let lease_ms = lease_ms(&i.lease_ms.0)?;
         let purpose = match &i.purpose {
             Some(p) if p.0.chars().count() > MAX_PURPOSE_CHARS => {

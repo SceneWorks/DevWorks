@@ -35,6 +35,12 @@ pub struct StoredProject {
     pub updated_at_ms: i64,
     pub archived_at_ms: Option<i64>,
     pub deleted_at_ms: Option<i64>,
+    /// Advances with every archival: a launch whose intent was recorded under an earlier epoch
+    /// belongs to work an archival stopped.
+    pub archive_epoch: i64,
+    /// The archival's immediate stop (the project-wide kill of owned trees) has not run yet.
+    /// Restore and delete wait for it; the engine runs it and clears the flag.
+    pub archive_stop_pending: bool,
 }
 
 /// One registered repository: the app record of a source location (never the source itself).
@@ -168,6 +174,8 @@ pub trait ProjectRead {
         project: &ProjectId,
         repository: &Id,
     ) -> Result<i64, StorageError>;
+    /// Projects whose archival stop has not run yet, by ID.
+    fn pending_archive_stops(&self, limit: u16) -> Result<Vec<ProjectId>, StorageError>;
 }
 
 pub trait ProjectRepository: ProjectRead {
@@ -198,4 +206,11 @@ pub trait ProjectRepository: ProjectRead {
     /// Removes every published index view of the repository and their texts; returns how many
     /// views were removed. The registration, membership and work history are untouched.
     fn remove_index(&mut self, repository: &Id) -> Result<u64, StorageError>;
+    /// Records that the archival stop of `epoch` ran (no project revision change). Returns
+    /// whether that stop was still pending.
+    fn finish_archive_stop(
+        &mut self,
+        project: &ProjectId,
+        epoch: i64,
+    ) -> Result<bool, StorageError>;
 }

@@ -188,7 +188,7 @@ pub const MIGRATIONS: &[Migration] = &[
         rebuilds_tables: false,
     },
     // Additive: project and repository side tables, the index view registry and repository
-    // texts, and three indexes; the migration 1 tables keep their shape. The writer floor rises
+    // texts, and four indexes; the migration 1 tables keep their shape. The writer floor rises
     // to 14: a build without this migration (up to and including one with migration 13) treats
     // only `Archived` as closed to work, so as a writer it would dispatch the work of a project
     // tombstoned `Deleted`, and it would accept configuration, sessions, artifacts and resources
@@ -205,7 +205,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ];
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
-    "99d8b32085e553ff82068f55dc6c5bbb1ed52f33e870fb44d66f51ec39298aaf";
+    "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";

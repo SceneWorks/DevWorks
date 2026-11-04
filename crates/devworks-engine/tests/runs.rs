@@ -1531,6 +1531,8 @@ struct FakeHost {
     /// Trees that ignore stop and kill (never verifiably gone).
     stubborn: Arc<AtomicBool>,
     stopped: Arc<AtomicUsize>,
+    /// Runs inside the next spawn: after the launch intent committed, before the tree exists.
+    on_spawn: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 struct FakeTree {
     identity: NativeIdentity,
@@ -1575,6 +1577,9 @@ impl ProcessHost for FakeHost {
         Vec::new()
     }
     fn spawn(&self, _: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
+        if let Some(f) = self.on_spawn.lock().unwrap().take() {
+            f();
+        }
         Ok(Box::new(FakeTree {
             identity: NativeIdentity {
                 pid: 4242,
@@ -1855,6 +1860,112 @@ fn a_committed_archive_kills_the_projects_trees_at_once_through_the_runtime() {
     rt.block_on(app.shutdown());
 }
 
+/// A launch whose intent committed before an archival, but whose tree registers only after the
+/// archival snapshotted the live trees, is killed when it registers: while the project is
+/// archived, and after a restore too (its archival epoch is over).
+#[test]
+fn a_launch_overlapping_an_archival_is_killed_when_it_registers() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (_sup, processes) = supervisor(&fx, host.clone(), None);
+    // What the engine records once the archival's project-wide stop ran (no tree was live yet).
+    let store = fx.store.clone();
+    let stop_ran = move || {
+        let _ = write(&*store, |tx| {
+            let p = ProjectId(id("project-a"));
+            let epoch = tx.projects().project(&p)?.expect("project").archive_epoch;
+            tx.projects().finish_archive_stop(&p, epoch)
+        });
+    };
+    let gateway_parts = (
+        fx.store.clone(),
+        fx.h.clock.clone(),
+        fx.h.ids.clone(),
+        fx.use_cases.clone(),
+        fx.user.clone(),
+    );
+    let lifecycle = move |op: &str, key: &str, revision: &str| {
+        let (store, clock, ids, cases, user) = gateway_parts.clone();
+        let authority = HostAuthority {
+            store: &*store,
+            clock: &*clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*store,
+            ids: &*ids,
+        };
+        let frame = json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": key,
+            "body": {"kind": op, "projectId": "project-a", "expectedRevision": revision}});
+        cases
+            .command(&gateway, &user, op, frame.to_string().as_bytes())
+            .expect("addressable")
+    };
+    let launch = |root: Option<&str>| {
+        let ctx =
+            fx.agent
+                .clone()
+                .with_lineage(Some(ProjectId(id("project-a"))), root.map(rid), None);
+        let fs = NativeFilesystem::default();
+        let roots = ProtectedRoots::new(vec![], vec![], None);
+        processes.launch(
+            &ctx,
+            LaunchRequest {
+                spec: ProcessSpec::new(&["fake-tool".to_owned()]).unwrap(),
+                operation_id: None,
+                lease: None,
+                approved_hold: false,
+            },
+            &LaunchPolicy {
+                fs: &fs,
+                roots: &roots,
+                protected_branches: &[],
+            },
+        )
+    };
+    // 1. The archival commits (and its project-wide stop runs) between the intent and the spawn.
+    let (archive, ran) = (lifecycle.clone(), stop_ran.clone());
+    *host.on_spawn.lock().unwrap() = Some(Box::new(move || {
+        let _ = archive("projects.archive", "overlap-archive", "1");
+        ran();
+    }));
+    let late = launch(None);
+    assert!(
+        matches!(
+            late,
+            Err(devworks_core::services::process::LaunchRefusal::ProjectClosed)
+        ),
+        "{late:?}"
+    );
+    assert!(processes.owned().is_empty(), "the late tree was killed");
+    // 2. Restored meanwhile: the tree belongs to the archived epoch and is killed as well.
+    let reply = lifecycle("projects.restore", "restore-1", "2");
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{reply:?}"
+    );
+    let (again, ran) = (lifecycle.clone(), stop_ran.clone());
+    *host.on_spawn.lock().unwrap() = Some(Box::new(move || {
+        let _ = again("projects.archive", "overlap-archive-2", "3");
+        ran();
+        let _ = again("projects.restore", "overlap-restore-2", "4");
+    }));
+    let late = launch(None);
+    assert!(
+        matches!(
+            late,
+            Err(devworks_core::services::process::LaunchRefusal::ProjectClosed)
+        ),
+        "{late:?}"
+    );
+    assert!(processes.owned().is_empty());
+    // 3. Without an archival in between, a launch of the (restored, active) project runs.
+    assert!(launch(None).is_ok());
+    assert_eq!(processes.owned().len(), 1);
+}
+
 #[test]
 fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
     let fx = Fx::new();
@@ -1893,6 +2004,21 @@ fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
     }
     let (code, _) = refused(&fx.start(&fx.user, "root-g", 1, fx.control("root-g").revision));
     assert_eq!(code, "Conflict");
+    // Run supervision runs the archival stop the crash interrupted; only then may the project
+    // be restored.
+    rt.block_on(within("the interrupted archival stop runs", async {
+        while !read(&*fx.store, |s| s.projects().pending_archive_stops(10)).is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }));
+    let restore = json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": fx.key(),
+        "body": {"kind": "projects.restore", "projectId": "project-a", "expectedRevision": "2"}});
+    let reply = fx.command(&fx.user, "projects.restore", restore);
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{reply:?}"
+    );
     rt.block_on(app.shutdown());
 }
 

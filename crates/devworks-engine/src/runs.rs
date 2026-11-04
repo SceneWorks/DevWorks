@@ -133,6 +133,8 @@ pub struct RunTick {
     /// Roots whose capacity or rate-limit wait expired and was cleared.
     pub swept: Vec<RootId>,
     pub launched: Vec<Id>,
+    /// Projects whose pending archival stop ran this pass.
+    pub archived: Vec<ProjectId>,
 }
 
 /// One launch, keyed by its activation and claim epoch: a relaunch of the same activation after
@@ -297,6 +299,7 @@ impl RunSupervisor {
         let service = self.service.clone();
         report.swept = store::write(&self.store, move |tx| service.sweep_expired_waits(tx)).await?;
         self.signal_stopping().await?;
+        report.archived = self.finish_archive_stops().await?;
         (report.stops, report.failed) = self.execute_stops().await?;
         // Anything here may have made a root eligible again: restart the dispatcher's scan of
         // root work held awaiting eligibility (it rechecks each root; a needless wake is cheap).
@@ -716,13 +719,14 @@ impl RunSupervisor {
     ) -> Result<Vec<(RootId, OperationState)>, StorageError> {
         let p = project.clone();
         let stops = store::read(&self.store, move |s| {
-            let closed = s
-                .runs()
-                .project_lifecycle(&p)?
-                .is_some_and(|l| devworks_core::services::runs::closed_to_work(&l));
-            if !closed {
+            // A pending archival stop implies a closed project: restore and delete wait for it.
+            let Some(stored) = s.projects().project(&p)? else {
+                return Ok(None);
+            };
+            if !devworks_core::services::runs::closed_to_work(&stored.lifecycle) {
                 return Ok(None);
             }
+            let pending = stored.archive_stop_pending.then_some(stored.archive_epoch);
             let mut out = Vec::new();
             let mut after: Option<RootId> = None;
             loop {
@@ -738,16 +742,42 @@ impl RunSupervisor {
                     }
                 }
                 if page.len() < 500 {
-                    return Ok(Some(out));
+                    return Ok(Some((out, pending)));
                 }
                 after = page.last().cloned();
             }
         })
         .await?;
-        match stops {
-            Some(stops) => self.kill_project(project, stops).await,
-            None => Ok(Vec::new()),
+        let Some((stops, pending)) = stops else {
+            return Ok(Vec::new());
+        };
+        let out = self.kill_project(project, stops).await?;
+        // Only now, after the project-wide kill of the live trees, may the project be restored or
+        // deleted. A launch that registers after that kill is killed by its own epoch recheck.
+        if let Some(epoch) = pending {
+            let p = project.clone();
+            store::write(&self.store, move |tx| {
+                tx.projects().finish_archive_stop(&p, epoch)
+            })
+            .await?;
         }
+        Ok(out)
+    }
+
+    /// Runs every archival stop that has not run yet (its post-commit task never ran: a crash, a
+    /// storage failure, or a shutdown in between). Each project is its own unit of work.
+    async fn finish_archive_stops(&self) -> Result<Vec<ProjectId>, StorageError> {
+        let pending = store::read(&self.store, |s| s.projects().pending_archive_stops(100)).await?;
+        let mut done = Vec::new();
+        for p in pending {
+            if self.stopping.load(Ordering::SeqCst) {
+                break;
+            }
+            if self.stop_archived_project(&p).await.is_ok() {
+                done.push(p);
+            }
+        }
+        Ok(done)
     }
 
     /// Kills every owned tree of `project` at once, then executes and observes each root stop.

@@ -1501,6 +1501,9 @@ impl ProjectRead for Unsupported {
     fn work_naming_repository(&self, _: &ProjectId, _: &Id) -> Result<i64, StorageError> {
         nope()
     }
+    fn pending_archive_stops(&self, _: u16) -> Result<Vec<ProjectId>, StorageError> {
+        nope()
+    }
 }
 impl ProjectRepository for Unsupported {
     fn insert_project(&mut self, _: &StoredProject) -> Result<(), StorageError> {
@@ -1525,6 +1528,9 @@ impl ProjectRepository for Unsupported {
         nope()
     }
     fn remove_index(&mut self, _: &Id) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn finish_archive_stop(&mut self, _: &ProjectId, _: i64) -> Result<bool, StorageError> {
         nope()
     }
 }

@@ -46,8 +46,8 @@ use crate::ports::process::{
     NativeIdentity, Probe, ProcessError, ProcessHost, ProcessSpec, ProcessTree,
 };
 use crate::ports::storage::{
-    ApplicationStore, NewEvent, NewProcess, ProcessFilter, ProcessPhase, StorageError,
-    StoredProcess, WriteOptions, WriteTransaction, run_write,
+    ApplicationStore, NewEvent, NewProcess, ProcessFilter, ProcessPhase, ReadOptions, StorageError,
+    StoredProcess, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::protocol::{ActorId, EventId, Id, OperationId, ProjectId, RootId};
 use crate::services::resources::{
@@ -109,6 +109,26 @@ impl From<StorageError> for LaunchRefusal {
     fn from(e: StorageError) -> Self {
         Self::Storage(e)
     }
+}
+
+/// Bound on verifying the kill of a tree that registered after its project closed.
+const LATE_LAUNCH_STOP_BOUND: Duration = Duration::from_secs(5);
+
+/// A project's launch fence: closed (archived, deleted or unknown), or open at an archival epoch.
+enum Fence {
+    Closed,
+    Open(i64),
+}
+fn project_fence(
+    read: &dyn crate::ports::storage::ProjectRead,
+    project: &ProjectId,
+) -> Result<Fence, StorageError> {
+    Ok(match read.project(project)? {
+        Some(p) if !crate::services::runs::closed_to_work(&p.lifecycle) => {
+            Fence::Open(p.archive_epoch)
+        }
+        _ => Fence::Closed,
+    })
 }
 
 /// A launched, owned tree.
@@ -302,15 +322,15 @@ impl ProcessSupervisor {
         let operation_id = request.operation_id.clone();
         let intent = run_write(&*self.store, WriteOptions::default(), move |tx| {
             // An archived (or deleted) project's work is fenced from the archival's commit: no
-            // tree is launched for it, whatever path asks.
-            if let Some(p) = c.project_id()
-                && tx
-                    .runs()
-                    .project_lifecycle(p)?
-                    .is_some_and(|l| crate::services::runs::closed_to_work(&l))
-            {
-                return Ok(Err(LaunchRefusal::ProjectClosed));
-            }
+            // tree is launched for it, whatever path asks. The archival epoch this intent was
+            // recorded under is rechecked once the tree is registered (see below).
+            let epoch = match c.project_id() {
+                None => None,
+                Some(p) => match project_fence(tx.projects(), p)? {
+                    Fence::Closed => return Ok(Err(LaunchRefusal::ProjectClosed)),
+                    Fence::Open(epoch) => Some(epoch),
+                },
+            };
             let ticket = match &claim {
                 Some(claim) => {
                     match resources.authorize_dispatch(
@@ -346,9 +366,9 @@ impl ProcessSupervisor {
             })?;
             // The launch record now guards the lease; the dispatch ticket is not needed.
             drop(ticket);
-            Ok(Ok(record))
+            Ok(Ok((record, epoch)))
         })?;
-        let record = intent?;
+        let (record, epoch) = intent?;
 
         match self.host.spawn(&request.spec) {
             Err(e) => {
@@ -389,11 +409,30 @@ impl ProcessSupervisor {
                         record: running.clone(),
                     })),
                 );
-                Ok(OwnedProcess {
+                let owned = OwnedProcess {
                     id,
                     identity,
-                    lease: running.lease_id,
-                })
+                    lease: running.lease_id.clone(),
+                };
+                // An archival that committed after the intent above may have snapshotted the live
+                // trees before this one was registered. Rechecked now that it is registered,
+                // either that archival's stop saw it, or this read sees the archival (closed, or a
+                // later epoch after a restore): then the tree is killed at once. A fence that
+                // cannot be read fails closed.
+                if let (Some(project), Some(epoch)) = (running.project_id.as_ref(), epoch) {
+                    let fence = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+                        project_fence(s.projects(), project)
+                    });
+                    let open = matches!(fence, Ok(Fence::Open(e)) if e == epoch);
+                    if !open {
+                        let _ = self.cancel(&owned, Duration::ZERO, LATE_LAUNCH_STOP_BOUND);
+                        return Err(match fence {
+                            Err(e) => LaunchRefusal::Storage(e),
+                            Ok(_) => LaunchRefusal::ProjectClosed,
+                        });
+                    }
+                }
+                Ok(owned)
             }
         }
     }
