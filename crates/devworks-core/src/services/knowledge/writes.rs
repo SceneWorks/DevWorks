@@ -1054,8 +1054,9 @@ fn record(
         if !next.body.evidence_ids.contains(&evidence) {
             next.body.evidence_ids.push(evidence.clone());
         }
-        next.basis = attach_basis(&mut w, &[evidence], None, next.basis)?;
-        w.put_claim(next, Some(c.revision), "EvidenceAdded")?;
+        next.basis = attach_basis(&mut w, std::slice::from_ref(&evidence), None, next.basis)?;
+        let stored = w.put_claim(next, Some(c.revision), "EvidenceAdded")?;
+        adopt(&mut w, &stored, &[evidence], false)?;
     }
     for d in &i.batch.claims.0 {
         record_claim(&mut w, &scoped, &refs, d)?;
@@ -1182,6 +1183,8 @@ fn recurrence(
     } else {
         t
     };
+    // What the recurrence cites is the lesson's own, even where a merge brought it first.
+    adopt(w, &stored, &evidence, false)?;
     take_effect_if_due(w, stored)?;
     Ok(())
 }
@@ -1235,6 +1238,8 @@ fn revise(
     }
     if !same_content(&next, &current) {
         let stored = w.put_claim(next, Some(current.revision), "Revised")?;
+        // A revision restates every citation and baseline as its own.
+        adopt(&mut w, &stored, &stored.body.evidence_ids, true)?;
         note_conflicts(&mut w, &scoped, &stored)?;
     }
     let primary = scoped.exact.clone();
@@ -1442,10 +1447,12 @@ fn relate(
                 .body
                 .evidence_ids
                 .retain(|e| !added.contains(e) || evidence.contains(e) || owned.contains(e));
-            // ... and the baselines it added (one the target re-verified since is its own).
-            target
-                .basis
-                .retain(|b| !added_basis.contains(b) || owned_basis.contains(b));
+            // ... and the baselines it added (one the target re-verified since is its own, and
+            // so is one of a source this unmerge cites).
+            let cited = sources_of(&mut w, &evidence)?;
+            target.basis.retain(|b| {
+                !added_basis.contains(b) || owned_basis.contains(b) || cited.contains(&b.0)
+            });
             // The user's effect a merge carried in stays while a remaining merge carries it too;
             // undoing the last one restores the rule the target had before.
             restore_uncarried_rule(&mut w, &mut target)?;
@@ -1454,9 +1461,12 @@ fn relate(
             lose_recurrence_if_due(&mut w, &mut target)?;
             if target != into {
                 let stored = w.put_claim(target, Some(into.revision), "Unmerged")?;
+                // What this unmerge cites stays the target's own after any later unmerge too.
+                adopt(&mut w, &stored, &evidence, false)?;
                 // A restored inferred rule whose events still reach the threshold is in effect.
                 take_effect_if_due(&mut w, stored)?;
             } else {
+                adopt(&mut w, &into, &evidence, false)?;
                 w.touch(&into.scope);
             }
             let message = format!(
@@ -1666,6 +1676,59 @@ fn reinstate(w: &mut Writer<'_>, from: &StoredClaim, change: &str) -> Result<Sto
     lose_recurrence_if_due(w, &mut restored)?;
     let stored = w.put_claim(restored, Some(from.revision), change)?;
     take_effect_if_due(w, stored)
+}
+
+/// The claim's own act (a verification, a revision, evidence it attaches, a recurrence's
+/// citations) takes what it uses from the merges into it: `evidence`, and the claim's
+/// baselines for their sources (`all_basis`: every baseline), are the claim's own now, so no
+/// later unmerge takes them back.
+fn adopt(
+    w: &mut Writer<'_>,
+    claim: &StoredClaim,
+    evidence: &[Id],
+    all_basis: bool,
+) -> Result<(), Failure> {
+    let basis: Vec<(String, String)> = if all_basis {
+        claim.basis.clone()
+    } else {
+        let sources = sources_of(w, evidence)?;
+        claim
+            .basis
+            .iter()
+            .filter(|(s, _)| sources.contains(s))
+            .cloned()
+            .collect()
+    };
+    for r in merges_into(w, &claim.id)? {
+        let kept: Vec<Id> = r
+            .added_evidence_ids
+            .iter()
+            .filter(|e| !evidence.contains(e))
+            .cloned()
+            .collect();
+        let kept_basis: Vec<(String, String)> = r
+            .added_basis
+            .iter()
+            .filter(|b| !basis.contains(b))
+            .cloned()
+            .collect();
+        if kept != r.added_evidence_ids || kept_basis != r.added_basis {
+            w.k()
+                .set_knowledge_relation_ownership(&r.id, &kept, &kept_basis)?;
+        }
+    }
+    Ok(())
+}
+
+/// The sources `evidence` was taken from.
+fn sources_of(w: &mut Writer<'_>, evidence: &[Id]) -> Result<BTreeSet<String>, Failure> {
+    let mut sources = BTreeSet::new();
+    for id in evidence {
+        if let Some(e) = w.k().knowledge_evidence(id)? {
+            sources.insert(e.source_ref);
+        }
+    }
+    Ok(sources)
 }
 
 /// Whether a deletion removes `c` as well.
@@ -1951,7 +2014,9 @@ fn verify(
     next.body.verified_by = Some(ctx.principal().clone());
     next.body.verified_source_revision = revision;
     next.body.reason = Some(i.reason.0.clone());
-    w.put_claim(next, Some(c.revision), "Verified")?;
+    let stored = w.put_claim(next, Some(c.revision), "Verified")?;
+    // The verification covers every citation and baseline: none is a merge's to take back.
+    adopt(&mut w, &stored, &stored.body.evidence_ids, true)?;
     let primary = scoped.exact.clone();
     outcome(w, &primary, |value| OperationResult::KnowledgeVerify {
         value,

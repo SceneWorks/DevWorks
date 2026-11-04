@@ -4024,3 +4024,120 @@ fn a_move_refused_by_another_projects_claim_never_names_it() {
     assert_eq!(f.target_kind.unwrap().0, "knowledge_claim");
     assert_eq!(f.target_id, None);
 }
+
+/// Lessons A, B and C of project A (A and C cite `repo:merged` at c1), A merged into B.
+/// Returns (A, B, C, the merged evidence).
+fn merged_citation(fx: &Fx, a: &InvocationContext) -> (Id, Id, Id, Id) {
+    let (la, lb, lc) = three_lessons(fx, a);
+    let e = fx.read_claim(a, proj("project-a"), &la).evidence.0[0]
+        .id
+        .clone();
+    relate_in_a(fx, a, &la, "same_as", &lb);
+    (la, lb, lc, e)
+}
+
+/// Whether B still cites the merged evidence and a newer revision of its source marks it
+/// stale (its baseline stayed).
+fn keeps_merged_citation(fx: &Fx, a: &InvocationContext, lb: &Id) {
+    assert_eq!(cited_snippets(fx, a, lb), vec!["merged evidence"]);
+    observe_merged_source(fx);
+    assert_eq!(fx.claim(a, proj("project-a"), lb).stale, Some(true));
+}
+
+#[test]
+fn a_verification_keeps_the_citation_and_baseline_it_used_after_an_unmerge() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let user = fx.user();
+    let (la, lb, _, e) = merged_citation(&fx, &a);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.verify",
+        json!({"scope": proj("project-a"), "claimId": lb,
+        "expectedRevision": fx.revision(&lb).to_string(), "reason": "checked",
+        "evidenceIds": [e], "sourceRevision": "c1"}),
+    ));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    keeps_merged_citation(&fx, &a, &lb);
+}
+
+#[test]
+fn a_revision_keeps_the_citations_it_restates_after_an_unmerge() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, _, e) = merged_citation(&fx, &a);
+    let subject = {
+        let b = lb.clone();
+        fx.read(move |s| s.knowledge().knowledge_claim(&b))
+            .unwrap()
+            .subject_id
+    };
+    receipt(fx.cmd(
+        &a,
+        "knowledge.revise",
+        json!({"scope": proj("project-a"), "claimId": lb,
+        "expectedRevision": fx.revision(&lb).to_string(),
+        "replacement": with(draft("Lesson", "rule b, reworded"),
+            json!({"subjectId": subject, "evidenceIds": [e]}))}),
+    ));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    keeps_merged_citation(&fx, &a, &lb);
+}
+
+#[test]
+fn a_recurrence_keeps_the_citation_it_brings_after_an_unmerge() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, _, e) = merged_citation(&fx, &a);
+    receipt(fx.record(
+        &a,
+        proj("project-a"),
+        json!({"entities": [], "evidence": [], "claims": [
+        with(draft("Lesson", "again"), json!({"subjectId": "unused-entity",
+            "evidenceIds": [e], "lesson": with(lesson_draft("Agent", Some("eb2"), None),
+            json!({"sameAs": lb}))}))]}),
+    ));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    keeps_merged_citation(&fx, &a, &lb);
+}
+
+#[test]
+fn attached_evidence_keeps_its_sources_baseline_after_an_unmerge() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, _, _) = merged_citation(&fx, &a);
+    // New evidence of the merged source at the same revision: B already has that baseline
+    // (through the merge), which is now B's own.
+    receipt(fx.record(
+        &a,
+        proj("project-a"),
+        json!({"entities": [], "claims": [], "evidence": [{"id": "n",
+            "source": {"kind": "Code", "sourceRef": "repo:merged"},
+            "snippet": "attached evidence", "sourceRevision": "c1", "claimId": lb}]}),
+    ));
+    relate_in_a(&fx, &a, &la, "unmerge", &lb);
+    observe_merged_source(&fx);
+    assert_eq!(fx.claim(&a, proj("project-a"), &lb).stale, Some(true));
+}
+
+#[test]
+fn evidence_an_unmerge_cites_stays_after_the_last_merge_is_undone() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, lc, e) = merged_citation(&fx, &a);
+    relate_in_a(&fx, &a, &lc, "same_as", &lb);
+    // The first unmerge cites the merged evidence: B keeps it, as its own.
+    relate_with(&fx, &a, &la, "unmerge", &lb, &[&e]);
+    relate_in_a(&fx, &a, &lc, "unmerge", &lb);
+    keeps_merged_citation(&fx, &a, &lb);
+}
+
+#[test]
+fn an_unmerge_keeps_the_baseline_of_the_evidence_it_cites() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let (la, lb, _, e) = merged_citation(&fx, &a);
+    // The unmerge cites the merged evidence, so B keeps it, and its baseline with it.
+    relate_with(&fx, &a, &la, "unmerge", &lb, &[&e]);
+    keeps_merged_citation(&fx, &a, &lb);
+}
