@@ -1811,6 +1811,9 @@ impl RunRead for Unsupported {
     fn work_parent(&self, _: &RootId) -> Result<Option<Option<RootId>>, StorageError> {
         nope()
     }
+    fn work_repository_ids(&self, _: &RootId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
     fn open_prerequisites(&self, _: &RootId) -> Result<Vec<RootId>, StorageError> {
         nope()
     }

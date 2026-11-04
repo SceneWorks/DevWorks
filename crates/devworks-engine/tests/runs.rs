@@ -4763,6 +4763,41 @@ fn pending_feature_stop_with_a_running_issue(
 }
 
 #[test]
+fn a_process_only_card_linked_during_a_pending_feature_stop_is_covered() {
+    let fx = Fx::new();
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    spawn_tree(&fx, &processes, "root-f", "project-a");
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    spawn_tree(&fx, &processes, "root-b", "project-b");
+    assert!(read(&*fx.store, |s| s.runs().root_control(&rid("root-i"))).is_none());
+    let op = match decision(&fx.stop(&fx.user, "root-f")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("the feature's process keeps Stop pending: {other:?}"),
+    };
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    assert!(read(&*fx.store, |s| s.runs().root_control(&rid("root-i"))).is_none());
+    assert!(fx.events("root-f").iter().any(|e| e == "RootStopExtended"));
+    let tick = runtime().block_on(sup.tick()).unwrap();
+    assert!(
+        tick.stops
+            .contains(&(rid("root-f"), OperationState::ObservedComplete))
+    );
+    assert_eq!(
+        host.stopped.load(Ordering::SeqCst),
+        2,
+        "both covered trees stop"
+    );
+    assert_eq!(processes.owned().len(), 1, "unrelated work keeps running");
+    assert_eq!(
+        read(&*fx.store, |s| s.operations().operation(&op))
+            .unwrap()
+            .state,
+        OperationState::ObservedComplete
+    );
+}
+
+#[test]
 fn a_card_linked_while_its_features_stop_is_pending_is_stopped_and_waited_for() {
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());

@@ -234,6 +234,11 @@ pub(crate) fn controlled_root_tx(
     )
     .into())
 }
+/// Whether this card retains controls or unsettled root-owned work. Both initial Stop
+/// coverage and late-link extension use this predicate; controls may still be implicit.
+fn has_run_state(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
+    Ok(tx.runs().root_control(root)?.is_some() || ControlService::root_has_work(tx, root)?)
+}
 /// The cards linked to `feature` that keep run controls of their own: a retained activation (an
 /// issue linked while its agent ran), its root-scoped deliveries and its process trees. The
 /// feature's Pause and Stop reach them, and the feature's stop settles only once they quiesced.
@@ -260,7 +265,7 @@ pub(crate) fn linked_roots(
         after = page.last().map(WorkPosition::of);
         for w in &page {
             let id = RootId(w.id.clone());
-            if (tx.runs().root_control(&id)?.is_some() || ControlService::root_has_work(tx, &id)?)
+            if has_run_state(tx, &id)?
                 && let Some(r) = tx.sessions().work_root(&id)?
             {
                 out.push(r);
@@ -644,6 +649,41 @@ fn stored(b: &StoredBlocker) -> Condition {
         stored: true,
     }
 }
+/// A card's repository references must remain within its feature's active approved scope.
+/// Pending replacements change no authority; unaffected requirement evidence stays current.
+fn repository_gate(
+    runs: &dyn RunRead,
+    feature: &RootId,
+    work: &RootId,
+    subject: Subject,
+    conditions: &mut Vec<Condition>,
+) -> Result<(), StorageError> {
+    let Some(plan) = runs
+        .feature_plan(feature)?
+        .and_then(|p| p.approved_plan)
+        .and_then(|v| crate::services::work::model::active_of(Some(&v)))
+    else {
+        return Ok(());
+    };
+    if let Some(repository) = runs
+        .work_repository_ids(work)?
+        .into_iter()
+        .find(|id| !plan.draft.repository_ids.0.contains(id))
+    {
+        conditions.push(derived(
+            "repository-scope",
+            subject,
+            plan.plan_revision,
+            HoldCause::Policy,
+            &format!(
+                "repository {} is outside the active approved plan",
+                repository.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Holds implementation of `work` while it has a prerequisite not completed with verified
 /// acceptance.
 fn prerequisite_gate(
@@ -760,6 +800,7 @@ impl ControlService {
                     created_at_ms: 0,
                 };
                 prerequisite_gate(runs, f, Subject::Root(f.clone()), &mut c)?;
+                repository_gate(runs, f, &root.id, root_subject.clone(), &mut c)?;
                 match self.scope.plan(runs, &feature)? {
                     PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
                     PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
@@ -877,6 +918,9 @@ impl ControlService {
                     ));
                 }
                 if purpose == ActivationPurpose::Implementation {
+                    if is_feature(root) {
+                        repository_gate(runs, &root.id, &a.work_id, subject.clone(), &mut c)?;
+                    }
                     let open = runs.open_prerequisites(&a.work_id)?;
                     if let Some(p) = open.first() {
                         c.push(derived(
@@ -2153,8 +2197,8 @@ impl ControlService {
     }
 
     /// A card was linked to `feature_id` (`tasks.set_feature`): while the feature's stop is still
-    /// pending and the feature still carries it, the stop is extended to the card (when it keeps
-    /// run controls of its own; one without any has nothing running).
+    /// pending and the feature still carries it, the stop is extended to a card that retains
+    /// controls or unsettled work, including work whose controls are still implicit.
     pub(crate) fn card_linked(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -2171,7 +2215,7 @@ impl ControlService {
         };
         if is_terminal(rec.state)
             || recovery::stop_superseded(&control)
-            || tx.runs().root_control(card_id)?.is_none()
+            || !has_run_state(tx, card_id)?
         {
             return Ok(false);
         }

@@ -554,6 +554,8 @@ pub trait RunRead {
     /// The work item's current feature membership (`None`: no such item; `Some(None)`: it has
     /// no feature).
     fn work_parent(&self, work: &RootId) -> Result<Option<Option<RootId>>, StorageError>;
+    /// The repositories currently named by a work item (checked against active plan scope).
+    fn work_repository_ids(&self, work: &RootId) -> Result<Vec<Id>, StorageError>;
     /// The work item's prerequisites that are not completed with verified acceptance.
     fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError>;
     /// The project's lifecycle label (`None` for an unknown project).

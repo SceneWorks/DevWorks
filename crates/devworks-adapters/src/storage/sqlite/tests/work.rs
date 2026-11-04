@@ -3451,3 +3451,118 @@ fn a_placement_moves_one_card_in_a_bucket_larger_than_an_ordered_list_can_name()
             || matches!(recorded(r), DomainDecision::Refused { .. })
     );
 }
+
+#[test]
+fn repository_scope_removal_fences_only_cards_outside_the_active_plan() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &["repo-1", "repo-2"]);
+    let f = fx.feature(&p, "Checkout", &["repo-1", "repo-2"]);
+    let doc = fx.artifact(&p, 1);
+    let plan = |f: &WorkRecord, repos: &[&str]| {
+        work_of(applied(fx.command(
+            &fx.user(),
+            "features.edit_plan",
+            json!({"featureId":f.id, "expectedRevision":f.revision,
+            "plan":draft(&doc, &[("E1","pay")], repos)}),
+        )))
+    };
+    let assess = |f: &WorkRecord| {
+        let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+        let active = f.approval.as_ref().unwrap();
+        let mut change = json!({"kind":"Assess", "planRevision":active.plan_revision,
+            "planDigest":active.plan_digest, "summary":"reviewed", "findings":[]});
+        if let Some(r) = &f.readiness {
+            change["expectedAssessmentRevision"] = json!(r.revision);
+        }
+        work_of(applied(fx.command_at(
+            &fx.agent(),
+            "features.edit",
+            json!({"workId":f.id, "expectedRevision":f.revision, "changes":{"readiness":change}}),
+            Some(2),
+        )))
+    };
+    let f = assess(&fx.approve(&plan(&f, &["repo-1", "repo-2"])));
+    let card = |name: &str, repo: &str| {
+        let c = fx.task(&fx.user(), &p, Some(&f), name, 0);
+        work_of(applied(fx.command(
+            &fx.user(),
+            "tasks.edit",
+            json!({"workId":c.id,
+            "expectedRevision":c.revision, "changes":{"repositoryIds":[repo]}}),
+        )))
+    };
+    let kept = card("Kept repo", "repo-1");
+    let removed = card("Removed repo", "repo-2");
+    let coordinator = assign(&fx, &f.id, &f.id, 90000);
+    let a = assign_under(&fx, &f.id, &kept.id, 90001, Some(coordinator.clone()));
+    let b = assign_under(&fx, &f.id, &removed.id, 90002, Some(coordinator));
+    // Both workers bind the same unchanged requirement, whose readiness stays current.
+    let digest = {
+        let (runs, fid) = (fx.runs.clone(), RootId(f.id.clone()));
+        fx.read(move |s| {
+            let root = s.sessions().work_root(&fid)?.unwrap();
+            Ok(runs
+                .scope()
+                .plan(s.runs(), &root)?
+                .unit(Some("E1"))
+                .unwrap()
+                .digest
+                .clone())
+        })
+    };
+    for id in [&a, &b] {
+        let id = id.clone();
+        let digest = digest.clone();
+        fx.write(move |tx| {
+            let mut assignment = tx.runs().assignment(&id)?.unwrap();
+            let revision = assignment.revision;
+            assignment.scope_key = Some("E1".into());
+            assignment.scope_digest = Some(digest);
+            assignment.revision += 1;
+            tx.runs().update_assignment(&assignment, revision)
+        });
+    }
+    assert!(fx.eligible(&f.id, Target::Assignment(a.clone())).is_empty());
+    assert!(fx.eligible(&f.id, Target::Assignment(b.clone())).is_empty());
+    let f = fx.fresh(&f);
+    let pending = plan(&f, &["repo-1"]);
+    assert!(
+        fx.eligible(&f.id, Target::Assignment(b.clone())).is_empty(),
+        "a pending scope does not fence active work"
+    );
+    let adopted = fx.approve(&pending);
+    assert!(
+        fx.eligible(&f.id, Target::Assignment(a.clone())).is_empty(),
+        "unaffected work stays ready"
+    );
+    let reasons = fx.eligible(&f.id, Target::Assignment(b.clone()));
+    assert!(
+        reasons.iter().any(|s| s.contains("repository")),
+        "{reasons:?}"
+    );
+    let _ = assess(&adopted);
+    assert!(fx.eligible(&f.id, Target::Assignment(a)).is_empty());
+    let reasons = fx.eligible(&f.id, Target::Assignment(b.clone()));
+    assert!(
+        reasons.iter().any(|s| s.contains("repository")),
+        "reassessment cannot authorize an out-of-scope repository: {reasons:?}"
+    );
+    // A retained linked-card root obeys the same scope, even after readiness is current.
+    let reasons = fx.eligible(&removed.id, Target::Root);
+    assert!(
+        reasons.iter().any(|s| s.contains("repository")),
+        "{reasons:?}"
+    );
+    let removed = fx.fresh(&removed);
+    applied(fx.command(
+        &fx.user(),
+        "tasks.edit",
+        json!({"workId":removed.id,
+        "expectedRevision":removed.revision, "changes":{"repositoryIds":["repo-1"]}}),
+    ));
+    assert!(
+        fx.eligible(&f.id, Target::Assignment(b)).is_empty(),
+        "correcting the repository restores eligibility"
+    );
+    assert!(fx.eligible(&removed.id, Target::Root).is_empty());
+}

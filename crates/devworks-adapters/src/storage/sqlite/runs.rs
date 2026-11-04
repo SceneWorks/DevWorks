@@ -817,6 +817,9 @@ macro_rules! run_reads {
                 })
                 .transpose()
             }
+            fn work_repository_ids(&self, work: &RootId) -> Result<Vec<Id>, StorageError> {
+                WorkRead::work_repositories(self, &work.0)
+            }
             fn open_prerequisites(&self, work: &RootId) -> Result<Vec<RootId>, StorageError> {
                 Ok(super::work::open_prerequisites(self.conn, &work.0)?
                     .into_iter()
