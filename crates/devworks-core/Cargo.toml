@@ -12,6 +12,10 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# WHATWG URL parsing for the web tools' egress policy (host forms, IPv4 numeric spellings, IDNA,
+# relative redirect resolution). A parser, not an HTTP client: requests are made by the adapters.
+# Already in the lockfile through the desktop stack.
+url = "=2.5.8"
 
 [features]
 # Reusable behavioral contract suite for `ports::storage` implementations (STORE-11).

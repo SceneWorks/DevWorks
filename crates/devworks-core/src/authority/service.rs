@@ -435,6 +435,33 @@ pub fn fences_hold(
     Ok(true)
 }
 
+/// [`authorization_holds`] inside a write transaction, together with the invocation's store and
+/// restore epoch: the linearization point of a write a query makes during preparation (the web
+/// tools' evidence and activity records). A principal revoked or re-bound, a narrowed policy or
+/// a changed grant since authorization makes it `false`, and the caller writes nothing.
+pub fn authorization_holds_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    authorization: &Authorization,
+) -> Result<bool, StorageError> {
+    let store = tx.store();
+    if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
+        return Ok(false);
+    }
+    if !fences_hold(tx, authorization.fences())? {
+        return Ok(false);
+    }
+    for g in authorization.authority_grants() {
+        let current = tx.authority().authority_grant(&g.grant_id)?;
+        if !current
+            .is_some_and(|c| c.revision == g.expected_revision && c.state == GrantState::Active)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Re-checks fences and the grants an authorization relies on against a fresh snapshot (the
 /// publication point of a read). A grant revoked or changed since authorization denies output.
 pub fn authorization_holds(

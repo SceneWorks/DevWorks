@@ -272,6 +272,8 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "sessions.get",
             "sessions.list",
             "sessions.start",
+            "web.fetch",
+            "web.search",
             "workspace.diagnostics",
             "workspace.logs",
             "workspace.record_diagnostic",

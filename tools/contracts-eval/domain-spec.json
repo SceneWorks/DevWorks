@@ -1386,7 +1386,20 @@
         "title": "Label",
         "url": "Url",
         "snippet": "Content",
-        "observed_at_ms": "Counter"
+        "observed_at_ms": "Counter",
+        "trust": "?TrustLevel",
+        "provider_id": "?Id"
+      },
+      "since": {
+        "trust": 2,
+        "provider_id": 2
+      }
+    },
+    "WebRedirect": {
+      "kind": "record",
+      "fields": {
+        "url": "Url",
+        "status": "i32"
       }
     },
     "WebDocument": {
@@ -1397,7 +1410,19 @@
         "content": "ArtifactRef",
         "media_type": "Label",
         "observed_at_ms": "Counter",
-        "truncated": "bool"
+        "truncated": "bool",
+        "trust": "?TrustLevel",
+        "status": "?i32",
+        "redirects": "?Items<WebRedirect>",
+        "source_sha256": "?Digest",
+        "source_byte_length": "?Counter"
+      },
+      "since": {
+        "trust": 2,
+        "status": 2,
+        "redirects": 2,
+        "source_sha256": 2,
+        "source_byte_length": 2
       }
     },
     "ContainerCapability": {
@@ -5536,7 +5561,7 @@
       "result": "Page<WebResult>",
       "effect": "ExternalRead",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Searches the configured external search provider (Settings web.searchProvider; its credential is a native secret-store reference); providerId must name it. No configured provider is UnsupportedCapability, a missing or unavailable credential CredentialsRequired; never fake or empty-as-success results. Pages are bounded by the provider's page size, and the cursor binds the query, provider, scope, principal and configuration revision. A request sent without a complete answer is OutcomeUnknown (the provider may have counted it). Results are untrusted data. Schema revision 2: each result carries trust (Untrusted) and the providerId that produced it."
     },
     "web.fetch": {
       "operation": "web.fetch",
@@ -5550,7 +5575,7 @@
       "result": "WebDocument",
       "effect": "ExternalRead",
       "authority": "Scoped",
-      "rules": "Authorize redirects and outbound credentials at each hop. Bounded untrusted source; no tool authority from web instructions."
+      "rules": "Authorize redirects and outbound credentials at each hop. Bounded untrusted source; no tool authority from web instructions. A URL carrying credentials is refused; no cookie or DevWorks credential is ever sent. Each hop resolves once, every address is checked (loopback, private, link-local, metadata and other non-global ranges are refused unless private networks are allowed in Settings; link-local and metadata never) and the connection goes to the checked address; redirects are bounded and rechecked per hop. HTML is reduced to text, plain text and JSON pass through, other media types are refused; the stored content is a bounded, redacted artifact. A failure after the request was sent is OutcomeUnknown, never success. Schema revision 2: trust (Untrusted), the final status (2xx), the redirect chain (each hop's URL and 3xx status) and the digest and length of the bytes received."
     },
     "containers.capabilities": {
       "operation": "containers.capabilities",
@@ -6915,6 +6940,14 @@
       2
     ],
     "indexing.status": [
+      1,
+      2
+    ],
+    "web.search": [
+      1,
+      2
+    ],
+    "web.fetch": [
       1,
       2
     ]

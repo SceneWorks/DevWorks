@@ -15,6 +15,16 @@ rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled
 serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"
+# Native web fetching and search (DW-51): HTTP/1.1 written over rustls with the ring provider
+# (no aws-lc build tooling on Windows), Mozilla's root set bundled (an explicit trust policy, not
+# the OS store), httparse for response heads. The transport connects only to the address the
+# core egress policy checked, never resolves, never follows redirects and never sends cookies or
+# credentials.
+httparse = "=1.10.1"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "=1.0.11"
+# The provider endpoint and query string are built with the same WHATWG URL type core decides on.
+url = "=2.5.8"
 tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
 # Structural indexing (DW-23, CODE-01/02): the tree-sitter runtime and one grammar crate per
 # language the retained CodeGraph LanguageSpecs and frozen adapter surface cover. Every grammar
@@ -49,6 +59,8 @@ toml = { version = "=1.1.8", default-features = false, features = ["parse", "ser
 regex = "=1.13.1"
 
 [dev-dependencies]
+# A throwaway certificate authority for the local TLS server the transport tests connect to.
+rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
 
 # Descriptor-relative no-follow filesystem calls (openat, fstatat, unlinkat) for verified reads

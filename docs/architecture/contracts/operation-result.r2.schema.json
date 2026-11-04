@@ -4789,6 +4789,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_WebRedirect_0_128": {
+      "items": {
+        "$ref": "#/$defs/WebRedirect"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_WebResult_0_500": {
       "items": {
         "$ref": "#/$defs/WebResult"
@@ -9922,6 +9930,15 @@
       ],
       "type": "object"
     },
+    "TrustLevel": {
+      "enum": [
+        "Trusted",
+        "Untrusted",
+        "Inferred",
+        "Unresolved"
+      ],
+      "type": "string"
+    },
     "UpdateChannel": {
       "enum": [
         "Stable",
@@ -10264,8 +10281,29 @@
         "observedAtMs": {
           "$ref": "#/$defs/Counter"
         },
+        "redirects": {
+          "$ref": "#/$defs/List_WebRedirect_0_128",
+          "x-since": 2
+        },
+        "sourceByteLength": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "sourceSha256": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 2
+        },
+        "status": {
+          "format": "int32",
+          "type": "integer",
+          "x-since": 2
+        },
         "truncated": {
           "type": "boolean"
+        },
+        "trust": {
+          "$ref": "#/$defs/TrustLevel",
+          "x-since": 2
         },
         "url": {
           "$ref": "#/$defs/Url"
@@ -10281,17 +10319,42 @@
       ],
       "type": "object"
     },
+    "WebRedirect": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "url",
+        "status"
+      ],
+      "type": "object"
+    },
     "WebResult": {
       "additionalProperties": false,
       "properties": {
         "observedAtMs": {
           "$ref": "#/$defs/Counter"
         },
+        "providerId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "snippet": {
           "$ref": "#/$defs/Text0To65536"
         },
         "title": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "trust": {
+          "$ref": "#/$defs/TrustLevel",
+          "x-since": 2
         },
         "url": {
           "$ref": "#/$defs/Url"

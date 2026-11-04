@@ -119,6 +119,7 @@
 //! `StorageUnavailable`.
 pub mod host;
 pub mod lifecycle;
+pub mod observed;
 pub mod preview;
 pub mod replies;
 
@@ -468,7 +469,7 @@ pub const WORKSPACE_SCOPE: &str = "workspace_scope";
 /// from a workspace invocation (no project, no work lineage) of a principal whose current
 /// authorized scope is the workspace: the user, the host and unconfined principals. A
 /// project-confined principal, or a work invocation, is refused (`PermissionDenied`).
-fn named_scope(
+pub(crate) fn named_scope(
     authority: &dyn AuthorityRead,
     ctx: &InvocationContext,
     project: Option<&ProjectId>,
