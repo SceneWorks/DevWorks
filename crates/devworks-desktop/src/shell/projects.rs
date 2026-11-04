@@ -76,6 +76,9 @@ pub struct BaseDirectory {
     pub saving: bool,
     /// Reload after the save settles (drafts are cleared, not kept as a conflict).
     pub after_save: bool,
+    /// The text the running save submitted: text typed after it stays a draft when the save
+    /// settles.
+    pub submitted: Option<String>,
     pub error: Option<String>,
 }
 
@@ -107,6 +110,10 @@ pub struct ProjectsUi {
     pub create: Option<CreateForm>,
     pub edit: Option<EditForm>,
     pub membership: Option<MembershipForm>,
+    /// The exact form each running save submitted, by project: its reply settles that form
+    /// only, and an editor holding later edits stays open at the saved revision.
+    pub edit_saving: BTreeMap<String, EditForm>,
+    pub membership_saving: BTreeMap<String, MembershipForm>,
     pub confirm: Option<Confirm>,
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
@@ -289,12 +296,15 @@ impl Shell {
                     let description =
                         (form.description != p.description.0).then_some(form.description.clone());
                     let access =
-                        (!same_access(&form.access, &p.access_mode)).then_some(form.access);
+                        (!same_access(&form.access, &p.access_mode)).then_some(form.access.clone());
                     if name.is_none() && description.is_none() && access.is_none() {
                         self.projects.edit = None;
                         continue;
                     }
                     let slot = Slot::ProjectCommand(p.id.0.as_str().to_owned());
+                    self.projects
+                        .edit_saving
+                        .insert(p.id.0.as_str().to_owned(), form);
                     self.command(slot, "Saving the project", "projects.edit", move |b| {
                         ops::project_edit(
                             b,
@@ -309,6 +319,9 @@ impl Shell {
                     let p = form.snapshot.clone();
                     let repos: Vec<String> = form.repositories.iter().cloned().collect();
                     let slot = Slot::ProjectCommand(p.id.0.as_str().to_owned());
+                    self.projects
+                        .membership_saving
+                        .insert(p.id.0.as_str().to_owned(), form);
                     self.command(
                         slot,
                         "Changing the project's repositories",
@@ -365,6 +378,7 @@ impl Shell {
                     };
                     if let Some(x) = self.projects.base.get_mut(&p) {
                         x.saving = true;
+                        x.submitted = Some(x.buffer.trim().to_owned());
                     }
                     if let Some(c) = &mut self.client {
                         c.command(
@@ -483,8 +497,15 @@ impl Shell {
             (Slot::ProjectCommand(id), Reply::Command(c)) => match ops::project_changed(c) {
                 Ok(p) => {
                     self.projects.mutations += 1;
-                    self.projects.edit = None;
-                    self.projects.membership = None;
+                    let saved_edit = self.projects.edit_saving.remove(&id);
+                    let saved_members = self.projects.membership_saving.remove(&id);
+                    self.projects.edit =
+                        edit_after_reply(self.projects.edit.take(), saved_edit.as_ref(), &p);
+                    self.projects.membership = membership_after_reply(
+                        self.projects.membership.take(),
+                        saved_members.as_ref(),
+                        &p,
+                    );
                     let text = match p.lifecycle {
                         LifeState::Archived => format!(
                             "{} is archived. Its running work was stopped at once; restoring it \
@@ -509,7 +530,14 @@ impl Shell {
                     self.load_deleted_projects();
                     self.load_repositories();
                 }
-                Err(e) => self.project_failure("The project change", e),
+                Err(e) => {
+                    // The forms keep their drafts; an unknown outcome stays pending.
+                    if !matches!(e, Failure::Unknown) {
+                        self.projects.edit_saving.remove(&id);
+                        self.projects.membership_saving.remove(&id);
+                    }
+                    self.project_failure("The project change", e)
+                }
             },
             (Slot::ProjectSettings(p), Reply::Query(q)) => {
                 let after_save;
@@ -535,12 +563,27 @@ impl Shell {
                             if after_save {
                                 b.saving = false;
                             }
-                            b.buffer = b
-                                .view
-                                .as_ref()
-                                .and_then(|v| v.item(BASE_DIRECTORY))
-                                .and_then(|i| i.shown().as_str().map(str::to_owned))
-                                .unwrap_or_default();
+                            // Text typed while the save ran stays a draft on the saved value.
+                            let later = std::mem::take(&mut b.submitted)
+                                .filter(|sent| after_save && b.buffer.trim() != sent);
+                            match (later, &mut b.view) {
+                                (Some(_), Some(v)) => {
+                                    let typed = b.buffer.trim().to_owned();
+                                    if typed.is_empty() {
+                                        let _ = v.inherit(BASE_DIRECTORY);
+                                    } else {
+                                        let _ = v.edit(BASE_DIRECTORY, json!(typed));
+                                    }
+                                }
+                                _ => {
+                                    b.buffer = b
+                                        .view
+                                        .as_ref()
+                                        .and_then(|v| v.item(BASE_DIRECTORY))
+                                        .and_then(|i| i.shown().as_str().map(str::to_owned))
+                                        .unwrap_or_default();
+                                }
+                            }
                             b.error = None;
                         }
                         Err(e) => {
@@ -585,6 +628,7 @@ impl Shell {
                     Err(e) => {
                         if let Some(b) = self.projects.base.get_mut(&p) {
                             b.saving = false;
+                            b.submitted = None;
                             b.error = Some(e.describe());
                         }
                         if matches!(&e, Failure::Refused(f) if f.code == DomainErrorCode::RevisionConflict)
@@ -1533,6 +1577,61 @@ fn edit_form(
     });
     if close {
         projects.edit = None;
+    }
+}
+
+/// The project editor after a project command of `p` succeeded. A form of another project is
+/// untouched. This project's form closes when the project is no longer active, or when its own
+/// save (`saved`) holds everything it shows; a form holding later edits stays open at the saved
+/// revision. A form that was not saved here stays as it is.
+pub fn edit_after_reply(
+    live: Option<EditForm>,
+    saved: Option<&EditForm>,
+    p: &ProjectRecord,
+) -> Option<EditForm> {
+    let f = live?;
+    if f.project != p.id.0.as_str() {
+        return Some(f);
+    }
+    if !matches!(p.lifecycle, LifeState::Active) {
+        return None;
+    }
+    match saved {
+        Some(s)
+            if s.name == f.name
+                && s.description == f.description
+                && same_access(&s.access, &f.access) =>
+        {
+            None
+        }
+        Some(_) => Some(EditForm {
+            snapshot: p.clone(),
+            ..f
+        }),
+        None => Some(f),
+    }
+}
+
+/// The membership form after a project command of `p` succeeded (as [`edit_after_reply`]).
+pub fn membership_after_reply(
+    live: Option<MembershipForm>,
+    saved: Option<&MembershipForm>,
+    p: &ProjectRecord,
+) -> Option<MembershipForm> {
+    let f = live?;
+    if f.project != p.id.0.as_str() {
+        return Some(f);
+    }
+    if !matches!(p.lifecycle, LifeState::Active) {
+        return None;
+    }
+    match saved {
+        Some(s) if s.repositories == f.repositories => None,
+        Some(_) => Some(MembershipForm {
+            snapshot: p.clone(),
+            ..f
+        }),
+        None => Some(f),
     }
 }
 

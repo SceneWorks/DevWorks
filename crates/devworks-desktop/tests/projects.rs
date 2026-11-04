@@ -462,3 +462,221 @@ fn an_unavailable_repository_text_can_be_retried_and_refresh_reads_it_again() {
     click(&mut h, Role::Button, "Refresh");
     assert_eq!(shown(&h), 2);
 }
+
+/// A shell over `gate` with the Engine project (member repo-a) selected in All projects.
+fn gated_engine(
+    name: &str,
+    gate: &Gate,
+    script: Script,
+) -> (
+    Root,
+    devworks_desktop::host::Engine,
+    ProjectRecord,
+    egui_kittest::Harness<'static, devworks_desktop::shell::Shell>,
+) {
+    let root = Root::new(name);
+    let engine = start(&root);
+    register(&engine, "repo-a", "engine");
+    register(&engine, "repo-b", "tools");
+    let real = engine.backend();
+    let made = ops::project_changed(real.command(
+        "projects.create",
+        &ops::project_create(&*real, "Engine", "", &["repo-a".into()]),
+    ))
+    .unwrap();
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, script, None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click_nav(&mut h, "All projects");
+    click_row(&mut h, "Engine  ·");
+    (root, engine, made, h)
+}
+
+#[test]
+fn project_edits_made_while_a_save_runs_stay_open_at_the_saved_revision() {
+    let gate = Gate::new("projects.edit");
+    let (_root, engine, _made, mut h) =
+        gated_engine("projects-edit-in-flight", &gate, Script::default());
+    let backend = engine.backend();
+    click(&mut h, Role::Button, "Edit");
+    h.state_mut().projects.edit.as_mut().expect("editing").name = "Engine 2".into();
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save").click();
+    h.run_steps(3);
+    assert!(
+        !h.state().projects.edit_saving.is_empty(),
+        "the save is in flight"
+    );
+    h.state_mut().projects.edit.as_mut().unwrap().name = "Engine 3".into();
+    gate.open();
+    settle(&mut h);
+    let saved = listed(&*backend, None).remove(0);
+    assert_eq!(saved.name.0, "Engine 2", "the save submitted its own form");
+    let form = h
+        .state()
+        .projects
+        .edit
+        .clone()
+        .expect("the later edit is kept");
+    assert_eq!(form.name, "Engine 3");
+    assert_eq!(form.snapshot.revision, saved.revision);
+    // Saving it again applies at the saved revision and settles the editor.
+    click(&mut h, Role::Button, "Save");
+    assert_eq!(listed(&*backend, None).remove(0).name.0, "Engine 3");
+    assert!(h.state().projects.edit.is_none());
+}
+
+#[test]
+fn membership_choices_made_while_a_save_runs_stay_open_at_the_saved_revision() {
+    let gate = Gate::new("projects.membership");
+    let (_root, engine, _made, mut h) =
+        gated_engine("projects-membership-in-flight", &gate, Script::default());
+    let backend = engine.backend();
+    click(&mut h, Role::Button, "Repositories…");
+    let set = |v: &[&str]| {
+        v.iter()
+            .map(|s| s.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    h.state_mut()
+        .projects
+        .membership
+        .as_mut()
+        .expect("choosing")
+        .repositories = set(&["repo-a", "repo-b"]);
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save repositories")
+        .click();
+    h.run_steps(3);
+    assert!(!h.state().projects.membership_saving.is_empty());
+    h.state_mut()
+        .projects
+        .membership
+        .as_mut()
+        .unwrap()
+        .repositories = set(&["repo-b"]);
+    gate.open();
+    settle(&mut h);
+    let saved = listed(&*backend, None).remove(0);
+    assert_eq!(
+        saved
+            .repository_ids
+            .0
+            .iter()
+            .map(Id::as_str)
+            .collect::<Vec<_>>(),
+        ["repo-a", "repo-b"]
+    );
+    let form = h
+        .state()
+        .projects
+        .membership
+        .clone()
+        .expect("the later choice is kept");
+    assert_eq!(form.repositories, set(&["repo-b"]));
+    assert_eq!(form.snapshot.revision, saved.revision);
+}
+
+#[test]
+fn a_base_directory_typed_while_its_save_runs_stays_a_draft() {
+    let gate = Gate::new("settings.save_revision");
+    let script = Script::default();
+    let (root, engine, made, mut h) =
+        gated_engine("projects-base-in-flight", &gate, script.clone());
+    let backend = engine.backend();
+    script.folders.lock().unwrap().push(root.dir("clones"));
+    let pid = made.id.0.as_str().to_owned();
+    click(&mut h, Role::Button, "Choose…");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save directory")
+        .click();
+    h.run_steps(3);
+    assert!(
+        h.state().projects.base[&pid].saving,
+        "the save is in flight"
+    );
+    h.get_by_role_and_label(Role::TextInput, "Repository base directory")
+        .focus();
+    h.step();
+    h.key_press(egui::Key::End);
+    h.get_by_role_and_label(Role::TextInput, "Repository base directory")
+        .type_text("-later");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    let chosen = root.dir("clones").display().to_string();
+    let entries = ops::settings_entries(backend.query(
+        "settings.read_effective",
+        &ops::project_settings_read(&*backend, &pid, &["repositories.baseDirectory"]),
+    ))
+    .unwrap()
+    .1;
+    assert_eq!(
+        entries[0].value.value.0,
+        serde_json::json!(chosen),
+        "the save sent its own text"
+    );
+    let b = &h.state().projects.base[&pid];
+    assert_eq!(
+        b.buffer,
+        format!("{chosen}-later"),
+        "the later text is kept"
+    );
+    assert!(
+        b.view
+            .as_ref()
+            .and_then(|v| v.item("repositories.baseDirectory"))
+            .is_some_and(|i| i.is_dirty()),
+        "and still unsaved"
+    );
+}
+
+#[test]
+fn an_unknown_project_edit_at_close_is_confirmed_at_the_next_launch_and_applied_once() {
+    let root = Root::new("projects-edit-unknown");
+    let engine = start(&root);
+    let real = engine.backend();
+    ops::project_changed(real.command(
+        "projects.create",
+        &ops::project_create(&*real, "Engine", "", &[]),
+    ))
+    .unwrap();
+    let lossy = LoseAcks::over(real.clone(), "projects.edit", 4);
+    let mut h = harness(
+        shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click_nav(&mut h, "All projects");
+    click_row(&mut h, "Engine  ·");
+    click(&mut h, Role::Button, "Edit");
+    h.state_mut().projects.edit.as_mut().unwrap().name = "Engine 2".into();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save");
+    assert!(has_text(&h, "not yet confirmed whether it was applied"));
+    assert!(!h.state().projects.edit_saving.is_empty(), "still pending");
+    h.state_mut().on_exit();
+    drop(h);
+    let again = LoseAcks::over(real.clone(), "projects.edit", 0);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    let now = listed(&*real, None).remove(0);
+    assert_eq!(now.name.0, "Engine 2");
+    assert_eq!(now.revision.as_str(), "2", "applied once");
+    assert_eq!(
+        again.request_keys().len(),
+        1,
+        "confirmed with its exact frame"
+    );
+    assert_eq!(h.state().unconfirmed_count(), 0);
+}
