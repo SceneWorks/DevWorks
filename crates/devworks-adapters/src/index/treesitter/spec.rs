@@ -18,6 +18,16 @@
 //! `Inferred`, otherwise the callee name is a `Symbol`. Retained unresolved imports are `IMPORTS`
 //! symbols from the file. Nodes emitted twice (the retained pipeline upserted by qualified name)
 //! are merged per label and qualified name.
+//!
+//! Not emitted, because the retained specs do not (`LanguageSpecs.cs` at the frozen revision):
+//! Rust `mod` items (Rust `ClassNodeTypes` are `struct_item`, `enum_item`, `trait_item`,
+//! `impl_item`; `FunctionNodeTypes` is `function_item` only, so trait method signatures without
+//! a body are not definitions either), `Constructor` labels (a Java `constructor_declaration` is a
+//! `Method`: `TreeSitterExtractor` labels a callable `Method` inside a type, else the spec's
+//! `FunctionLabel`), Go `Struct`/`Interface` labels (a Go `type_declaration` is a `Class`: no
+//! `ClassLabelSelector`), Java records (`ClassNodeTypes` are class, interface and enum
+//! declarations) and C unions (C `ClassNodeTypes` are `struct_specifier`, `enum_specifier` and
+//! `type_definition`, all `Struct`).
 use super::swift;
 use devworks_core::ports::indexing::{
     EdgeTarget, ExtractFault, ExtractedEdge, ExtractedNode, FileExtract, Resolution, Span,

@@ -316,6 +316,17 @@ BEGIN
 END
 GO
 CREATE OR ALTER VIEW dbo.Skipped AS SELECT 1 AS x FROM dbo.Archive;
+GO
+CREATE OR ALTER PROCEDURE dbo.SkippedProc AS
+BEGIN
+    SELECT * FROM dbo.ArchiveProc;
+    EXEC dbo.NotifyArchive;
+END
+GO
+CREATE OR ALTER FUNCTION dbo.SkippedFn () RETURNS INT AS
+BEGIN
+    RETURN (SELECT COUNT(*) FROM dbo.ArchiveFn);
+END
 ";
 
 fn column<'v>(table: &'v ExtractedNode, name: &str) -> &'v Value {
@@ -427,9 +438,15 @@ fn sql_views_procedures_and_functions() {
         "the retained visitor never walked a function body as the function"
     );
 
-    // CREATE OR ALTER is not the visited CreateViewStatement.
+    // CREATE OR ALTER is not the visited CreateViewStatement (nor CreateProcedureStatement or
+    // CreateFunctionStatement): no node, and its body is walked with no current object.
     no_node(&x, "dbo.Skipped");
     no_symbol(&x, "QUERIES", "dbo.Archive");
+    no_node(&x, "dbo.SkippedProc");
+    no_symbol(&x, "QUERIES", "dbo.ArchiveProc");
+    no_symbol(&x, "CALLS", "dbo.NotifyArchive");
+    no_node(&x, "dbo.SkippedFn");
+    no_symbol(&x, "QUERIES", "dbo.ArchiveFn");
 }
 
 #[test]

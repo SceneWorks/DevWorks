@@ -365,3 +365,48 @@ fn source_configuration_and_identity_records_keep_their_invariants() {
     .unwrap();
     assert_eq!(back, Some(ok));
 }
+
+#[test]
+fn the_overlay_listing_bound_never_hides_a_live_overlay_behind_ended_records() {
+    let h = Harness::new();
+    let s = store(&h);
+    registered(&s, "repo-a");
+    let overlay = |n: u32, state: &str| StoredOverlay {
+        id: id(&format!("overlay-{n:04}")),
+        repository_id: id("repo-a"),
+        worktree_id: None,
+        worktree_path: None,
+        state: state.into(),
+        revision: 1,
+        base_generation_id: None,
+        base_oid: None,
+        // Commits sort by number: the live overlay's commit sorts after every ended one.
+        head_oid: Some(format!("{n:040x}")),
+        head_ref: None,
+        capture_digest: None,
+        branch_generation_id: None,
+        worktree_generation_id: None,
+        view_id: None,
+        run_id: None,
+        reason: None,
+        created_at_ms: T0,
+        updated_at_ms: T0,
+        expires_at_ms: T0,
+    };
+    let ended: Vec<StoredOverlay> = (0..300).map(|n| overlay(n, "Expired")).collect();
+    let live = overlay(999, "Ready");
+    let l = live.clone();
+    write(&s, move |tx| {
+        for o in ended.iter().chain([&l]) {
+            tx.indexing().put_overlay(o, None)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let listed = read_snapshot(&*s, &ReadOptions::default(), |snap| {
+        snap.indexing().overlays(&id("repo-a"))
+    })
+    .unwrap();
+    assert_eq!(listed.len(), 256);
+    assert_eq!(listed[0], live, "the live overlay is listed first");
+}

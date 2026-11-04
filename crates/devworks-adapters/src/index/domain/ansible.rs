@@ -71,6 +71,28 @@ impl Builder<'_> {
         std::str::from_utf8(&self.src[n.start_byte()..n.end_byte().min(self.src.len())])
             .unwrap_or("")
     }
+    /// A block scalar's header and lines with the empty lines that follow it: the grammar ends
+    /// the node at its last content line unless the stream ends, and keep chomping (`|+`)
+    /// keeps those lines.
+    fn block_scalar_text(&self, n: Node<'_>) -> String {
+        let mut end = n.end_byte().min(self.src.len());
+        let rest = &self.src[end..];
+        let first = rest.iter().position(|b| *b == b'\n');
+        if let Some(i) = first.filter(|i| rest[..*i].iter().all(|b| *b == b'\r')) {
+            end += i + 1;
+            loop {
+                let rest = &self.src[end..];
+                let Some(i) = rest.iter().position(|b| *b == b'\n') else {
+                    break;
+                };
+                if !rest[..i].iter().all(|b| matches!(b, b' ' | b'\t' | b'\r')) {
+                    break;
+                }
+                end += i + 1;
+            }
+        }
+        String::from_utf8_lossy(&self.src[n.start_byte()..end]).into_owned()
+    }
     fn empty(n: Node<'_>) -> Rc<YNode> {
         Rc::new(YNode {
             y: Y::Scalar(String::new()),
@@ -202,7 +224,10 @@ impl Builder<'_> {
                 let inner = t.get(1..t.len().saturating_sub(1)).unwrap_or("");
                 node(Y::Scalar(double_quoted(inner)))
             }
-            "block_scalar" => node(Y::Scalar(block_scalar(self.text(n)))),
+            "block_scalar" => node(Y::Scalar(block_scalar(
+                &self.block_scalar_text(n),
+                parent_indent(n),
+            ))),
             other => return Err(format!("unexpected YAML node {other}")),
         })
     }
@@ -332,25 +357,51 @@ fn double_quoted(inner: &str) -> String {
     out
 }
 
-/// A block scalar (`|` literal, `>` folded) with its chomping indicator; the indentation is the
-/// first content line's.
-fn block_scalar(text: &str) -> String {
+/// The indentation level of the collection entry a block scalar is the value of (YAML's `n`):
+/// the column of its mapping key or sequence `-`; -1 at the top of a document.
+fn parent_indent(n: Node<'_>) -> i64 {
+    let mut cur = n.parent();
+    while let Some(p) = cur {
+        match p.kind() {
+            "block_mapping_pair" | "block_sequence_item" => {
+                return p.start_position().column as i64;
+            }
+            "document" | "stream" => return -1,
+            _ => cur = p.parent(),
+        }
+    }
+    -1
+}
+
+/// A block scalar (`|` literal, `>` folded) with its chomping (`-` strip, `+` keep, clip by
+/// default) and indentation indicators, in either order; without an indentation indicator the
+/// content indentation is the first non-empty line's, with one it is `parent_indent` plus the
+/// indicator, so more-indented leading lines keep their extra spaces.
+fn block_scalar(text: &str, parent_indent: i64) -> String {
     let mut lines = text.split('\n');
     let header = lines.next().unwrap_or("");
     let header = header.split(" #").next().unwrap_or(header).trim();
     let literal = header.starts_with('|');
-    let chomp = if header.contains('-') {
+    let indicators = header.get(1..).unwrap_or("");
+    let chomp = if indicators.contains('-') {
         '-'
-    } else if header.contains('+') {
+    } else if indicators.contains('+') {
         '+'
     } else {
         ' '
     };
+    let explicit = indicators
+        .chars()
+        .find_map(|c| c.to_digit(10))
+        .filter(|d| *d > 0);
     let body: Vec<&str> = lines.map(|l| l.trim_end_matches('\r')).collect();
-    let indent = body
-        .iter()
-        .find(|l| !l.trim().is_empty())
-        .map_or(0, |l| l.len() - l.trim_start_matches(' ').len());
+    let indent = match explicit {
+        Some(d) => (parent_indent + i64::from(d)).max(0) as usize,
+        None => body
+            .iter()
+            .find(|l| !l.trim().is_empty())
+            .map_or(0, |l| l.len() - l.trim_start_matches(' ').len()),
+    };
     let content: Vec<&str> = body
         .iter()
         .map(|l| {
@@ -1072,5 +1123,55 @@ fn collect_scalars(root: &YNode, out: &mut Vec<String>) {
         if out.len() > 1_000_000 {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_document;
+
+    /// The scalar at `path` in the first document (a key, or `None` for a first sequence item).
+    fn value(src: &str, path: &[Option<&str>]) -> String {
+        let mut p = tree_sitter::Parser::new();
+        p.set_language(&tree_sitter_yaml::LANGUAGE.into())
+            .expect("the YAML grammar");
+        let tree = p.parse(src, None).expect("a tree");
+        let mut node = first_document(tree.root_node(), src.as_bytes())
+            .expect("valid YAML")
+            .expect("a document");
+        for step in path {
+            node = match step {
+                Some(k) => node.get(k).expect("the key").clone(),
+                None => node.seq().expect("a sequence")[0].clone(),
+            };
+        }
+        node.scalar().expect("a scalar").to_owned()
+    }
+
+    #[test]
+    fn block_scalars_keep_trailing_lines_and_honour_indentation_indicators() {
+        let a = &[Some("a")];
+        // Keep chomping keeps the empty lines after the last content line, before more content
+        // and at the end of the stream; clip and strip do not.
+        assert_eq!(value("a: |+\n  x\n\n\nb: 1\n", a), "x\n\n\n");
+        assert_eq!(value("a: |+\n  x\n\n\n", a), "x\n\n\n");
+        assert_eq!(value("- >+\n  x\n  y\n\n- z\n", &[None]), "x y\n\n");
+        assert_eq!(
+            value("k:\n  a: |+\n    x\n\n  b: 1\n", &[Some("k"), Some("a")]),
+            "x\n\n"
+        );
+        assert_eq!(value("a: |\n  x\n\n\nb: 1\n", a), "x\n");
+        assert_eq!(value("a: |-\n  x\n\n\nb: 1\n", a), "x");
+        // An indentation indicator counts from the entry's indentation: more-indented leading
+        // lines keep their extra spaces, in either indicator order.
+        assert_eq!(value("a: |2\n    x\n  y\nb: 1\n", a), "  x\ny\n");
+        assert_eq!(value("a: |2-\n    x\n  y\n", a), "  x\ny");
+        assert_eq!(value("a: |-2\n    x\n  y\n", a), "  x\ny");
+        assert_eq!(
+            value("k:\n  a: |2\n      x\n    y\n", &[Some("k"), Some("a")]),
+            "  x\ny\n"
+        );
+        assert_eq!(value("- |1\n  explicit\n", &[None]), " explicit\n");
+        assert_eq!(value("a: >1\n  x\n y\n", a), " x\ny\n");
     }
 }

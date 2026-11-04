@@ -436,7 +436,9 @@ pub trait IndexRead {
         repository: &Id,
         commit: &str,
     ) -> Result<Option<StoredOverlay>, StorageError>;
-    /// The repository's overlays: worktree overlays by worktree ID, then ref overlays by commit.
+    /// At most 256 of the repository's overlays: the live ones (not expired or unavailable)
+    /// first, so ended ref-overlay records never hide a live overlay; within each, worktree
+    /// overlays by worktree ID, then ref overlays by commit.
     fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError>;
     /// Overlays (not expired or unavailable) whose expiry is at or before `now_ms`.
     fn overlays_due(&self, now_ms: i64, limit: u16) -> Result<Vec<StoredOverlay>, StorageError>;

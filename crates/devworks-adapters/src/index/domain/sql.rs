@@ -22,6 +22,14 @@
 //! temporary tables (`#t`) and table variables are never query targets. `CREATE OR ALTER`
 //! statements derive from different ScriptDom classes than the ones the visitor overrode, so they
 //! contribute no node (their nested statements still do), as in the retained output.
+//!
+//! The two behaviours above that depend on ScriptDom rather than on the visitor's own code:
+//! `CreateOrAlterProcedureStatement` derives from `ProcedureStatementBody` and
+//! `CreateOrAlterViewStatement` from `ViewStatementBody` (the ScriptDom API reference), not from
+//! the `Create*`/`Alter*` statements whose `Visit` the visitor overrides. And `VisitFunction`
+//! calls `base.Visit((TSqlStatement)node)`, a `TSqlFragmentVisitor` hook that visits no
+//! children; the children are visited afterwards by `ExplicitVisit`'s `AcceptChildren`, once
+//! the current object is already cleared, so a function's table references emit nothing.
 use super::{Lines, Out, props};
 use devworks_core::ports::indexing::{ExtractFault, Span};
 use regex::Regex;

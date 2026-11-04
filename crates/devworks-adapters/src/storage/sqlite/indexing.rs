@@ -851,7 +851,7 @@ macro_rules! index_reads {
             }
             fn overlays(&self, repository: &Id) -> Result<Vec<StoredOverlay>, StorageError> {
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 ORDER BY worktree_id IS NULL, worktree_id, head_oid LIMIT 256"
+                    "SELECT {OVERLAY_COLUMNS} FROM index_overlays WHERE repository_id=?1 ORDER BY state IN ('Expired','Unavailable'), worktree_id IS NULL, worktree_id, head_oid LIMIT 256"
                 )))?;
                 let rows = db(db(s.query_map([repository.as_str()], overlay_of))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;
