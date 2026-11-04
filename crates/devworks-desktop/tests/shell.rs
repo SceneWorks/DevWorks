@@ -1277,3 +1277,107 @@ fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() 
         !s.addons.config_errors.contains_key("foreign-pack")
     });
 }
+
+#[test]
+fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
+    let root = Root::new("addons-log-pages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let dialogs = Script::default();
+    let schema = br#"{"type":"object","properties":{"threads":{"type":"integer","minimum":1}}}"#;
+    let bundle = foreign_bundle_with(&root.0.with_extension("bundles"), Some(schema));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    // More refusals than one log page holds, before the one the form waits for.
+    let rec = h.state().addons.items[0].clone();
+    let schema_ref = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    for _ in 0..(devworks_desktop::ops::PAGE_LIMIT as usize + 5) {
+        let frame = devworks_desktop::addons::configure_frame(
+            &*backend,
+            "foreign-pack",
+            rec.revision.get(),
+            schema_ref.clone(),
+            json!({"threads": -1}),
+        );
+        let _ = backend.command("addons.configure", &frame);
+    }
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 0}"#.into());
+    click(&mut h, Role::DisclosureTriangle, "Configuration");
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the newest refusal's field errors arrive", |s| {
+        s.addons.config_errors.contains_key("foreign-pack")
+    });
+    assert!(h.state().addons.config_errors["foreign-pack"].contains("/threads"));
+    // The whole log was read: every refusal is listed, newest first in the view.
+    settle(&mut h);
+    let logs = &h.state().addons.logs["foreign-pack"];
+    let refusals = logs
+        .iter()
+        .filter(|d| d.code.0 == "ConfigurationInvalid")
+        .count();
+    assert_eq!(refusals, devworks_desktop::ops::PAGE_LIMIT as usize + 6);
+}
+
+#[test]
+fn the_add_ons_catalog_follows_every_page() {
+    use ed25519_dalek::SigningKey;
+    let root = Root::new("addons-catalog-pages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    // A local signed publisher index offering more packs than one catalog page holds.
+    let dir = root.0.with_extension("index");
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = SigningKey::from_bytes(&[9; 32]);
+    let count = devworks_desktop::ops::PAGE_LIMIT as usize + 7;
+    let entries: Vec<_> = (0..count)
+        .map(|n| {
+            json!({"packageId": format!("offered-{n:03}"), "version": "1.0.0",
+                "manifestDigest": "a".repeat(64), "bundleDigest": "b".repeat(64), "bundleBytes": 10,
+                "targets": ["x86_64-unknown-linux-gnu"], "kind": "HarnessPackage", "languages": [],
+                "bundle": format!("offered-{n:03}.dwpkg")})
+        })
+        .collect();
+    let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": entries});
+    std::fs::write(
+        dir.join("devworks-index.json"),
+        devworks_adapters::packages::write_index(&index, &key),
+    )
+    .unwrap();
+    let hex: String = key
+        .verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let d = descriptor(devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("an index source");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh");
+    step_until(&mut h, "every offered pack is listed", |s| {
+        s.addons.items.len() == count
+    });
+}

@@ -906,6 +906,7 @@ dependencies = [
  "devworks-adapters",
  "devworks-core",
  "devworks-engine",
+ "ed25519-dalek",
  "eframe",
  "egui_kittest",
  "image",

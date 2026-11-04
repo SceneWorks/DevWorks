@@ -94,7 +94,7 @@ use std::time::{Duration, Instant};
 /// Engineering defaults of the package host.
 #[derive(Clone, Debug)]
 pub struct HostConfig {
-    /// `host.initialize` and `host.activate` deadline.
+    /// One deadline for `host.initialize` and `host.activate` together.
     pub handshake: Duration,
     /// Cooperative cancellation before the process tree is terminated.
     pub cancel_grace: Duration,
@@ -289,7 +289,9 @@ impl Running {
         if self.slot.terminal().is_some() || self.cancelling.swap(true, Ordering::SeqCst) {
             return;
         }
-        let grace = self.host.config.cancel_grace;
+        // One cancellation grace for the acknowledgement and the stop together.
+        let deadline = Instant::now() + self.host.config.cancel_grace;
+        let left = || deadline.saturating_duration_since(Instant::now());
         let (sid, iid) = (self.session.id.clone(), self.slot.invocation_id.clone());
         let ack = self.session.request(
             |id| HostRequest::Cancel {
@@ -301,13 +303,13 @@ impl Running {
                     cancellation_revision: rev_w(1),
                 },
             },
-            grace,
+            left(),
         );
         // An acknowledgement records receipt of the request; it is not proof of stop.
         if matches!(ack, Reply::Result(RpcResult::CancelAcknowledged { .. })) {
             self.session.acknowledge_cancel(&iid);
         }
-        if self.slot.wait(grace).is_some() {
+        if self.slot.wait(left()).is_some() {
             return;
         }
         // Not stopped cooperatively: terminate the owned tree (its other invocations end
@@ -732,7 +734,8 @@ impl PackageHost {
             .cloned()
             .collect();
         for inst in idle {
-            self.stop_instance(&inst, self.config.cancel_grace);
+            // The same stop phases as before, all within one deadline.
+            self.stop_instance(&inst, Instant::now() + self.config.cancel_grace * 4);
         }
         let mut map = self.instances.lock().unwrap_or_else(|p| p.into_inner());
         for list in map.values_mut() {
@@ -741,11 +744,18 @@ impl PackageHost {
         map.retain(|_, v| !v.is_empty());
     }
 
-    fn stop_instance(&self, inst: &Instance, grace: Duration) {
+    /// Stops an instance within one absolute `deadline`: `host.shutdown` and its answer, the
+    /// wait for the process to exit, then the cooperative stop and forced kill. Each phase gets
+    /// at most the cancellation grace of what remains, recomputed before it; once the deadline
+    /// has passed nothing is waited for (the tree is killed at once).
+    fn stop_instance(&self, inst: &Instance, deadline: Instant) {
+        let grace = self.config.cancel_grace;
+        let left = || deadline.saturating_duration_since(Instant::now());
         if let Some(s) = inst.session() {
-            if !s.is_closed() {
+            let wait = left().min(grace);
+            if !s.is_closed() && !wait.is_zero() {
                 let sid = s.id.clone();
-                let deadline_ms = grace.as_millis().clamp(1, 60_000) as u32;
+                let deadline_ms = wait.as_millis().clamp(1, 60_000) as u32;
                 let _ = s.request(
                     |id| HostRequest::Shutdown {
                         jsonrpc: RpcVersion::V2,
@@ -755,16 +765,18 @@ impl PackageHost {
                             deadline_ms,
                         },
                     },
-                    grace,
+                    wait,
                 );
             }
             s.fail("the helper is retired");
         }
         let process = inst.take_process();
         if let Some(p) = process {
-            let exited = self.supervisor.wait(&p, grace).ok().flatten().is_some();
+            let wait = left().min(grace);
+            let exited = !wait.is_zero() && self.supervisor.wait(&p, wait).ok().flatten().is_some();
             if !exited {
-                let _ = self.supervisor.cancel(&p, grace, grace * 2);
+                let bound = left();
+                let _ = self.supervisor.cancel(&p, bound.min(grace), bound);
             }
         }
         inst.set(InstanceStatus::Stopped);
@@ -1052,6 +1064,9 @@ impl PackageHost {
     }
 
     fn handshake(&self, inst: &Instance, s: &Session) -> Result<(), (&'static str, String)> {
+        // `host.initialize` and `host.activate` together within one handshake deadline.
+        let deadline = Instant::now() + self.config.handshake;
+        let left = || deadline.saturating_duration_since(Instant::now());
         let host = self.service.platform();
         let i = &inst.inspection;
         let sid = s.id.clone();
@@ -1075,7 +1090,7 @@ impl PackageHost {
                     max_frame_bytes: devworks_extension_protocol::frame::MAX_FRAME_BYTES as u32,
                 },
             },
-            self.config.handshake,
+            left(),
         );
         let (selected, manifest_digest, contributions) = match reply {
             Reply::Result(RpcResult::Initialized {
@@ -1159,7 +1174,7 @@ impl PackageHost {
                     configuration,
                 },
             },
-            self.config.handshake,
+            left(),
         );
         match reply {
             Reply::Result(RpcResult::Activated {
@@ -1585,15 +1600,9 @@ impl PackageHost {
             inst.set(InstanceStatus::Retiring);
         }
         for inst in all {
-            // Every helper gets at most the cancellation grace, and all of them together at
-            // most the shutdown bound; the process owner stops whatever is left.
-            let left = deadline.saturating_duration_since(Instant::now());
-            self.stop_instance(
-                &inst,
-                (left / 2)
-                    .min(self.config.cancel_grace)
-                    .max(Duration::from_millis(10)),
-            );
+            // One deadline for every helper and every stop phase; the process owner stops
+            // whatever is left.
+            self.stop_instance(&inst, deadline);
         }
         self.instances
             .lock()

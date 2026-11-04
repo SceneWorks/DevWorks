@@ -232,9 +232,11 @@ pub fn package_record(
         signer_key: shown
             .and_then(|v| v.signer_key.as_ref())
             .map(|k| label(k, "-")),
+        // Only the active version's failure (another version's record guards rollback).
         failure_code: p
-            .failure
-            .as_ref()
+            .active_digest
+            .as_deref()
+            .and_then(|d| super::failure_of(p, d))
             .and_then(|f| f["code"].as_str())
             .map(|c| label(c, "Failed")),
         available: None,

@@ -7,8 +7,16 @@
 //!
 //! * `mode`: `normal`, `hang-initialize` (never answers), `wrong-digest`, `wrong-inventory`,
 //!   `exit-on-activate` (exits 3), `exit-after-ready` (exits 4 shortly after activation) or
-//!   `deaf-after-ready` (stops reading its input after activation, without exiting);
+//!   `deaf-after-ready` (stops reading its input after activation, without exiting) or
+//!   `slow-handshake` (answers `host.initialize` and `host.activate` after 1 s each);
 //! * `inventory`: the contribution IDs it reports.
+//!
+//! On `host.shutdown` it writes the deadline it was given to
+//! `devworks-fixture-<package>-shutdown` in the temporary directory while
+//! `devworks-fixture-<package>-shutdown-watch` exists there, then exits.
+//!
+//! In any mode it exits 3 on activation while `devworks-fixture-<package>-fail-on-activate`
+//! exists in the temporary directory (a test makes an installed version fail later).
 //!
 //! Each invoked contribution's local name selects what the invocation does: `echo` (progress,
 //! then completes with its input), `sleep` (completes after 300 ms), `wait` (until cancelled,
@@ -295,6 +303,9 @@ fn main() {
                 if mode == "hang-initialize" {
                     continue;
                 }
+                if mode == "slow-handshake" {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 let p = &msg["params"];
                 *st.session.lock().unwrap() =
                     p["processSessionId"].as_str().unwrap_or("").to_owned();
@@ -310,7 +321,13 @@ fn main() {
                 ));
             }
             Some("host.activate") => {
-                if mode == "exit-on-activate" {
+                let marked = std::env::temp_dir()
+                    .join(format!("devworks-fixture-{package}-fail-on-activate"))
+                    .exists();
+                if mode == "slow-handshake" {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                if mode == "exit-on-activate" || marked {
                     eprintln!("fixture helper exits on activation");
                     std::process::exit(3);
                 }
@@ -354,6 +371,18 @@ fn main() {
                 }
             }
             Some("host.shutdown") => {
+                // Records that the host asked, when a test watches for it (what a bounded
+                // shutdown sends).
+                let tmp = std::env::temp_dir();
+                if tmp
+                    .join(format!("devworks-fixture-{package}-shutdown-watch"))
+                    .exists()
+                {
+                    let _ = std::fs::write(
+                        tmp.join(format!("devworks-fixture-{package}-shutdown")),
+                        msg["params"]["deadlineMs"].to_string(),
+                    );
+                }
                 st.out
                     .send(&result(&id, json!({"kind": "ShutdownAcknowledged"})));
                 return;

@@ -22,7 +22,10 @@ use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
 use devworks_core::ports::packages::HostPlatform;
-use devworks_core::ports::packages::{IndexTransport, RuntimeCache, RuntimeObservation};
+use devworks_core::ports::packages::{
+    BundleFile, IndexTransport, InspectedFile, PackageFileError, PackageFiles, RuntimeCache,
+    RuntimeObservation,
+};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{PackageAvailability, PackageRecord, ProposalRecord};
@@ -280,6 +283,8 @@ struct App {
     runtimes: Arc<RuntimeCache>,
     /// Probe runtimes on this PATH (fake executables) instead of using a fixed cache.
     probe_path: Option<String>,
+    /// The install-directory port, when a test instruments it.
+    files: Option<Arc<dyn PackageFiles>>,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -313,7 +318,15 @@ impl App {
     fn probing(path: &std::path::Path) -> Self {
         Self::over(Harness::new(), Some(path.display().to_string()))
     }
+    fn with_files(files: impl FnOnce(&Harness) -> Arc<dyn PackageFiles>) -> Self {
+        let h = Harness::new();
+        let f = files(&h);
+        Self::build(h, None, Some(f))
+    }
     fn over(h: Harness, probe_path: Option<String>) -> Self {
+        Self::build(h, probe_path, None)
+    }
+    fn build(h: Harness, probe_path: Option<String>, files: Option<Arc<dyn PackageFiles>>) -> Self {
         let rt = runtime();
         let store = h.open();
         seed_project(&h);
@@ -349,6 +362,7 @@ impl App {
             transport: Arc::new(FakeTransport::default()),
             runtimes: Arc::new(RuntimeCache::new()),
             probe_path,
+            files,
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -390,7 +404,9 @@ impl App {
             h.ids.clone(),
             artifacts.clone(),
             Arc::new(BundleInspector),
-            Arc::new(NativePackageFiles::new(h.root.join("packages"))),
+            self.files
+                .clone()
+                .unwrap_or_else(|| Arc::new(NativePackageFiles::new(h.root.join("packages")))),
             self.runtimes.clone(),
             HostPlatform {
                 target_triple: host_target_triple(),
@@ -2674,4 +2690,309 @@ fn an_update_that_would_break_a_package_pinning_the_replaced_version_waits() {
     for pkg in ["base-dep", "pinned-dep"] {
         assert_eq!(availability(&a.record(pkg)), "Ready", "{pkg}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review round 3: rollback loops, shutdown deadlines, collection races, re-proposals
+
+fn marker(package: &str, what: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("devworks-fixture-{package}-{what}"))
+}
+
+/// A fixture marker file removed when dropped (also when the test fails, so no later run
+/// sees it).
+struct Marker(std::path::PathBuf);
+impl Marker {
+    fn absent(package: &str, what: &str) -> Self {
+        let m = Self(marker(package, what));
+        let _ = std::fs::remove_file(&m.0);
+        m
+    }
+    fn set(&self) {
+        std::fs::write(&self.0, "1").unwrap();
+    }
+}
+impl Drop for Marker {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[test]
+fn automatic_rollback_never_returns_to_a_version_that_just_failed() {
+    let _s = serial();
+    let fail = Marker::absent("loop-pack", "fail-on-activate");
+    let a = App::new();
+    let spec = Spec::new("loop-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("loop-pack");
+    // From now on 1.0.0 fails too (whatever its state generation).
+    fail.set();
+    package(a.update(
+        &a.user,
+        &Spec {
+            version: "1.1.0".into(),
+            mode: "exit-on-activate".into(),
+            ..spec.clone()
+        },
+    ));
+    // 1.1.0 fails, 1.0.0 is restored and fails as well: no viable predecessor remains, so
+    // the failure is durable instead of alternating between the two.
+    let rec = a.until("loop-pack", "the failure is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    drop(fail);
+    assert_eq!(rec.version.0, "1.0.0");
+    std::thread::sleep(Duration::from_secs(2));
+    let rec = a.record("loop-pack");
+    assert_eq!(
+        (rec.version.0.as_str(), availability(&rec)),
+        ("1.0.0", "Failed".to_owned())
+    );
+    let rolled = a
+        .logs("loop-pack")
+        .iter()
+        .filter(|c| *c == "PackageRolledBack")
+        .count();
+    assert_eq!(rolled, 1);
+}
+
+#[test]
+fn shutdown_shares_one_deadline_and_sends_nothing_once_it_has_passed() {
+    let _s = serial();
+    let a = App::new();
+    let packages = ["bound-a", "bound-b", "bound-c"];
+    let mut markers = Vec::new();
+    for p in packages {
+        markers.push(Marker::absent(p, "shutdown"));
+        let watch = Marker::absent(p, "shutdown-watch");
+        watch.set();
+        markers.push(watch);
+        package(a.install(&a.user, &Spec::new(p, "1.0.0")));
+        a.ready(p);
+    }
+    let host = a.app().packages().unwrap().clone();
+    let started = Instant::now();
+    host.shutdown(Duration::ZERO);
+    let took = started.elapsed();
+    // The deadline had passed before the first helper: none was asked to shut down (no
+    // minimum wait per phase), every tree was killed at once.
+    for p in packages {
+        assert!(
+            !marker(p, "shutdown").exists(),
+            "{p} was sent host.shutdown"
+        );
+    }
+    assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+#[test]
+fn a_cancellation_shares_one_grace_between_the_acknowledgement_and_the_stop() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "deaf-after-ready".into(),
+            ..Spec::new("graceful-pack", "1.0.0")
+        },
+    ));
+    a.ready("graceful-pack");
+    // The helper reads nothing: neither an acknowledgement nor a stop arrives.
+    let h = a
+        .invoke("graceful-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let started = Instant::now();
+    assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
+    // One 500 ms grace, then the tree is killed (not a grace per phase).
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(900), "{took:?}");
+}
+
+#[test]
+fn the_handshake_shares_one_deadline_between_initialize_and_activate() {
+    let _s = serial();
+    let a = App::new();
+    // Each answer takes 1 s: within a 1.5 s bound each, not 2 s together.
+    package(a.install(
+        &a.user,
+        &Spec {
+            mode: "slow-handshake".into(),
+            ..Spec::new("slow-pack", "1.0.0")
+        },
+    ));
+    let rec = a.until("slow-pack", "the startup timeout is recorded", |r| {
+        matches!(r.availability, Some(PackageAvailability::Failed))
+    });
+    assert_eq!(rec.failure_code.unwrap().0, "StartupTimeout");
+}
+
+/// Native install directories whose removal of one version pauses (up to a bound) for a
+/// publication of the same version, so a test can race the two.
+struct RacedFiles {
+    inner: NativePackageFiles,
+    target: Mutex<Option<(String, String)>>,
+    /// Set when the removal of the target started; then when a publish of it finished.
+    removing: (Mutex<(bool, bool)>, std::sync::Condvar),
+}
+impl RacedFiles {
+    fn arm(&self, package: &str, digest: &str) {
+        *self.target.lock().unwrap() = Some((package.into(), digest.into()));
+    }
+    fn is_target(&self, package: &str, digest: &str) -> bool {
+        self.target
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(p, d)| p == package && d == digest)
+    }
+    fn wait_removing(&self) {
+        let (m, cv) = &self.removing;
+        let g = m.lock().unwrap();
+        let (g, t) = cv
+            .wait_timeout_while(g, Duration::from_secs(20), |s| !s.0)
+            .unwrap();
+        assert!(!t.timed_out() && g.0, "the removal never started");
+    }
+}
+impl PackageFiles for RacedFiles {
+    fn publish(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        files: &[BundleFile],
+        expected: &[InspectedFile],
+    ) -> Result<(), PackageFileError> {
+        let r = self
+            .inner
+            .publish(package_id, manifest_digest, files, expected);
+        if self.is_target(package_id, manifest_digest) {
+            self.removing.0.lock().unwrap().1 = true;
+            self.removing.1.notify_all();
+        }
+        r
+    }
+    fn verify(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        expected: &[InspectedFile],
+    ) -> Result<(), PackageFileError> {
+        self.inner.verify(package_id, manifest_digest, expected)
+    }
+    fn path(&self, package_id: &str, manifest_digest: &str, relative: &str) -> std::path::PathBuf {
+        self.inner.path(package_id, manifest_digest, relative)
+    }
+    fn directory(&self, package_id: &str, manifest_digest: &str) -> std::path::PathBuf {
+        self.inner.directory(package_id, manifest_digest)
+    }
+    fn remove(&self, package_id: &str, manifest_digest: &str) -> Result<(), PackageFileError> {
+        if self.is_target(package_id, manifest_digest) {
+            *self.target.lock().unwrap() = None;
+            let (m, cv) = &self.removing;
+            let mut g = m.lock().unwrap();
+            g.0 = true;
+            cv.notify_all();
+            // Give a concurrent publication of the same version the chance to run first.
+            let _ = cv
+                .wait_timeout_while(g, Duration::from_secs(1), |s| !s.1)
+                .unwrap();
+            // Re-arm so a publish after this removal is still observed.
+            *self.target.lock().unwrap() = Some((package_id.into(), manifest_digest.into()));
+        }
+        self.inner.remove(package_id, manifest_digest)
+    }
+    fn idle_for(&self, package_id: &str, manifest_digest: &str) -> Option<Duration> {
+        self.inner.idle_for(package_id, manifest_digest)
+    }
+    fn installed(&self) -> Result<Vec<(String, String)>, PackageFileError> {
+        self.inner.installed()
+    }
+    fn clean_staging(&self, older_than: Option<Duration>) -> Result<usize, PackageFileError> {
+        self.inner.clean_staging(older_than)
+    }
+}
+
+#[test]
+fn collection_never_removes_a_directory_a_concurrent_publication_reuses() {
+    let _s = serial();
+    let raced: Arc<std::sync::OnceLock<Arc<RacedFiles>>> = Arc::new(std::sync::OnceLock::new());
+    let slot = raced.clone();
+    let a = App::with_files(move |h| {
+        let f = Arc::new(RacedFiles {
+            inner: NativePackageFiles::new(h.root.join("packages")),
+            target: Mutex::new(None),
+            removing: (Mutex::new((false, false)), std::sync::Condvar::new()),
+        });
+        let _ = slot.set(f.clone());
+        f
+    });
+    let files = raced.get().unwrap().clone();
+    let spec = Spec::new("raced-pack", "1.0.0");
+    let rec = package(a.install(&a.user, &spec));
+    let digest = digest_of(&rec);
+    a.ready("raced-pack");
+    files.arm("raced-pack", &digest);
+    // Uninstalled: once its helper is retired, collection removes the version's directory.
+    package(a.simple(&a.user, "addons.uninstall", "Uninstall", "raced-pack"));
+    files.wait_removing();
+    // While that removal is under way, the person installs the same contents again: their
+    // publication must not reuse a directory collection is about to remove.
+    let rec = package(a.install(&a.user, &spec));
+    assert_eq!(digest_of(&rec), digest);
+    let rec = a.until("raced-pack", "the reinstall runs", |r| {
+        matches!(
+            r.availability,
+            Some(PackageAvailability::Ready | PackageAvailability::Failed)
+        )
+    });
+    assert_eq!(availability(&rec), "Ready", "{:?}", rec.failure_code);
+    a.ready("raced-pack");
+    assert!(
+        a.h.root
+            .join("packages")
+            .join("raced-pack")
+            .join(&digest)
+            .join("fixture.json")
+            .exists()
+    );
+}
+
+#[test]
+fn a_re_proposal_of_retired_contents_waits_for_approval_and_activates_once_approved() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("repropose-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("repropose-pack");
+    let first = Spec {
+        version: "1.1.0".into(),
+        ..spec.clone()
+    };
+    let (_, d1, _) = propose(&a, &first);
+    propose(
+        &a,
+        &Spec {
+            version: "1.2.0".into(),
+            ..spec.clone()
+        },
+    );
+    // 1.1.0 was retired by the newer proposal; the agent proposes it again.
+    let (p, d, _) = propose(&a, &first);
+    assert_eq!(d, d1);
+    let dd = d.clone();
+    let v = read(&*a.store, move |s| {
+        s.packages().package_version("repropose-pack", &dd)
+    })
+    .unwrap();
+    assert_eq!(v.phase, VersionPhase::Staged);
+    assert_eq!(v.waits, vec!["ExactVersionApproval".to_owned()]);
+    assert_eq!(v.provenance["agentAuthored"], json!(true));
+    let svc = a.app().packages().unwrap().service().clone();
+    svc.decide_proposal(&a.user, &p.id, 1, &d, true, "yes")
+        .unwrap()
+        .unwrap();
+    a.until("repropose-pack", "the approved proposal activates", |r| {
+        r.version.0 == "1.1.0"
+    });
 }

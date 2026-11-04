@@ -94,6 +94,11 @@ pub struct AddonsScreen {
     pub awaiting: Option<(String, String)>,
     /// The field errors of the last refused configuration, per package.
     pub config_errors: HashMap<String, String>,
+    /// Log pages read so far while a package's logs are followed to their end.
+    pub logs_pending: HashMap<String, Vec<Diagnostic>>,
+    /// Catalog pages read so far (and the registry revision of the first) while the catalog is
+    /// followed to its end.
+    pub catalog_pending: Option<(Vec<PackageRecord>, i64)>,
 }
 
 pub fn availability_label(a: Option<&PackageAvailability>) -> (&'static str, Tone) {
@@ -597,7 +602,8 @@ impl AddonsScreen {
                     .id_salt("addon-logs")
                     .max_height(200.0)
                     .show(ui, |ui| {
-                        for d in entries {
+                        // Newest first (the log is read oldest first, to its end).
+                        for d in entries.iter().rev() {
                             ui.label(format!("{:?}  {}  {}", d.severity, d.code.0, d.message.0));
                         }
                     });
@@ -642,32 +648,52 @@ pub const COMMANDS: [&str; 7] = [
     "addons.configure",
 ];
 
-pub fn catalog_frame(backend: &dyn Backend) -> Vec<u8> {
+/// Most log entries kept per package (the newest; the log is read to its end).
+pub const LOGS_KEPT: usize = 2000;
+/// Most catalog pages followed in one load.
+pub const CATALOG_PAGES: usize = 50;
+
+fn page(cursor: Option<&str>) -> Value {
+    match cursor {
+        Some(c) => json!({"limit": ops::PAGE_LIMIT, "cursor": c}),
+        None => json!({"limit": ops::PAGE_LIMIT}),
+    }
+}
+/// One catalog page (`cursor`: the previous page's continuation).
+pub fn catalog_frame(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"),
         "schemaRevision": ADDONS_REVISION,
-        "body": {"kind": "addons.catalog", "page": {"limit": ops::PAGE_LIMIT}}})
+        "body": {"kind": "addons.catalog", "page": page(cursor)}})
     .to_string()
     .into_bytes()
 }
-/// The catalog page and the registry revision it was read at.
-pub fn catalog(outcome: QueryOutcome) -> Result<(Vec<PackageRecord>, i64), Failure> {
+/// A catalog page, the registry revision it was read at and its continuation.
+pub fn catalog(
+    outcome: QueryOutcome,
+) -> Result<(Vec<PackageRecord>, i64, Option<String>), Failure> {
     match ops::query_result(outcome)? {
-        (OperationResult::AddonsCatalog { value }, registry) => Ok((value.items.0, registry)),
+        (OperationResult::AddonsCatalog { value }, registry) => {
+            Ok((value.items.0, registry, value.next_cursor.map(|c| c.0)))
+        }
         (other, _) => Err(Failure::Other(format!(
             "unexpected addons.catalog result {other:?}"
         ))),
     }
 }
-pub fn logs_frame(backend: &dyn Backend, package: &str) -> Vec<u8> {
+/// One page of a package's logs, oldest first (the contract's order), after `cursor`.
+pub fn logs_frame(backend: &dyn Backend, package: &str, cursor: Option<&str>) -> Vec<u8> {
     json!({"mode": "Query", "protocol": PROTOCOL, "queryId": backend.token("q"),
         "body": {"kind": "addons.logs", "packageId": package, "afterSequence": "0",
-            "page": {"limit": ops::PAGE_LIMIT}}})
+            "page": page(cursor)}})
     .to_string()
     .into_bytes()
 }
-pub fn logs(outcome: QueryOutcome) -> Result<Vec<Diagnostic>, Failure> {
+/// A page of log entries and its continuation.
+pub fn logs(outcome: QueryOutcome) -> Result<(Vec<Diagnostic>, Option<String>), Failure> {
     match ops::query_result(outcome)? {
-        (OperationResult::AddonsLogs { value }, _) => Ok(value.items.0),
+        (OperationResult::AddonsLogs { value }, _) => {
+            Ok((value.items.0, value.next_cursor.map(|c| c.0)))
+        }
         (other, _) => Err(Failure::Other(format!(
             "unexpected addons.logs result {other:?}"
         ))),

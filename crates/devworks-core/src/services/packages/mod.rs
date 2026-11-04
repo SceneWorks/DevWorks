@@ -247,6 +247,10 @@ pub struct PackageService {
     /// Install directories a command published and has not settled yet: collection never
     /// removes them (a retired version being installed again is republished, then recorded).
     publishing: Arc<Mutex<BTreeMap<(String, String), usize>>>,
+    /// Serializes publication with collection: a publish (including the reuse of an existing
+    /// install directory) and collection's eligibility decision plus its physical removal never
+    /// interleave.
+    files_gate: Arc<Mutex<()>>,
     /// Bound on waiting for a running package to quiesce inside an update or rollback command.
     pub quiesce_wait: Duration,
 }
@@ -412,6 +416,7 @@ impl PackageService {
             validator,
             consumers: RwLock::new(Vec::new()),
             publishing: Arc::new(Mutex::new(BTreeMap::new())),
+            files_gate: Arc::new(Mutex::new(())),
             quiesce_wait: QUIESCE_WAIT,
         }
     }
@@ -539,16 +544,20 @@ impl PackageService {
             }
         };
         let i = inspected.inspection;
+        // The hold and the publication happen while no collection pass decides or removes.
+        let gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
         let held = PublishHold::new(
             &self.publishing,
             (i.package_id.clone(), i.manifest_digest.clone()),
         );
-        if let Err(e) = self.files.publish(
+        let published = self.files.publish(
             &i.package_id,
             &i.manifest_digest,
             &inspected.files,
             &i.files,
-        ) {
+        );
+        drop(gate);
+        if let Err(e) = published {
             return BundlePrep {
                 target: quiesce.map(str::to_owned),
                 outcome: Err(("InstallFailed".into(), e.to_string())),
@@ -956,7 +965,11 @@ impl PackageService {
         }
         Self::retire_obsolete_pending(tx, actor, p, &version.manifest_digest)?;
         p.state_generation = generation;
-        p.failure = None;
+        // Activating a version clears its own failure record (an explicit retry); another
+        // version's record stays, so automatic rollback never returns to a failed version.
+        if failure_of(p, &version.manifest_digest).is_some() {
+            p.failure = None;
+        }
         tx.packages().update_version(
             &p.package_id,
             &version.manifest_digest,
@@ -1064,7 +1077,11 @@ impl PackageService {
             .package(package_id.as_str())?
             .filter(|p| p.installed && p.active_digest.is_some())
             .ok_or_else(|| not_found("package", package_id.as_str()))?;
-        if p.enabled && p.failure.is_none() {
+        if p.enabled
+            && p.active_digest
+                .as_deref()
+                .is_none_or(|d| failure_of(&p, d).is_none())
+        {
             return Ok(DomainDecision::NoChange {
                 result: self.result(tx, &p, "addons.enable")?,
             });
@@ -1560,6 +1577,29 @@ impl PackageService {
         {
             return Err(conflict("package_version", &p.package_id).into());
         }
+        // Retired contents (superseded or uninstalled) proposed again come back with their
+        // identity and provenance: unapproved ones wait for the person's exact approval like
+        // new ones; approved ones are installed contents again (as an approved version that was
+        // never retired is).
+        if let Some(v) = existing
+            .as_ref()
+            .filter(|v| v.phase == VersionPhase::Removed)
+        {
+            let (phase, waits) = match &v.approval {
+                Some(_) => (VersionPhase::Installed, vec![]),
+                None => (
+                    VersionPhase::Staged,
+                    vec!["ExactVersionApproval".to_owned()],
+                ),
+            };
+            tx.packages().update_version(
+                &v.package_id,
+                &v.manifest_digest,
+                phase,
+                &waits,
+                v.approval.as_ref(),
+            )?;
+        }
         if existing.is_none() {
             tx.packages().insert_version(&StoredPackageVersion {
                 package_id: candidate.package_id.clone(),
@@ -1845,8 +1885,12 @@ impl PackageService {
                 return Ok(false);
             }
             let host = tx.store().host_actor.clone();
+            // Never back into a version whose own startup failure is recorded (it just exhausted
+            // its budget, possibly under another state generation): no viable predecessor means
+            // the failure is recorded durably instead.
             if admitted_nothing
                 && let Some(pred) = p.predecessor_digest.clone()
+                && failure_of(&p, &pred).is_none()
                 && let Some(v) = tx.packages().package_version(&package_id, &pred)?
                 && v.phase == VersionPhase::Installed
                 && v.approval.is_some()
@@ -1860,8 +1904,12 @@ impl PackageService {
                     Ok(true) => {
                         tx.release(sp)?;
                         // The failed version stays installed with its failure recorded, never
-                        // active again by itself.
-                        p.failure = None;
+                        // active again by itself (automatic rollback never returns to it).
+                        p.failure = Some(
+                            json!({"code": code, "message": message, "atMs": tx.now_ms(),
+                            "attempts": attempts, "digest": failed, "rolledBack": true}),
+                        );
+                        Self::save(tx, &mut p, false)?;
                         svc.log_in(tx, &package_id, Severity::Warning, "PackageRolledBack", &format!("The new version failed to start ({code}: {message}) before any work was admitted; the previous version {} was restored", v.version), Some(DiagnosticOutcome::Failed))?;
                         event(
                             tx,
@@ -1923,7 +1971,7 @@ impl PackageService {
                 return Ok(());
             }
             let host = tx.store().host_actor.clone();
-            if p.failure.is_some() {
+            if failure_of(&p, &digest).is_some() {
                 p.failure = None;
                 Self::save(tx, &mut p, false)?;
             }
@@ -1972,6 +2020,9 @@ impl PackageService {
         in_use: &BTreeSet<(String, String)>,
         orphan_age: Option<Duration>,
     ) -> Result<usize, StorageError> {
+        // The whole pass (eligibility in its unit of work and the removals after it) excludes
+        // publication, so a republish that reuses a directory never loses its files.
+        let _gate = self.files_gate.lock().unwrap_or_else(|p| p.into_inner());
         // A publication in progress owns its staging directory: outside boot only abandoned
         // (old) ones are removed.
         let _ = self.files.clean_staging(orphan_age);
@@ -2211,6 +2262,7 @@ impl PackageService {
             validator: self.validator.clone(),
             consumers: RwLock::new(self.consumers()),
             publishing: self.publishing.clone(),
+            files_gate: self.files_gate.clone(),
             quiesce_wait: self.quiesce_wait,
         })
     }
@@ -2237,6 +2289,14 @@ impl PackageService {
         }
         DomainDecision::Refused { fault }
     }
+}
+
+/// The recorded failure of `digest` (a package keeps one failure record, of the version that
+/// last failed; it marks the active version unavailable only while it is that version).
+pub(crate) fn failure_of<'a>(p: &'a StoredPackage, digest: &str) -> Option<&'a Value> {
+    p.failure
+        .as_ref()
+        .filter(|f| f["digest"].as_str() == Some(digest))
 }
 
 /// Whether a staged version's remaining waits are ones the host clears by itself (quiescence,

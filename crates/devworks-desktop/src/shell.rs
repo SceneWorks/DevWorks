@@ -547,12 +547,22 @@ impl Shell {
             ops::workspace_artifacts,
         );
     }
+    /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
     fn load_addons(&mut self) {
+        self.addons.catalog_pending = None;
+        self.query(Slot::AddonsList, "Loading add-ons", "addons.catalog", |b| {
+            crate::addons::catalog_frame(b, None)
+        });
+    }
+    /// Loads a package's logs from the start, following their pages to the end.
+    fn load_addon_logs(&mut self, package: String) {
+        self.addons.logs_pending.insert(package.clone(), Vec::new());
+        let p = package.clone();
         self.query(
-            Slot::AddonsList,
-            "Loading add-ons",
-            "addons.catalog",
-            crate::addons::catalog_frame,
+            Slot::AddonsLogs(package),
+            "Loading add-on logs",
+            "addons.logs",
+            move |b| crate::addons::logs_frame(b, &p, None),
         );
     }
     fn addons_actions(&mut self, actions: Vec<crate::addons::AddonsAction>) {
@@ -601,13 +611,7 @@ impl Shell {
                     None
                 }
                 AddonsAction::Logs(id) => {
-                    let p = id.clone();
-                    self.query(
-                        Slot::AddonsLogs(id),
-                        "Loading add-on logs",
-                        "addons.logs",
-                        move |b| a::logs_frame(b, &p),
-                    );
+                    self.load_addon_logs(id);
                     None
                 }
                 AddonsAction::OpenIndexing => {
@@ -1717,26 +1721,74 @@ impl Shell {
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
             (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
-                Ok((items, registry)) => {
-                    self.addons.items = items;
-                    self.addons.registry_revision = registry;
-                    self.addons.loaded = true;
-                    self.addons.error = None;
+                Ok((items, registry, next)) => {
+                    let (mut all, first) = self
+                        .addons
+                        .catalog_pending
+                        .take()
+                        .unwrap_or_else(|| (Vec::new(), registry));
+                    let pages = all.len() / usize::from(crate::ops::PAGE_LIMIT) + 1;
+                    if registry != first {
+                        // The registry changed between pages: read it again from the start.
+                        self.load_addons();
+                    } else if let Some(cursor) =
+                        next.filter(|_| pages < crate::addons::CATALOG_PAGES)
+                    {
+                        all.extend(items);
+                        self.addons.catalog_pending = Some((all, first));
+                        self.query(
+                            Slot::AddonsList,
+                            "Loading add-ons",
+                            "addons.catalog",
+                            move |b| crate::addons::catalog_frame(b, Some(&cursor)),
+                        );
+                    } else {
+                        all.extend(items);
+                        self.addons.items = all;
+                        self.addons.registry_revision = registry;
+                        self.addons.loaded = true;
+                        self.addons.error = None;
+                    }
                 }
-                Err(e) => self.addons.error = Some(e.describe()),
+                Err(e) => {
+                    self.addons.catalog_pending = None;
+                    self.addons.error = Some(e.describe());
+                }
             },
             (Slot::AddonsLogs(id), Reply::Query(q)) => match crate::addons::logs(q) {
-                Ok(entries) => {
+                Ok((entries, next)) => {
+                    let mut all = self.addons.logs_pending.remove(&id).unwrap_or_default();
+                    all.extend(entries);
                     if let Some((p, d)) = self.addons.awaiting.clone()
                         && p == id
-                        && let Some(e) = entries.iter().find(|e| e.id.as_str() == d)
+                        && let Some(e) = all.iter().find(|e| e.id.as_str() == d)
                     {
                         self.addons.config_errors.insert(p, e.message.0.clone());
                         self.addons.awaiting = None;
                     }
-                    self.addons.logs.insert(id, entries);
+                    // Only the newest entries are kept while the log is followed to its end.
+                    if all.len() > crate::addons::LOGS_KEPT {
+                        all.drain(..all.len() - crate::addons::LOGS_KEPT);
+                    }
+                    match next {
+                        Some(cursor) => {
+                            self.addons.logs_pending.insert(id.clone(), all);
+                            self.query(
+                                Slot::AddonsLogs(id.clone()),
+                                "Loading add-on logs",
+                                "addons.logs",
+                                move |b| crate::addons::logs_frame(b, &id, Some(&cursor)),
+                            );
+                        }
+                        None => {
+                            self.addons.logs.insert(id, all);
+                        }
+                    }
                 }
-                Err(e) => self.addons.notice = Some(e.describe()),
+                Err(e) => {
+                    self.addons.logs_pending.remove(&id);
+                    self.addons.notice = Some(e.describe());
+                }
             },
             (Slot::AddonsCommand, Reply::Command(outcome)) => {
                 self.addons.busy = false;
@@ -1748,13 +1800,7 @@ impl Shell {
                 if let Some((package, diagnostic)) = crate::addons::configuration_refusal(&outcome)
                 {
                     self.addons.awaiting = Some((package.clone(), diagnostic));
-                    let p = package.clone();
-                    self.query(
-                        Slot::AddonsLogs(package),
-                        "Loading add-on logs",
-                        "addons.logs",
-                        move |b| crate::addons::logs_frame(b, &p),
-                    );
+                    self.load_addon_logs(package);
                 }
                 self.addons.notice = Some(crate::addons::describe(outcome));
                 self.load_addons();
