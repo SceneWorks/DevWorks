@@ -148,6 +148,9 @@ pub struct Memory {
     pub intelligence_open: bool,
     pub coordinator_open: bool,
     pub selected_session: Option<String>,
+    /// The project the navigation selected (dropped if it no longer exists).
+    #[serde(default)]
+    pub selected_project: Option<String>,
     pub sidebar_tab: SidebarTab,
     pub history_query: String,
     pub drafts: BTreeMap<String, DraftMemory>,
@@ -174,6 +177,7 @@ impl Default for Memory {
             intelligence_open: true,
             coordinator_open: false,
             selected_session: None,
+            selected_project: None,
             sidebar_tab: SidebarTab::Current,
             history_query: String::new(),
             drafts: BTreeMap::new(),

@@ -57,7 +57,7 @@ fn scope_exists(conn: &Connection, scope: &ConfigScope) -> Result<bool, StorageE
     match scope {
         ConfigScope::Workspace => Ok(true),
         ConfigScope::Project(p) => db(conn
-            .prepare_cached("SELECT 1 FROM projects WHERE id=?1")
+            .prepare_cached("SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'")
             .and_then(|mut s| s.exists([p.0.as_str()]))),
     }
 }

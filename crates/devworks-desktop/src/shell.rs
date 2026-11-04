@@ -26,6 +26,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod projects;
+
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
 pub trait Dialogs {
     fn pick_files(&mut self) -> Vec<PathBuf>;
@@ -138,6 +140,10 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    /// All projects, the project selector and Repositories (DW-11).
+    pub projects: projects::ProjectsUi,
+    /// The project the navigation selected; its screens follow it.
+    selected_project: Option<String>,
     pub completions: Completions,
     scrolls: Scrolls,
     lifecycle: Lifecycle,
@@ -272,6 +278,8 @@ impl Shell {
             settings,
             artifacts: ListState::default(),
             resources: ListState::default(),
+            projects: projects::ProjectsUi::default(),
+            selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
             lifecycle: Lifecycle::Open,
@@ -389,6 +397,15 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::Portfolio => {
+                self.load_projects();
+                self.load_deleted_projects();
+                self.load_repositories();
+            }
+            Route::Repositories => {
+                self.load_projects();
+                self.load_repositories();
+            }
             _ => {}
         }
     }
@@ -1008,6 +1025,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
         match (slot, reply) {
             // Started before a session mutation was applied: it may lack that change.
             (Slot::SessionsList, Reply::Query(_))
@@ -1626,6 +1646,11 @@ impl Shell {
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
+            Route::Portfolio | Route::Repositories
+                if !self.pending(&Slot::ProjectsList) && !self.pending(&Slot::RepositoriesList) =>
+            {
+                self.load_route();
+            }
             _ => {}
         }
     }
@@ -1844,6 +1869,7 @@ impl Shell {
             intelligence_open: self.intelligence_open,
             coordinator_open: self.coordinator_open,
             selected_session: self.chat.selected.clone(),
+            selected_project: self.selected_project.clone(),
             sidebar_tab: self.chat.tab,
             history_query: self.chat.history_query.clone(),
             drafts: self
@@ -1992,6 +2018,9 @@ impl Shell {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
                 }
+                Slot::ProjectSettingsSave(p) => {
+                    self.projects.base.entry(p.clone()).or_default().saving = true;
+                }
                 Slot::RouteFirst(id) => {
                     self.chat.routing.first_in_flight.insert(id.clone());
                 }
@@ -2050,6 +2079,10 @@ impl Shell {
                 });
             }
             self.load_sessions();
+            // The navigation's project selector lists the projects on every screen.
+            if self.route != Route::Portfolio && self.route != Route::Repositories {
+                self.load_projects();
+            }
             self.load_route();
             self.restore_previews();
             // First messages saved before their routing was known, at the last close.
@@ -2485,11 +2518,7 @@ impl Shell {
                             }
                             ui.add_space(10.0);
                             widgets::caption(ui, "YOUR PROJECT");
-                            ui.add_enabled(false, egui::Button::new("No project selected"))
-                                .on_disabled_hover_text(
-                                    "Projects arrive with DW-11; project screens show what \
-                                     they will hold until then.",
-                                );
+                            self.project_selector(ui);
                             for r in NAV_ORDER
                                 .iter()
                                 .copied()
@@ -2649,6 +2678,8 @@ impl Shell {
             }
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::Portfolio => self.portfolio_screen(ui),
+            Route::Repositories => self.repositories_screen(ui),
             _ => self.pending_screen(ui),
         }
     }

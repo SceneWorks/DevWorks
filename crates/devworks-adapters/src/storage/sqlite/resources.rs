@@ -289,6 +289,11 @@ fn open_leases(
             "state<>'Released' AND root_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
             params![root.0.as_str(), after, n],
         ),
+        OpenLeaseFilter::Project(project) => leases(
+            conn,
+            "state<>'Released' AND project_id=?1 AND id>?2 ORDER BY id LIMIT ?3",
+            params![project.0.as_str(), after, n],
+        ),
     }
 }
 fn check_lease(l: &StoredLease) -> Result<(), StorageError> {
@@ -524,7 +529,7 @@ impl ResourceRepository for Unit<'_> {
         if let Some(p) = &r.project_id
             && !db(db(self
                 .conn
-                .prepare_cached("SELECT 1 FROM projects WHERE id=?1"))?
+                .prepare_cached("SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'"))?
             .exists([p.0.as_str()]))?
         {
             return Err(StorageError::NotFound {
