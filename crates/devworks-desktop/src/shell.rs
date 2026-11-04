@@ -1737,7 +1737,9 @@ impl Shell {
                 self.load_route();
             }
             // Run status moves while the screen is open (claims, runs, cancellations).
-            Route::Jobs if !self.pending(&Slot::JobsList) => self.load_jobs(),
+            Route::Jobs if !self.pending(&Slot::JobsList) && self.jobs.list_refresh.is_none() => {
+                self.load_jobs();
+            }
             _ => {}
         }
     }

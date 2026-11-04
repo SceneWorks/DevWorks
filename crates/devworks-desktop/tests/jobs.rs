@@ -662,3 +662,67 @@ fn a_selection_change_drops_the_previous_jobs_paging() {
     assert!(jobs.selected.is_none() && jobs.older_cursor.is_none());
     assert!(jobs.list_cursor.is_none() && !jobs.list.loaded);
 }
+
+/// Creates a disabled manual job titled `title` through `jobs.create`.
+fn create_job(backend: &dyn Backend, title: &str) {
+    let created = ops::job_changed(backend.command(
+        "jobs.create",
+        &ops::job_create(
+            backend,
+            None,
+            title,
+            &json!({"kind": "Manual"}),
+            &inference(),
+            false,
+        ),
+    ));
+    assert!(matches!(created, Ok(ops::JobChange::Job(_))), "{title}");
+}
+
+/// An automatic refresh (a runtime change hint) of a list expanded with More jobs re-reads every
+/// shown page: the list keeps its later pages, the job pushed off the first page by a new one
+/// stays listed, and nothing collapses to the first page.
+#[test]
+fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
+    let root = Root::new("jobs-list-refresh-pages");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    let backend = engine.backend();
+    let page = usize::from(ops::PAGE_LIMIT);
+    let title = |n: usize| format!("Job {n:04}");
+    for n in 1..=page + 5 {
+        create_job(&*backend, &title(n));
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 9000.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    settle(&mut h);
+    assert_eq!(h.state().jobs.list.items.len(), page);
+    click(&mut h, Role::Button, "More jobs");
+    settle(&mut h);
+    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    // A job created elsewhere sorts first: its change hint refreshes the screen.
+    create_job(&*backend, &title(0));
+    step_until(&mut h, "the hint-driven refresh", |s| {
+        s.jobs.list.items.iter().any(|j| j.title.0 == title(0))
+    });
+    settle(&mut h);
+    let titles: Vec<String> = h
+        .state()
+        .jobs
+        .list
+        .items
+        .iter()
+        .map(|j| j.title.0.clone())
+        .collect();
+    assert_eq!(titles, (0..=page + 5).map(title).collect::<Vec<_>>());
+    assert!(!h.state().jobs.list.more && h.state().jobs.list_pages == 2);
+    assert!(
+        has_text(&h, &title(page)),
+        "the boundary job is still shown"
+    );
+    assert!(
+        has_text(&h, &title(page + 5)),
+        "the later page is still shown"
+    );
+}

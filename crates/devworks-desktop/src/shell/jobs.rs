@@ -282,6 +282,15 @@ pub fn reconcile_history(before: &[JobRun], now: &[JobRun], older: &mut Vec<JobR
     *older = merged;
 }
 
+/// Appends a page in title order; a job already listed (renamed meanwhile) is kept once.
+fn append_jobs(list: &mut Vec<JobRecord>, page: Vec<JobRecord>) {
+    for j in page {
+        if !list.iter().any(|k| k.id == j.id) {
+            list.push(j);
+        }
+    }
+}
+
 /// The schedule in words.
 pub fn describe_schedule(s: &Schedule) -> String {
     match s {
@@ -339,6 +348,14 @@ pub struct JobsUi {
     pub list: ListState<JobRecord>,
     /// Where the next page of the list starts (`None`: every job is listed).
     pub list_cursor: Option<String>,
+    /// How many pages the shown list holds (the first and each More jobs page).
+    pub list_pages: usize,
+    /// The shown list's identity: a More jobs page continues only the list it was asked for.
+    pub list_generation: u64,
+    /// The last list or refresh identity handed out.
+    pub generations: u64,
+    /// A refresh re-reading every shown page, replacing the list once they are all read.
+    pub list_refresh: Option<ListRefresh>,
     /// The listed scope: a project's jobs, or the app-level ones (`None`).
     pub scope: Option<String>,
     pub selected: Option<String>,
@@ -385,7 +402,35 @@ impl JobsUi {
         self.select(None);
         self.list = ListState::default();
         self.list_cursor = None;
+        self.list_pages = 0;
+        self.list_refresh = None;
+        self.list_generation = self.generation();
     }
+    /// A new list or refresh identity.
+    fn generation(&mut self) -> u64 {
+        self.generations += 1;
+        self.generations
+    }
+    /// Shows `items` (`pages` pages, the next one after `cursor`) as a new list.
+    fn show_list(&mut self, items: Vec<JobRecord>, cursor: Option<String>, pages: usize) {
+        self.list = ListState {
+            items,
+            loaded: true,
+            error: None,
+            more: cursor.is_some(),
+        };
+        self.list_cursor = cursor;
+        self.list_pages = pages;
+        self.list_refresh = None;
+        self.list_generation = self.generation();
+    }
+}
+
+/// A refresh of the jobs list in progress: the pages read so far, from the first, deduplicated.
+pub struct ListRefresh {
+    pub generation: u64,
+    pub pages: usize,
+    pub items: Vec<JobRecord>,
 }
 
 /// The run status of a scope's jobs in one line.
@@ -462,6 +507,20 @@ impl Shell {
             move |b| ops::jobs_list(b, Some(&p)),
         );
     }
+    /// Reads the next page of the jobs refresh `generation`, after `cursor`.
+    fn refresh_next_jobs(&mut self, generation: u64, cursor: String) {
+        let scope = self.jobs.scope.clone();
+        let submitted = self.query(
+            Slot::JobsRefresh(generation),
+            "Loading scheduled jobs",
+            "jobs.list",
+            move |b| ops::jobs_list_after(b, scope.as_deref(), Some(&cursor)),
+        );
+        if !submitted {
+            // Offline or closing: the shown list stays as it was.
+            self.jobs.list_refresh = None;
+        }
+    }
     fn load_job(&mut self, job: &str) {
         let j = job.to_owned();
         self.query(
@@ -481,7 +540,7 @@ impl Shell {
                     else {
                         continue;
                     };
-                    let slot = Slot::JobsMore(scope.clone().unwrap_or_default());
+                    let slot = Slot::JobsMore(self.jobs.list_generation);
                     self.query(slot, "Loading more jobs", "jobs.list", move |b| {
                         ops::jobs_list_after(b, scope.as_deref(), Some(&cursor))
                     });
@@ -606,29 +665,61 @@ impl Shell {
         use crate::backend::Reply;
         match (slot, reply) {
             (Slot::JobsList, Reply::Query(q)) => match ops::jobs_page(q) {
-                Ok((items, cursor)) => {
-                    self.jobs.list = ListState {
+                // More pages are shown: every one is read again before the list is replaced,
+                // so a refresh never collapses it to the first page.
+                Ok((items, Some(cursor))) if self.jobs.list_pages > 1 => {
+                    let generation = self.jobs.generation();
+                    self.jobs.list_refresh = Some(ListRefresh {
+                        generation,
+                        pages: 1,
                         items,
-                        loaded: true,
-                        error: None,
-                        more: cursor.is_some(),
-                    };
-                    self.jobs.list_cursor = cursor;
+                    });
+                    self.refresh_next_jobs(generation, cursor);
                 }
-                Err(e) => self.jobs.list.error = Some(e.describe()),
+                Ok((items, cursor)) => self.jobs.show_list(items, cursor, 1),
+                Err(e) => {
+                    self.jobs.list_refresh = None;
+                    self.jobs.list.error = Some(e.describe());
+                }
             },
-            (Slot::JobsMore(scope), Reply::Query(_))
-                if scope != self.jobs.scope.clone().unwrap_or_default() => {}
-            (Slot::JobsMore(_), Reply::Query(q)) => match ops::jobs_page(q) {
-                Ok((items, cursor)) => {
-                    // Appended in title order; a job already shown (renamed meanwhile) once.
-                    for j in items {
-                        if !self.jobs.list.items.iter().any(|k| k.id == j.id) {
-                            self.jobs.list.items.push(j);
+            (Slot::JobsRefresh(g), reply) => {
+                if self.jobs.list_refresh.as_ref().map(|r| r.generation) != Some(g) {
+                    return None;
+                }
+                let page = match reply {
+                    Reply::Query(q) => ops::jobs_page(q).map_err(|e| e.describe()),
+                    _ => Err("the jobs list could not be read".into()),
+                };
+                match page {
+                    Ok((items, cursor)) => {
+                        let Some(mut refresh) = self.jobs.list_refresh.take() else {
+                            return None;
+                        };
+                        append_jobs(&mut refresh.items, items);
+                        refresh.pages += 1;
+                        // Up to the pages shown now (More jobs may have added one meanwhile).
+                        match cursor {
+                            Some(c) if refresh.pages < self.jobs.list_pages => {
+                                self.jobs.list_refresh = Some(refresh);
+                                self.refresh_next_jobs(g, c);
+                            }
+                            cursor => self.jobs.show_list(refresh.items, cursor, refresh.pages),
                         }
                     }
+                    Err(e) => {
+                        self.jobs.list_refresh = None;
+                        self.jobs.list.error = Some(e);
+                    }
+                }
+            }
+            // A page asked for a list since replaced continues none of it.
+            (Slot::JobsMore(g), Reply::Query(_)) if g != self.jobs.list_generation => {}
+            (Slot::JobsMore(_), Reply::Query(q)) => match ops::jobs_page(q) {
+                Ok((items, cursor)) => {
+                    append_jobs(&mut self.jobs.list.items, items);
                     self.jobs.list.more = cursor.is_some();
                     self.jobs.list_cursor = cursor;
+                    self.jobs.list_pages += 1;
                 }
                 Err(e) => self.jobs.list.error = Some(e.describe()),
             },

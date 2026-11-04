@@ -110,8 +110,10 @@ pub enum Slot {
     RemoveIndex(String),
     /// The jobs of the selected scope, and a further page of them.
     JobsList,
-    /// A further page of a scope's jobs (the scope's project, empty for app-level jobs).
-    JobsMore(String),
+    /// A further page of the shown jobs list (that list's generation).
+    JobsMore(u64),
+    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
+    JobsRefresh(u64),
     /// The jobs of one project, for its run status on All projects.
     ProjectJobs(String),
     /// One job's inspection (its first run-history page) and an older history page (job ID).
