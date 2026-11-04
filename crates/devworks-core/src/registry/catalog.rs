@@ -2964,7 +2964,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.read",
@@ -2986,7 +2986,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.record",
@@ -3162,7 +3162,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<Diagnostic>",
         result_schema: schema_of::<Page<Diagnostic>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.delete_by_source",
@@ -3184,7 +3184,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.delete_selected",
@@ -3250,7 +3250,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.entity_bundle",
@@ -3272,7 +3272,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.entity_graph",
@@ -3294,7 +3294,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.claim_bundle",
@@ -3316,7 +3316,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.expand_frontier",
@@ -3338,7 +3338,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.render_summary",
@@ -3382,7 +3382,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "KnowledgeBundle",
         result_schema: schema_of::<KnowledgeBundle>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "knowledge.import_user_data",
@@ -3470,7 +3470,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<KnowledgeClaim>",
         result_schema: schema_of::<Page<KnowledgeClaim>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "dreaming.run",

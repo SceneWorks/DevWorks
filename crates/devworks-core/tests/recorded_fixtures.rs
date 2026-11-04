@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1204), 1204);
+    assert_eq!(run("domain-fixtures.json", 1236), 1236);
 }
 
 #[test]
@@ -380,10 +380,11 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .record_diagnostic, revision 2 of router.availability, router.catalog, router.connections,
     // router.configure, web.search and web.fetch, revision 2 of twenty-one Knowledge operations
     // and dreaming.revert, revision 2 of the nine jobs operations,
-    // revision 3 of artifacts.save and artifacts.list, revision 2 of the twenty operations returning a work record (feature
-    // readiness), the three prioritizations (placement), and indexing.status,
-    // indexing.runs and indexing.refresh_overlay.
-    assert_eq!(admitted.len(), 454);
+    // revision 3 of artifacts.save and artifacts.list and eleven Knowledge operations,
+    // revision 2 of the twenty operations returning a work record (feature
+    // readiness) and of the three prioritizations (placement).
+    // Indexing status/runs/overlay and eight package operations also retain revision 2.
+    assert_eq!(admitted.len(), 465);
 }
 
 #[test]

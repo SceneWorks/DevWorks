@@ -10,15 +10,21 @@ BASE = ROOT / 'docs/architecture'
 SOURCES = ['implementation-slices.json', 'devworks-capability-catalog.json',
            'devworks-requirements-traceability.json', 'codegraph-capability-inventory.json',
            'capability-validation-contracts.json', 'validation-workloads.json',
-           'contracts/family-coverage.json', 'mcp-publication-candidates.json']
+           'contracts/family-coverage.json', 'mcp-publication-candidates.json', 'codegraph-work-map.json']
 def read(name): return json.loads((BASE / name).read_text())
 def write(name, value): (BASE / name).write_text(json.dumps(value, indent=2) + '\n')
 
 slices = read('implementation-slices.json')['slices']
 bykey = {s['key']: s for s in slices}
 assert len(bykey) == len(slices), 'Duplicate slice key'
-# Final acceptance must await every retained implementation and qualification slice.
-bykey['acceptance']['dependsOnKeys'] = [s['key'] for s in slices if s['key'] != 'acceptance']
+# Each approved feature retains its terminal acceptance scope; the native baseline does not
+# silently acquire dependencies on the separately approved EVAL feature.
+scopes = read('implementation-slices.json').get('acceptanceScopes', {
+    'acceptance': [s['key'] for s in slices if s['key'] != 'acceptance']})
+for terminal, members in scopes.items():
+    assert terminal in bykey and terminal not in members and len(set(members)) == len(members)
+    bykey[terminal]['dependsOnKeys'] = members
+assert set(scopes) | {member for members in scopes.values() for member in members} == set(bykey), ('Unscoped implementation slice', set(bykey) - set(scopes) - {member for members in scopes.values() for member in members})
 for s in slices:
     assert set(s['dependsOnKeys']) <= bykey.keys(), ('Unknown dependency', s['key'])
 order, visiting, visited = [], set(), set()
@@ -55,6 +61,7 @@ reqowners = {
  'CONV':'conventions knowledge', 'COORD':'delegation workflow git_delivery tool_turn',
  'DB':'schema_sources database_tools', 'DELIVERY':'git_delivery releases reviews',
  'DOC':'documents files', 'DREAM':'dreaming knowledge approvals', 'EXT':'sdk packages instructions',
+ 'EVAL':'eval_recorded',
  'GH':'github git_tasks reviews', 'GIT':'git_tasks git_delivery process_owner',
  'GRAPH':'graph structural knowledge_graph', 'HEALTH':'analysis diagnostics', 'HELP':'help repo_docs',
  'HISTORY':'sessions files', 'IMPORT':'imports files', 'JOB':'jobs usage controls',
@@ -75,7 +82,21 @@ overrides = {**{f'MCP-{n:02}':'mcp_server mcp_server_access authority graph work
  'ROUTE-19':'router chat settings', 'ROUTE-20':'router chat transports',
  'ROUTE-16':'usage router', 'ROUTE-17':'usage router',
  **{r:'delegation work workflow controls approvals' for r in ['AGENT-12','AGENT-18','AGENT-19','AGENT-20']},
- 'UI-10':'chat router systemone settings'}
+ 'UI-10':'chat router systemone settings',
+ 'EVAL-01':'eval_suites eval_package_suites eval_acceptance',
+ 'EVAL-02':'eval_recorded eval_mcp_records eval_acceptance',
+ 'EVAL-03':'eval_judges eval_acceptance',
+ 'EVAL-04':'eval_trials eval_acceptance',
+ 'EVAL-05':'eval_comparisons eval_gates eval_acceptance',
+ 'EVAL-06':'eval_suites eval_package_suites eval_acceptance',
+ 'EVAL-07':'eval_adoption eval_acceptance',
+ 'EVAL-08':'eval_adoption eval_acceptance',
+ 'EVAL-09':'eval_comparisons eval_acceptance',
+ 'EVAL-10':'eval_triggers eval_acceptance',
+ 'EVAL-11':'eval_ui eval_acceptance',
+ 'EVAL-12':'eval_ui eval_acceptance',
+ 'EVAL-13':'eval_suites eval_ui eval_acceptance',
+ 'EVAL-14':'eval_recorded eval_comparisons eval_mcp_records eval_acceptance'}
 requirements = []
 for r in read('devworks-requirements-traceability.json')['requirements']:
     keys = overrides.get(r['requirement'], reqowners[r['requirement'].rsplit('-', 1)[0]]).split()
@@ -150,7 +171,7 @@ counts = {'slices':len(slices), 'operationFamilies':len(catalog['families']), 'o
  'capabilityAcceptanceGroups':len(capcases), 'workloadSpecifications':len(workloads),
  'unownedOperations':0, 'unownedRequirements':0, 'unownedRetainedEntries':0}
 result = {'title':'DevWorks local implementation plan',
- 'status':'Architecture baseline 1.1 implementation plan; execution not started, production acceptance pending',
+ 'status':'Architecture baseline 1.1 and approved EVAL plan metadata; execution and acceptance are tracked in CodeGraph',
  'retiredSlices':read('implementation-slices.json').get('retiredSlices',[]),
  'sourceSha256':{n:hashlib.sha256((BASE/n).read_bytes()).hexdigest() for n in SOURCES},
  'counts':counts, 'dependencyOrder':[bykey[k]['id'] for k in order],
@@ -163,8 +184,9 @@ write('implementation-plan.json', result)
 
 lines = ['# Local implementation plan', '',
  'Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, '
- 'not implementation authorization or a frozen public API. Requirements remain 209 Confirmed and 141 Proposed; '
- 'a planned slice does not approve a Proposed requirement. No Shortcut records or production application have been created.', '',
+ 'not implementation authorization or a frozen public API. '
+ f'Requirements remain {counts["requirementsByStatus"].get("Confirmed", 0)} Confirmed and {counts["requirementsByStatus"].get("Proposed", 0)} Proposed; '
+ 'a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.', '',
  '## Success and remaining commitments', '',
  f'The register assigns all {counts["requirements"]} requirements, {counts["operations"]} operations across '
  f'{counts["operationFamilies"]} families, {counts["retainedSourceEntries"]} retained source entries, '
@@ -183,14 +205,14 @@ lines = ['# Local implementation plan', '',
  'Complete concrete contracts before exposing their operations. Build vertical UI/service/tool behavior in its owning slice, '
  'using the shared shell and authority boundary. Foundation slices do not create a second UI-only data model. '
  'Language/semantic packs and all eight SDK contribution types remain retained scope. '
- 'Release acceptance awaits every slice; optional dependencies must fail visibly and locally without making a server, '
+ 'The native baseline and EVAL feature each retain their approved terminal acceptance dependencies. Optional dependencies must fail visibly and locally without making a server, '
  'VM or preinstalled general-purpose runtime a core requirement.', '',
  'The dependency order is a valid topological order, not a timeline or resource estimate. It allows independent work once prerequisites '
  'are satisfied. Integration qualification may hold a particular capability without falsely declaring the product ready. '
  'Routine engineering decisions remain delegated; no further product question arose from the native probes.', '',
  'Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs '
  'retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.', '',
- 'DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 63 active slices remain. No HelixDB source adapter or engine is an app dependency.', '',
+ f'DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; {counts["slices"]} planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.', '',
  '![Coverage and qualification gates](architecture-diagrams/41-implementation-coverage.svg)', '',
  '## Dependency order', '',
  ' → '.join(result['dependencyOrder']), '',
@@ -201,9 +223,9 @@ for s in slices:
 lines += ['', '## Concrete outcomes and acceptance', '']
 for s in slices:
     lines += [f'### {s["id"]}', '', f'**{s["title"]}** · {s["type"]} · {s["status"]}.', '',
-        s['acceptance'], '', *([s['readinessAcceptance'], ''] if s.get('readinessAcceptance') else []), s['commonAcceptance'], '',
+        s['acceptance'], '', *([f'**Tracked work:** {s["codegraphItem"]} in {s["codegraphFeature"]}.', ''] if s.get('codegraphItem') else []), *([s['readinessAcceptance'], ''] if s.get('readinessAcceptance') else []), s['commonAcceptance'], '',
         '**Operations:** ' + (', '.join('`'+o+'`' for o in s['ownedOperations']) or
-          'Cross-cutting implementation/qualification; no separate public operation.') + '', '',
+          s.get('operationContractOwner', 'Cross-cutting implementation/qualification; no separate public operation.')) + '', '',
         '**Primary requirement cases:** ' + (', '.join('AT-'+r for r in s['primaryRequirements']) or 'See supporting and integration obligations.') + '', '',
         '**Supporting requirements:** ' + (', '.join(s['supportingRequirements']) or 'None assigned.') + '', '',
         '**Behavior/workload obligations:** ' + (', '.join(s['capabilityCases']+s['workloads']) or 'Slice-specific acceptance above.') +

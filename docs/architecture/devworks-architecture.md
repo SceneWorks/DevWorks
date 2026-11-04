@@ -1372,13 +1372,21 @@ Add property/state-machine tests for work transitions, policy intersections, que
 
 Architecture/document checks reject missing requirement mappings, nonexistent design anchors, dependency cycles, stale generated capability/Help indexes and unrenderable diagrams. A documentation gate cannot be satisfied merely by adding a filename: review the described behavior against the actual change. Native release tests must measure clean install, startup, idle CPU/RSS, installed size, rendering latency, active-index memory and concurrent-agent behavior separately. Numeric product thresholds remain to be set from representative measurements.
 
+### Evaluation ownership and evidence boundaries
+
+The evaluation services, grader adapters and trial runner own **EVAL-01 through EVAL-14**. Suites are separately versioned measurement assets; recorded-work grading reads durable session, tool, Git, review and work records without changing them, attributes each step to its effective revisions and keeps mixed-revision evidence explicit. Comparison and adoption evidence retain the measured subject, baseline and measurement identities, outcome denominators, coverage and uncertainty. Suite activation, exceptions, proposal overrides and rollback use their required human authority; a subject cannot approve or change its own measurement.
+
+The same domain owns permitted UI/tool execution, the Evals view, package-contributed suites and versioned Help. Trials write only to disposable snapshots and substitute services with no production credentials. Live trials and model judging use the internal router with attributed costs and the EVAL-10 controls: on-demand and proposal runs may pause at their spending limit; scheduled runs follow JOB-09. Normal tests exercise this machinery with recorded fixtures and scripted judges, never inference. Confirmed and Proposed requirement statuses remain as recorded in the requirements source.
+
+This is architecture ownership, not native acceptance. The existing evaluation feature plan owns the operation contracts, implementation slices and production evidence; its recorded-work grading item supplies that design and plan integration.
+
 ## Native backend feasibility and planning coverage
 
 **AD64–68 · confidence high in narrow evidence and coverage; medium in target integration.** The [native backend reader](native-backend-feasibility.html) records explicit candidates, ownership and failure boundaries for egui 0.37, PDFium 7881 through pdfium-render 0.9.5, a native owned Chromium/CDP adapter, structured SystemOne fixtures and handle-relative verified reads. Thirty-nine narrow checks pass on macOS arm64 without inference or a visible browser tab. That 39-check checkpoint did not qualify an eframe window, production security, full provider/SDK behavior or the six target builds. AD73 subsequently adds narrow hidden-window evidence; production and OS accessibility acceptance remains pending.
 
 ![Native backend ownership and qualification](architecture-diagrams/40-native-backend-boundaries.svg)
 
-The [local implementation plan](implementation-plan.html) assigns 63 active slices with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 353 requirements, 353 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
+The [local implementation plan](implementation-plan.html) assigns 75 planned slices (63 native baseline slices and 12 approved EVAL items) with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 353 requirements, 353 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
 
 ![Implementation coverage and acceptance gates](architecture-diagrams/41-implementation-coverage.svg)
 
