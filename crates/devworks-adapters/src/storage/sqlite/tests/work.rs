@@ -2331,26 +2331,33 @@ fn a_finding_that_names_its_work_gates_only_that_work() {
     };
     assert!(gated(ga));
     assert!(!gated(gb.clone()));
-    // Widening a work-specific finding (more work named) is accepted.
+    // Widening a work-specific finding (more work named) is accepted, but on an unchanged plan
+    // only with newly discovered evidence (AGENT-20).
     let f = fx.fresh(&f);
     let r = fx
         .get_at("features.get", &f.id, Some(2))
         .unwrap()
         .readiness
         .unwrap();
+    let widen = |wider: Value| {
+        fx.command_at(
+            &fx.agent(),
+            "features.edit",
+            json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "changes": {"readiness": {"kind": "Assess",
+                    "planRevision": active.plan_revision.as_str(),
+                    "planDigest": String::from(active.plan_digest.clone()), "summary": "wider",
+                    "expectedAssessmentRevision": r.revision.as_str(),
+                    "findings": [wider]}}}),
+            Some(2),
+        )
+    };
     let mut wider = investigation("I1", Some("E1"));
     wider["affectedWorkIds"] = json!([a.id.as_str(), b.id.as_str()]);
-    applied(fx.command_at(
-        &fx.agent(),
-        "features.edit",
-        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
-            "changes": {"readiness": {"kind": "Assess",
-                "planRevision": active.plan_revision.as_str(),
-                "planDigest": String::from(active.plan_digest.clone()), "summary": "wider",
-                "expectedAssessmentRevision": r.revision.as_str(),
-                "findings": [wider]}}}),
-        Some(2),
-    ));
+    let fault = refused(widen(wider.clone()));
+    assert_eq!(kind_of(&fault), "settled_without_new_evidence");
+    wider["evidence"] = json!([fx.artifact(&p, 2)]);
+    applied(widen(wider));
     assert!(gated(gb));
 }
 
@@ -2594,4 +2601,64 @@ fn a_plan_key_that_is_another_items_id_is_refused_as_ambiguous() {
         fx.list("tasks.list", &p, 50, None, None).unwrap().0.len(),
         before
     );
+}
+
+#[test]
+fn a_finding_made_blocking_on_an_unchanged_plan_needs_new_evidence() {
+    let fx = Fx::new();
+    let p = fx.project("Alpha", &[]);
+    let f = fx.feature(&p, "Checkout", &[]);
+    let doc = fx.artifact(&p, 1);
+    let f = fx.plan(&f, &doc, &[("E1", "pay")]);
+    let f = fx.approve(&f);
+    let f = fx.get_at("features.get", &f.id, Some(2)).unwrap();
+    let active = f.approval.clone().unwrap();
+    let finding = |blocking: bool, evidence: Vec<ArtifactRef>| {
+        json!({"id": "F1", "disposition": "NeedsUserDecision", "blocking": blocking,
+            "prerequisite": false, "state": "Open", "requirementIds": ["E1"], "scopeKey": "E1",
+            "affectedWorkIds": [], "summary": "processor unknown",
+            "missing": "which payment processor", "consequence": "cannot verify refunds",
+            "attempts": ["read the repository conventions"],
+            "insufficiency": "a product choice", "closureCondition": "the processor is named",
+            "evidence": evidence, "question": "Stripe or Adyen?", "recommendation": "Stripe",
+            "closureEvidence": []})
+    };
+    let assess = |expected: Option<&str>, finding: Value| {
+        let f = fx.fresh(&f);
+        let mut change = json!({"kind": "Assess",
+            "planRevision": active.plan_revision.as_str(),
+            "planDigest": String::from(active.plan_digest.clone()), "summary": "assessed",
+            "findings": [finding]});
+        if let Some(e) = expected {
+            change["expectedAssessmentRevision"] = json!(e);
+        }
+        fx.command_at(
+            &fx.agent(),
+            "features.edit",
+            json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "changes": {"readiness": change}}),
+            Some(2),
+        )
+    };
+    applied(assess(None, finding(false, vec![])));
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    assert!(r.ready, "a non-blocking finding does not gate");
+    // The same plan, the same evidence: it cannot become a blocker.
+    let fault = refused(assess(Some(r.revision.as_str()), finding(true, vec![])));
+    assert_eq!(kind_of(&fault), "settled_without_new_evidence");
+    // Newly discovered evidence makes it one.
+    applied(assess(
+        Some(r.revision.as_str()),
+        finding(true, vec![fx.artifact(&p, 2)]),
+    ));
+    let r = fx
+        .get_at("features.get", &f.id, Some(2))
+        .unwrap()
+        .readiness
+        .unwrap();
+    assert!(!r.ready);
 }

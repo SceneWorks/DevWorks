@@ -190,7 +190,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: &[&str] = &[
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -204,6 +204,22 @@ pub const COMMANDS: [&str; 13] = [
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "features.create",
+    "features.edit",
+    "features.edit_plan",
+    "features.prioritize",
+    "features.request_plan_approval",
+    "issues.create",
+    "issues.prioritize",
+    "tasks.create",
+    "tasks.edit",
+    "tasks.move",
+    "tasks.prioritize",
+    "tasks.dependency_links",
+    "tasks.set_feature",
+    "runs.start",
+    "runs.pause",
+    "runs.continue",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.
@@ -223,7 +239,7 @@ impl Unresolved {
     }
     /// One kept across a restart; `None` for an operation the shell does not admit.
     pub fn restored(slot: Slot, label: String, operation: &str, frame: Vec<u8>) -> Option<Self> {
-        let operation = COMMANDS.into_iter().find(|c| *c == operation)?;
+        let operation = COMMANDS.iter().copied().find(|c| *c == operation)?;
         Some(Self {
             slot,
             label,

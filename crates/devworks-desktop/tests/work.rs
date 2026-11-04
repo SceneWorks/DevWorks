@@ -295,7 +295,7 @@ fn a_plan_save_submits_the_form_it_started_from_into_the_project() {
         .click();
     h.run_steps(3);
     assert!(
-        h.state().work.plan_saving.is_some(),
+        !h.state().work.plan_saving.is_empty(),
         "the save is in flight: {:?}",
         h.state().work.message
     );
@@ -419,7 +419,7 @@ fn an_item_edit_made_while_a_save_runs_stays_open() {
     h.get_by_role_and_label(Role::Button, "Save").click();
     h.run_steps(3);
     assert!(
-        h.state().work.edit_saving.is_some(),
+        !h.state().work.edit_saving.is_empty(),
         "the save is in flight"
     );
     h.state_mut().work.edit.as_mut().unwrap().title = "Crash on start-up".into();
@@ -471,4 +471,258 @@ fn a_creation_locks_its_form_while_it_runs() {
     gate.open();
     settle(&mut h);
     assert_eq!(list(&*real, "issues.list", &pid).len(), 1);
+}
+
+/// A project with features `titles`, created from the Features screen of `h`.
+fn features_from_screen(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    backend: &dyn Backend,
+    pid: &str,
+    titles: &[&str],
+) -> Vec<WorkRecord> {
+    h.state_mut().navigate(Route::Features);
+    h.state_mut().select_project(Some(pid.to_owned()));
+    settle(h);
+    for t in titles {
+        click(h, Role::Button, "New feature");
+        type_into(h, Role::TextInput, "Title", t);
+        click(h, Role::Button, "Create");
+    }
+    list(backend, "features.list", pid)
+}
+/// Opens `title`'s plan editor, writes `requirement` and saves, without waiting for replies.
+fn save_plan_now(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    title: &str,
+    requirement: &str,
+) {
+    let prefix = format!("{title}  ·");
+    h.query_all_by_label_contains(&prefix)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with(&prefix))
+        })
+        .expect("the feature row")
+        .click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Edit plan").click();
+    h.run_steps(3);
+    {
+        let form = h
+            .state_mut()
+            .work
+            .plan
+            .as_mut()
+            .expect("the editor is open");
+        form.text = format!("Plan of {title}");
+        form.requirements = vec![devworks_desktop::shell::work::Entry {
+            id: "E1".into(),
+            text: requirement.into(),
+        }];
+    }
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "Save plan draft")
+        .click();
+    h.run_steps(3);
+}
+fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {
+    wops::work_record(backend.query(
+        "features.get",
+        &wops::work_get(backend, "features.get", feature.id.as_str()),
+    ))
+    .unwrap()
+    .pending_plan
+    .map(|p| p.draft.requirements.0[0].statement.0.clone())
+}
+fn shop(backend: &dyn Backend) -> String {
+    ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(backend, "Shop", "", &[]),
+    ))
+    .unwrap()
+    .id
+    .0
+    .as_str()
+    .to_owned()
+}
+
+#[test]
+fn two_plan_saves_in_flight_each_submit_their_own_draft() {
+    let root = Root::new("two-plan-saves");
+    let engine = start(&root);
+    let real = engine.backend();
+    let pid = shop(&*real);
+    let gate = Gate::new("artifacts.save");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    let features = features_from_screen(&mut h, &*real, &pid, &["Checkout", "Refunds"]);
+    // Both plan texts are uploading at once.
+    gate.close();
+    save_plan_now(&mut h, "Checkout", "pay");
+    save_plan_now(&mut h, "Refunds", "refund");
+    assert_eq!(h.state().work.plan_saving.len(), 2);
+    gate.open();
+    settle(&mut h);
+    let by = |t: &str| features.iter().find(|f| f.title.0 == t).unwrap();
+    assert_eq!(
+        pending_statement(&*real, by("Checkout")).as_deref(),
+        Some("pay")
+    );
+    assert_eq!(
+        pending_statement(&*real, by("Refunds")).as_deref(),
+        Some("refund")
+    );
+    assert!(h.state().work.plan_saving.is_empty());
+}
+
+#[test]
+fn plan_saves_pending_at_close_are_finished_at_the_next_launch() {
+    let root = Root::new("plan-saves-relaunch");
+    let engine = start(&root);
+    let real = engine.backend();
+    let pid = shop(&*real);
+    // Checkout's save committed but its acknowledgment was lost, so its outcome is unknown at
+    // close; Refunds is still storing its text.
+    let lossy = LoseAcks::over(real.clone(), "features.edit_plan", 100);
+    let gate = Gate::new("artifacts.save");
+    let mut h = harness(
+        shell_with(Ok(gate.over(lossy.clone())), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    let features = features_from_screen(&mut h, &*real, &pid, &["Checkout", "Refunds"]);
+    save_plan_now(&mut h, "Checkout", "pay");
+    settle(&mut h);
+    gate.close();
+    save_plan_now(&mut h, "Refunds", "refund");
+    assert_eq!(h.state().work.plan_saving.len(), 2);
+    h.state_mut().on_exit();
+    drop(h);
+    gate.open();
+    let by = |t: &str| features.iter().find(|f| f.title.0 == t).unwrap();
+    assert_eq!(
+        pending_statement(&*real, by("Checkout")).as_deref(),
+        Some("pay"),
+        "it committed; only its outcome is unknown"
+    );
+    let mut h = harness(
+        shell_with(Ok(real.clone()), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    assert_eq!(
+        pending_statement(&*real, by("Checkout")).as_deref(),
+        Some("pay")
+    );
+    assert_eq!(
+        pending_statement(&*real, by("Refunds")).as_deref(),
+        Some("refund")
+    );
+    assert!(h.state().work.plan_saving.is_empty());
+    assert_eq!(h.state().unconfirmed_count(), 0);
+    // Checkout was confirmed with its exact frame, not saved again (which its own commit would
+    // refuse as a conflict, reopening the draft).
+    assert!(
+        h.state().work.plan.is_none(),
+        "{:?}",
+        h.state().work.message
+    );
+}
+
+#[test]
+fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
+    use devworks_desktop::work_ops::ACTIVITY_PAGE;
+    let root = Root::new("activity-newest");
+    let engine = start(&root);
+    let real = engine.backend();
+    let pid = shop(&*real);
+    let backlog = default_status_id(
+        &devworks_core::protocol::ProjectId(devworks_core::protocol::Id::new(pid.clone()).unwrap()),
+        "backlog",
+    )
+    .as_str()
+    .to_owned();
+    let issue = |n: usize| {
+        command(
+            &*real,
+            "issues.create",
+            json!({"projectId": pid, "title": format!("Issue {n}"), "description": "",
+                "repositoryIds": [], "statusId": backlog, "priority": 0}),
+        )
+    };
+    let n = usize::from(ACTIVITY_PAGE) + 20;
+    for i in 0..n {
+        issue(i);
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Activity");
+    let read = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.state()
+            .work
+            .activity
+            .items
+            .iter()
+            .map(|e| e.sequence.as_str().parse::<u64>().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let first = read(&h);
+    // Every page up to the newest change, not only the oldest page.
+    assert!(first.len() > usize::from(ACTIVITY_PAGE), "{}", first.len());
+    assert!(
+        first.windows(2).all(|w| w[0] < w[1]),
+        "oldest first, once each"
+    );
+    assert!(h.query_by_label("Load older changes").is_none());
+    // The newest change is shown first, above the one before it.
+    let shown: Vec<(f64, String)> = h
+        .query_all_by_label_contains(" · ")
+        .filter_map(|n| {
+            let v = n.accesskit_node().value()?.to_string();
+            let y = n.accesskit_node().bounding_box()?.y0;
+            v.starts_with('#').then_some((y, v))
+        })
+        .collect();
+    let top = shown
+        .iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, v)| v.clone())
+        .expect("activity rows");
+    assert!(
+        top.starts_with(&format!("#{} ·", first.last().unwrap())),
+        "the top row is the newest change: {top}"
+    );
+    let row = |seq: u64| {
+        let prefix = format!("#{seq} ·");
+        h.query_all_by_label_contains(&prefix)
+            .find(|n| {
+                n.accesskit_node()
+                    .value()
+                    .is_some_and(|l| l.starts_with(&prefix))
+            })
+            .unwrap_or_else(|| panic!("a row {prefix}"))
+            .accesskit_node()
+            .bounding_box()
+            .expect("laid out")
+            .y0
+    };
+    let last = *first.last().unwrap();
+    let before = first[first.len() - 2];
+    assert!(row(last) < row(before), "newest first");
+    // Refresh adds what happened since, without reading the feed again.
+    issue(n);
+    click(&mut h, Role::Button, "Refresh");
+    let after = read(&h);
+    assert_eq!(after.len(), first.len() + 1);
+    assert!(after.windows(2).all(|w| w[0] < w[1]));
 }

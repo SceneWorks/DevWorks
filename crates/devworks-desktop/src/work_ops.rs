@@ -129,9 +129,12 @@ pub fn approval_requested(outcome: CommandOutcome) -> Result<ProposalRecord, Fai
         other => Err(unexpected("features.request_plan_approval", &other)),
     }
 }
-/// A page of the project change feed (`history.events` revision 2 with `projectId`).
+/// Events one Activity read asks for.
+pub const ACTIVITY_PAGE: u16 = 200;
+/// A page of the project change feed (`history.events` revision 2 with `projectId`), oldest
+/// first after `after` (the feed pages forward only).
 pub fn project_events(backend: &dyn Backend, project: &str, after: Option<&str>) -> Vec<u8> {
-    let mut query = json!({"kind": "history.events", "projectId": project, "limit": 200});
+    let mut query = json!({"kind": "history.events", "projectId": project, "limit": ACTIVITY_PAGE});
     if let Some(a) = after {
         query["after"] = json!(a);
     }
@@ -140,14 +143,18 @@ pub fn project_events(backend: &dyn Backend, project: &str, after: Option<&str>)
     .to_string()
     .into_bytes()
 }
-/// Events of a feed page, its continuation and whether more exist.
+/// Events of a feed page and where reading continues: the next page's cursor while more
+/// exist, otherwise the checkpoint after everything read (newer events start there).
 pub fn events_page(outcome: QueryOutcome) -> Result<(Vec<Event>, Option<String>, bool), Failure> {
     match query_result(outcome)? {
-        (OperationResult::HistoryEvents { value }, _) => Ok((
-            value.items.0,
-            value.next_cursor.map(|c| c.0),
-            value.has_more,
-        )),
+        (OperationResult::HistoryEvents { value }, _) => {
+            let resume = if value.has_more {
+                value.next_cursor.map(|c| c.0)
+            } else {
+                value.checkpoint.map(|c| c.0)
+            };
+            Ok((value.items.0, resume, value.has_more))
+        }
         (other, _) => Err(unexpected("history.events", &other)),
     }
 }

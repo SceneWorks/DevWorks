@@ -104,7 +104,7 @@ pub struct EditForm {
     pub priority: i32,
 }
 /// A plan draft being written for a feature, against the record it was opened on.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PlanForm {
     pub snapshot: WorkRecord,
     pub text: String,
@@ -126,7 +126,7 @@ pub struct PlanForm {
     pub base: PlanBase,
 }
 /// One requirement, criterion or test being edited: its ID and its full text.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Entry {
     pub id: String,
     pub text: String,
@@ -199,7 +199,7 @@ pub fn plan_after_save(
 }
 
 /// The requirements and criteria a plan form started from.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlanBase {
     pub requirements: Vec<RequirementItem>,
     pub acceptance: Vec<AcceptanceCriterion>,
@@ -333,12 +333,16 @@ pub fn plan_body(form: &PlanForm, content: &ArtifactRef) -> Value {
         "acceptanceTests": merged_criteria(&form.acceptance_tests, &form.base.acceptance_tests),
     })
 }
-/// The project's Activity: its change feed, read page by page to its full history.
+/// The project's Activity: its change feed, read page by page to its end and shown newest
+/// first. The feed pages forward only, so a read follows its pages to the end; a refresh reads
+/// on from where the last read stopped (the feed is append-only), so it adds the newest.
 #[derive(Default)]
 pub struct Activity {
+    /// Every event read, oldest first.
     pub items: Vec<Event>,
-    pub next: Option<String>,
-    pub more: bool,
+    /// Where the next read starts (`None`: the beginning).
+    pub resume: Option<String>,
+    /// Whether every page up to the end was read at least once.
     pub loaded: bool,
     pub error: Option<String>,
     /// 0 everything, 1 features, 2 issues, 3 tasks, 4 the project itself.
@@ -371,9 +375,11 @@ pub struct WorkUi {
     pub plan: Option<PlanForm>,
     /// The exact plan form a save submitted, while that save runs: its upload and its command
     /// use this snapshot, never the editor, which stays open for later edits.
-    pub plan_saving: Option<PlanForm>,
+    /// The exact plan form each running save submitted, by feature: one feature's save never
+    /// replaces another's (a close keeps them, and the next launch finishes each one).
+    pub plan_saving: BTreeMap<String, PlanForm>,
     /// The exact edit form a save submitted, while it runs (the editor stays open).
-    pub edit_saving: Option<EditForm>,
+    pub edit_saving: BTreeMap<String, EditForm>,
     /// A card whose removal from its feature waits for confirmation.
     pub unlink: Option<WorkRecord>,
     /// Cards whose move was submitted and is not confirmed yet, with the target status.
@@ -517,18 +523,23 @@ impl Shell {
 
     /// Reads the selected project's features, cards and Activity (every page).
     pub(super) fn load_work(&mut self) {
+        // Saves still running belong to their items, not to the project shown: a project
+        // switch keeps them, so each reply still finishes its own save.
         let Some(p) = self.selected_project.clone() else {
             self.work = WorkUi {
                 archive_counts: std::mem::take(&mut self.work.archive_counts),
+                plan_saving: std::mem::take(&mut self.work.plan_saving),
+                edit_saving: std::mem::take(&mut self.work.edit_saving),
                 ..WorkUi::default()
             };
             return;
         };
         if self.work.of.as_deref() != Some(p.as_str()) {
-            let counts = std::mem::take(&mut self.work.archive_counts);
             self.work = WorkUi {
                 of: Some(p.clone()),
-                archive_counts: counts,
+                archive_counts: std::mem::take(&mut self.work.archive_counts),
+                plan_saving: std::mem::take(&mut self.work.plan_saving),
+                edit_saving: std::mem::take(&mut self.work.edit_saving),
                 ..WorkUi::default()
             };
         }
@@ -548,9 +559,9 @@ impl Shell {
             "tasks.list",
             move |be| wops::work_list(be, "tasks.list", &b, None),
         );
-        // The Activity feed keeps the pages already read; an explicit refresh reads it again.
+        // The Activity feed keeps what it read; a refresh reads on to the newest.
         if !self.work.activity.loaded && !self.pending(&Slot::WorkActivity(p)) {
-            self.load_activity(false);
+            self.load_activity();
         }
     }
     /// Whether a work list read is in flight.
@@ -560,17 +571,13 @@ impl Shell {
                 || self.pending(&Slot::WorkCards(p.clone()))
         })
     }
-    fn load_activity(&mut self, more: bool) {
+    /// Reads the project's change feed on from where the last read stopped, page after page to
+    /// its end (each reply asks for the next page while more exist).
+    fn load_activity(&mut self) {
         let Some(p) = self.work.of.clone() else {
             return;
         };
-        let after = if more {
-            self.work.activity.next.clone()
-        } else {
-            self.work.activity.items.clear();
-            self.work.activity.loaded = false;
-            None
-        };
+        let after = self.work.activity.resume.clone();
         self.query(
             Slot::WorkActivity(p.clone()),
             "Loading activity",
@@ -650,7 +657,7 @@ impl Shell {
             match a {
                 Action::Reload => {
                     self.load_work();
-                    self.load_activity(false);
+                    self.load_activity();
                 }
                 Action::Create(form) => {
                     let Some(p) = self.work.of.clone() else {
@@ -720,7 +727,7 @@ impl Shell {
                     };
                     let body = json!({"workId": w.id, "expectedRevision": w.revision,
                         "changes": changes});
-                    self.work.edit_saving = Some(form);
+                    self.work.edit_saving.insert(w.id.as_str().to_owned(), form);
                     self.command(
                         Slot::WorkCommand(w.id.as_str().to_owned()),
                         "Saving work",
@@ -826,7 +833,9 @@ impl Shell {
         let unchanged = form.content.is_some() && form.text == form.original;
         if unchanged {
             let content = form.content.clone().expect("checked");
-            self.work.plan_saving = Some(form.clone());
+            self.work
+                .plan_saving
+                .insert(form.snapshot.id.as_str().to_owned(), form.clone());
             self.submit_plan(&form, &content);
             return;
         }
@@ -864,7 +873,31 @@ impl Shell {
             )
         });
         if started {
-            self.work.plan_saving = Some(form);
+            self.work.plan_saving.insert(id, form);
+        } else if self.work.plan.is_none() {
+            // Not started (offline): the draft goes back to the editor, never dropped.
+            self.work.plan = Some(form);
+        }
+    }
+    /// A plan save of `feature` that ended without saving: its draft goes back to the editor
+    /// when the editor is free (an open editor keeps what it holds).
+    fn unsaved_plan(&mut self, feature: &str) {
+        if let Some(saved) = self.work.plan_saving.remove(feature)
+            && self.work.plan.is_none()
+        {
+            self.work.plan = Some(saved);
+        }
+    }
+    /// Puts back the plan saves a close kept: one whose `features.edit_plan` is pending waits
+    /// for its confirmation; one still storing its text is saved again from its snapshot.
+    pub(super) fn restore_plan_saves(&mut self, saves: Vec<PlanForm>, confirming: &[String]) {
+        for form in saves {
+            let id = form.snapshot.id.as_str().to_owned();
+            if confirming.contains(&id) {
+                self.work.plan_saving.insert(id, form);
+            } else {
+                self.save_plan(form);
+            }
         }
     }
     fn submit_plan(&mut self, form: &PlanForm, content: &ArtifactRef) {
@@ -968,15 +1001,36 @@ impl Shell {
             (Slot::WorkActivity(p), Reply::Query(q)) => {
                 if self.work.of.as_deref() == Some(p.as_str()) {
                     match wops::events_page(q) {
-                        Ok((items, next, more)) => {
+                        Ok((items, resume, more)) => {
                             let a = &mut self.work.activity;
                             a.items.extend(items);
-                            a.next = next;
-                            a.more = more;
-                            a.loaded = true;
+                            if resume.is_some() {
+                                a.resume = resume;
+                            }
                             a.error = None;
+                            if more {
+                                self.load_activity();
+                            } else {
+                                self.work.activity.loaded = true;
+                            }
                         }
-                        Err(e) => self.work.activity.error = Some(e.describe()),
+                        Err(e) => {
+                            // A continuation can expire (its scope changed): the feed is then
+                            // read again from the beginning, once.
+                            let a = &mut self.work.activity;
+                            if a.resume.is_some() {
+                                *a = Activity {
+                                    kind: a.kind,
+                                    actor: a.actor,
+                                    text: std::mem::take(&mut a.text),
+                                    item: a.item.take(),
+                                    ..Activity::default()
+                                };
+                                self.load_activity();
+                            } else {
+                                a.error = Some(e.describe());
+                            }
+                        }
                     }
                 }
             }
@@ -1093,11 +1147,7 @@ impl Shell {
                         self.work.mutations += 1;
                         // Only this item's saved edit is settled: an editor holding later edits
                         // stays open on the saved revision; a draft of other work is kept.
-                        if let Some(saved) = self
-                            .work
-                            .edit_saving
-                            .take_if(|e| e.snapshot.id.as_str() == id)
-                        {
+                        if let Some(saved) = self.work.edit_saving.remove(&id) {
                             let current = self.work.detail.get(&id).cloned();
                             self.work.edit =
                                 edit_after_save(self.work.edit.take(), &saved, current);
@@ -1118,10 +1168,10 @@ impl Shell {
                         }
                     }
                     Err(e) => {
-                        // The editor keeps its draft.
-                        self.work
-                            .edit_saving
-                            .take_if(|e| e.snapshot.id.as_str() == id);
+                        // The editor keeps its draft (an unknown outcome stays pending).
+                        if !unknown {
+                            self.work.edit_saving.remove(&id);
+                        }
                         self.work_failure("The change", e)
                     }
                 }
@@ -1140,23 +1190,29 @@ impl Shell {
                     Ok(_) => Err(Failure::Other("unexpected reply".into())),
                     Err(e) => Err(Failure::Other(e)),
                 };
-                // The draft submitted is the form the save started from, never the editor.
-                match (stored, self.work.plan_saving.take()) {
-                    (Ok(record), Some(mut form)) if form.snapshot.id.as_str() == id => {
+                // The draft submitted is the form this feature's save started from, never the
+                // editor nor another feature's save.
+                match (stored, self.work.plan_saving.get_mut(&id)) {
+                    (Ok(record), Some(form)) => {
                         form.content = Some(record.artifact.clone());
                         form.original = form.text.clone();
-                        self.work.plan_saving = Some(form.clone());
+                        let form = form.clone();
                         self.submit_plan(&form, &record.artifact);
                     }
-                    (Ok(_), other) => self.work.plan_saving = other,
-                    (Err(e), _) => self.work_failure("Storing the plan text", e),
+                    (Ok(_), None) => {}
+                    (Err(e), _) => {
+                        self.unsaved_plan(&id);
+                        self.work_failure("Storing the plan text", e)
+                    }
                 }
             }
             (Slot::WorkPlan(id), Reply::Command(c)) => {
-                let saved = self
-                    .work
-                    .plan_saving
-                    .take_if(|p| p.snapshot.id.as_str() == id);
+                if is_unknown(&c) {
+                    // Still pending: confirmed later with its exact frame.
+                    self.work_failure("Saving the plan draft", Failure::Unknown);
+                    return None;
+                }
+                let saved = self.work.plan_saving.remove(&id);
                 match wops::work_changed(c) {
                     Ok(w) => {
                         self.work.mutations += 1;
@@ -1170,7 +1226,14 @@ impl Shell {
                         self.load_work();
                         self.load_detail(&w);
                     }
-                    Err(e) => self.work_failure("Saving the plan draft", e),
+                    Err(e) => {
+                        if let Some(saved) = saved
+                            && self.work.plan.is_none()
+                        {
+                            self.work.plan = Some(saved);
+                        }
+                        self.work_failure("Saving the plan draft", e)
+                    }
                 }
             }
             (Slot::WorkRun(id), Reply::Command(c)) => {
@@ -1278,7 +1341,6 @@ impl Shell {
         let project = self.selected_project.clone();
         let cols = columns(project.as_deref().unwrap_or("p"), &self.work.cards.items);
         let user = devworks_desktop_user();
-        let mut load_more = false;
         let work = &mut self.work;
         let (_, tab) = widgets::pane(
             ui,
@@ -1371,15 +1433,12 @@ impl Shell {
                         ));
                     }
                 } else {
-                    activity(ui, work, &cols, &user, &mut load_more, actions);
+                    activity(ui, work, &cols, &user, actions);
                 }
             },
         );
         mem.tab = tab;
         self.routes.insert(Route::Overview, mem);
-        if load_more {
-            self.load_activity(true);
-        }
         self.work_act(actions);
     }
 
@@ -1743,7 +1802,6 @@ fn activity(
     work: &mut WorkUi,
     cols: &[Column],
     user: &str,
-    load_more: &mut bool,
     _actions: &mut Vec<Action>,
 ) {
     let a = &mut work.activity;
@@ -1858,14 +1916,9 @@ fn activity(
     widgets::caption(
         ui,
         format!(
-            "{} of {} changes shown{}",
+            "{} of {} changes shown · newest first · full history (Refresh adds newer changes)",
             rows.len(),
             a.items.len(),
-            if a.more {
-                " · older changes exist"
-            } else {
-                " · full history"
-            }
         ),
     );
     if rows.is_empty() {
@@ -1885,9 +1938,6 @@ fn activity(
                 ui.label(r);
             }
         });
-    if a.more && ui.button("Load older changes").clicked() {
-        *load_more = true;
-    }
 }
 fn matches_text_line(line: &str, needle: &str) -> bool {
     let n = fold(needle.trim());

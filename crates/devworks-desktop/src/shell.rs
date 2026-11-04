@@ -2021,18 +2021,26 @@ impl Shell {
                     })
                 })
                 .collect(),
+            plans: self
+                .work
+                .plan_saving
+                .values()
+                .filter_map(|f| serde_json::to_value(f).ok())
+                .collect(),
             commands,
         }
     }
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
                 continue;
             };
             match &slot {
+                Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
                 }
@@ -2084,6 +2092,12 @@ impl Shell {
                 client.keep_unresolved(u);
             }
         }
+        let plans = pending
+            .plans
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect();
+        self.restore_plan_saves(plans, &confirming);
         for r in pending.removed {
             let local = self.chat.next_local();
             self.chat.removed.insert(

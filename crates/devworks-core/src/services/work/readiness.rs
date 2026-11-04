@@ -338,6 +338,22 @@ fn keeps_gate(stored: &ReadinessFinding, given: &ReadinessFinding) -> R<()> {
     Ok(())
 }
 
+/// Whether `given` gates more than `stored` did: an open blocker where it was not one (it was
+/// non-blocking or settled), a new prerequisite, a wider scope (every scope where it named
+/// one) or more work (the whole scope where it named work, or work it did not name).
+fn strengthens(stored: &ReadinessFinding, given: &ReadinessFinding) -> bool {
+    if !open_blocking(given) {
+        return false;
+    }
+    let named = &stored.affected_work_ids.0;
+    !open_blocking(stored)
+        || (given.prerequisite && !stored.prerequisite)
+        || (stored.scope_key.is_some() && given.scope_key.is_none())
+        || (!named.is_empty()
+            && (given.affected_work_ids.0.is_empty()
+                || given.affected_work_ids.0.iter().any(|w| !named.contains(w))))
+}
+
 fn evidence_keys(f: &ReadinessFinding) -> BTreeSet<String> {
     f.evidence
         .0
@@ -455,7 +471,8 @@ pub(crate) fn apply_change(
             let mut out: Vec<ReadinessFinding> = findings.0.clone();
             if let Some(prev) = &previous {
                 // Closure is checked without reopening settled choices: at an unchanged plan, a
-                // new blocker or a reopened finding needs newly discovered evidence.
+                // new blocker, a reopened finding or a strengthened one needs newly discovered
+                // evidence (AGENT-20).
                 let same_plan = prev.plan_digest == digest;
                 for f in &findings.0 {
                     let old = prev.findings.iter().find(|o| o.id == f.id);
@@ -468,7 +485,8 @@ pub(crate) fn apply_change(
                             && matches!(f.state, FindingState::Open)
                     });
                     let added_blocker = old.is_none() && open_blocking(f);
-                    if same_plan && (reopened || added_blocker) && !new_evidence {
+                    let strengthened = old.is_some_and(|o| strengthens(o, f));
+                    if same_plan && (reopened || added_blocker || strengthened) && !new_evidence {
                         return Err(conflict("settled_without_new_evidence", &f.id));
                     }
                     if old.is_some_and(|o| matches!(o.state, FindingState::RiskAccepted))
