@@ -129,6 +129,56 @@ impl Default for Draft {
     }
 }
 
+impl Draft {
+    /// An edit draft of `c` as it is stored, at its revision.
+    pub fn of(c: &KnowledgeClaim) -> Self {
+        let join = |items: Vec<String>| items.join(", ");
+        Self {
+            revises: Some((c.id.clone(), c.revision.get())),
+            entry_kind: ENTRY_KINDS
+                .iter()
+                .map(|(e, _)| *e)
+                .find(|e| Some(e.to_string()) == c.entry_kind.as_ref().map(wire))
+                .unwrap_or("Fact"),
+            subject: String::new(),
+            value: c.value.as_ref().map(|v| v.0.clone()).unwrap_or_default(),
+            tags: join(c.tags.0.iter().map(|t| t.0.clone()).collect()),
+            activities: c.lesson.as_ref().map_or_else(String::new, |l| {
+                join(
+                    l.applicability
+                        .activities
+                        .0
+                        .iter()
+                        .map(|a| a.0.clone())
+                        .collect(),
+                )
+            }),
+        }
+    }
+    /// This draft rebased onto `stored`, a newer revision of the entry it edits (its own save,
+    /// or another write), field by field (the rule project forms follow): a field the user did
+    /// not change since `base` takes the stored value, a changed field keeps the user's, and
+    /// the draft then revises the stored revision.
+    pub fn rebased(self, base: &Draft, stored: &Draft) -> Self {
+        fn pick<T: PartialEq>(mine: T, base: &T, stored: &T, clone: impl Fn(&T) -> T) -> T {
+            if mine == *base { clone(stored) } else { mine }
+        }
+        Self {
+            revises: stored.revises.clone(),
+            entry_kind: pick(self.entry_kind, &base.entry_kind, &stored.entry_kind, |k| k),
+            subject: self.subject,
+            value: pick(self.value, &base.value, &stored.value, String::clone),
+            tags: pick(self.tags, &base.tags, &stored.tags, String::clone),
+            activities: pick(
+                self.activities,
+                &base.activities,
+                &stored.activities,
+                String::clone,
+            ),
+        }
+    }
+}
+
 /// A lifecycle change of the selected entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -310,6 +360,10 @@ pub struct KnowledgeScreen {
     /// What the write in flight took from the forms (`None`: unknown, as for a write held
     /// from an earlier launch, which clears nothing).
     pub submitted: Option<Submitted>,
+    /// What an edit draft's fields were when it opened on its entry's revision, or as its last
+    /// save submitted them: a field still equal to it is one the user did not change, which a
+    /// newer revision of the entry replaces (`None` with a new-entry draft).
+    pub draft_base: Option<Draft>,
     pub message: Option<(Tone, String)>,
     pub reason: String,
     pub tag_edit: String,
@@ -643,6 +697,25 @@ impl KnowledgeScreen {
                 }
                 if let Some(id) = &self.selected {
                     self.tags_loaded = Some((id.clone(), loaded));
+                }
+                // An edit draft of this entry at an older revision (its own save succeeded with
+                // later edits, or another write changed the entry) is rebased onto the stored
+                // one, so its next save applies instead of failing with a revision conflict.
+                if let Some(c) = value.claims.0.iter().find(|c| c.id.as_str() == claim)
+                    && let Some(d) = self.draft.take()
+                {
+                    self.draft = Some(match &d.revises {
+                        Some((id, revision))
+                            if id.as_str() == claim && c.revision.get() > *revision =>
+                        {
+                            let stored = Draft::of(c);
+                            // Without a base, every field counts as the user's.
+                            let base = self.draft_base.clone().unwrap_or_else(|| d.clone());
+                            self.draft_base = Some(stored.clone());
+                            d.rebased(&base, &stored)
+                        }
+                        _ => d,
+                    });
                 }
                 self.detail = Some(value);
                 self.detail_error = None;
@@ -1048,13 +1121,35 @@ impl KnowledgeScreen {
     pub fn written(&mut self, outcome: CommandOutcome) -> bool {
         let label = self.writing.take().unwrap_or_else(|| "Change".into());
         match ops::command_result(outcome) {
-            Ok(_) => {
+            Ok(result) => {
                 let mut kept = false;
                 match self.submitted.take() {
                     Some(Submitted::Draft(d)) if self.draft.as_ref() == Some(&d) => {
                         self.draft = None;
+                        self.draft_base = None;
                     }
-                    Some(Submitted::Draft(_)) => kept = self.draft.is_some(),
+                    Some(Submitted::Draft(d)) => {
+                        kept = self.draft.is_some();
+                        // The stored entry holds what was submitted: a field still equal to it is
+                        // not an edit made since.
+                        if let Some(live) = self.draft.as_mut()
+                            && live.revises == d.revises
+                        {
+                            if d.revises.is_none()
+                                && let OperationResult::KnowledgeRecord { value } = &result
+                                && let Some(created) = value.claim_ids.0.first()
+                            {
+                                // The entry it created is what the later edits change: the
+                                // draft edits it (selected, so it is read and the draft rebased
+                                // onto its revision), never records a second one.
+                                live.revises = Some((created.clone(), 0));
+                                self.selected = Some(created.clone());
+                                self.detail = None;
+                                self.detail_error = None;
+                            }
+                            self.draft_base = Some(d);
+                        }
+                    }
                     Some(Submitted::Reason(r)) if self.reason == r => self.reason.clear(),
                     _ => {}
                 }
@@ -1522,18 +1617,9 @@ impl KnowledgeScreen {
             let lifecycle = c.lifecycle.as_ref().map_or_else(|| "Active".to_owned(), wire);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(enabled && lifecycle == "Active", egui::Button::new("Edit")).clicked() {
-                    self.draft = Some(Draft {
-                        revises: Some((c.id.clone(), c.revision.get())),
-                        entry_kind: ENTRY_KINDS
-                            .iter()
-                            .map(|(e, _)| *e)
-                            .find(|e| Some(e.to_string()) == c.entry_kind.as_ref().map(wire))
-                            .unwrap_or("Fact"),
-                        subject: String::new(),
-                        value: c.value.as_ref().map(|v| v.0.clone()).unwrap_or_default(),
-                        tags: c.tags.0.iter().map(|t| t.0.clone()).collect::<Vec<_>>().join(", "),
-                        activities: c.lesson.as_ref().map(|l| l.applicability.activities.0.iter().map(|a| a.0.clone()).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
-                    });
+                    let opened = Draft::of(&c);
+                    self.draft_base = Some(opened.clone());
+                    self.draft = Some(opened);
                 }
                 let mut offer = vec![Change::SaveTags];
                 if lifecycle == "Active" {

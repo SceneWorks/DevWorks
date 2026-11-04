@@ -491,3 +491,137 @@ fn a_completed_write_clears_only_the_form_it_submitted_and_only_if_unchanged() {
     assert_eq!(h.state().knowledge.reason, "checked again, twice");
     h.state_mut().on_exit();
 }
+
+/// The stored entry `id` as listed.
+fn listed(
+    h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    id: &devworks_core::protocol::Id,
+) -> (String, Vec<String>) {
+    let c = h
+        .state()
+        .knowledge
+        .items
+        .iter()
+        .find(|c| c.id == *id)
+        .unwrap_or_else(|| panic!("{id:?} is listed"));
+    (
+        c.value.as_ref().unwrap().0.clone(),
+        c.tags.0.iter().map(|t| t.0.clone()).collect(),
+    )
+}
+
+/// Saves the open draft while `gate` holds its reply, types `more` into it meanwhile, then
+/// lets the reply arrive.
+fn save_typing_meanwhile(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    gate: &Gate,
+    more: &str,
+) {
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save entry").click();
+    step_until(h, "the entry is being saved", |s| {
+        s.knowledge.writing.is_some()
+    });
+    type_into(h, "Entry text", more);
+    gate.open();
+    settle(h);
+    assert!(
+        has_text(h, "The edits made while it was saving stay in the form"),
+        "{:?}",
+        h.state().knowledge.message
+    );
+}
+
+#[test]
+fn an_entry_edited_while_saving_saves_again_onto_the_stored_revision() {
+    let root = Root::new("knowledge-rebase");
+    let engine = start(&root);
+    let real = engine.backend();
+    let record = Gate::holding_replies("knowledge.record");
+    let revise = Gate::holding_replies("knowledge.revise");
+    let mut h = harness(
+        shell_with(
+            Ok(revise.over(record.over(real.clone()))),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+
+    // A new entry edited while it saves: the later text edits the entry it created.
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry subject", "Storage");
+    type_into(&mut h, "Entry text", "First entry");
+    type_into(&mut h, "Entry tags", "Storage");
+    save_typing_meanwhile(&mut h, &record, ", revised");
+    let id = h
+        .state()
+        .knowledge
+        .draft
+        .as_ref()
+        .unwrap()
+        .revises
+        .clone()
+        .unwrap()
+        .0;
+    assert_eq!(h.state().knowledge.items.len(), 1);
+    // The tags were not edited after the save submitted them: they are the stored ones now
+    // (as the store folded them), the text keeps the later edit.
+    let stored_tags = listed(&h, &id).1.join(", ");
+    assert_ne!(stored_tags, "Storage");
+    assert_eq!(
+        h.state().knowledge.draft.as_ref().map(|d| d.tags.clone()),
+        Some(stored_tags)
+    );
+    click(&mut h, Role::Button, "Save entry");
+    assert!(
+        has_text(&h, "Entry recorded."),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    assert!(h.state().knowledge.draft.is_none());
+    assert_eq!(h.state().knowledge.items.len(), 1, "never a second entry");
+    assert_eq!(listed(&h, &id).0, "First entry, revised");
+
+    // An edit of it, changed again while its own save runs, then saved again: the second save
+    // applies at the stored revision and keeps the later edit.
+    click(&mut h, Role::Button, "Edit");
+    type_into(&mut h, "Entry text", " twice");
+    save_typing_meanwhile(&mut h, &revise, " and more");
+    click(&mut h, Role::Button, "Save entry");
+    assert!(
+        has_text(&h, "Entry recorded."),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    assert!(h.state().knowledge.draft.is_none());
+    assert_eq!(listed(&h, &id).0, "First entry, revised twice and more");
+
+    // Another write of the entry while it is being edited: the field the user did not change
+    // (tags) takes the stored value, the one they changed keeps theirs, and the save applies
+    // without undoing the other write.
+    click(&mut h, Role::Button, "Edit");
+    type_into(&mut h, "Entry text", ", final");
+    h.state_mut().knowledge.tag_edit = "fresh".into();
+    click(&mut h, Role::Button, Change::SaveTags.label());
+    assert!(has_text(&h, "Save tags recorded."));
+    assert_eq!(
+        h.state().knowledge.draft.as_ref().map(|d| d.tags.as_str()),
+        Some("fresh")
+    );
+    click(&mut h, Role::Button, "Save entry");
+    assert!(
+        has_text(&h, "Entry recorded."),
+        "{:?}",
+        h.state().knowledge.message
+    );
+    let (text, tags) = listed(&h, &id);
+    assert_eq!(text, "First entry, revised twice and more, final");
+    assert!(tags.contains(&"fresh".to_owned()), "{tags:?}");
+    h.state_mut().on_exit();
+}
