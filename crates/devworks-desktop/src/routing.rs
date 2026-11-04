@@ -74,6 +74,10 @@ pub struct Routing {
     /// Conversations whose explicit pin change is submitted and not yet decided (kept while its
     /// outcome is unknown, and restored with it after a relaunch).
     pub pin_in_flight: std::collections::BTreeSet<String>,
+    /// The selection each conversation's availability query in flight asks about: a refresh
+    /// for the same selection waits for it instead of asking again, so a slow router never
+    /// fills the client's few workers with identical queries.
+    pub status_asked: BTreeMap<String, Selection>,
 }
 
 /// One catalog load: the pages gathered so far.
