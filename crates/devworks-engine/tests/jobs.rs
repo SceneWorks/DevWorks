@@ -152,23 +152,25 @@ impl CommandHandler for Docs {
 #[derive(Default)]
 struct FakeHost {
     stopped: Arc<AtomicUsize>,
+    stop_uncertain: Arc<AtomicBool>,
 }
 struct FakeTree {
     identity: NativeIdentity,
     gone: bool,
     stopped: Arc<AtomicUsize>,
+    stop_uncertain: Arc<AtomicBool>,
 }
 impl ProcessTree for FakeTree {
     fn identity(&self) -> &NativeIdentity {
         &self.identity
     }
     fn request_stop(&mut self) -> Result<bool, ProcessError> {
-        self.gone = true;
+        self.gone = !self.stop_uncertain.load(Ordering::SeqCst);
         self.stopped.fetch_add(1, Ordering::SeqCst);
         Ok(true)
     }
     fn kill(&mut self) -> Result<(), ProcessError> {
-        self.gone = true;
+        self.gone = !self.stop_uncertain.load(Ordering::SeqCst);
         Ok(())
     }
     fn poll(&mut self) -> Result<TreeStatus, ProcessError> {
@@ -199,6 +201,7 @@ impl ProcessHost for FakeHost {
             },
             gone: false,
             stopped: self.stopped.clone(),
+            stop_uncertain: self.stop_uncertain.clone(),
         }))
     }
     fn probe(&self, _: &NativeIdentity) -> Probe {
@@ -526,11 +529,26 @@ fn a_run_active_at_close_resumes_after_reopen_and_feature_holds_stay() {
 
 #[test]
 fn cancelling_a_dispatched_run_stops_its_trees_through_the_process_owner() {
+    cancel_failed_inner(true, false);
+}
+
+#[test]
+fn an_inner_failure_before_the_first_cancel_tick_still_verifies_the_process_stop() {
+    cancel_failed_inner(false, false);
+}
+
+#[test]
+fn an_inner_failure_after_an_uncertain_stop_never_claims_cancellation() {
+    cancel_failed_inner(true, true);
+}
+
+fn cancel_failed_inner(prior_tick: bool, uncertain: bool) {
     let h = Harness::new();
     drop(h.open());
     seed(&h);
     let rt = runtime();
     let app = boot_app(&rt, &h, true);
+    app.host.stop_uncertain.store(uncertain, Ordering::SeqCst);
     let job = value(app.command("jobs.create", job_body(json!({"kind": "Manual"}), true)));
     let jid = id(job["id"].as_str().unwrap());
     let run = value(app.command(
@@ -541,6 +559,29 @@ fn cancelling_a_dispatched_run_stops_its_trees_through_the_process_owner() {
     app.tick(&rt);
     let running = app.run(&rid);
     let inner = running.inner_operation_id.clone().unwrap();
+    // Drive cancellation ticks explicitly: the booted loop also wakes on job commands.
+    app.runtime.scheduler().stop();
+    struct NoDispatch;
+    impl devworks_core::services::jobs::runner::NativeJobDispatch for NoDispatch {
+        fn command(
+            &self,
+            _: &InvocationContext,
+            _: &str,
+            _: &[u8],
+        ) -> devworks_core::gateway::CommandOutcome {
+            panic!("cancellation cannot dispatch a new operation")
+        }
+    }
+    let mut scheduler = devworks_engine::Scheduler::new(
+        app.store.clone(),
+        app.runtime.jobs().clone(),
+        Arc::new(NoDispatch),
+        Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
+        app.runtime.processes().clone(),
+    );
+    let config = Arc::get_mut(&mut scheduler).unwrap();
+    config.stop_grace = Duration::ZERO;
+    config.stop_bound = Duration::from_millis(50);
     // The accepted operation launched an owned tree.
     let fs = NativeFilesystem::default();
     let roots = ProtectedRoots::new(vec![], vec![], None);
@@ -569,16 +610,37 @@ fn cancelling_a_dispatched_run_stops_its_trees_through_the_process_owner() {
         panic!("{reply:?}")
     };
     assert!(matches!(receipt.decision, DomainDecision::Accepted { .. }));
-    let report = app.tick(&rt);
-    // The tree was stopped through the process owner; the run waits for its operation's
-    // outcome instead of claiming a cancellation it has not observed.
-    assert_eq!(app.host.stopped.load(Ordering::SeqCst), 1);
-    assert!(report.cancelled.is_empty());
-    let asked = app.run(&rid);
-    assert!(asked.cancel_requested && asked.status == "Running");
+    if prior_tick {
+        let report = rt.block_on(scheduler.tick()).unwrap();
+        // Even an uncertain stop keeps the run active until its operation ends.
+        assert!(app.host.stopped.load(Ordering::SeqCst) > 0);
+        assert!(report.cancelled.is_empty());
+        let asked = app.run(&rid);
+        assert!(asked.cancel_requested && asked.status == "Running");
+    }
     finish_inner(&app.store, inner, OperationState::Failed);
-    app.tick(&rt);
-    assert_eq!(app.run(&rid).status, "Cancelled");
+    let report = rt.block_on(scheduler.tick()).unwrap();
+    assert_eq!(
+        report.settled, 0,
+        "polling cannot bypass verified cancellation"
+    );
+    assert_eq!(report.cancelled, vec![rid.clone()]);
+    assert!(app.host.stopped.load(Ordering::SeqCst) > 0);
+    let ended = app.run(&rid);
+    assert_eq!(
+        ended.status,
+        if uncertain {
+            "OutcomeUnknown"
+        } else {
+            "Cancelled"
+        }
+    );
+    assert!(ended.reason.unwrap().contains(if uncertain {
+        "could not be verified stopped"
+    } else {
+        "verified stopped"
+    }));
+    app.host.stop_uncertain.store(false, Ordering::SeqCst);
     rt.block_on(app.runtime.shutdown());
 }
 

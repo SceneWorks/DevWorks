@@ -962,6 +962,9 @@ fn cancel_is_bound_to_the_named_run_and_never_reports_an_unverified_stop() {
             .transition(&inner, rec.revision, None, OperationState::Failed, None)
     });
     let svc = fx.jobs.clone();
+    assert_eq!(fx.write(move |tx| svc.poll_inner(tx)), 0);
+    assert_eq!(fx.run(asked.id.as_str()).status, "Running");
+    let svc = fx.jobs.clone();
     let (rid, rev) = (asked.id.clone(), asked.revision);
     let settled = fx
         .write(move |tx| {

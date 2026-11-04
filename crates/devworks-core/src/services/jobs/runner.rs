@@ -1447,15 +1447,16 @@ impl JobService {
                         settled += 1;
                     }
                     OperationState::Failed | OperationState::CancelledBeforeDispatch => {
-                        let status = if run.cancel_requested {
-                            "Cancelled"
-                        } else {
-                            "Failed"
-                        };
+                        // A failed operation does not establish that its owned processes
+                        // stopped. Leave requested cancellations for the scheduler's
+                        // verified-stop path, including a previously uncertain stop.
+                        if run.cancel_requested {
+                            continue;
+                        }
                         finish(
                             tx,
                             &run,
-                            status,
+                            "Failed",
                             Some(OperationState::Failed),
                             Some(&format!(
                                 "operation {} ended {:?}",
