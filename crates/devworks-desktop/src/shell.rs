@@ -656,20 +656,21 @@ impl Shell {
                     update,
                 } => {
                     if let Some(c) = &mut self.client {
-                        self.addons.busy =
-                            c.task(Slot::AddonsCommand, "Downloading the add-on", move |b| {
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave {
+                                update: update.then_some(package.clone()),
+                                registry,
+                            },
+                            "Downloading the add-on",
+                            move |b| {
                                 let path = b.fetch_index_bundle(&package, &digest)?;
-                                let installed = a::install_from_file(
-                                    b,
-                                    &path,
-                                    update.then_some(package.as_str()),
-                                    registry,
-                                );
+                                let installed = a::prepare_install_from_file(b, &path);
                                 // The download was saved as an artifact (or refused): it
                                 // never accumulates in the scratch directory.
                                 let _ = std::fs::remove_file(&path);
                                 installed
-                            });
+                            },
+                        );
                     }
                     None
                 }
@@ -689,10 +690,11 @@ impl Shell {
                     if let Some(path) = self.dialogs.pick_package()
                         && let Some(c) = &mut self.client
                     {
-                        self.addons.busy =
-                            c.task(Slot::AddonsCommand, "Installing the add-on", move |b| {
-                                a::install_from_file(b, &path, update.as_deref(), registry)
-                            });
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave { update, registry },
+                            "Preparing the add-on",
+                            move |b| a::prepare_install_from_file(b, &path),
+                        );
                     }
                     None
                 }
@@ -1866,7 +1868,6 @@ impl Shell {
                     Ok(
                         TaskOutput::Preview { .. }
                         | TaskOutput::Prepared { .. }
-                        | TaskOutput::Package { .. }
                         | TaskOutput::Refreshed,
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
@@ -1927,7 +1928,6 @@ impl Shell {
                         Ok(
                             TaskOutput::Stored { .. }
                             | TaskOutput::Prepared { .. }
-                            | TaskOutput::Package { .. }
                             | TaskOutput::Refreshed,
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
@@ -2180,7 +2180,7 @@ impl Shell {
                 }
             },
             (Slot::AddonsCommand, Reply::Command(outcome)) => {
-                self.addons.busy = false;
+                self.addons.busy = is_unknown(&outcome);
                 // A configuration refused by the package's schema names the diagnostic that
                 // carries its field errors: fetch it for the form.
                 if let Some(package) = crate::addons::configured_package(&outcome) {
@@ -2200,14 +2200,52 @@ impl Shell {
                 }
                 self.load_addons();
             }
-            (Slot::AddonsCommand, Reply::Task(t)) => {
+            (
+                Slot::AddonsSave { update, registry },
+                Reply::Task(Ok(TaskOutput::Prepared { frame })),
+            ) => {
+                if let Some(client) = &mut self.client {
+                    client.command(
+                        Slot::AddonsSave { update, registry },
+                        "Saving the add-on bundle",
+                        "artifacts.save",
+                        frame,
+                    );
+                }
+            }
+            (Slot::AddonsSave { update, registry }, Reply::Command(outcome)) => {
+                let unknown = is_unknown(&outcome);
+                match ops::saved_artifact(outcome) {
+                    Ok(saved) => {
+                        if let Some(backend) = self.backend() {
+                            let (op, frame) = crate::addons::install_saved(
+                                &*backend,
+                                &saved.artifact,
+                                update.as_deref(),
+                                registry,
+                            );
+                            if let Some(client) = &mut self.client {
+                                client.command(
+                                    Slot::AddonsCommand,
+                                    "Installing the add-on",
+                                    op,
+                                    frame,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.addons.busy = unknown;
+                        self.addons.notice = Some(e.describe());
+                    }
+                }
+            }
+            (Slot::AddonsSave { .. }, Reply::Task(t)) => {
                 self.addons.busy = false;
                 self.addons.notice = Some(match t {
-                    Ok(TaskOutput::Package { outcome }) => crate::addons::describe(outcome),
-                    Ok(_) => "unexpected reply".into(),
                     Err(e) => e,
+                    Ok(_) => "unexpected reply".into(),
                 });
-                self.load_addons();
             }
             (Slot::KnowledgeList(generation), Reply::Query(q)) => {
                 if self.knowledge.listed(generation, q) {
@@ -3046,6 +3084,7 @@ impl Shell {
                             .collect();
                     }
                 }
+                Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
                     p.sequence = p.sequence.max(*n);
