@@ -2714,13 +2714,14 @@ impl BrowserService {
         r
     }
 
+    /// Inspects a target of the live session `s` and publishes the accessibility snapshot as
+    /// evidence. Runs in [`QueryHandler::prepare`], never inside the gateway's read snapshot:
+    /// it reads and writes the store itself.
     fn inspect(
         &self,
-        snapshot: &dyn ReadSnapshot,
-        ctx: &InvocationContext,
+        s: &StoredBrowserSession,
         target: &BrowserTarget,
     ) -> Result<OperationResult, Failure> {
-        let s = self.readable(snapshot, ctx, &target.session_id)?;
         if s.phase != BrowserPhase::Ready {
             return Err(
                 Refusal::new(DomainErrorCode::Conflict, SESSION_STATE, Some(s.id.clone())).into(),
@@ -2734,14 +2735,14 @@ impl BrowserService {
         Ok(OperationResult::BrowserInspect { value })
     }
 
+    /// Captures a target of the live session `s` and publishes the image as evidence. Runs in
+    /// [`QueryHandler::prepare`], like [`Self::inspect`].
     fn screenshot(
         &self,
-        snapshot: &dyn ReadSnapshot,
-        ctx: &InvocationContext,
+        s: &StoredBrowserSession,
         target: &BrowserTarget,
         full_page: bool,
     ) -> Result<OperationResult, Failure> {
-        let s = self.readable(snapshot, ctx, &target.session_id)?;
         if s.phase != BrowserPhase::Ready {
             return Err(
                 Refusal::new(DomainErrorCode::Conflict, SESSION_STATE, Some(s.id.clone())).into(),
@@ -2753,7 +2754,7 @@ impl BrowserService {
                 .map_err(|e| action_failure(e, target))
         })?;
         let evidence = self.session_evidence(
-            &s,
+            s,
             format!("Screenshot of {}", target.target_id.as_str()),
             "image/png",
             json!({
@@ -2782,7 +2783,7 @@ impl BrowserService {
         page: &crate::protocol::records::PageRequest,
         channel: BrowserChannel,
     ) -> Result<Page<BrowserObservation>, Failure> {
-        let s = self.readable(snapshot, ctx, id)?;
+        self.readable(snapshot, ctx, id)?;
         let op_name = match channel {
             BrowserChannel::Network => "browser.network",
             _ => "browser.console",
@@ -2796,8 +2797,37 @@ impl BrowserService {
                 .map_err(|_| StorageError::CursorExpired)?
                 .max(after);
         }
-        // Notifications buffered since the last read are published as one observation first.
-        let mut published_now = false;
+        let limit = (page.limit.get() as usize).clamp(1, MAX_PAGE as usize);
+        // The page is read from the gateway's snapshot, taken after this query's preparation
+        // published what was pending ([`Self::publish_pending`]): committed sequences form a
+        // gap-free prefix (each is allocated and committed by the single writer in turn), so
+        // that snapshot also sees every earlier one another query published meanwhile, and a
+        // continuation never skips one.
+        let mut items = observation_page(snapshot, id, channel, position, limit)?;
+        let more = items.len() > limit;
+        items.truncate(limit);
+        let next_cursor = if more {
+            items
+                .last()
+                .map(|i| BoundedText(binding.encode(&i.sequence.get().to_string())))
+        } else {
+            None
+        };
+        Ok(Page {
+            items: BoundedList(items),
+            next_cursor,
+            has_more: more,
+        })
+    }
+
+    /// Publishes the notifications of `channel` buffered since the last read as one
+    /// observation. Runs in [`QueryHandler::prepare`], outside the gateway's read snapshot.
+    fn publish_pending(
+        &self,
+        s: &StoredBrowserSession,
+        channel: BrowserChannel,
+    ) -> Result<(), Failure> {
+        let id = &s.id;
         if s.phase == BrowserPhase::Ready
             && let Some(slot) = self.existing_slot(id)
         {
@@ -2821,9 +2851,9 @@ impl BrowserService {
             };
             if let Some((batch, cdp)) = pending {
                 let (doc, truncated) = batch.document(id, channel.as_str(), cdp > 0);
-                let published = self.publish_observation(&s, channel, &doc, truncated, None);
+                let published = self.publish_observation(s, channel, &doc, truncated, None);
                 match published {
-                    Ok(_) => published_now = true,
+                    Ok(_) => {}
                     Err(e) => {
                         // Nothing was recorded: the notifications stay pending for a retry.
                         let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
@@ -2839,33 +2869,37 @@ impl BrowserService {
                 }
             }
         }
-        let limit = (page.limit.get() as usize).clamp(1, MAX_PAGE as usize);
-        // The page is read from a snapshot that sees this query's own publication: committed
-        // sequences form a gap-free prefix (each is allocated and committed by the single
-        // writer in turn), so a snapshot taken after the publication also sees every earlier
-        // one another query published meanwhile, and a continuation never skips one.
-        let mut items = if published_now {
-            read_snapshot(&*self.store, &ReadOptions::default(), |fresh| {
-                observation_page(fresh, id, channel, position, limit)
-            })?
-        } else {
-            observation_page(snapshot, id, channel, position, limit)?
-        };
-        let more = items.len() > limit;
-        items.truncate(limit);
-        let next_cursor = if more {
-            items
-                .last()
-                .map(|i| BoundedText(binding.encode(&i.sequence.get().to_string())))
-        } else {
-            None
-        };
-        Ok(Page {
-            items: BoundedList(items),
-            next_cursor,
-            has_more: more,
-        })
+        Ok(())
     }
+
+    /// The live observation [`QueryHandler::prepare`] made for the session `id`, answered once
+    /// the session is still readable in the gateway's snapshot.
+    fn observed(
+        &self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        id: &Id,
+        observed: Option<&Observed>,
+    ) -> Result<OperationResult, Failure> {
+        self.readable(snapshot, ctx, id)?;
+        match observed {
+            Some(Observed::Result(r)) => Ok(r.clone()),
+            _ => {
+                Err(Refusal::new(DomainErrorCode::Conflict, SESSION_STATE, Some(id.clone())).into())
+            }
+        }
+    }
+}
+
+/// What a browser read prepared outside the gateway's read snapshot
+/// ([`QueryHandler::prepare`]): the live observation and the evidence published from it. Live
+/// observation reads and writes the store (the session, evidence and its index), so it never
+/// runs while the query's pooled reader is held.
+enum Observed {
+    /// An inspection or a screenshot, its evidence published.
+    Result(OperationResult),
+    /// The channel's pending notifications were published (or none were pending).
+    Published,
 }
 
 /// One page (plus one row of lookahead) of a session's observations after `position`.
@@ -3011,6 +3045,42 @@ pub struct BrowserRecovery {
 }
 
 impl QueryHandler for BrowserService {
+    /// Live reads (inspect, screenshot, and the publication of pending console and network
+    /// notifications) run here, before the gateway takes its read snapshot: they read and
+    /// write the store themselves, which must never happen while the query holds a pooled
+    /// reader (a store with one reader would wait on itself).
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, DomainFault> {
+        let OperationInput::Browser(input) = query.input() else {
+            return Ok(None);
+        };
+        let session = |id: &Id| -> Result<StoredBrowserSession, Failure> {
+            env.read(|s| Ok(session_of(s.browser(), ctx, id)))?
+        };
+        let observed = match input {
+            ops::Input::Inspect(i) => session(&i.target.session_id)
+                .and_then(|s| self.inspect(&s, &i.target))
+                .map(Observed::Result),
+            ops::Input::Screenshot(i) => session(&i.target.session_id)
+                .and_then(|s| self.screenshot(&s, &i.target, i.full_page))
+                .map(Observed::Result),
+            ops::Input::Console(i) => session(&i.session_id)
+                .and_then(|s| self.publish_pending(&s, BrowserChannel::Console))
+                .map(|()| Observed::Published),
+            ops::Input::Network(i) => session(&i.session_id)
+                .and_then(|s| self.publish_pending(&s, BrowserChannel::Network))
+                .map(|()| Observed::Published),
+            _ => return Ok(None),
+        };
+        observed
+            .map(|o| Some(Prepared::new(o)))
+            .map_err(|f| query_fault(f, "browser_session", self.correlation()))
+    }
+
     fn query(
         &self,
         ctx: &InvocationContext,
@@ -3023,10 +3093,13 @@ impl QueryHandler for BrowserService {
                     .fault(self.correlation()),
             );
         };
+        let observed = query.prepared::<Observed>();
         let answered = match input {
             ops::Input::SessionsQuery(i) => self.list(snapshot, ctx, i),
-            ops::Input::Inspect(i) => self.inspect(snapshot, ctx, &i.target),
-            ops::Input::Screenshot(i) => self.screenshot(snapshot, ctx, &i.target, i.full_page),
+            ops::Input::Inspect(i) => self.observed(snapshot, ctx, &i.target.session_id, observed),
+            ops::Input::Screenshot(i) => {
+                self.observed(snapshot, ctx, &i.target.session_id, observed)
+            }
             ops::Input::Console(i) => self
                 .notices(
                     snapshot,

@@ -3894,6 +3894,67 @@ fn an_uncertain_session_without_a_recorded_tree_is_never_closed_unverified() {
     assert!(fx.session(&session).process_id.is_some());
 }
 
+/// Browser reads observe the live session and publish evidence before the gateway takes its
+/// read snapshot: with a single pooled reader, none of them waits on the reader its own query
+/// holds.
+#[test]
+fn browser_reads_answer_over_a_store_with_a_single_reader() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let fx = Fx::boot(h, platform);
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let started = Instant::now();
+    let inspected = fx.inspect(&user, &target_json(&snap));
+    assert_eq!(target_json(&inspected), target_json(&snap));
+    match fx.result(
+        &user,
+        "browser.screenshot",
+        json!({"target": target_json(&snap), "fullPage": false}),
+    ) {
+        OperationResult::BrowserScreenshot { value } => assert_eq!(value.media_type, "image/png"),
+        other => panic!("{other:?}"),
+    }
+    let b = fx.platform.browser(&session);
+    b.lock().unwrap().emit(
+        Some("S1"),
+        "Runtime.consoleAPICalled",
+        json!({"type": "log", "args": [{"type": "string", "value": "one reader"}]}),
+    );
+    match fx.result(
+        &user,
+        "browser.console",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserConsole { value } => {
+            let text = value
+                .items
+                .0
+                .iter()
+                .map(|o| fx.json(&o.evidence).to_string())
+                .collect::<String>();
+            assert!(text.contains("one reader"), "{text}");
+        }
+        other => panic!("{other:?}"),
+    }
+    match fx.result(
+        &user,
+        "browser.network",
+        json!({"sessionId": session.as_str(), "afterSequence": "0", "page": {"limit": 50}}),
+    ) {
+        OperationResult::BrowserNetwork { .. } => {}
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "no read waited for a reader: {:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn navigation_without_a_target_registers_a_new_one_and_artifact_pages_are_staged() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());

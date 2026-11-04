@@ -40,6 +40,8 @@ pub struct Harness {
     pub root: PathBuf,
     pub clock: Arc<TestClock>,
     pub ids: Arc<TestIds>,
+    /// Read connections of every store opened (0: the adapter's default).
+    pub readers: AtomicUsize,
 }
 impl Harness {
     pub fn new() -> Self {
@@ -54,6 +56,7 @@ impl Harness {
             root,
             clock: Arc::new(TestClock(AtomicI64::new(T0))),
             ids: Arc::new(TestIds(AtomicU64::new(0))),
+            readers: AtomicUsize::new(0),
         }
     }
     /// Opens (or reopens, as a new boot) the store.
@@ -61,13 +64,17 @@ impl Harness {
         Arc::new(self.open_sqlite())
     }
     pub fn open_sqlite(&self) -> SqliteStore {
-        SqliteStore::open(SqliteConfig::new(
+        let mut config = SqliteConfig::new(
             self.root.clone(),
             self.clock.clone(),
             self.ids.clone(),
             ActorId(Id::new("host").unwrap()),
-        ))
-        .expect("open store")
+        );
+        let readers = self.readers.load(Ordering::SeqCst);
+        if readers > 0 {
+            config.read_connections = readers;
+        }
+        SqliteStore::open(config).expect("open store")
     }
     pub fn now(&self) -> i64 {
         self.clock.0.load(Ordering::SeqCst)
