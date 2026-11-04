@@ -1216,6 +1216,228 @@ fn a_card_leaving_its_feature_keeps_the_next_draft_savable_and_surfaces_lost_cov
     assert_eq!(fault.code, DomainErrorCode::NotFound);
 }
 
+/// Coverage-loss fixtures: a feature whose plan's E1 is covered by `covering`, approved and
+/// assessed (no findings).
+struct Coverage {
+    fx: Fx,
+    f: WorkRecord,
+    doc: ArtifactRef,
+}
+impl Coverage {
+    fn new(cards: &[&str], covering: &[usize]) -> (Self, Vec<WorkRecord>) {
+        let fx = Fx::new();
+        let p = fx.project("Alpha", &[]);
+        let f = fx.feature(&p, "Checkout", &[]);
+        let doc = fx.artifact(&p, 1);
+        let cards: Vec<WorkRecord> = cards
+            .iter()
+            .map(|t| fx.task(&fx.user(), &p, Some(&f), t, 0))
+            .collect();
+        let c = Self {
+            fx,
+            f: f.clone(),
+            doc,
+        };
+        let f = c.edit_plan(
+            &c.fx.fresh(&f),
+            &covering.iter().map(|i| &cards[*i]).collect::<Vec<_>>(),
+        );
+        let f = c.fx.approve(&f);
+        let active = f.approval.clone().unwrap();
+        let f = c.assess(
+            &f,
+            active.plan_revision.as_str(),
+            String::from(active.plan_digest.clone()),
+        );
+        (Self { f, ..c }, cards)
+    }
+    /// Saves a draft whose E1 is covered by `covering`.
+    fn edit_plan(&self, f: &WorkRecord, covering: &[&WorkRecord]) -> WorkRecord {
+        let mut plan = draft(&self.doc, &[("E1", "pay")], &[]);
+        plan["requirements"][0]["coveredByTaskIds"] =
+            json!(covering.iter().map(|w| w.id.as_str()).collect::<Vec<_>>());
+        work_of(applied(self.fx.command(
+            &self.fx.user(),
+            "features.edit_plan",
+            json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "plan": plan}),
+        )))
+    }
+    fn assess(&self, f: &WorkRecord, rev: &str, digest: String) -> WorkRecord {
+        let mut change = json!({"kind": "Assess", "planRevision": rev, "planDigest": digest,
+            "summary": "assessed", "findings": []});
+        if let Some(r) = self.revision() {
+            change["expectedAssessmentRevision"] = json!(r);
+        }
+        let f = self.fx.fresh(f);
+        work_of(applied(self.fx.command_at(
+            &self.fx.agent(),
+            "features.edit",
+            json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "changes": {"readiness": change}}),
+            Some(2),
+        )))
+    }
+    fn shown(&self) -> WorkRecord {
+        self.fx.get_at("features.get", &self.f.id, Some(2)).unwrap()
+    }
+    fn revision(&self) -> Option<String> {
+        let f = self.shown();
+        f.readiness
+            .or(f.pending_readiness)
+            .map(|r| r.revision.as_str().to_owned())
+    }
+    fn set_feature(&self, card: &WorkRecord, feature: Option<&WorkRecord>) {
+        let card = self.fx.fresh(card);
+        let mut body = json!({"taskId": card.id.as_str(),
+            "expectedRevision": card.revision.as_str(), "clearFeature": feature.is_none()});
+        if let Some(f) = feature {
+            body["featureId"] = json!(f.id.as_str());
+        }
+        applied(self.fx.command(&self.fx.user(), "tasks.set_feature", body));
+    }
+    fn e1(&self) -> devworks_core::services::runs::scope::Readiness {
+        let (runs, fid) = (self.fx.runs.clone(), RootId(self.f.id.clone()));
+        self.fx
+            .read(move |s| {
+                let w = s.sessions().work_root(&fid)?.unwrap();
+                runs.scope().plan(s.runs(), &w)
+            })
+            .unit(Some("E1"))
+            .unwrap()
+            .readiness
+            .clone()
+    }
+    fn open_ids(r: &devworks_core::protocol::records::ReadinessAssessment) -> Vec<String> {
+        r.findings
+            .0
+            .iter()
+            .filter(|x| {
+                matches!(
+                    x.state,
+                    devworks_core::protocol::records::FindingState::Open
+                )
+            })
+            .map(|x| x.id.as_str().to_owned())
+            .collect()
+    }
+    fn decide(&self, approve: bool) {
+        let f = self.fx.fresh(&self.f);
+        let pending = f.pending_plan.clone().expect("pending plan");
+        let proposal = match applied(self.fx.command(
+            &self.fx.agent(),
+            "features.request_plan_approval",
+            json!({"featureId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+                "planRevision": pending.revision.as_str(),
+                "planDigest": plan_digest(&pending.draft)}),
+        )) {
+            OperationResult::FeaturesRequestPlanApproval { value } => value,
+            other => panic!("{other:?}"),
+        };
+        let ctx = self.fx.user();
+        self.fx.write(move |tx| {
+            decide_plan_approval(tx, &ctx, &proposal.id, 1, approve)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        });
+    }
+}
+
+#[test]
+fn a_coverage_gap_only_the_pending_draft_has_never_holds_the_active_plan() {
+    use devworks_core::services::runs::scope::Readiness;
+    // The active plan covers E1 with Pay; a replacement draft covers it with Wallet instead.
+    let (c, cards) = Coverage::new(&["Pay", "Wallet"], &[0]);
+    let (pay, wallet) = (&cards[0], &cards[1]);
+    let f = c.edit_plan(&c.fx.fresh(&c.f), &[wallet]);
+    let pending = f.pending_plan.clone().unwrap();
+    c.assess(&f, pending.revision.as_str(), plan_digest(&pending.draft));
+    // Wallet leaves: only the replacement lost E1's coverage.
+    c.set_feature(wallet, None);
+    let shown = c.shown();
+    assert!(
+        Coverage::open_ids(&shown.readiness.clone().unwrap()).is_empty(),
+        "the active plan still covers E1 with {}",
+        pay.id.as_str()
+    );
+    assert_eq!(
+        Coverage::open_ids(&shown.pending_readiness.clone().unwrap()).len(),
+        1,
+        "the replacement's gap is recorded on the replacement"
+    );
+    assert!(c.e1().is_current());
+    // Rejecting the replacement leaves the active plan unblocked.
+    c.decide(false);
+    assert!(c.e1().is_current());
+    assert!(Coverage::open_ids(&c.shown().readiness.unwrap()).is_empty());
+    // Adopting it keeps the finding: E1 is blocked under the adopted plan.
+    c.decide(true);
+    let r = c.shown().readiness.unwrap();
+    assert_eq!(Coverage::open_ids(&r).len(), 1, "{:?}", r.findings);
+    assert!(matches!(c.e1(), Readiness::Blocked { .. }));
+}
+
+#[test]
+fn a_card_leaving_again_after_its_coverage_finding_closed_blocks_the_requirement_again() {
+    use devworks_core::protocol::records::FindingState;
+    use devworks_core::services::runs::scope::Readiness;
+    let (c, cards) = Coverage::new(&["Pay"], &[0]);
+    let pay = &cards[0];
+    // Pay leaves: E1 is blocked by its coverage finding.
+    c.set_feature(pay, None);
+    assert!(matches!(c.e1(), Readiness::Blocked { .. }));
+    let first = Coverage::open_ids(&c.shown().readiness.unwrap());
+    assert_eq!(first.len(), 1);
+    // Pay is linked back and the finding is closed: E1 is current again.
+    c.set_feature(pay, Some(&c.f));
+    let f = c.fx.fresh(&c.f);
+    applied(c.fx.command_at(
+        &c.fx.user(),
+        "features.edit",
+        json!({"workId": f.id.as_str(), "expectedRevision": f.revision.as_str(),
+            "changes": {"readiness": {"kind": "CloseFinding",
+                "expectedAssessmentRevision": c.revision().unwrap(),
+                "findingId": first[0], "note": "Pay is back in the feature", "evidence": []}}}),
+        Some(2),
+    ));
+    assert!(c.e1().is_current());
+    // Pay leaves again: changed scope again, so E1 is blocked again by a new occurrence.
+    c.set_feature(pay, None);
+    assert!(matches!(c.e1(), Readiness::Blocked { .. }));
+    let r = c.shown().readiness.unwrap();
+    let open = Coverage::open_ids(&r);
+    assert_eq!(open.len(), 1);
+    assert_ne!(open[0], first[0], "a new occurrence");
+    // The earlier closure is kept, in the assessment and in history.
+    let earlier = r
+        .findings
+        .0
+        .iter()
+        .find(|x| x.id.as_str() == first[0])
+        .expect("the closed finding");
+    assert!(matches!(earlier.state, FindingState::Resolved));
+    assert_eq!(
+        earlier.closure_note.as_ref().map(|n| n.0.as_str()),
+        Some("Pay is back in the feature")
+    );
+    let fid = RootId(c.f.id.clone());
+    let kinds: Vec<String> = c.fx.read(move |s| {
+        Ok(s.history()
+            .page(&EventFilter::Root(fid), 0, 500)?
+            .events
+            .into_iter()
+            .map(|e| e.kind)
+            .collect())
+    });
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|k| *k == "ReadinessCoverageLost")
+            .count(),
+        2
+    );
+    assert!(kinds.iter().any(|k| k == "ReadinessFindingClosed"));
+}
+
 #[test]
 fn readiness_is_bound_to_the_plan_and_invalidates_only_changed_units() {
     let fx = Fx::new();

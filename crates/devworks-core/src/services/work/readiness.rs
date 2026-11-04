@@ -750,47 +750,86 @@ pub(crate) fn apply_change(
     Ok(())
 }
 
-/// The live requirements of `feature`'s active plan or pending draft that `card` covered and no
-/// other card of the feature still covers (`card` has just left the feature).
-fn uncovered_by(tx: &mut dyn WriteTransaction, feature: &StoredWork, card: &Id) -> R<Vec<Id>> {
+/// The live requirements that `card` covered and no other card of the feature still covers
+/// (`card` has just left the feature), per generation: of the active plan, and of the pending
+/// draft. A generation's gap is its own: the other one may still cover the requirement.
+fn uncovered_by(
+    tx: &mut dyn WriteTransaction,
+    feature: &StoredWork,
+    card: &Id,
+) -> R<(Vec<Id>, Vec<Id>)> {
     let Some(slot) = tx.work().feature_plan(&feature.id)? else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let members = feature_work(tx.work(), feature)?;
-    let drafts = [
-        active_of(slot.approved.as_ref()).map(|a| a.draft),
-        pending_of(slot.pending.as_ref()).map(|p| p.draft),
-    ];
-    let mut out: Vec<Id> = Vec::new();
-    for d in drafts.iter().flatten() {
-        for r in d.requirements.0.iter().filter(|r| !dropped(r)) {
-            let covering = &r.covered_by_task_ids.0;
-            if covering.contains(card)
-                && !covering.iter().any(|t| members.contains(t.as_str()))
-                && !out.contains(&r.id)
-            {
-                out.push(r.id.clone());
-            }
-        }
-    }
-    Ok(out)
+    let lost = |d: Option<crate::protocol::records::PlanDraft>| -> Vec<Id> {
+        d.map(|d| {
+            d.requirements
+                .0
+                .iter()
+                .filter(|r| !dropped(r))
+                .filter(|r| {
+                    let covering = &r.covered_by_task_ids.0;
+                    covering.contains(card)
+                        && !covering.iter().any(|t| members.contains(t.as_str()))
+                })
+                .map(|r| r.id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+    };
+    Ok((
+        lost(active_of(slot.approved.as_ref()).map(|a| a.draft)),
+        lost(pending_of(slot.pending.as_ref()).map(|p| p.draft)),
+    ))
+}
+
+/// The ID stem of the coverage findings of requirement `r` lost through `card`; each departure
+/// is its own occurrence (`<stem>-<n>`).
+fn coverage_stem(r: &Id, card: &Id) -> String {
+    format!(
+        "coverage-{}",
+        &crate::fingerprint::sha256_hex(format!("{}|{}", r.as_str(), card.as_str()).as_bytes())
+            [..32]
+    )
+}
+fn of_stem(f: &ReadinessFinding, stem: &str) -> bool {
+    f.id.as_str()
+        .strip_prefix(stem)
+        .is_some_and(|rest| rest.starts_with('-'))
 }
 
 /// A card left `feature` (unlinked, or moved to another feature). A requirement it was the
 /// only covering card of has lost its delivery: that is surfaced as an open, blocking readiness
 /// finding of that requirement alone (AGENT-19: a local gap blocks only the affected scope, and
-/// AGENT-20: changed scope is what adds a blocker), never by silently dropping coverage. It is
-/// recorded in every stored assessment generation (active, and a pending draft's), and closes
-/// as any finding does (`CloseFinding`: a card covers the requirement again, or it is dropped
-/// with a decision). Without a stored assessment nothing is ready to begin with and the first
-/// assessment reviews the plan as it is. Returns the uncovered requirements.
+/// AGENT-20: changed scope is what adds a blocker), never by silently dropping coverage.
+///
+/// The finding goes to the generation that lost the coverage: a gap of the active plan into the
+/// active assessment and, as [`carry_open`] keeps every open active finding, into the pending
+/// one too; a gap only the pending draft has (the active plan still covers the requirement)
+/// into the pending assessment alone, so it never holds the active plan and a rejected
+/// replacement takes it with it, while an adopted one keeps it. Findings flow from active to
+/// pending, never back.
+///
+/// Each departure is its own occurrence with its own ID: a card that leaves again after an
+/// earlier finding was closed (it was linked back) is changed scope again, so a new open
+/// finding is recorded and the earlier one keeps its closure; while an occurrence is still open
+/// the same departure adds none. It closes as any finding does (`CloseFinding`). Without a
+/// stored assessment of a generation nothing of it is ready to begin with, and its first
+/// assessment reviews the plan as it is. Returns the requirements either generation lost.
 pub(crate) fn coverage_lost(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     feature: &StoredWork,
     card: &Id,
 ) -> R<Vec<Id>> {
-    let uncovered = uncovered_by(tx, feature, card)?;
+    let (active_lost, pending_lost) = uncovered_by(tx, feature, card)?;
+    let mut uncovered = active_lost.clone();
+    for r in &pending_lost {
+        if !uncovered.contains(r) {
+            uncovered.push(r.clone());
+        }
+    }
     let Some(stored) = tx.work().readiness(&feature.id)? else {
         return Ok(uncovered);
     };
@@ -800,12 +839,32 @@ pub(crate) fn coverage_lost(
     let mut next = Slots::of(&stored.body);
     let mut added = Vec::new();
     for r in &uncovered {
-        let id = Id::new(format!(
-            "coverage-{}",
-            &crate::fingerprint::sha256_hex(format!("{}|{}", r.as_str(), card.as_str()).as_bytes())
-                [..32]
-        ))
-        .map_err(|_| invalid("finding_id", None))?;
+        let in_active = active_lost.contains(r);
+        let in_pending = in_active || pending_lost.contains(r);
+        let stem = coverage_stem(r, card);
+        let bodies = [next.active.as_ref(), next.pending.as_ref()];
+        let open = |b: Option<&Assessment>| {
+            b.is_some_and(|b| {
+                b.findings
+                    .iter()
+                    .any(|f| of_stem(f, &stem) && matches!(f.state, FindingState::Open))
+            })
+        };
+        // This departure is already an open finding: nothing is added.
+        if (in_active && open(bodies[0])) || (!in_active && open(bodies[1])) {
+            continue;
+        }
+        let occurrence = bodies
+            .iter()
+            .flatten()
+            .flat_map(|b| b.findings.iter())
+            .filter(|f| of_stem(f, &stem))
+            .map(|f| f.id.as_str().to_owned())
+            .collect::<BTreeSet<_>>()
+            .len()
+            + 1;
+        let id =
+            Id::new(format!("{stem}-{occurrence}")).map_err(|_| invalid("finding_id", None))?;
         let finding: ReadinessFinding = serde_json::from_value(json!({
             "id": id.as_str(),
             "disposition": "NeedsUserDecision",
@@ -827,18 +886,19 @@ pub(crate) fn coverage_lost(
             "closureEvidence": [],
         }))
         .map_err(|_| invalid("finding", Some(&id)))?;
-        // Each generation that reviewed the requirement holds it; one open in the active
-        // generation is open in the pending one too (as [`carry_open`] keeps it).
+        // The generation that lost the coverage holds it once it reviewed the requirement; one
+        // open in the active generation is open in the pending one too (as [`carry_open`]
+        // keeps it).
         let mut recorded = false;
-        for body in [next.active.as_mut(), next.pending.as_mut()]
-            .into_iter()
-            .flatten()
-        {
-            let reviewed = body.units.contains_key(r.as_str()) || recorded;
-            if reviewed
-                && body.findings.len() < 128
-                && !body.findings.iter().any(|f| f.id == finding.id)
-            {
+        for (body, lost) in [
+            (next.active.as_mut(), in_active),
+            (next.pending.as_mut(), in_pending),
+        ] {
+            let Some(body) = body else {
+                continue;
+            };
+            let holds = lost && (body.units.contains_key(r.as_str()) || recorded);
+            if holds && body.findings.len() < 128 {
                 body.findings.push(finding.clone());
                 recorded = true;
             }
