@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub mod projects;
+pub mod work;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
 pub trait Dialogs {
@@ -145,6 +146,8 @@ pub struct Shell {
     pub resources: ListState<ResourceRecord>,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
+    /// Features, the board, Issues and Overview of the selected project (DW-12).
+    pub work: work::WorkUi,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -282,6 +285,7 @@ impl Shell {
             artifacts: ListState::default(),
             resources: ListState::default(),
             projects: projects::ProjectsUi::default(),
+            work: work::WorkUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
@@ -408,6 +412,10 @@ impl Shell {
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+            }
+            Route::Overview | Route::Features | Route::Issues => {
+                self.load_projects();
+                self.load_work();
             }
             _ => {}
         }
@@ -1064,6 +1072,9 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -1797,6 +1808,10 @@ impl Shell {
             {
                 self.load_route();
             }
+            // Changes an agent made reach the work screens (the lists are read in full again).
+            Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
+                self.load_work();
+            }
             _ => {}
         }
     }
@@ -2267,18 +2282,26 @@ impl Shell {
                     })
                 })
                 .collect(),
+            plans: self
+                .work
+                .plan_saving
+                .values()
+                .filter_map(|f| serde_json::to_value(f).ok())
+                .collect(),
             commands,
         }
     }
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
             let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
                 continue;
             };
             match &slot {
+                Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
                 }
@@ -2330,6 +2353,12 @@ impl Shell {
                 client.keep_unresolved(u);
             }
         }
+        let plans = pending
+            .plans
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect();
+        self.restore_plan_saves(plans, &confirming);
         for r in pending.removed {
             let local = self.chat.next_local();
             self.chat.removed.insert(
@@ -2979,6 +3008,9 @@ impl Shell {
             Route::Resources => self.resources_screen(ui),
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Overview => self.overview_screen(ui),
+            Route::Features => self.features_screen(ui),
+            Route::Issues => self.issues_screen(ui),
             _ => self.pending_screen(ui),
         }
     }
@@ -3321,9 +3353,8 @@ impl Shell {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
             if let CardAction::Open(id) = a {
-                self.announce(format!(
-                    "Opening completed work {id} arrives with its work screens (DW-12)."
-                ));
+                // Reading or opening completed work never dismisses its card.
+                self.open_work(&id);
             }
         }
         if let Some(text) = self.completions.take_announcement() {

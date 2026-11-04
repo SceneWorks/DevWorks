@@ -911,6 +911,14 @@
       ],
       "type": "object"
     },
+    "ConfidenceLevel": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low"
+      ],
+      "type": "string"
+    },
     "ConnectionLifecycle": {
       "enum": [
         "Disconnected",
@@ -2738,6 +2746,14 @@
       ],
       "type": "object"
     },
+    "FindingState": {
+      "enum": [
+        "Open",
+        "Resolved",
+        "RiskAccepted"
+      ],
+      "type": "string"
+    },
     "Finite": {
       "type": "number"
     },
@@ -4478,6 +4494,14 @@
         "$ref": "#/$defs/QueueDelivery"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ReadinessFinding_0_128": {
+      "items": {
+        "$ref": "#/$defs/ReadinessFinding"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -7786,6 +7810,225 @@
       ],
       "type": "object"
     },
+    "ReadinessAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "assessedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "assessedBy": {
+          "$ref": "#/$defs/Id"
+        },
+        "findings": {
+          "$ref": "#/$defs/List_ReadinessFinding_0_128"
+        },
+        "freshness": {
+          "$ref": "#/$defs/ReadinessFreshness"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "planRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reviewedPending": {
+          "type": "boolean"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "staleScopeKeys": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "planRevision",
+        "planDigest",
+        "reviewedPending",
+        "freshness",
+        "staleScopeKeys",
+        "ready",
+        "summary",
+        "findings",
+        "assessedBy",
+        "assessedAtMs"
+      ],
+      "type": "object"
+    },
+    "ReadinessDisposition": {
+      "enum": [
+        "ResolvedDecision",
+        "BoundedInvestigation",
+        "NeedsUserDecision"
+      ],
+      "type": "string"
+    },
+    "ReadinessFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedWorkIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "attempts": {
+          "$ref": "#/$defs/List_Text0To65536_0_128"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "closureCondition": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "closureEvidence": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "closureNote": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfidenceLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consequence": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disposition": {
+          "$ref": "#/$defs/ReadinessDisposition"
+        },
+        "evidence": {
+          "$ref": "#/$defs/List_ArtifactRef_0_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "insufficiency": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missing": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prerequisite": {
+          "type": "boolean"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirementIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "scopeKey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/FindingState"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "id",
+        "disposition",
+        "blocking",
+        "prerequisite",
+        "state",
+        "requirementIds",
+        "affectedWorkIds",
+        "summary",
+        "missing",
+        "consequence",
+        "attempts",
+        "insufficiency",
+        "closureCondition",
+        "evidence",
+        "closureEvidence"
+      ],
+      "type": "object"
+    },
+    "ReadinessFreshness": {
+      "enum": [
+        "Current",
+        "Stale"
+      ],
+      "type": "string"
+    },
     "ReceiptLookupState": {
       "enum": [
         "NotFound",
@@ -10616,6 +10859,10 @@
             }
           ]
         },
+        "acceptanceTests": {
+          "$ref": "#/$defs/List_AcceptanceCriterion_0_128",
+          "x-since": 2
+        },
         "approval": {
           "anyOf": [
             {
@@ -10754,6 +11001,10 @@
             }
           ]
         },
+        "pendingReadiness": {
+          "$ref": "#/$defs/ReadinessAssessment",
+          "x-since": 2
+        },
         "plan": {
           "anyOf": [
             {
@@ -10770,6 +11021,14 @@
         },
         "projectId": {
           "$ref": "#/$defs/Id"
+        },
+        "queueRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
+        },
+        "readiness": {
+          "$ref": "#/$defs/ReadinessAssessment",
+          "x-since": 2
         },
         "repositoryIds": {
           "$ref": "#/$defs/List_Id_0_128"
@@ -10788,6 +11047,10 @@
         },
         "touches": {
           "$ref": "#/$defs/List_TouchRef_0_128"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
         }
       },
       "required": [

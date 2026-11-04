@@ -93,7 +93,7 @@ pub fn command_result(outcome: CommandOutcome) -> Result<OperationResult, Failur
     }
 }
 
-fn unexpected(op: &str, r: &OperationResult) -> Failure {
+pub(crate) fn unexpected(op: &str, r: &OperationResult) -> Failure {
     Failure::Other(format!("{op} returned {}", r.operation()))
 }
 
@@ -104,7 +104,7 @@ pub fn query_frame(backend: &dyn Backend, operation: &str, mut body: Value) -> V
         .into_bytes()
 }
 /// A frame negotiating schema `revision` (the envelope member `schemaRevision`).
-fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
+pub(crate) fn at_revision(frame: Vec<u8>, revision: u64) -> Vec<u8> {
     let mut v: Value = serde_json::from_slice(&frame).expect("frames are JSON");
     v["schemaRevision"] = json!(revision);
     v.to_string().into_bytes()
@@ -300,6 +300,24 @@ pub fn save_workspace_artifact(
     }
     json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
         "schemaRevision": WORKSPACE_ARTIFACT_REVISION, "command": command})
+    .to_string()
+    .into_bytes()
+}
+/// An `artifacts.save` frame storing an upload into `project` (ticket from
+/// `mint_project_upload`).
+pub fn save_project_artifact(
+    backend: &dyn Backend,
+    project: &str,
+    ticket: &str,
+    title: &str,
+    media_type: &str,
+    digest: &str,
+    bytes: u64,
+) -> Vec<u8> {
+    json!({"protocol": PROTOCOL, "requestKey": backend.token("rk"),
+        "command": {"kind": "Save", "projectId": project, "title": title,
+            "mediaType": media_type, "source": {"kind": "Upload", "ticketId": ticket},
+            "expectedDigest": digest, "expectedBytes": bytes.to_string()}})
     .to_string()
     .into_bytes()
 }

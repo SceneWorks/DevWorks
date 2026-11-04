@@ -30,6 +30,7 @@ use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::{MachineResource, ResourceService, desktop};
 use devworks_core::services::runs::ControlService;
 use devworks_core::services::runs::recovery::{BootRecovery, LifecycleHooks, NoLifecycleHooks};
+use devworks_core::services::work::WorkService;
 use devworks_core::settings::view::Health;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -275,14 +276,17 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         mut consumers,
         config,
     } = composition;
+    let work = Arc::new(
+        WorkService::new(ids.clone(), runs.service.clone()).with_staged_plans(artifacts.clone()),
+    );
     let use_cases = use_cases
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
         .with_runs(runs.service.clone())
-        .with_projects(Arc::new(ProjectService::new(
-            ids.clone(),
-            runs.service.clone(),
-        )))
+        .with_projects(Arc::new(
+            ProjectService::new(ids.clone(), runs.service.clone()).with_work(work.clone()),
+        ))
+        .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
     // No entry path bypasses root controls: every consumer's root-scoped work passes the

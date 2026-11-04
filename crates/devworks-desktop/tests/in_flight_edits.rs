@@ -225,6 +225,13 @@ impl Backend for Stuck {
     fn mint_workspace_upload(&self, _: &Path) -> Result<Id, String> {
         Err("unused".into())
     }
+    fn mint_project_upload(
+        &self,
+        _: &devworks_core::protocol::ProjectId,
+        _: &Path,
+    ) -> Result<Id, String> {
+        Err("unused".into())
+    }
     fn keep_awake_health(&self) -> Health {
         Health::NotChecked
     }

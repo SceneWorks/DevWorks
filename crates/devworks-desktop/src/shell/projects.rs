@@ -267,6 +267,12 @@ impl Shell {
         if self.route == Route::Repositories {
             self.load_repositories();
         }
+        if matches!(
+            self.route,
+            Route::Overview | Route::Features | Route::Issues
+        ) {
+            self.load_work();
+        }
     }
 
     fn act(&mut self, actions: Vec<Action>) {
@@ -542,6 +548,12 @@ impl Shell {
                         && self.selected_project.as_deref() == Some(id.as_str())
                     {
                         self.select_project(None);
+                    }
+                    // Its lifecycle changed: the work screens re-read it (archived work is
+                    // closed to change), and an archive count is taken afresh next time.
+                    self.work.archive_counts.remove(&id);
+                    if self.work.of.as_deref() == Some(id.as_str()) {
+                        self.load_work();
                     }
                     self.load_projects();
                     self.load_deleted_projects();
@@ -1032,8 +1044,9 @@ impl Shell {
                     "Archive {}? DevWorks stops all of this project's running work immediately, \
                      without waiting for agents to reach a safe step, and admits no new work for \
                      it. Work already accepted by a remote system may still finish there. \
-                     Restoring the project later leaves its work stopped until you continue it.",
-                    p.name.0
+                     Restoring the project later leaves its work stopped until you continue it.{}",
+                    p.name.0,
+                    self.archive_work_line(p.id.0.as_str())
                 ),
                 "Archive project",
             ),
@@ -1077,6 +1090,12 @@ impl Shell {
                     }
                 });
             });
+        if decided.is_some()
+            && let Confirm::Archive(p) = &confirm
+        {
+            // A later confirmation counts the running work afresh.
+            self.work.forget_archive_count(p.id.0.as_str());
+        }
         match decided {
             Some(true) => {
                 self.projects.confirm = None;

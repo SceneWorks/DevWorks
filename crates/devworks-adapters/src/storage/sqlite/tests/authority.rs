@@ -2249,6 +2249,9 @@ impl WriteTransaction for Lying<'_> {
     fn projects(&mut self) -> &mut dyn ProjectRepository {
         self.inner.projects()
     }
+    fn work(&mut self) -> &mut dyn devworks_core::ports::storage::WorkRepository {
+        self.inner.work()
+    }
 }
 
 fn seams_run(
