@@ -2222,3 +2222,50 @@ impl InferenceJobs for Sessionless {
         Ok(true)
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Codex round 4
+
+/// An archival stops the runs whose own snapshot acts on the project, not those of the jobs
+/// whose current definition does: retargeting a task from A to B while its run is active leaves
+/// that run acting on A, so archiving B holds the schedule but leaves the run, and archiving A
+/// stops it.
+#[test]
+fn an_archival_stops_runs_by_their_own_target_not_their_jobs_current_one() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let a = fx.project("A");
+    let b = fx.project("B");
+    let jid = targeting(&fx, &a.id, "Scan", every(3600));
+    let rid = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    assert_eq!(fx.run(&rid).status, "Queued");
+    // Retargeted to B while its run (queued against A) is active.
+    let mut def = seed_prompt_once(&fx);
+    def["projectId"] = json!(b.id.0.as_str());
+    let rev = fx.stored(&jid).revision.to_string();
+    applied(fx.command(
+        &user,
+        "jobs.edit",
+        json!({"jobId": jid, "expectedRevision": rev, "title": "Scan",
+            "schedule": every(3600), "definition": def}),
+    ));
+    // Archiving B holds the schedule (it now targets B) but leaves the run, which acts on A.
+    fx.lifecycle("projects.archive", &b.id);
+    assert_eq!(fx.stored(&jid).hold.as_deref(), Some("ProjectClosed"));
+    let run = fx.run(&rid);
+    assert_eq!(run.status, "Queued");
+    assert!(!run.cancel_requested);
+    let archived = fx.events("ProjectArchived");
+    assert_eq!(
+        archived.last().unwrap().payload["stoppedJobRuns"],
+        json!([])
+    );
+    // Archiving A stops it at once, in the archival's unit of work.
+    fx.lifecycle("projects.archive", &a.id);
+    assert_eq!(fx.run(&rid).status, "Cancelled");
+    let archived = fx.events("ProjectArchived");
+    assert_eq!(
+        archived.last().unwrap().payload["stoppedJobRuns"],
+        json!([rid])
+    );
+}

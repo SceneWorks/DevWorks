@@ -45,8 +45,9 @@
 //! # Projects and restore
 //!
 //! `projects.archive` calls [`project_archived`] in its unit of work (after
-//! `ControlService::stop_project`): every enabled job of the project is held `ProjectClosed` and
-//! its active run asked to stop, at once. `projects.restore` calls [`project_restored`]: those
+//! `ControlService::stop_project`): every enabled job whose current definition acts on the
+//! project is held `ProjectClosed`, and every active run whose own snapshot acts on it is asked
+//! to stop, at once (a run keeps the target it was queued with when its job is retargeted). `projects.restore` calls [`project_restored`]: those
 //! holds become `ReactivationRequired`, so the restored project's schedules stay stopped until a
 //! person enables each. Independently of both calls, a job records the project's archive epoch it
 //! was activated under and a run the epochs it was authorized under (a person's Run now: the
@@ -56,7 +57,7 @@
 //! holds every job activated under an earlier epoch at boot and at claim (STORE-13).
 use super::{
     JOB_AGGREGATE, JobService, RUN_AGGREGATE, counter, event, job_target, parse, project_closed,
-    run_operation, stored_plan, target_project, undispatched,
+    run_operation, run_target, stored_plan, undispatched,
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::GatewayFailure;
@@ -433,7 +434,7 @@ fn run_project_current(
     tx: &mut dyn WriteTransaction,
     run: &StoredJobRun,
 ) -> Result<bool, StorageError> {
-    let Some(p) = &target_project(run.project_id.as_ref(), &run.definition) else {
+    let Some(p) = &run_target(run) else {
         return Ok(true);
     };
     Ok(!project_closed(tx.runs().project_lifecycle(p)?.as_deref())
@@ -2015,8 +2016,9 @@ impl LifecycleHooks for JobLifecycle {
     }
 }
 
-/// The jobs whose runs act on `project`: those scoped to it, and the app-level inference tasks
-/// that target it.
+/// The jobs whose schedules act on `project` under their current definition: those scoped to
+/// it, and the app-level inference tasks that now target it. A run acts on its own snapshot's
+/// target instead ([`project_runs`]).
 fn project_jobs(
     tx: &mut dyn WriteTransaction,
     project: &ProjectId,
@@ -2047,22 +2049,47 @@ fn project_jobs(
     Ok(out)
 }
 
+/// The active runs that act on `project` by their own snapshot ([`run_target`]), whatever their
+/// job's current definition targets: an edit may retarget a job while its run is active.
+fn project_runs(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+) -> Result<Vec<StoredJobRun>, StorageError> {
+    let mut out = Vec::new();
+    let mut after: Option<Id> = None;
+    loop {
+        let page = tx
+            .jobs()
+            .runs_where(&RunFilter::Active, after.as_ref(), PAGE)?;
+        let more = page.len() == usize::from(PAGE);
+        after = page.last().map(|r| r.id.clone());
+        out.extend(
+            page.into_iter()
+                .filter(|r| run_target(r).as_ref() == Some(project)),
+        );
+        if !more {
+            return Ok(out);
+        }
+    }
+}
+
 /// `projects.archive` (DW-11) calls this in the archival's unit of work (after
-/// `ControlService::stop_project`), every enabled job whose runs act on `project` (scoped to it,
-/// or an app-level task targeting it) is held `ProjectClosed` and its active run asked to stop. Returns the runs asked to stop.
+/// `ControlService::stop_project`): every enabled job whose schedule acts on `project` (scoped
+/// to it, or an app-level task now targeting it) is held `ProjectClosed`, and every active run
+/// whose own snapshot acts on it is asked to stop. Returns the runs asked to stop.
 pub fn project_archived(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
     project: &ProjectId,
 ) -> Result<Vec<Id>, StorageError> {
-    let mut stopped = Vec::new();
     for job in project_jobs(tx, project)? {
         if job.enabled {
             hold_job(tx, &job, "ProjectClosed", "the project was archived")?;
         }
-        if let Some(run) = tx.jobs().active_run(&job.id)?
-            && !run.cancel_requested
-        {
+    }
+    let mut stopped = Vec::new();
+    for run in project_runs(tx, project)? {
+        if !run.cancel_requested {
             request_cancel(tx, actor, &run, "the project was archived")?;
             stopped.push(run.id);
         }
