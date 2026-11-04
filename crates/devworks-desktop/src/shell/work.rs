@@ -646,6 +646,19 @@ impl Shell {
             "tasks.list",
             move |be| wops::work_list(be, "tasks.list", &b, None),
         );
+        // Derived reverse links have no independent revision on their prerequisite. Reload the
+        // visible detail too; the client fences any older reply for the same detail slot.
+        let mem = self.route_memory(self.route());
+        let selected = match self.route() {
+            Route::Features if mem.tab.min(1) == 1 => {
+                self.work.card.clone().or_else(|| self.work.board.clone())
+            }
+            Route::Features | Route::Issues => mem.selection,
+            _ => None,
+        };
+        if let Some(w) = selected.and_then(|id| self.record(&id)) {
+            self.load_detail(&w);
+        }
         // The Activity feed keeps what it read; a refresh reads on to the newest.
         if !self.work.activity.loaded && !self.pending(&Slot::WorkActivity(p)) {
             self.load_activity();

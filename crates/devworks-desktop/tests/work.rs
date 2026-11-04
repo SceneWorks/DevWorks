@@ -1061,7 +1061,24 @@ fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
     let root = Root::new("readiness-after-unlink");
     let engine = start(&root);
     let backend = engine.backend();
-    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    let gate = Gate::new("features.get");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1300.0,
+    );
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
     settle(&mut h);
     let f = initial_approved_plan(&engine, &*backend, &mut h);
     h.state_mut().work.plan = None;
@@ -1112,7 +1129,36 @@ fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
         json!({"taskId":card.id,
         "expectedRevision":card.revision,"clearFeature":true}),
     );
-    click(&mut h, Role::Button, "Refresh");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Refresh").click();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !h
+        .state()
+        .work
+        .features
+        .items
+        .iter()
+        .any(|w| w.id == f.id && w.readiness.as_ref().is_some_and(|r| !r.ready))
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "the refreshed list arrives while full detail is held"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        h.state()
+            .work
+            .detail
+            .get(f.id.as_str())
+            .unwrap()
+            .readiness
+            .as_ref()
+            .unwrap()
+            .ready,
+        "the full-detail reply is still held"
+    );
     let shown = h.state().work.freshest(f.id.as_str()).unwrap();
     assert_eq!(shown.revision, f.revision, "coverage has its own revision");
     let r = shown.readiness.unwrap();
@@ -1125,6 +1171,55 @@ fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
         has_text(&h, &finding.summary.0),
         "the detail renders the new finding"
     );
+    gate.open();
+    settle(&mut h);
+}
+
+#[test]
+fn refreshing_a_cached_prerequisite_shows_new_dependents_at_the_same_work_revision() {
+    let root = Root::new("blocks-after-refresh");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let pid = shop(&*backend);
+    let project =
+        devworks_core::protocol::ProjectId(devworks_core::protocol::Id::new(pid.clone()).unwrap());
+    let issue = |title| {
+        command(
+            &*backend,
+            "issues.create",
+            json!({"projectId":pid,"title":title,
+        "description":"","repositoryIds":[],"priority":0,"statusId":default_status_id(&project,"backlog")}),
+        )
+    };
+    let prerequisite = issue("Prerequisite");
+    let dependent = issue("Dependent");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "Prerequisite  ·");
+    assert!(h.state().work.detail.contains_key(prerequisite.id.as_str()));
+    assert!(has_text(&h, "It blocks nothing."));
+    command(
+        &*backend,
+        "tasks.dependency_links",
+        json!({"taskId":dependent.id,
+        "expectedRevision":dependent.revision,"replacement":{"edges":[{
+            "predecessor":prerequisite.id,"successor":dependent.id}]}}),
+    );
+    click(&mut h, Role::Button, "Refresh");
+    let shown = h.state().work.freshest(prerequisite.id.as_str()).unwrap();
+    assert_eq!(
+        shown.revision, prerequisite.revision,
+        "the reverse view is derived"
+    );
+    assert_eq!(
+        shown.dependent_ids.0,
+        vec![dependent.id],
+        "Refresh must update Blocks"
+    );
+    assert!(!has_text(&h, "It blocks nothing."));
 }
 
 #[test]
