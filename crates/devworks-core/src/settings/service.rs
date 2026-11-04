@@ -46,10 +46,10 @@ use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
 };
 use crate::protocol::records::{
-    SettingAssignment, SettingEntry, ValidationIssue, ValidationReport,
+    SchemaValue, SettingAssignment, SettingEntry, ValidationIssue, ValidationReport,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, Page};
 use crate::protocol::{
     CorrelationId, DomainErrorCode, DomainFault, EventId, HoldId, Id, ProjectId, RetryAdvice,
     Revision, RevisionDimension,
@@ -345,6 +345,54 @@ fn writer(
             Err(denied("settings_write"))
         }
     }
+}
+
+/// Saves `key = value` in the workspace scope for a human, exactly as `settings.save_revision`
+/// would (same plan, validation, revision row and `SettingsRevisionSaved` history), at the
+/// scope revision `expected`. This is the seam behind the router's `Tier` configuration
+/// (`router.configure`), so tier membership has one home: the routing settings. `Ok(None)` is
+/// an unchanged value; a stale revision is the `Configuration` revision conflict; a value the
+/// settings validation refuses is the returned refusal.
+pub(crate) fn save_workspace_value(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    key: &str,
+    value: Value,
+    expected: i64,
+) -> Result<Result<Option<i64>, (DomainErrorCode, &'static str)>, StorageError> {
+    let scope = ConfigScope::Workspace;
+    if require_human(tx, ctx).is_err() {
+        return Ok(Err((DomainErrorCode::PermissionDenied, "human_decision")));
+    }
+    let Some(d) = descriptor(key) else {
+        return Ok(Err((DomainErrorCode::InvalidArgument, "setting")));
+    };
+    let current = current_layer(&*tx.configuration(), &scope)?;
+    if current.revision != expected {
+        return Err(StorageError::conflict(
+            RevisionDimension::Configuration,
+            "settings",
+            scope.target_id(),
+            revision(expected),
+            revision(current.revision),
+        ));
+    }
+    let entries = [SettingAssignment {
+        key: BoundedText(d.key.to_owned()),
+        value: SchemaValue {
+            schema: d.schema_ref(),
+            value: DynamicJson(value),
+        },
+    }];
+    let planned = plan(&current, &entries);
+    if planned.blocking().next().is_some() {
+        return Ok(Err((DomainErrorCode::InvalidArgument, "setting")));
+    }
+    if !planned.differs {
+        return Ok(Ok(None));
+    }
+    let saved = commit(tx, ctx, &current, &planned, json!({"kind": "Saved"}))?;
+    Ok(Ok(Some(saved.revision)))
 }
 
 /// `settings.save_revision`.

@@ -5,9 +5,10 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, DiagnosticEntry, EffortName, MutationSummary, ProjectRecord,
-    RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent,
-    RouteModel, SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
+    AccessMode, ArtifactRecord, ConnectionRecord, DiagnosticEntry, EffortName, MutationSummary,
+    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
+    RouteChoice, RouteIntent, RouteModel, SessionRecord, SettingEntry, ValidationReport,
+    WebDocument, WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -709,4 +710,81 @@ pub fn project_settings_validate(
         json!({"scope": {"kind": "Project", "projectId": project},
             "expectedRevision": revision.to_string(), "entries": entries}),
     )
+}
+// Provider connections (DW-18)
+
+/// `router.connections`, `router.catalog` and `router.configure` revision 2: connection
+/// lifecycle, health, discovery and sign-in challenges; model context windows and bindings.
+pub const ROUTER_CONNECTIONS_REVISION: u64 = 2;
+
+pub fn router_connections(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(backend, "router.connections", json!({"page": page})),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+/// A page of connections and the cursor of the next one.
+pub fn connection_records(
+    outcome: QueryOutcome,
+) -> Result<(Vec<ConnectionRecord>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterConnections { value }, _) => {
+            let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
+            if value.has_more && next.is_none() {
+                return Err(Failure::Other(
+                    "router.connections reported more pages without a cursor".into(),
+                ));
+            }
+            Ok((value.items.0, next))
+        }
+        (other, _) => Err(unexpected("router.connections", &other)),
+    }
+}
+/// The whole catalog, disabled models included, at revision 2 (context windows, bindings).
+pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit": PAGE_LIMIT});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    at_revision(
+        query_frame(
+            backend,
+            "router.catalog",
+            json!({"page": page, "includeDisabled": true}),
+        ),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+pub fn router_configure(backend: &dyn Backend, action: Value) -> Vec<u8> {
+    at_revision(
+        command_frame(backend, "router.configure", json!({"action": action})),
+        ROUTER_CONNECTIONS_REVISION,
+    )
+}
+/// Whether `router.configure` changed something (`Applied`) or found it as asked (`NoChange`).
+pub fn configured(outcome: CommandOutcome) -> Result<bool, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied {
+                result: OperationResult::RouterConfigure { value },
+            }
+            | DomainDecision::NoChange {
+                result: OperationResult::RouterConfigure { value },
+            } => Ok(value.changed),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+            other => Err(Failure::Other(format!(
+                "router.configure returned {}",
+                match other {
+                    DomainDecision::Accepted { .. } => "an accepted operation",
+                    _ => "an unexpected result",
+                }
+            ))),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
 }

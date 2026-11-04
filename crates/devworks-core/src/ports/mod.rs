@@ -7,6 +7,7 @@
 //! across threads. Core stays runtime-agnostic (no async runtime dependency).
 pub mod diagnostics;
 pub mod files;
+pub mod http;
 pub mod process;
 pub mod router;
 pub mod secrets;
@@ -59,6 +60,12 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Provider connections.
+    Connection,
+    /// Secret-store credential handles (immutable; a replacement gets a new one).
+    Credential,
+    /// In-process sign-in flows.
+    SignInFlow,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 956), 956);
+    assert_eq!(run("domain-fixtures.json", 977), 977);
 }
 
 #[test]
@@ -377,9 +377,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // artifacts.list, history.events, .work_lineage, .git_links, .evidence_links, .tool_usage
     // and sessions.briefing, revision 2 of the six resources operations, of sessions.list,
     // .get, .append_message, .start and .end, and of workspace.diagnostics, .logs and
-    // .record_diagnostic, revision 2 of router.availability, web.search and web.fetch, and
-    // revision 3 of artifacts.save and artifacts.list.
-    assert_eq!(admitted.len(), 386);
+    // .record_diagnostic, revision 2 of router.availability, router.catalog, router.connections,
+    // router.configure, web.search and web.fetch, and revision 3 of artifacts.save and
+    // artifacts.list.
+    assert_eq!(admitted.len(), 389);
 }
 
 #[test]
