@@ -3,7 +3,7 @@
 -- pointer, the rollback predecessor, the pending version, the state generation, configuration,
 -- publisher trust and the last failure), immutable verified versions, exact-version approval
 -- proposals and retained package state generations.
--- Additive: seven new tables and their indexes. They reference no table of migrations 11-12; the
+-- Additive: seven new tables and their indexes. They reference no table of migrations 11-14; the
 -- live handler state of the current generation stays in package_handler_state (migration 1).
 CREATE TABLE package_registry (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

@@ -405,6 +405,33 @@ fn save(
     }
 }
 
+/// Applies `entries` to `scope` as one new revision at its current revision, with the same
+/// planning, validation and `SettingsRevisionSaved` history as a save. Human only (a host-bound
+/// human decision). This is the seam a command of another family uses when its own input changes
+/// a setting (`projects.edit` changing a project's access profile), so the setting has one
+/// writer and one history. Returns whether anything changed.
+pub fn apply_human_assignments(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &ConfigScope,
+    entries: &[SettingAssignment],
+    origin: Value,
+) -> Result<bool, Failure> {
+    require_human(tx, ctx)?;
+    require_scope(&*tx.configuration(), scope)?;
+    let current = current_layer(&*tx.configuration(), scope)?;
+    let planned = plan(&current, entries);
+    let blocking: Vec<&Issue> = planned.blocking().collect();
+    if !blocking.is_empty() {
+        return Err(plan_refusal(&blocking, scope).into());
+    }
+    if !planned.differs {
+        return Ok(false);
+    }
+    commit(tx, ctx, &current, &planned, origin)?;
+    Ok(true)
+}
+
 /// Stages a proposal for human approval, bound to the scope revision the author read. This is
 /// the transaction-scoped seam behind the approvals and roles proposal commands: it validates
 /// exactly like a save, writes nothing to the effective configuration and records the proposal

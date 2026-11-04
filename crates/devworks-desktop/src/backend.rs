@@ -95,6 +95,26 @@ pub enum Slot {
     RoutePin(String),
     /// The first routed request of a conversation (session ID): its selection becomes its pin.
     RouteFirst(String),
+    /// Active and archived projects.
+    ProjectsList,
+    /// Deleted projects (their tombstones).
+    DeletedProjects,
+    /// Every registered repository.
+    RepositoriesList,
+    /// The repositories of one project.
+    ProjectRepositories(String),
+    ProjectCreate,
+    /// An edit, membership or lifecycle command of one project (one at a time per project).
+    ProjectCommand(String),
+    /// A project's repository base directory setting (read, health, save).
+    ProjectSettings(String),
+    ProjectSettingsHealth(String),
+    ProjectSettingsSave(String),
+    /// A repository's README (`true`) or summary text.
+    RepositoryText(String, bool),
+    /// The artifact content of a repository's README (`true`) or summary.
+    RepositoryContent(String, bool),
+    RemoveIndex(String),
 }
 
 /// A finished request.
@@ -159,7 +179,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: [&str; 20] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -173,6 +193,13 @@ pub const COMMANDS: [&str; 13] = [
     "addons.configure",
     "router.pin",
     "router.route",
+    "projects.create",
+    "projects.edit",
+    "projects.membership",
+    "projects.archive",
+    "projects.restore",
+    "projects.delete",
+    "repositories.remove_index",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

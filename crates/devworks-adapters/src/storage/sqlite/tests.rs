@@ -109,6 +109,7 @@ mod artifacts;
 mod authority;
 mod diagnostics;
 mod packages;
+mod projects;
 mod replies;
 mod resources;
 mod router;

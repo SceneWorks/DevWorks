@@ -212,7 +212,7 @@ fn proposals_record_one_decision_and_generations_fence_and_retain_state() {
 }
 
 #[test]
-fn migration_15_adds_the_package_registry_to_a_version_12_store() {
+fn migration_15_adds_the_package_registry_to_a_version_14_store() {
     let m = MIGRATIONS
         .iter()
         .find(|m| m.version == 15)
@@ -222,7 +222,7 @@ fn migration_15_adds_the_package_registry_to_a_version_12_store() {
         MIGRATION_0015_SHA256,
         "an applied migration was edited"
     );
-    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 11));
+    assert_eq!((m.minimum_reader, m.minimum_writer), (8, 14));
     assert!(
         MIGRATIONS
             .iter()
@@ -230,7 +230,7 @@ fn migration_15_adds_the_package_registry_to_a_version_12_store() {
             .all(|e| e.minimum_reader <= m.minimum_reader && e.minimum_writer <= m.minimum_writer)
     );
     let h = Harness::new();
-    drop(SqliteStore::open_with(h.config(), &through(12)).unwrap());
+    drop(SqliteStore::open_with(h.config(), &through(14)).unwrap());
     let s = h.store();
     let head = run_write(&s, WriteOptions::default(), |tx| {
         tx.packages().registry_revision()

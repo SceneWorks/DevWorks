@@ -187,28 +187,47 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0013_router.sql"),
         rebuilds_tables: false,
     },
+    // Additive: project and repository side tables, the index view registry and repository
+    // texts, and four indexes; the migration 1 tables keep their shape. The writer floor rises
+    // to 14: a build without this migration (up to and including one with migration 13) treats
+    // only `Archived` as closed to work, so as a writer it would dispatch the work of a project
+    // tombstoned `Deleted`, and it would accept configuration, sessions, artifacts and resources
+    // for such a project. The reader floor stays at 8: no earlier build reads the new tables,
+    // and the indexes leave every query an earlier reader makes unchanged. Both are at least
+    // every earlier floor.
+    Migration {
+        version: 14,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0014_projects.sql"),
+        rebuilds_tables: false,
+    },
     // Additive: the package registry head, package records, verified versions, approval
     // proposals, retained state generations, index sources and availability observations (seven
-    // tables and an index), independent of every table of migrations 11-13 (it references only
-    // its own tables). The floors stay 8/11,
-    // the highest so far: applying a migration overwrites both floors, so a lower writer floor
-    // would re-admit the build-10 writers migration 11 refuses. They need not rise: no earlier
-    // build reads or writes these tables, and the package handler state rows (migration 1) a
-    // generation publication rewrites were never written by an earlier build.
+    // tables and an index), independent of every table of migrations 11-14 (it references only
+    // its own tables). The writer floor stays at 14, the highest so far: applying a migration
+    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11
+    // and 14 refuse. It need not rise: no earlier build reads or writes these tables, and the
+    // package handler state rows (migration 1) a generation publication rewrites were never
+    // written by an earlier build. The reader floor stays at 8: no earlier build reads these
+    // tables, and every query an earlier reader makes is unchanged.
     Migration {
         version: 15,
         minimum_reader: 8,
-        minimum_writer: 11,
+        minimum_writer: 14,
         sql: include_str!("migrations/0015_packages.sql"),
         rebuilds_tables: false,
     },
 ];
+/// Recorded checksum of migration 15; a test fails if the shipped text changes.
+pub const MIGRATION_0015_SHA256: &str =
+    "7cabf466f43dcc1677f62ad14ebb1e96ed9239f2cf505e9646c0a4e38287876a";
+/// Recorded checksum of migration 14; a test fails if the shipped text changes.
+pub const MIGRATION_0014_SHA256: &str =
+    "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";
 /// Recorded checksum of migration 13; a test fails if the shipped text changes.
 pub const MIGRATION_0013_SHA256: &str =
     "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";
-/// Recorded checksum of migration 15; a test fails if the shipped text changes.
-pub const MIGRATION_0015_SHA256: &str =
-    "7868e9c5f7d93ba390ec2b552af5a2c398748b7fdf7f1487e66ef185f3086502";
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
     "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";

@@ -57,6 +57,7 @@ pub enum IdKind {
     Diagnostic,
     /// Router session pins.
     RoutePin,
+    Project,
     /// Exact-version package approval proposals.
     Proposal,
     /// Package process sessions (the protocol nonce of one helper instance).
