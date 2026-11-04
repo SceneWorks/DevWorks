@@ -785,9 +785,11 @@ impl Dispatcher {
 
     /// Holds a claimed effect delivery until its executor reports its operation ready, without
     /// a worker permit: the permit is released while it waits (more work may be claimed) and
-    /// reacquired before delivery; the claim's lease is renewed meanwhile. Returns `false` when
-    /// the dispatcher stops or the claim is lost while waiting: the operation was never
-    /// dispatched, so the claim is recovered as safely redeliverable.
+    /// reacquired before delivery. The claim's lease is renewed for the whole wait, the
+    /// readiness wait and the reacquisition of a permit alike (every permit may be taken for
+    /// longer than a lease). Returns `false` when the dispatcher stops or the claim is lost
+    /// while waiting: the operation was never dispatched, so the claim is recovered as safely
+    /// redeliverable.
     async fn park(&self, idx: usize, entry: &QueueEntry, slot: &mut Slot) -> bool {
         let consumer = &self.inner.consumers[idx];
         let (None, Some(executor), Some(op_id)) = (
@@ -809,7 +811,7 @@ impl Dispatcher {
         ) {
             return true;
         }
-        let Some(mut ready) = executor.ready(&op) else {
+        let Some(ready) = executor.ready(&op) else {
             return true;
         };
         let Some(fence) = entry.fence() else {
@@ -821,6 +823,13 @@ impl Dispatcher {
         self.inner.wake.notify_one();
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
+        // Ready, then a worker permit: one wait, so the lease is renewed (and a stop or a lost
+        // claim honoured) until the delivery can actually run.
+        let permits = self.inner.permits.clone();
+        let mut admitted = std::pin::pin!(async move {
+            ready.await;
+            permits.acquire_owned().await.ok()
+        });
         let mut proceed = true;
         loop {
             if self.inner.stopping.load(Ordering::SeqCst) {
@@ -829,8 +838,15 @@ impl Dispatcher {
             }
             // A stop (which notifies `changed`) or the lease renewal interval ends one wait.
             let pause = first(self.inner.changed.notified(), tokio::time::sleep(every));
-            match first(&mut ready, pause).await {
-                Either::Left(()) => break,
+            match first(&mut admitted, pause).await {
+                Either::Left(Some(p)) => {
+                    slot.permit = Some(p);
+                    break;
+                }
+                Either::Left(None) => {
+                    proceed = false;
+                    break;
+                }
                 Either::Right(Either::Left(())) => {}
                 Either::Right(Either::Right(())) => {
                     let (id, f) = (entry.id.clone(), fence.clone());
@@ -843,12 +859,6 @@ impl Dispatcher {
                         break;
                     }
                 }
-            }
-        }
-        if proceed {
-            match self.inner.permits.clone().acquire_owned().await {
-                Ok(p) => slot.permit = Some(p),
-                Err(_) => proceed = false,
             }
         }
         self.inner.parked.fetch_sub(1, Ordering::SeqCst);

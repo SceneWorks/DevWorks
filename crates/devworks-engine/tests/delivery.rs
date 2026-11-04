@@ -1477,3 +1477,187 @@ fn resumed_counts_only_work_that_became_ready() {
     );
     assert_eq!(recorder.seen().len(), 1);
 }
+
+/// An effect executor whose operations become ready only once the test opens them: until then
+/// each claimed delivery is parked without a worker permit. Execution is delegated to `fx`.
+#[derive(Clone)]
+struct Ordered {
+    fx: Effects,
+    open: tokio::sync::watch::Receiver<bool>,
+}
+impl devworks_engine::EffectExecutor for Ordered {
+    fn execute(&self, op: OperationRecord) -> devworks_engine::EffectFuture {
+        self.fx.execute(op)
+    }
+    fn observe(&self, op: OperationRecord) -> devworks_engine::EffectFuture {
+        self.fx.observe(op)
+    }
+    fn ready(&self, _: &OperationRecord) -> Option<devworks_engine::dispatch::ReadyFuture> {
+        let mut open = self.open.clone();
+        Some(Box::pin(async move {
+            while !*open.borrow() {
+                if open.changed().await.is_err() {
+                    return;
+                }
+            }
+        }))
+    }
+}
+
+/// One worker permit, a short lease: a delivery `parked` behind its readiness, and an effect
+/// `blocker` that then takes the only permit and holds it until its gate opens.
+struct PermitStarved {
+    h: Harness,
+    s: Arc<dyn ApplicationStore>,
+    d: Dispatcher,
+    parked: QueueEntry,
+    parked_fx: Effects,
+    blocker: QueueEntry,
+    blocker_fx: Effects,
+    blocker_gate: tokio::sync::watch::Sender<bool>,
+    open: tokio::sync::watch::Sender<bool>,
+}
+impl PermitStarved {
+    const LEASE_MS: i64 = 300;
+    /// Claims the parked delivery, then the blocker (its effect running on the only permit),
+    /// then makes the parked operation ready: it now waits for a permit.
+    async fn new() -> Self {
+        let h = Harness::new();
+        let s = h.open();
+        let recorder = Recorder::ok();
+        let parked_fx = Effects::new(EffectResult::Completed(json!({})));
+        let blocker_fx = Effects::new(EffectResult::Completed(json!({})));
+        let blocker_gate = blocker_fx.gated();
+        let (open, rx) = tokio::sync::watch::channel(false);
+        let mut p = consumer("parked", recorder.clone());
+        p.effect = Some(Arc::new(Ordered {
+            fx: parked_fx.clone(),
+            open: rx,
+        }));
+        let mut b = consumer("blocker", recorder.clone());
+        b.effect = Some(blocker_fx.executor());
+        let d = dispatcher_with(&h, s.clone(), vec![p, b], |c| {
+            c.max_in_flight = 1;
+            c.lease_ms = Self::LEASE_MS;
+        });
+        let parked = write(&*s, |tx| {
+            let op = intent(tx)?;
+            enqueue_tx(tx, "parked", None, Some(op), json!({}))
+        })
+        .unwrap();
+        assert_eq!(d.tick().await.unwrap().claimed, 1);
+        let parked = entry(&*s, &parked.id);
+        write(&*s, |tx| {
+            let op = intent(tx)?;
+            enqueue_tx(tx, "blocker", None, Some(op), json!({}))
+        })
+        .unwrap();
+        // The parked delivery released its permit: the blocker is claimed and runs on it.
+        let mut rx = d.subscribe();
+        while blocker_fx.executed() == 0 {
+            d.tick().await.unwrap();
+            let _ = tokio::time::timeout(Duration::from_millis(20), rx.changed()).await;
+        }
+        let blocker = read(&*s, |r| {
+            r.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: Some("blocker".into()),
+                    operation_id: None,
+                },
+                None,
+                10,
+            )
+        })
+        .entries
+        .remove(0);
+        assert_eq!(d.in_flight(), 2);
+        assert_eq!(parked.state, QueueState::Claimed);
+        open.send(true).unwrap();
+        Self {
+            h,
+            s,
+            d,
+            parked,
+            parked_fx,
+            blocker,
+            blocker_fx,
+            blocker_gate,
+            open,
+        }
+    }
+    fn lease_until(&self, e: &QueueEntry) -> i64 {
+        entry(&*self.s, &e.id).lease_until_ms.unwrap_or(i64::MIN)
+    }
+}
+
+#[test]
+fn a_ready_delivery_renews_its_lease_while_every_worker_permit_is_taken() {
+    runtime().block_on(within("permit-starved lease renewal", async {
+        let t = PermitStarved::new().await;
+        // Store time passes, in steps shorter than the lease but together several leases long,
+        // while the ready delivery waits for the blocker's permit. After each step its lease is
+        // renewed from the advanced clock (a renewal already in flight when the operation
+        // became ready can account for one step at most).
+        let lease = PermitStarved::LEASE_MS;
+        for _ in 0..5 {
+            t.h.advance(lease * 2 / 3);
+            let now = t.h.now();
+            until(&t.d, || {
+                t.lease_until(&t.parked) >= now + lease && t.lease_until(&t.blocker) >= now + lease
+            })
+            .await;
+        }
+        // Expired-claim recovery finds nothing to requeue: the claim and its fence stand.
+        assert_eq!(
+            t.d.tick().await.unwrap().recovered,
+            RecoveryOutcome::default()
+        );
+        let held = entry(&*t.s, &t.parked.id);
+        assert_eq!(
+            (held.state, held.generation),
+            (QueueState::Claimed, t.parked.generation)
+        );
+        // The permit frees: the delivery runs under its original fence, exactly once.
+        t.blocker_gate.send(true).unwrap();
+        until(&t.d, || {
+            entry(&*t.s, &t.parked.id).state == QueueState::Completed
+                && entry(&*t.s, &t.blocker.id).state == QueueState::Completed
+        })
+        .await;
+        assert_eq!(t.parked_fx.executed(), 1);
+        assert_eq!(t.blocker_fx.executed(), 1);
+        let op = t.parked.operation_id.clone().unwrap();
+        assert_eq!(
+            read(&*t.s, |r| r.operations().operation(&op))
+                .unwrap()
+                .state,
+            OperationState::ObservedComplete
+        );
+        drop(t.open);
+    }));
+}
+
+#[test]
+fn a_stop_releases_a_ready_delivery_still_waiting_for_a_worker_permit() {
+    runtime().block_on(within("permit-starved stop", async {
+        let t = PermitStarved::new().await;
+        // Stopping ends the permit wait at once: only the running blocker stays in flight, and
+        // the waiting delivery was never dispatched (its claim recovers as redeliverable).
+        t.d.stop();
+        until(&t.d, || t.d.in_flight() == 1).await;
+        assert_eq!(t.parked_fx.executed(), 0);
+        let op = t.parked.operation_id.clone().unwrap();
+        assert_eq!(
+            read(&*t.s, |r| r.operations().operation(&op))
+                .unwrap()
+                .state,
+            OperationState::IntentRecorded
+        );
+        // The shutdown wait then only waits for the running effect.
+        t.blocker_gate.send(true).unwrap();
+        t.d.idle().await;
+        assert_eq!(t.d.in_flight(), 0);
+        assert_eq!(t.parked_fx.executed(), 0);
+        drop(t.open);
+    }));
+}
