@@ -38,6 +38,7 @@ use devworks_core::services::runs::substrate::{
 };
 use devworks_core::services::runs::{ControlService, ResumeBinding, Target};
 use devworks_core::services::sessions::SessionService;
+use devworks_core::services::work::WorkService;
 use devworks_core::settings::catalog::AgentRole;
 use devworks_engine::{
     ActivationLauncher, Composition, Launch, LaunchEnd, LaunchFuture, RunComposition, RunGate,
@@ -107,7 +108,8 @@ impl Fx {
                 h.ids.clone(),
                 service.clone(),
             )))
-            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())));
+            .with_sessions(Arc::new(SessionService::new(h.ids.clone(), store.clone())))
+            .with_work(Arc::new(WorkService::new(h.ids.clone(), service.clone())));
         let user = principal(&*store, "user-a", PrincipalKind::Human);
         let agent = principal(&*store, "agent-a", PrincipalKind::Agent);
         let sched = principal(&*store, "sched-a", PrincipalKind::Schedule);
@@ -331,6 +333,24 @@ impl Fx {
             json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": self.key(), "body": {
                 "kind": "runs.stop", "rootId": root,
                 "expectedControlRevision": control.to_string()}}),
+        )
+    }
+    /// Links the card `card` to `feature` (or clears its feature) through `tasks.set_feature`.
+    fn set_feature(&self, card: &str, feature: Option<&str>) -> DomainCommandReply {
+        let w = id(card);
+        let revision = read(&*self.store, |s| s.work().work(&w))
+            .expect("card")
+            .revision;
+        let mut body = json!({"kind": "tasks.set_feature", "taskId": card,
+            "expectedRevision": revision.to_string(), "clearFeature": feature.is_none()});
+        if let Some(f) = feature {
+            body["featureId"] = json!(f);
+        }
+        self.command(
+            &self.user,
+            "tasks.set_feature",
+            json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": self.key(),
+                "body": body}),
         )
     }
     fn inspect(&self, ctx: &InvocationContext, root: &str) -> Value {
@@ -1535,6 +1555,8 @@ struct FakeHost {
     stop_requests: Arc<AtomicUsize>,
     /// Runs inside the next spawn: after the launch intent committed, before the tree exists.
     on_spawn: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Boot recovery cannot tell whether an earlier boot's tree is gone.
+    unknown: AtomicBool,
 }
 struct FakeTree {
     identity: NativeIdentity,
@@ -1598,6 +1620,9 @@ impl ProcessHost for FakeHost {
         }))
     }
     fn probe(&self, _: &NativeIdentity) -> Probe {
+        if self.unknown.load(Ordering::SeqCst) {
+            return Probe::Unknown("the fixture cannot tell".into());
+        }
         Probe::Gone
     }
     fn terminate(&self, _: &NativeIdentity) -> Probe {
@@ -4669,4 +4694,266 @@ fn a_pending_feature_stop_never_settles_a_newer_generation_of_an_unlinked_card()
         vec![(rid("root-f"), OperationState::Dispatching)]
     );
     assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Stopping);
+}
+
+// ---------------------------------------------------------------------------------------------
+// A card linked while its feature's stop is pending (DW-12): the stop's coverage is extended
+
+/// Starts the feature and the standalone issue, launches both (gated), gives the issue a tree,
+/// and stops the feature while the issue is still standalone: the stop covers no card and stays
+/// pending while the feature's launch runs. Returns the stop and the feature's and issue's
+/// launch slots.
+fn pending_feature_stop_with_a_running_issue(
+    fx: &Fx,
+    rt: &tokio::runtime::Runtime,
+    sup: &Arc<RunSupervisor>,
+    processes: &ProcessSupervisor,
+) -> (OperationId, usize, usize) {
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let first = rt.block_on(sup.tick()).unwrap().launched;
+    let slot = |root: &str| {
+        first
+            .iter()
+            .position(|a| fx.activation(a).root_id == rid(root))
+            .unwrap()
+    };
+    let (feature, card) = (slot("root-f"), slot("root-i"));
+    spawn_tree(fx, processes, "root-i", "project-a");
+    let op = match decision(&fx.stop(&fx.user, "root-f")) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("stop not accepted: {other:?}"),
+    };
+    (op, feature, card)
+}
+
+#[test]
+fn a_card_linked_while_its_features_stop_is_pending_is_stopped_and_waited_for() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host.clone(), Some(launcher.clone()));
+    let rt = runtime();
+    let (op, feature, card) = pending_feature_stop_with_a_running_issue(&fx, &rt, &sup, &processes);
+    // The stop's first pass covers only the feature: the standalone issue keeps running.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    assert!(launcher.stop_seen(feature) && !launcher.stop_seen(card));
+    assert_eq!(processes.owned().len(), 1, "the issue's tree runs");
+    // The issue is linked while the feature's stop is pending: the stop now covers it.
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    assert_eq!(
+        fx.live("root-i").unwrap().phase,
+        ActivationPhase::Stopping,
+        "the linked card is asked to stop"
+    );
+    assert!(fx.events("root-f").iter().any(|k| k == "RootStopExtended"));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    assert!(launcher.stop_seen(card), "the card's launch is signalled");
+    assert!(processes.owned().is_empty(), "the card's tree is stopped");
+    assert_eq!(host.stopped.load(Ordering::SeqCst), 1);
+    // The feature's own launch ends; the stop stays pending while the card's launch runs.
+    launcher.release(feature);
+    rt.block_on(within("the feature's launch ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)],
+        "the stop waits for the card it came to cover"
+    );
+    // Once the card quiesced, the stop is observed complete.
+    launcher.release(card);
+    rt.block_on(within("the card's launch ends", async {
+        while sup.launches() > 0 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::ObservedComplete)]
+    );
+    let state = read(&*fx.store, |s| s.operations().operation(&op))
+        .unwrap()
+        .state;
+    assert_eq!(state, OperationState::ObservedComplete);
+}
+
+#[test]
+fn a_card_linked_while_its_features_stop_is_pending_is_covered_across_a_restart() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, Some(launcher.clone()));
+    let rt = runtime();
+    let (op, _, _) = pending_feature_stop_with_a_running_issue(&fx, &rt, &sup, &processes);
+    let tree = processes.owned();
+    assert_eq!(tree.len(), 1);
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    // The app ends before any pass of the stop ran.
+    sup.abort_launches();
+    drop((sup, processes, rt));
+    let (h, store) = fx.into_parts();
+    drop(store);
+    let store = h.open();
+    let fx = Fx::over(h, store);
+    let host = Arc::new(FakeHost::default());
+    host.unknown.store(true, Ordering::SeqCst);
+    let (sup, processes) = supervisor(&fx, host.clone(), None);
+    // Process recovery cannot verify the card's tree gone; run-control recovery then settles the
+    // feature's stop with the card it came to cover: not complete, its tree held for
+    // reconciliation.
+    processes.recover().unwrap();
+    let report = fx.tx(|svc, tx| svc.recover_boot(tx, &NoLifecycleHooks));
+    assert_eq!(
+        report.stops,
+        vec![(op.clone(), OperationState::OutcomeUnknown)]
+    );
+    let held = fx
+        .holds("root-f")
+        .into_iter()
+        .find(|b| b.cause == HoldCause::Reconciliation)
+        .expect("the card's tree is held for reconciliation");
+    assert_eq!(
+        held.clearance["processes"],
+        json!([tree[0].as_str()]),
+        "{:?}",
+        held.clearance
+    );
+    // Once the card's tree is verified gone, the stop is observed complete and its hold cleared.
+    host.unknown.store(false, Ordering::SeqCst);
+    processes.recover().unwrap();
+    let rt = runtime();
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::ObservedComplete)]
+    );
+    assert!(
+        !fx.holds("root-f")
+            .iter()
+            .any(|b| b.cause == HoldCause::Reconciliation)
+    );
+}
+
+#[test]
+fn a_card_covered_by_extension_is_not_stopped_after_it_is_unlinked_and_continued() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, Some(launcher.clone()));
+    let rt = runtime();
+    let (op, feature, card) = pending_feature_stop_with_a_running_issue(&fx, &rt, &sup, &processes);
+    // Linked while the stop is pending: covered at generation 1, its tree stopped.
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    rt.block_on(sup.tick()).unwrap();
+    assert!(launcher.stop_seen(card));
+    assert!(processes.owned().is_empty());
+    // Unlinked (its unlink pause) and explicitly continued while generation 1 stops; when
+    // generation 1 ends, generation 2 replaces it as standalone work with a tree of its own.
+    applied(&fx.set_feature("root-i", None));
+    applied(&fx.resume(&fx.user, "root-i"));
+    launcher.release(card);
+    rt.block_on(within("generation 1 of the card ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let launched = rt.block_on(sup.tick()).unwrap().launched;
+    assert_eq!(launched.len(), 1);
+    let second = fx.activation(&launched[0]);
+    assert_eq!(
+        (second.root_id.clone(), second.generation),
+        (rid("root-i"), 2)
+    );
+    spawn_tree(&fx, &processes, "root-i", "project-a");
+    let new_tree = processes.owned();
+    // The still-pending stop observes only the generation it covered: generation 2 is neither
+    // signalled nor stopped, and a reapplied Stop leaves it alone too.
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)]
+    );
+    applied(&fx.resume(&fx.user, "root-f"));
+    assert!(matches!(
+        decision(&fx.stop(&fx.user, "root-f")),
+        DomainDecision::Accepted { operation_id } if operation_id == &op
+    ));
+    rt.block_on(sup.tick()).unwrap();
+    assert!(!launcher.stop_seen(2), "generation 2 was signalled");
+    assert_eq!(processes.owned(), new_tree, "generation 2's tree runs");
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Running);
+    // Once the feature's own launch ended, the stop is complete while generation 2 runs.
+    launcher.release(feature);
+    rt.block_on(within("the feature's launch ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::ObservedComplete)]
+    );
+    assert_eq!(fx.activation(&second.id).phase, ActivationPhase::Running);
+    assert_eq!(processes.owned(), new_tree);
+}
+
+#[test]
+fn a_reapplied_feature_stop_covers_a_card_linked_after_the_feature_continued() {
+    let fx = Fx::new();
+    let launcher = Arc::new(Gated::default());
+    let host = Arc::new(FakeHost::default());
+    let (sup, processes) = supervisor(&fx, host, Some(launcher.clone()));
+    let rt = runtime();
+    let (op, feature, card) = pending_feature_stop_with_a_running_issue(&fx, &rt, &sup, &processes);
+    // The feature is continued while its stop is pending (the stop no longer reaches new
+    // cards), then the issue is linked: nothing stops it yet.
+    applied(&fx.resume(&fx.user, "root-f"));
+    applied(&fx.set_feature("root-i", Some("root-f")));
+    assert_eq!(fx.live("root-i").unwrap().phase, ActivationPhase::Running);
+    // Stop is reapplied under the same operation: it covers the card linked since.
+    assert!(matches!(
+        decision(&fx.stop(&fx.user, "root-f")),
+        DomainDecision::Accepted { operation_id } if operation_id == &op
+    ));
+    assert_eq!(fx.live("root-i").unwrap().phase, ActivationPhase::Stopping);
+    rt.block_on(sup.tick()).unwrap();
+    assert!(launcher.stop_seen(card));
+    assert!(processes.owned().is_empty(), "the card's tree is stopped");
+    launcher.release(feature);
+    rt.block_on(within("the feature's launch ends", async {
+        while sup.launches() > 1 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::Dispatching)],
+        "the reapplied stop waits for the card"
+    );
+    launcher.release(card);
+    rt.block_on(within("the card's launch ends", async {
+        while sup.launches() > 0 {
+            tokio::task::yield_now().await;
+        }
+    }));
+    let tick = rt.block_on(sup.tick()).unwrap();
+    assert_eq!(
+        tick.stops,
+        vec![(rid("root-f"), OperationState::ObservedComplete)]
+    );
 }

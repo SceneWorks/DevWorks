@@ -1576,6 +1576,17 @@ impl WorkService {
         } else {
             None
         };
+        // A card linked while its new feature's stop is still pending is covered by that stop:
+        // the feature's Stop reaches every linked card, and settles only once it quiesced.
+        let stop_extended = match &target {
+            Some(f) => self.runs().card_linked(
+                tx,
+                ctx.principal(),
+                &RootId(f.clone()),
+                &RootId(after.id.clone()),
+            )?,
+            None => false,
+        };
         let kept: Vec<String> = crate::services::runs::active_blockers(
             tx.runs(),
             &BlockerFilter::RootLevel(RootId(after.id.clone())),
@@ -1595,6 +1606,7 @@ impl WorkService {
                 "toFeatureId": target.as_ref().map(Id::as_str),
                 "transfer": before.parent_feature_id.is_some() && target.is_some(),
                 "pauseHoldId": pause.as_ref().map(Id::as_str),
+                "featureStopExtended": stop_extended,
                 "keptHoldIds": kept,
                 "controlRevision": control.revision,
                 "deliveryAuthorizedWithoutPlanApproval": target.is_some(),

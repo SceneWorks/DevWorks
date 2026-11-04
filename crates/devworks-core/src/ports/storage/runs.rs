@@ -491,6 +491,18 @@ pub struct StoredPlanState {
     pub readiness: Option<(i64, Value)>,
 }
 
+/// A linked card a pending feature stop came to cover after it was decided (the card was
+/// linked while the stop was pending, or a reapply reached it at a newer generation), fenced
+/// like the cards the stop's journaled intent names: the card's activation generation then, and
+/// whether a reactivation was already pending.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredStopCoverage {
+    pub operation_id: OperationId,
+    pub root_id: RootId,
+    pub generation: i64,
+    pub reactivate: bool,
+}
+
 pub trait RunRead {
     fn root_control(&self, root: &RootId) -> Result<Option<StoredRootControl>, StorageError>;
     /// Roots with a journaled stop whose outcome is still to be observed, in root order after
@@ -561,6 +573,14 @@ pub trait RunRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<Id>, StorageError>;
+    /// The cards the stop `op` came to cover after it was decided, in root order after `after`,
+    /// at most `limit` (1..=500).
+    fn stop_coverage(
+        &self,
+        op: &OperationId,
+        after: Option<&RootId>,
+        limit: u16,
+    ) -> Result<Vec<StoredStopCoverage>, StorageError>;
 }
 
 pub trait RunRepository: RunRead {
@@ -607,6 +627,9 @@ pub trait RunRepository: RunRead {
     fn insert_turn(&mut self, turn: &StoredTurn) -> Result<(), StorageError>;
     /// Ends the session's turn `turn`; another (or no) turn is [`StorageError::LeaseLost`].
     fn delete_turn(&mut self, session: &Id, turn: &Id) -> Result<(), StorageError>;
+    /// Records (or moves forward) the stop's coverage of one card. A coverage never moves to an
+    /// older generation ([`StorageError::InvalidRecord`]).
+    fn cover_stop(&mut self, coverage: &StoredStopCoverage) -> Result<(), StorageError>;
 }
 
 /// The page bound every listing of this repository honours.

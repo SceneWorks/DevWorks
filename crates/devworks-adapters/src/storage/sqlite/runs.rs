@@ -1,7 +1,7 @@
 //! SQLite run root control records: `root_controls`, `executions` (activations), `assignments`
 //! and `blockers` (migration 1, extended by migration 11), `run_instructions` and
-//! `session_turns` (migration 11), plus the read-only views run control needs of
-//! `feature_plans`, `projects`, `work_items` and `queue_entries`.
+//! `session_turns` (migration 11), `stop_coverage` (migration 15), plus the read-only views run
+//! control needs of `feature_plans`, `projects`, `work_items` and `queue_entries`.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
@@ -865,8 +865,46 @@ macro_rules! run_reads {
                     params![root.0.as_str(), after.map_or("", Id::as_str), n],
                 )
             }
+            fn stop_coverage(
+                &self,
+                op: &OperationId,
+                after: Option<&RootId>,
+                n: u16,
+            ) -> Result<Vec<StoredStopCoverage>, StorageError> {
+                coverage(
+                    self.conn,
+                    op,
+                    after.map_or("", |r| r.0.as_str()),
+                    limit(n)?,
+                )
+            }
         }
     };
+}
+fn coverage(
+    conn: &Connection,
+    op: &OperationId,
+    after: &str,
+    n: i64,
+) -> Result<Vec<StoredStopCoverage>, StorageError> {
+    let mut s = db(conn.prepare_cached(
+        "SELECT root_id,generation,reactivate FROM stop_coverage WHERE operation_id=?1 AND root_id>?2 ORDER BY root_id LIMIT ?3",
+    ))?;
+    let raw: Vec<(String, i64, bool)> = db(db(s
+        .query_map(params![op.0.as_str(), after, n], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        }))?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
+    raw.into_iter()
+        .map(|(root, generation, reactivate)| {
+            Ok(StoredStopCoverage {
+                operation_id: op.clone(),
+                root_id: RootId(id_of(root)?),
+                generation,
+                reactivate,
+            })
+        })
+        .collect()
 }
 run_reads!(Snapshot<'_>);
 run_reads!(Unit<'_>);
@@ -1270,6 +1308,35 @@ impl RunRepository for Unit<'_> {
         ))
         .map(|_| ())
         .map_err(|e| unique(e, "session_turn", t.session_id.as_str()))
+    }
+    fn cover_stop(&mut self, c: &StoredStopCoverage) -> Result<(), StorageError> {
+        if c.generation < 0 {
+            return Err(invalid("stop coverage generation out of range"));
+        }
+        root_exists(self.conn, &c.root_id)?;
+        let current: Option<i64> = db(self
+            .conn
+            .query_row(
+                "SELECT generation FROM stop_coverage WHERE operation_id=?1 AND root_id=?2",
+                params![c.operation_id.0.as_str(), c.root_id.0.as_str()],
+                |r| r.get(0),
+            )
+            .optional())?;
+        if current.is_some_and(|g| g > c.generation) {
+            return Err(invalid(
+                "a stop's coverage of a card never moves to an older generation",
+            ));
+        }
+        db(self.conn.execute(
+            "INSERT INTO stop_coverage(operation_id,root_id,generation,reactivate) VALUES(?1,?2,?3,?4) ON CONFLICT(operation_id,root_id) DO UPDATE SET generation=excluded.generation,reactivate=excluded.reactivate",
+            params![
+                c.operation_id.0.as_str(),
+                c.root_id.0.as_str(),
+                c.generation,
+                c.reactivate,
+            ],
+        ))
+        .map(|_| ())
     }
     fn delete_turn(&mut self, session: &Id, turn: &Id) -> Result<(), StorageError> {
         let n = db(self.conn.execute(

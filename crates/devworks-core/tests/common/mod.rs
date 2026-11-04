@@ -1795,6 +1795,14 @@ impl RunRead for Unsupported {
     fn root_deliveries(&self, _: &RootId, _: Option<&Id>, _: u16) -> Result<Vec<Id>, StorageError> {
         nope()
     }
+    fn stop_coverage(
+        &self,
+        _: &OperationId,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<StoredStopCoverage>, StorageError> {
+        nope()
+    }
 }
 impl RunRepository for Unsupported {
     fn insert_root_control(&mut self, _: &StoredRootControl) -> Result<(), StorageError> {
@@ -1831,6 +1839,9 @@ impl RunRepository for Unsupported {
         nope()
     }
     fn delete_turn(&mut self, _: &Id, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn cover_stop(&mut self, _: &StoredStopCoverage) -> Result<(), StorageError> {
         nope()
     }
 }
