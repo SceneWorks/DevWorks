@@ -171,7 +171,26 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0012_diagnostics.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the router catalog (seeded once), tier cursors, session pins, cooldowns and
+    // request bindings (five tables and their indexes), independent of every table of
+    // migrations 11-12.
+    // The writer floor stays at 11 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the build-10 writers migration 11 refuses.
+    // It need not rise: no earlier build writes these tables, so it cannot break their cursor
+    // and pin compare-and-set rules, and every record it writes is unchanged here. The reader
+    // floor stays at 8: no earlier build reads these tables, and every query an earlier reader
+    // makes is unchanged.
+    Migration {
+        version: 13,
+        minimum_reader: 8,
+        minimum_writer: 11,
+        sql: include_str!("migrations/0013_router.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 13; a test fails if the shipped text changes.
+pub const MIGRATION_0013_SHA256: &str =
+    "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b";
 /// Recorded checksum of migration 12; a test fails if the shipped text changes.
 pub const MIGRATION_0012_SHA256: &str =
     "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba";

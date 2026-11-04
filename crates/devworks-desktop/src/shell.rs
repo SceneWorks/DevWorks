@@ -252,6 +252,8 @@ impl Shell {
             chat.drafts.insert(key.clone(), draft);
         }
         chat.scrolls = Scrolls::restoring(&memory.scroll);
+        chat.routing.selections = memory.routing.clone();
+        chat.routing.first_route = memory.routing_first.clone();
         let mut settings = SettingsScreen::default();
         settings.restore(&memory.settings);
         settings.scrolls = Scrolls::restoring(&memory.scroll);
@@ -395,6 +397,9 @@ impl Shell {
         if !self.chat.sessions_loaded && !self.pending(&Slot::SessionsList) {
             self.load_sessions();
         }
+        if !self.chat.routing.catalog_loaded && self.chat.routing.catalog_load.is_none() {
+            self.load_router_catalog();
+        }
         if let Some(id) = self.chat.selected.clone()
             && !self.chat.transcripts.contains_key(&id)
         {
@@ -409,37 +414,45 @@ impl Shell {
     // -----------------------------------------------------------------------------------------
     // Requests
 
+    /// Submits a query; `false` when nothing was submitted (offline, or closing: the shell
+    /// admits nothing new once the window is closing).
     fn query(
         &mut self,
         slot: Slot,
         label: &str,
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
-    ) {
+    ) -> bool {
         if self.online().is_err() {
-            return;
+            return false;
         }
-        let Some(b) = self.backend() else { return };
+        let Some(b) = self.backend() else {
+            return false;
+        };
         let frame = frame(&*b);
-        if let Some(c) = &mut self.client {
-            c.query(slot, label, op, frame);
-        }
+        self.client
+            .as_mut()
+            .is_some_and(|c| c.query(slot, label, op, frame))
     }
+    /// Submits a command; `false` when it was not submitted now (offline or closing; a closed
+    /// client keeps it unresolved). A caller that marked state for it restores that state.
     fn command(
         &mut self,
         slot: Slot,
         label: &str,
         op: &'static str,
         frame: impl FnOnce(&dyn Backend) -> Vec<u8>,
-    ) {
+    ) -> bool {
         if self.online().is_err() {
-            return;
+            return false;
         }
-        let Some(b) = self.backend() else { return };
+        let Some(b) = self.backend() else {
+            return false;
+        };
         let frame = frame(&*b);
-        if let Some(c) = &mut self.client {
-            c.command(slot, label, op, frame);
-        }
+        self.client
+            .as_mut()
+            .is_some_and(|c| c.command(slot, label, op, frame))
     }
 
     pub fn load_sessions(&mut self) {
@@ -502,6 +515,202 @@ impl Shell {
             "resources.list",
             ops::resources_list,
         );
+    }
+
+    /// Drops the catalog and availability derived from routing settings, reloading what is
+    /// visible.
+    fn invalidate_routing(&mut self) {
+        self.chat.routing.invalidate();
+        // A load still paging may predate the change: it is replaced, not completed.
+        if self.route == Route::Chat || self.coordinator_open {
+            self.load_router_catalog();
+        } else {
+            self.chat.routing.catalog_load = None;
+        }
+    }
+
+    /// Loads the whole catalog, page by page, as a new load (replacing one still paging).
+    fn load_router_catalog(&mut self) {
+        if self.online().is_err() {
+            return;
+        }
+        let generation = self.chat.routing.begin_catalog_load();
+        if !self.query(
+            Slot::RouterCatalog(generation),
+            "Loading models and tiers",
+            "router.catalog",
+            |b| ops::router_catalog(b, None),
+        ) {
+            // Never left "loading": the next visible load (or launch) starts it again.
+            self.chat.routing.abandon_catalog_load(generation);
+        }
+    }
+
+    /// Asks the router about the active conversation's selection (and pin).
+    fn refresh_route_status(&mut self) -> bool {
+        let key = self.chat.draft_key();
+        self.refresh_route_status_of(key)
+    }
+
+    /// Asks the router about one conversation's selection (and pin). A newer query supersedes
+    /// one still running (its selection may be stale).
+    fn refresh_route_status_of(&mut self, key: String) -> bool {
+        let sel = self
+            .chat
+            .routing
+            .selections
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let session = (key != chat::NEW_DRAFT).then(|| key.clone());
+        self.query(
+            Slot::RouteStatus(key),
+            "Checking model availability",
+            "router.availability",
+            move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
+        )
+    }
+
+    /// A new route or effort for the active conversation: the explicit `router.pin` change of a
+    /// pinned conversation, otherwise the selection its first routed request uses.
+    fn select_route(&mut self, sel: crate::routing::Selection) {
+        let key = self.chat.draft_key();
+        if self.chat.selection() == sel {
+            return;
+        }
+        if self.chat.routing.selection_locked(&key) {
+            self.chat.notice = Some((
+                Tone::Attention,
+                "The conversation's first route is still being saved; choose again once it \
+                 is pinned."
+                    .into(),
+            ));
+            return;
+        }
+        let pin = self
+            .chat
+            .routing
+            .status
+            .get(&key)
+            .and_then(|s| s.availability.as_ref())
+            .and_then(|a| a.pin.as_ref())
+            .map(|p| p.pin_revision.get());
+        match pin {
+            Some(revision) if key != chat::NEW_DRAFT => {
+                if self.chat.routing.pin_in_flight.contains(&key)
+                    || self.pending(&Slot::RoutePin(key.clone()))
+                {
+                    self.chat.notice = Some((
+                        Tone::Attention,
+                        "The previous model change is still being saved; choose again once it \
+                         is confirmed."
+                            .into(),
+                    ));
+                    return;
+                }
+                let session = key.clone();
+                let submitted = sel.clone();
+                if self.command(
+                    Slot::RoutePin(key.clone()),
+                    "Changing the conversation's model",
+                    "router.pin",
+                    move |b| {
+                        ops::router_pin(b, &session, revision, &submitted.intent, &submitted.effort)
+                    },
+                ) {
+                    self.chat.routing.pin_in_flight.insert(key.clone());
+                    self.chat.routing.selections.insert(key, sel);
+                } else {
+                    // Not submitted: the pin (and so the selection) is unchanged.
+                    self.chat.notice = Some((
+                        Tone::Attention,
+                        "The model selection was not changed: DevWorks is offline or closing."
+                            .into(),
+                    ));
+                }
+            }
+            _ => {
+                self.chat.routing.selections.insert(key, sel);
+                self.refresh_route_status();
+            }
+        }
+    }
+
+    /// Routes a conversation that has no pin yet with its selection, so the selection becomes
+    /// its durable pin at its first message (ROUTE-14). With nothing eligible the router refuses
+    /// and the selection stays as it is; the status line says why.
+    fn route_first(&mut self, session: &str) {
+        let pinned = self
+            .chat
+            .routing
+            .status
+            .get(session)
+            .and_then(|s| s.availability.as_ref())
+            .map(|a| a.pin.is_some());
+        let Some(epoch) = self.chat.session(session).map(|r| r.context_epoch.get()) else {
+            // Its record may not be on the listed page: read it, then route.
+            if self.chat.routing.first_route.contains(session)
+                && !self.pending(&Slot::RouteSession(session.to_owned()))
+            {
+                let sid = session.to_owned();
+                self.query(
+                    Slot::RouteSession(session.to_owned()),
+                    "Reading the conversation",
+                    "sessions.get",
+                    move |b| ops::session_get(b, &sid),
+                );
+            }
+            return;
+        };
+        // A route submitted for it is authoritative until its decided reply is applied. The
+        // slot alone is not: a reply already collected in this frame's batch, but applied after
+        // the reply that called us, is no longer pending.
+        if self.chat.routing.first_in_flight.contains(session)
+            || self.chat.routing.pin_in_flight.contains(session)
+            || self.pending(&Slot::RouteFirst(session.to_owned()))
+            || self.pending(&Slot::RoutePin(session.to_owned()))
+        {
+            return;
+        }
+        match pinned {
+            Some(true) => {
+                self.chat.routing.first_route.remove(session);
+                return;
+            }
+            // Not known yet whether it is pinned: routed once the router says (this reply or
+            // a later one, also after a restart), never over a pin it does not know about.
+            None => {
+                if self.chat.routing.first_route.insert(session.to_owned())
+                    && !self.pending(&Slot::RouteStatus(session.to_owned()))
+                {
+                    self.refresh_route_status_of(session.to_owned());
+                }
+                return;
+            }
+            Some(false) => {
+                self.chat.routing.first_route.remove(session);
+            }
+        }
+        let sel = self
+            .chat
+            .routing
+            .selections
+            .get(session)
+            .cloned()
+            .unwrap_or_default();
+        let sid = session.to_owned();
+        if self.command(
+            Slot::RouteFirst(session.to_owned()),
+            "Routing the conversation",
+            "router.route",
+            move |b| ops::router_route(b, &sid, epoch, &sel.intent, &sel.effort),
+        ) {
+            self.chat.routing.first_in_flight.insert(session.to_owned());
+        } else {
+            // Not submitted (offline, or the window is closing): it keeps waiting in the
+            // persisted list and is routed when the router next answers (or at the next launch).
+            self.chat.routing.first_route.insert(session.to_owned());
+        }
     }
 
     fn send(&mut self) {
@@ -813,9 +1022,130 @@ impl Shell {
                     self.chat.sessions_loaded = true;
                     self.chat.sessions_error = None;
                     self.reconcile_selection();
+                    // A waiting first route needs its session's record (its context epoch).
+                    let waiting: Vec<String> =
+                        self.chat.routing.first_route.iter().cloned().collect();
+                    for key in waiting {
+                        self.route_first(&key);
+                    }
                 }
                 Err(e) => self.chat.sessions_error = Some(e.describe()),
             },
+            (Slot::RouterCatalog(generation), Reply::Query(q)) => match ops::route_models(q) {
+                Ok((models, next)) => {
+                    if let crate::routing::CatalogPage::More(cursor) =
+                        self.chat.routing.catalog_page(generation, models, next)
+                        && !self.query(
+                            Slot::RouterCatalog(generation),
+                            "Loading models and tiers",
+                            "router.catalog",
+                            move |b| ops::router_catalog(b, Some(&cursor)),
+                        )
+                    {
+                        self.chat.routing.abandon_catalog_load(generation);
+                    }
+                }
+                Err(e) => self.chat.routing.catalog_failed(
+                    generation,
+                    format!("Named models are unavailable: {}", e.describe()),
+                ),
+            },
+            (Slot::RouteSession(id), Reply::Query(q)) => {
+                if let Ok(record) = ops::session_record(q) {
+                    self.chat.upsert(record);
+                    if self.chat.routing.first_route.contains(&id) {
+                        self.route_first(&id);
+                    }
+                }
+            }
+            (Slot::RouteStatus(key), Reply::Query(_))
+                if self.pending(&Slot::RouteStatus(key.clone())) =>
+            {
+                // A newer query was issued after this reply was collected (by a reply applied
+                // before it in the same batch): it may predate a route or pin just applied.
+            }
+            (Slot::RouteStatus(key), Reply::Query(q)) => {
+                let status = match ops::availability(q) {
+                    Ok(a) => {
+                        // A pinned conversation's selection is its durable pin.
+                        if let Some(pin) = &a.pin
+                            && !self.chat.routing.pin_in_flight.contains(&key)
+                            && !self.pending(&Slot::RoutePin(key.clone()))
+                        {
+                            self.chat.routing.selections.insert(
+                                key.clone(),
+                                crate::routing::Selection {
+                                    intent: pin.intent.clone(),
+                                    effort: pin.requested_effort.clone(),
+                                },
+                            );
+                        }
+                        crate::routing::Status {
+                            availability: Some(a),
+                            error: None,
+                        }
+                    }
+                    Err(e) => crate::routing::Status {
+                        availability: None,
+                        error: Some(e.describe()),
+                    },
+                };
+                let known = status.availability.is_some();
+                self.chat.routing.status.insert(key.clone(), status);
+                if known && self.chat.routing.first_route.contains(&key) {
+                    self.route_first(&key);
+                }
+            }
+            (Slot::RouteFirst(key), Reply::Command(c)) => {
+                if matches!(ops::routed(c), Err(Failure::Unknown)) {
+                    // Confirmed with its identical frame by Confirm outcomes or the next launch;
+                    // the selection stays locked until then.
+                    return;
+                }
+                self.chat.routing.first_in_flight.remove(&key);
+                // Decided: a wait recorded for it (it was also kept while the window closed) is
+                // over, so it is never routed a second time.
+                self.chat.routing.first_route.remove(&key);
+                // Pinned, or refused because nothing is eligible: the status line says which. It
+                // is reread even when not shown, so no older reply stands for it.
+                self.chat.routing.status.remove(&key);
+                self.refresh_route_status_of(key);
+            }
+            (Slot::RoutePin(key), Reply::Command(c)) => {
+                match ops::pinned(c) {
+                    Ok(choice) => {
+                        self.chat.routing.selections.insert(
+                            key.clone(),
+                            crate::routing::Selection {
+                                intent: choice.intent,
+                                effort: choice.requested_effort,
+                            },
+                        );
+                        self.announce("The conversation's model selection was saved.");
+                    }
+                    Err(Failure::Unknown) => {
+                        self.chat.notice = Some((
+                            Tone::Attention,
+                            "Not yet confirmed whether the model change was saved. Use Confirm \
+                             outcomes to check again; it is never applied twice."
+                                .into(),
+                        ));
+                        return;
+                    }
+                    Err(e) => {
+                        self.chat.notice = Some(chat::failure_notice(
+                            "The model selection was not changed",
+                            &e,
+                        ));
+                        self.announce("The model selection was not changed.");
+                    }
+                }
+                // Decided: the pin (or the unchanged one) is re-read, shown or not, and its
+                // selection adopted.
+                self.chat.routing.pin_in_flight.remove(&key);
+                self.chat.routing.status.remove(&key);
+                self.refresh_route_status_of(key);
+            }
             (Slot::SessionStart, Reply::Command(c)) => {
                 let reason = self.chat.starting.take();
                 match ops::started(c) {
@@ -913,6 +1243,7 @@ impl Shell {
                         self.chat.notice = None;
                         self.announce("Message saved to the conversation. No coordinator is connected to reply (DW-16).");
                         self.load_transcript(&id);
+                        self.route_first(&id);
                     }
                     Err(e) => {
                         if let Failure::Refused(f) = &e
@@ -1093,6 +1424,9 @@ impl Shell {
                         self.announce("Settings: outcome not confirmed.");
                     }
                     Ok(()) => {
+                        // Tier membership and other routing settings may have changed: the
+                        // selectors' catalog and every availability are read again.
+                        self.invalidate_routing();
                         // Still saving until the follow-up read settles the drafts.
                         self.settings.after_save = true;
                         self.settings.message = Some((Tone::Good, "Settings saved.".into()));
@@ -1281,6 +1615,14 @@ impl Shell {
         {
             self.load_transcript(&id);
         }
+        if self.route == Route::Chat || self.coordinator_open {
+            self.refresh_route_status();
+            // Catalog edits and membership changes made elsewhere reach the selectors too.
+            if self.chat.routing.catalog_load.is_none() {
+                self.load_router_catalog();
+            }
+        }
+        self.refresh_waiting_first_routes();
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
@@ -1298,6 +1640,10 @@ impl Shell {
                 ChatAction::Select(id) => {
                     self.chat.selected = Some(id.clone());
                     self.chat.notice = None;
+                    if self.chat.routing.status.contains_key(&id) {
+                        // Shown as last known while its pin is read again.
+                        self.refresh_route_status();
+                    }
                     if !self.chat.transcripts.contains_key(&id) {
                         self.load_transcript(&id);
                     }
@@ -1326,6 +1672,7 @@ impl Shell {
                 ChatAction::CloseSidebar => self.coordinator_open = false,
                 ChatAction::ConfirmAttachment(local) => self.confirm_attachment(local),
                 ChatAction::RetryAttachment(local) => self.retry_attachment(local),
+                ChatAction::SetSelection(sel) => self.select_route(sel),
             }
         }
         let _ = ctx;
@@ -1519,6 +1866,8 @@ impl Shell {
                 .flat_map(|s| s.offsets().iter().map(|(k, v)| (k.clone(), *v)))
                 .collect(),
             pending: self.pending_memory(),
+            routing: self.chat.routing.selections.clone(),
+            routing_first: self.chat.routing.first_route.clone(),
         }
     }
 
@@ -1643,6 +1992,12 @@ impl Shell {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
                 }
+                Slot::RouteFirst(id) => {
+                    self.chat.routing.first_in_flight.insert(id.clone());
+                }
+                Slot::RoutePin(id) => {
+                    self.chat.routing.pin_in_flight.insert(id.clone());
+                }
                 _ => {}
             }
             if let Some(client) = &mut self.client {
@@ -1697,6 +2052,8 @@ impl Shell {
             self.load_sessions();
             self.load_route();
             self.restore_previews();
+            // First messages saved before their routing was known, at the last close.
+            self.refresh_waiting_first_routes();
             // Outcomes left unknown at the last close: confirmed with their exact frames.
             if self.unconfirmed_count() > 0 {
                 self.confirm_outcomes();
@@ -1728,6 +2085,9 @@ impl Shell {
             self.poll_hints();
             self.input(&ctx);
         }
+        if self.lifecycle == Lifecycle::Open {
+            self.route_status_due(&ctx);
+        }
         self.toolbar(ui);
         self.statusbar(ui);
         self.navigation(ui);
@@ -1743,6 +2103,56 @@ impl Shell {
         }
         // Periodic re-query of visible data (missed-hint repair) needs a frame now and then.
         ctx.request_repaint_after(Duration::from_secs(5));
+    }
+
+    /// Asks again about conversations whose first message still waits to be routed.
+    fn refresh_waiting_first_routes(&mut self) {
+        let waiting: Vec<String> = self.chat.routing.first_route.iter().cloned().collect();
+        for key in waiting {
+            if !self.pending(&Slot::RouteStatus(key.clone()))
+                && !self.pending(&Slot::RouteFirst(key.clone()))
+            {
+                self.refresh_route_status_of(key);
+            }
+        }
+    }
+
+    /// Asks about the visible conversation's selection when nothing is known yet, and again when
+    /// the earliest cooldown it waits for has ended (never earlier).
+    fn route_status_due(&mut self, ctx: &egui::Context) {
+        if !(self.route == Route::Chat || self.coordinator_open) || self.online().is_err() {
+            return;
+        }
+        let key = self.chat.draft_key();
+        if self.pending(&Slot::RouteStatus(key.clone())) {
+            return;
+        }
+        let retry = match self.chat.routing.status.get(&key) {
+            None => {
+                self.refresh_route_status();
+                return;
+            }
+            Some(s) => s
+                .availability
+                .as_ref()
+                .filter(|a| !a.available)
+                .and_then(|a| a.retry_at_ms.as_ref().map(|t| t.get())),
+        };
+        if let Some(at) = retry {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64);
+            if now >= at {
+                // Once per reported expiry: a router still reporting it (its clock may lag) is
+                // asked again by the periodic refresh, not every frame.
+                if self.chat.routing.rechecked.get(&key) != Some(&at) && self.refresh_route_status()
+                {
+                    self.chat.routing.rechecked.insert(key, at);
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis((at - now) as u64));
+            }
+        }
     }
 
     /// Clamps the text scale to [`theme::MAX_TEXT_SCALE`] and keeps the native minimum window

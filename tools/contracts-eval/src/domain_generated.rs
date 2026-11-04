@@ -3698,6 +3698,27 @@ pub struct RouteAvailability {
     pub blocked_reason_codes: Items<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RouteChoice", extend("x-since" = 2))]
+    pub pin: Option<RouteChoice>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub pin_eligible: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub pin_reason: Option<Label>,
 }
 impl Check for RouteAvailability {
     fn check(&self) -> Result<(), String> {
@@ -3706,11 +3727,28 @@ impl Check for RouteAvailability {
         self.eligible_model_ids.check()?;
         self.blocked_reason_codes.check()?;
         self.retry_at_ms.check()?;
+        self.pin.check()?;
+        self.pin_eligible.check()?;
+        self.pin_reason.check()?;
         super::domain_rules::record(
             "RouteAvailability",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RouteAvailability {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.pin = None;
+        }
+        if revision < 2 {
+            self.pin_eligible = None;
+        }
+        if revision < 2 {
+            self.pin_reason = None;
+        }
     }
 }
 
@@ -6990,6 +7028,13 @@ pub enum DomainQuery {
         intent: RouteIntent,
         effort: EffortName,
         required_capabilities: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        session_id: Option<Id>,
     },
     #[serde(rename = "router.usage")]
     RouterUsage {
@@ -8137,10 +8182,12 @@ impl Check for DomainQuery {
                 intent,
                 effort,
                 required_capabilities,
+                session_id,
             } => {
                 intent.check()?;
                 effort.check()?;
                 required_capabilities.check()?;
+                session_id.check()?;
             }
             Self::RouterUsage {
                 root_id,
@@ -8383,6 +8430,11 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *workspace = None;
+                }
+            }
+            Self::RouterAvailability { session_id, .. } => {
+                if revision < 2 {
+                    *session_id = None;
                 }
             }
             Self::WorkspaceLogs {
@@ -13180,6 +13232,7 @@ impl Revisioned for OperationResult {
             Self::ResourcesRelease { value } => value.retain_revision(revision),
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
+            Self::RouterAvailability { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),

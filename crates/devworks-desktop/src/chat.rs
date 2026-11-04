@@ -4,15 +4,17 @@
 //! one set of pending attachments and one transcript.
 //!
 //! Bound services: `sessions.list` / `.start` / `.transcript` / `.append_message` and
-//! `artifacts.save` (workspace scope, conversation-tagged). Not bound here, and shown honestly as
-//! unavailable: the coordinator agent and inference (DW-16), router tiers, named models and
-//! effort (DW-17), Current's app-wide work status (DW-12, DW-14) and conversation dates for
-//! history grouping (the session record carries none yet).
+//! `artifacts.save` (workspace scope, conversation-tagged), and `router.catalog`, `.availability`
+//! and `.pin` for the route and effort selectors ([`crate::routing`]). Not bound here, and shown
+//! honestly as unavailable: the coordinator agent and inference (DW-16), Current's app-wide
+//! work status (DW-12, DW-14) and conversation dates for history grouping (the session record
+//! carries none yet).
 use crate::memory::{
     DraftMemory, FailedAttachment, PendingUpload, SidebarTab, StoredAttachment,
     UnconfirmedAttachment,
 };
 use crate::ops::Failure;
+use crate::routing::{self, Routing, Selection};
 use crate::theme;
 use crate::virtual_list::{self, Blocks, Scrolls};
 use crate::widgets::{self, Tone, ViewState, chip};
@@ -277,6 +279,8 @@ pub struct Chat {
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
     pub scrolls: Scrolls,
+    /// The composer's route and effort selection, catalog and status (shared by both surfaces).
+    pub routing: Routing,
     next_local: u64,
 }
 
@@ -304,6 +308,7 @@ impl Chat {
             notice: None,
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
+            routing: Routing::default(),
             next_local: 0,
         }
     }
@@ -357,8 +362,24 @@ impl Chat {
         out.sort_by_key(|s| std::cmp::Reverse(last_activity(s)));
         out
     }
+    /// The active conversation's route and effort selection.
+    pub fn selection(&self) -> Selection {
+        self.routing
+            .selections
+            .get(&self.draft_key())
+            .cloned()
+            .unwrap_or_default()
+    }
     /// Moves the not-yet-started draft onto a started session.
     pub fn adopt_new_draft(&mut self, session: &str) {
+        // The new chat's route and effort selection becomes the session's.
+        if let Some(sel) = self.routing.selections.remove(NEW_DRAFT) {
+            self.routing
+                .selections
+                .entry(session.to_owned())
+                .or_insert(sel);
+        }
+        self.routing.status.remove(NEW_DRAFT);
         if let Some(d) = self.drafts.remove(NEW_DRAFT) {
             let target = self.drafts.entry(session.to_owned()).or_default();
             // Both texts are kept: neither the session's draft nor the new one is dropped.
@@ -492,6 +513,9 @@ pub enum ChatAction {
     /// Resubmit an attachment's unconfirmed save frame.
     ConfirmAttachment(u64),
     RetryAttachment(u64),
+    /// A new route (tier, named model or Open Router Auto) or effort for the active
+    /// conversation.
+    SetSelection(Selection),
 }
 
 /// Which surface renders the conversation.
@@ -785,6 +809,7 @@ fn composer(
         .inner_margin(theme::margin(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let selection = chat.selection();
             let draft = chat.draft_mut();
             // The draft and attachment areas scroll within what the measured overhead (the
             // action row, metadata line and margins) leaves of the bound.
@@ -863,23 +888,25 @@ fn composer(
                 {
                     actions.push(ChatAction::AttachDialog);
                 }
-                ui.add_enabled_ui(false, |ui| {
-                    egui::ComboBox::from_id_salt(("model", surface.salt()))
-                        .selected_text("Model: not configured")
-                        .show_ui(ui, |_| {})
-                        .response
-                        .on_disabled_hover_text(
-                            "Router tiers and named models arrive with DW-17; until then no \
-                             model is selected or pinned.",
-                        )
-                        .widget_info_labeled("Model or tier");
-                    egui::ComboBox::from_id_salt(("effort", surface.salt()))
-                        .selected_text("Effort: default")
-                        .show_ui(ui, |_| {})
-                        .response
-                        .on_disabled_hover_text("Effort selection arrives with DW-17.")
-                        .widget_info_labeled("Effort");
-                });
+                // A conversation's selection may be its durable pin: it is changed only once
+                // the router said what it is pinned to (never over an unknown pin).
+                let key = chat.draft_key();
+                // Nor while its first route, which carries the current selection, is saved.
+                let known = (key == NEW_DRAFT
+                    || chat
+                        .routing
+                        .status
+                        .get(&key)
+                        .is_some_and(|s| s.availability.is_some()))
+                    && !chat.routing.selection_locked(&key);
+                selectors(
+                    ui,
+                    &chat.routing,
+                    &selection,
+                    surface,
+                    online.is_ok() && known,
+                    actions,
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let draft = chat.draft();
                     let ready = draft.is_some_and(|d| !d.is_empty() && !d.busy());
@@ -904,7 +931,15 @@ fn composer(
         });
     ui.horizontal_wrapped(|ui| {
         widgets::caption(ui, "All projects");
-        widgets::caption(ui, "Pinned: no model (DW-17)");
+        let key = chat.draft_key();
+        widgets::caption(
+            ui,
+            routing::status_line(
+                &chat.routing.catalog,
+                &chat.selection(),
+                chat.routing.status.get(&key),
+            ),
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             widgets::caption(ui, "Cmd / Ctrl + Enter to send");
         });
@@ -919,6 +954,74 @@ fn composer(
     if (total - old_total).abs() > 0.5 || (chat.composer_overheads[i] - old_overhead).abs() > 0.5 {
         ui.ctx().request_repaint();
     }
+}
+
+/// The route selector (tiers first, then named models) and the separate effort selector.
+fn selectors(
+    ui: &mut Ui,
+    r: &Routing,
+    selection: &Selection,
+    surface: Surface,
+    enabled: bool,
+    actions: &mut Vec<ChatAction>,
+) {
+    let current = routing::intent_label(&r.catalog, &selection.intent);
+    let effort_text = format!("Effort: {}", routing::effort_label(&selection.effort));
+    let mut picked = None;
+    let route_hover = r
+        .catalog_error
+        .clone()
+        .unwrap_or_else(|| "Tiers allocate round robin; a named model is used directly.".into());
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(("model", surface.salt()))
+            .selected_text(current.clone())
+            .show_ui(ui, |ui| {
+                for (label, intent) in routing::options(&r.catalog) {
+                    let on = routing::same_intent(&intent, &selection.intent);
+                    if ui.selectable_label(on, label).clicked() && !on {
+                        picked = Some(intent);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(route_hover)
+            .widget_info(|| combo_info(routing::ROUTE_LABEL, enabled, &current));
+        let mut effort = None;
+        egui::ComboBox::from_id_salt(("effort", surface.salt()))
+            .selected_text(effort_text.clone())
+            .show_ui(ui, |ui| {
+                for e in routing::efforts(&r.catalog, &selection.intent) {
+                    let on = routing::effort_label(&e) == routing::effort_label(&selection.effort);
+                    if ui.selectable_label(on, routing::effort_label(&e)).clicked() && !on {
+                        effort = Some(e);
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Effort is separate from the route; an explicit effort is only sent to a model that declares it.")
+            .widget_info(|| combo_info(routing::EFFORT_LABEL, enabled, &effort_text));
+        if let Some(effort) = effort {
+            actions.push(ChatAction::SetSelection(Selection {
+                intent: selection.intent.clone(),
+                effort,
+            }));
+        }
+    });
+    if let Some(intent) = picked {
+        // Effort is kept independently of the route; one the new route does not declare is
+        // shown as not eligible rather than changed silently.
+        actions.push(ChatAction::SetSelection(Selection {
+            intent,
+            effort: selection.effort.clone(),
+        }));
+    }
+}
+
+/// A named selector with its current choice as its value.
+fn combo_info(label: &str, enabled: bool, value: &str) -> egui::WidgetInfo {
+    let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, enabled, label);
+    info.current_text_value = Some(value.to_owned());
+    info
 }
 
 fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {

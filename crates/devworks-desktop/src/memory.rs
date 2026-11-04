@@ -158,6 +158,13 @@ pub struct Memory {
     pub scroll: BTreeMap<String, f32>,
     #[serde(default)]
     pub pending: PendingMemory,
+    /// Route and effort selections of conversations that have no pin yet (the router holds a
+    /// pinned conversation's selection), by conversation key.
+    #[serde(default)]
+    pub routing: BTreeMap<String, crate::routing::Selection>,
+    /// Conversations whose first message waits to be routed (see `routing::Routing`).
+    #[serde(default)]
+    pub routing_first: std::collections::BTreeSet<String>,
 }
 impl Default for Memory {
     fn default() -> Self {
@@ -174,6 +181,8 @@ impl Default for Memory {
             settings: SettingsMemory::default(),
             scroll: BTreeMap::new(),
             pending: PendingMemory::default(),
+            routing: BTreeMap::new(),
+            routing_first: std::collections::BTreeSet::new(),
         }
     }
 }

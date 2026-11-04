@@ -6564,5 +6564,61 @@
     "raw": "{\"kind\":\"workspace.logs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"severity\":\"Info\",\"component\":\"fixture\",\"code\":\"fixture\",\"message\":\"Fixture content\",\"metrics\":[{\"name\":\"walBytes\",\"availability\":\"Maybe\",\"value\":\"4096\",\"unit\":\"bytes\"}]}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r2-input-router.availability",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":\"session-a\"},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-input-router.availability-plain",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[]},\"schemaRevision\":2}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-availability-session",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":\"session-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-availability-null-session",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":null},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r2-result-router.availability",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r2-result-router.availability-no-pin",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-availability-pin",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-availability-pin-effort",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"Low\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": false,
+    "schemaValid": true
   }
 ]

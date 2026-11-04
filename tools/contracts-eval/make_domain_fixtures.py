@@ -456,5 +456,17 @@ case('reject-r2-result-available-metric-without-value','operation-result.r2',{'k
 case('reject-r2-result-progress-over-total','operation-result.r2',{'kind':'workspace.record_diagnostic','value':{**diag_r2,'progressCompleted':'6'}},False,True)
 case('reject-r2-result-diagnostic-page-continuation','operation-result.r2',{'kind':'workspace.logs','value':{'items':[],'hasMore':True}},False,True)
 case('reject-r2-result-metric-unknown-availability','operation-result.r2',{'kind':'workspace.logs','value':{'items':[{**sample('Diagnostic'),'metrics':[{**metric_ok,'availability':'Maybe'}]}],'hasMore':False}},False,False)
+# Schema revision 2 (router availability): with sessionId, the session's current pin, whether
+# it is eligible for the asked intent/effort/capabilities and why it was last set.
+case('r2-input-router.availability','domain-request.r2',domain('router.availability',sessionId='session-a'))
+case('r2-input-router.availability-plain','domain-request.r2',domain('router.availability'))
+case('reject-r1-availability-session','domain-request',domain('router.availability',None,sessionId='session-a'),False,False)
+case('reject-r2-availability-null-session','domain-request.r2',domain('router.availability',sessionId=None),False,False)
+pin_choice={**sample('RouteChoice'),'requestedEffort':'High','effectiveEffort':'High'}
+availability_r2={**sample('RouteAvailability'),'pin':pin_choice,'pinEligible':True,'pinReason':'Failover'}
+case('r2-result-router.availability','operation-result.r2',{'kind':'router.availability','value':availability_r2})
+case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
+case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
+case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))
