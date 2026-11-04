@@ -60,6 +60,9 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Schedules (jobs) and their runs.
+    Job,
+    JobRun,
     /// Provider connections.
     Connection,
     /// Secret-store credential handles (immutable; a replacement gets a new one).

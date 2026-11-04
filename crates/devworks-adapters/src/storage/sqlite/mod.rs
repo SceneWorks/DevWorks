@@ -28,6 +28,7 @@ mod configuration;
 mod conn;
 mod connections;
 mod diagnostics;
+mod jobs;
 mod migrations;
 mod projects;
 mod repos;
@@ -47,7 +48,7 @@ pub use migrations::{
     MIGRATION_0005_SHA256, MIGRATION_0006_SHA256, MIGRATION_0007_SHA256, MIGRATION_0008_SHA256,
     MIGRATION_0009_SHA256, MIGRATION_0010_SHA256, MIGRATION_0011_SHA256, MIGRATION_0012_SHA256,
     MIGRATION_0013_SHA256, MIGRATION_0014_SHA256, MIGRATION_0015_SHA256, MIGRATION_0016_SHA256,
-    MIGRATIONS, Migration,
+    MIGRATION_0017_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};

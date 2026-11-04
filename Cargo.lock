@@ -775,6 +775,7 @@ dependencies = [
  "devworks-core",
  "getrandom 0.3.4",
  "httparse",
+ "jiff",
  "libc",
  "rcgen",
  "rusqlite",
@@ -794,6 +795,7 @@ dependencies = [
 name = "devworks-core"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "schemars",
  "serde",
  "serde_json",

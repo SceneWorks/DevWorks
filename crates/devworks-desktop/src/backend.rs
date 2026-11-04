@@ -54,6 +54,11 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// The native maintenance capabilities a scheduled job may run in this build (only those
+    /// with a registered use case; none are advertised otherwise).
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        Vec::new()
+    }
     /// Writes an API key the user typed into the OS secret store and returns its opaque handle
     /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
     /// key never passes through a frame, receipt or log.
@@ -154,6 +159,25 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// The jobs of the selected scope, and a further page of them.
+    JobsList,
+    /// A further page of the shown jobs list (that list's generation).
+    JobsMore(u64),
+    /// A further page re-read by a refresh of the shown jobs list (the refresh's generation).
+    JobsRefresh(u64),
+    /// The jobs of one project, for its run status on All projects.
+    ProjectJobs(String),
+    /// One job's inspection (its first run-history page) and an older history page (job ID).
+    JobInspect(String),
+    JobHistory(String),
+    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
+    /// skipped one while the active run continues.
+    JobActiveRun(String),
+    /// A project's artifacts, as prompt candidates of a job form (project ID).
+    JobPrompts(String),
+    JobCreate,
+    /// A command of one job or its run (one at a time per job).
+    JobCommand(String),
     /// Every feature of a project (all pages, read in order).
     WorkFeatures(String),
     /// Every card (feature task or standalone issue) of a project.
@@ -261,6 +285,13 @@ pub const COMMANDS: &[&str] = &[
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "jobs.create",
+    "jobs.edit",
+    "jobs.enable",
+    "jobs.disable",
+    "jobs.delete",
+    "jobs.run_now",
+    "jobs.cancel",
     "features.create",
     "features.edit",
     "features.edit_plan",

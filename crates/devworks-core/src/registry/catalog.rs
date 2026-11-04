@@ -6196,7 +6196,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<JobRecord>",
         result_schema: schema_of::<Page<JobRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.create",
@@ -6218,7 +6218,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.edit",
@@ -6240,7 +6240,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.enable",
@@ -6262,7 +6262,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.run_now",
@@ -6284,7 +6284,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.inspect",
@@ -6306,7 +6306,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobInspection",
         result_schema: schema_of::<JobInspection>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.cancel",
@@ -6328,7 +6328,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRun",
         result_schema: schema_of::<JobRun>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.delete",
@@ -6350,7 +6350,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "jobs.disable",
@@ -6372,7 +6372,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "JobRecord",
         result_schema: schema_of::<JobRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "settings.read_effective",

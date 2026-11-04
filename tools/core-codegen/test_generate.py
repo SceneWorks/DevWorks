@@ -37,7 +37,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
-            'router.connections', 'router.configure', 'web.search', 'web.fetch',
+            'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
+            'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
+            'jobs.disable', 'web.search', 'web.fetch',
             # Feature readiness and queue/workflow revisions on every work record result.
             'features.list', 'features.get', 'features.create', 'features.edit_plan',
             'features.dependencies', 'features.edit', 'issues.list', 'issues.get',
@@ -51,6 +53,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.availability'], {2})
         self.assertEqual(carried['router.connections'], {2})
         self.assertEqual(carried['router.configure'], {2})
+        self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})

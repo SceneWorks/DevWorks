@@ -39,6 +39,8 @@ getrandom = "=0.3.4"
 # A throwaway certificate authority for the local TLS server the transport tests connect to.
 rcgen = { version = "=0.13.2", default-features = false, features = ["ring", "pem"] }
 devworks-core = { path = "../devworks-core", features = ["contract-suite"] }
+# Civil times in schedule tests (already resolved for core and the desktop).
+jiff = "=0.2.39"
 
 # Descriptor-relative no-follow filesystem calls (openat, fstatat, unlinkat) for verified reads
 # and destructive steps. Already in the lockfile; Windows uses std handle flags only.

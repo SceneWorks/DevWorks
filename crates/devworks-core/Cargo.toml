@@ -7,7 +7,11 @@ license.workspace = true
 publish.workspace = true
 
 # Core stays free of UI, database-driver, HTTP and async-runtime dependencies (ARCH-07).
+# jiff 0.2.39 (already resolved for the desktop) resolves IANA time zones for schedule
+# occurrences, DST gaps and folds included (system tz database, bundled where the platform has
+# none, as on Windows).
 [dependencies]
+jiff = "=0.2.39"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

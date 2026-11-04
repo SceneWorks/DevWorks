@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod jobs;
 pub mod projects;
 pub mod work;
 
@@ -146,6 +147,7 @@ pub struct Shell {
     pub resources: ListState<ResourceRecord>,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
+    pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
     /// The project the navigation selected; its screens follow it.
@@ -285,6 +287,7 @@ impl Shell {
             artifacts: ListState::default(),
             resources: ListState::default(),
             projects: projects::ProjectsUi::default(),
+            jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
@@ -408,10 +411,23 @@ impl Shell {
                 self.load_projects();
                 self.load_deleted_projects();
                 self.load_repositories();
+                if let Some(p) = self
+                    .routes
+                    .get(&Route::Portfolio)
+                    .and_then(|m| m.selection.clone())
+                {
+                    self.load_project_jobs(&p);
+                }
             }
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+            }
+            Route::Jobs => {
+                self.load_jobs();
+                if !self.projects.list.loaded {
+                    self.load_projects();
+                }
             }
             Route::Overview | Route::Features | Route::Issues => {
                 self.load_projects();
@@ -1072,6 +1088,9 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
             return;
         };
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
@@ -1808,6 +1827,10 @@ impl Shell {
             {
                 self.load_route();
             }
+            // Run status moves while the screen is open (claims, runs, cancellations).
+            Route::Jobs if !self.pending(&Slot::JobsList) && self.jobs.list_refresh.is_none() => {
+                self.load_jobs();
+            }
             // Changes an agent made reach the work screens (the lists are read in full again).
             Route::Overview | Route::Features | Route::Issues if !self.work_loading() => {
                 self.load_work();
@@ -1933,6 +1956,7 @@ impl Shell {
                     }
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
+                SettingsAction::OpenJobs => self.navigate(Route::Jobs),
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
@@ -3008,6 +3032,7 @@ impl Shell {
             Route::Resources => self.resources_screen(ui),
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),
             Route::Issues => self.issues_screen(ui),
