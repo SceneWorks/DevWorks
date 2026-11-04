@@ -811,7 +811,8 @@ impl KnowledgeScreen {
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.cleanup_source)
+                        egui::TextEdit::multiline(&mut self.cleanup_source)
+                            .desired_rows(1)
                             .hint_text("Source, such as a test run")
                             .desired_width(220.0),
                     );

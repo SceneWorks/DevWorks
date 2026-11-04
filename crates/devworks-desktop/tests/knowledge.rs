@@ -838,7 +838,7 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
     let root = Root::new("knowledge-source-label");
     let engine = start(&root);
     let backend = engine.backend();
-    let source = " résumé test-run.json ";
+    let source = " résumé\n test-run.json ";
     let frame = knowledge_screen::command(
         &*backend,
         "knowledge.record",
@@ -856,7 +856,13 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
     assert_eq!(h.state().knowledge.items.len(), 1);
     h.get_by_label("Clean up by source").click();
     settle(&mut h);
-    type_into(&mut h, "Cleanup source", source);
+    h.get_by_role_and_label(Role::TextInput, "Cleanup source")
+        .focus();
+    h.step();
+    h.input_mut()
+        .events
+        .push(eframe::egui::Event::Paste(source.to_owned()));
+    h.step();
     click(&mut h, Role::Button, "Preview deletion");
     assert_eq!(
         h.state().knowledge.source_preview.as_ref().unwrap().source,
