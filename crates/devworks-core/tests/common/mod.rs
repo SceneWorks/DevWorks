@@ -1549,8 +1549,41 @@ impl RouterRead for Unsupported {
     fn route_request(&self, _: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
         nope()
     }
+    fn connection(&self, _: &Id) -> Result<Option<StoredConnection>, StorageError> {
+        nope()
+    }
+    fn connections(&self, _: Option<&str>, _: u16) -> Result<Vec<StoredConnection>, StorageError> {
+        nope()
+    }
+    fn decision_model(&self, _: &Id) -> Result<Option<StoredDecisionModel>, StorageError> {
+        nope()
+    }
+    fn decision_models(
+        &self,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<StoredDecisionModel>, StorageError> {
+        nope()
+    }
 }
 impl RouterRepository for Unsupported {
+    fn put_connection(
+        &mut self,
+        _: &StoredConnection,
+        _: Option<i64>,
+    ) -> Result<StoredConnection, StorageError> {
+        nope()
+    }
+    fn delete_connection(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_decision_model(
+        &mut self,
+        _: &StoredDecisionModel,
+        _: Option<i64>,
+    ) -> Result<StoredDecisionModel, StorageError> {
+        nope()
+    }
     fn put_route_model(
         &mut self,
         _: &StoredRouteModel,

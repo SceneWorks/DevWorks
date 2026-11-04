@@ -1491,6 +1491,8 @@ impl Revisioned for OperationResult {
             Self::JobsCancel { value } => value.retain_revision(revision),
             Self::JobsDelete { value } => value.retain_revision(revision),
             Self::JobsDisable { value } => value.retain_revision(revision),
+            Self::RouterCatalog { value } => value.retain_revision(revision),
+            Self::RouterConnections { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),

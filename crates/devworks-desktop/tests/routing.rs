@@ -8,6 +8,7 @@ mod common;
 
 use common::*;
 use devworks_core::ports::router::{ConnectionDirectory, ConnectionState, ConnectionStatus};
+use devworks_core::ports::storage::{RouterRead, StorageError};
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::RouteIntent;
 use devworks_desktop::backend::Backend;
@@ -23,8 +24,8 @@ use std::sync::Arc;
 /// Both subscriptions connected (no discovery yet).
 struct Connected;
 impl ConnectionDirectory for Connected {
-    fn connections(&self) -> Vec<ConnectionStatus> {
-        [
+    fn connections(&self, _: &dyn RouterRead) -> Result<Vec<ConnectionStatus>, StorageError> {
+        Ok([
             ("ClaudeSubscriptionMessages", "conn-claude"),
             ("CodexSubscriptionResponses", "conn-codex"),
         ]
@@ -34,14 +35,16 @@ impl ConnectionDirectory for Connected {
             profile: profile.into(),
             state: ConnectionState::Connected,
             discovered: None,
+            allowed: Vec::new(),
+            excluded: Vec::new(),
         })
-        .collect()
+        .collect())
     }
 }
 
 fn start_connected(root: &Root) -> Engine {
     let mut c = config(&root.0);
-    c.connections = Arc::new(Connected);
+    c.connections = Some(Arc::new(Connected));
     Engine::start(c).expect("the runtime boots")
 }
 
@@ -640,7 +643,7 @@ fn the_selectors_gather_every_catalog_page() {
     db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
     for i in 0..250 {
         db.execute(
-            "INSERT INTO router_models VALUES(?1,?2,'CompatibleChat',?1,1,'[]',0,1,NULL,?3,1,0)",
+            "INSERT INTO router_models VALUES(?1,?2,'CompatibleChat',?1,1,'[]',0,1,NULL,?3,1,0,NULL)",
             rusqlite::params![format!("custom-{i:03}"), format!("Custom {i:03}"), 1000 + i],
         )
         .unwrap();

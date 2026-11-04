@@ -36,11 +36,14 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
-            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'jobs.list',
-            'jobs.create', 'jobs.edit', 'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel',
-            'jobs.delete', 'jobs.disable', 'web.search', 'web.fetch'})
+            'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
+            'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
+            'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
+            'jobs.disable', 'web.search', 'web.fetch'})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
+        self.assertEqual(carried['router.connections'], {2})
+        self.assertEqual(carried['router.configure'], {2})
         self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
