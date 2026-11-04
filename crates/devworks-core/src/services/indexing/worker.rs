@@ -41,6 +41,7 @@ use crate::ports::storage::*;
 use crate::protocol::Id;
 use crate::protocol::records::{DiagnosticErrorClass, DiagnosticOutcome, Severity};
 use serde_json::{Map, Value, json};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -2191,6 +2192,8 @@ fn go_import_dir(
 
 /// Link candidates: (unit key, node kind, node ID).
 type Candidates = Vec<(String, String, String)>;
+/// Name lookups of one link page: the candidates and whether the lookup was capped.
+type NameCache = HashMap<String, (Candidates, bool)>;
 
 /// Narrows a HANDLES edge's name candidates to the scopes its extractor recorded: exact units
 /// (each optionally limited to definition lines) and package directories (Go files directly in
@@ -2350,7 +2353,7 @@ pub(crate) fn link_generation(
             let full = units.len() == 200;
             let last = units.last().map(|u| u.unit_key.clone());
             let mut updates = Vec::new();
-            let mut cache: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+            let mut cache: NameCache = HashMap::new();
             for u in &units {
                 for e in s.indexing().edges(&g, &u.unit_key)? {
                     let mut payload = e.payload.clone();
@@ -2426,14 +2429,17 @@ fn swift_extension_source(
     let Some(path) = path else {
         return Ok(e.source_node_id.clone());
     };
-    let types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
+    let cut = Cell::new(false);
+    let types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path, &cut)?
         .into_iter()
         .filter(|t| SWIFT_TYPE_KINDS.contains(&t.kind.as_str()))
         .collect();
     let Some(m) = payload.as_object_mut() else {
         return Ok(e.source_node_id.clone());
     };
-    if let [t] = types.as_slice() {
+    if let [t] = types.as_slice()
+        && !cut.get()
+    {
         m.insert("sourceUnit".into(), json!(t.unit));
         m.insert("sourceResolution".into(), json!("Inferred"));
         m.remove("sourceCandidates");
@@ -2483,7 +2489,7 @@ fn link_target(
     unit: &str,
     e: &StoredEdge,
     payload: &mut Value,
-    cache: &mut HashMap<String, Vec<(String, String, String)>>,
+    cache: &mut NameCache,
     scopes: &mut Option<SwiftScopes>,
 ) -> Result<Option<String>, StorageError> {
     let resolution = e
@@ -2505,13 +2511,15 @@ fn link_target(
         return Ok(None);
     }
     let mut name_bound = false;
+    // Set when a lookup answered at its cap: the candidates are then incomplete.
+    let cut = Cell::new(false);
     let mut candidates: Vec<(String, String, String)> = if by_qualified_name {
-        visible_qualified(s, g, low, name)?
+        visible_qualified(s, g, low, name, &cut)?
     } else if e.kind == "IMPORTS" {
+        // A file node's qualified name is its path: exact, never a capped name lookup.
         let mut found = Vec::new();
         for path in import_candidates(unit, name) {
-            let basename = path.rsplit('/').next().unwrap_or(&path).to_owned();
-            for n in visible_named(s, g, low, &basename)? {
+            for n in visible_qualified(s, g, low, &path, &cut)? {
                 if n.1 == "File" && n.0 == path {
                     found.push(n.clone());
                 }
@@ -2524,7 +2532,7 @@ fn link_target(
     } else if let Some(path) = name.strip_prefix(SWIFT_TYPE_REF).filter(|p| !p.is_empty()) {
         // A Swift type reference names the type at that path, never a name.
         let protocol = e.payload["properties"]["swift_protocol_target"] == json!(true);
-        swift_type_nodes(s, g, low, path)?
+        swift_type_nodes(s, g, low, path, &cut)?
             .into_iter()
             .filter(|c| kinds.contains(&c.kind.as_str()) && (!protocol || c.kind == "Interface"))
             .map(CallNode::key)
@@ -2539,16 +2547,22 @@ fn link_target(
             &e.payload["properties"],
             kinds,
             scopes,
+            &cut,
         )?;
         name_bound = by_name;
         found
     } else {
         let simple = simple_name(name);
         let all = match cache.get(&simple) {
-            Some(c) => c.clone(),
+            Some((c, truncated)) => {
+                cut.set(cut.get() || *truncated);
+                c.clone()
+            }
             None => {
-                let c = visible_named(s, g, low, &simple)?;
-                cache.insert(simple.clone(), c.clone());
+                let own = Cell::new(false);
+                let c = visible_named(s, g, low, &simple, &own)?;
+                cache.insert(simple.clone(), (c.clone(), own.get()));
+                cut.set(cut.get() || own.get());
                 c
             }
         };
@@ -2568,7 +2582,7 @@ fn link_target(
         // One route identity (method and path) registered by several files is ambiguous: none
         // of its registrations proves the handler.
         if let Some(route) = e.payload["properties"]["routeName"].as_str() {
-            let mut sources: Vec<String> = visible_named(s, g, low, route)?
+            let mut sources: Vec<String> = visible_named(s, g, low, route, &cut)?
                 .into_iter()
                 .filter(|n| n.1 == "Route")
                 .map(|n| n.0)
@@ -2582,7 +2596,14 @@ fn link_target(
             }
         }
     }
-    let (target, target_unit) = if candidates.len() == 1 {
+    // Incomplete candidates prove no unique target.
+    let truncated = cut.get();
+    if truncated {
+        payload["candidatesTruncated"] = json!(true);
+    } else if let Some(m) = payload.as_object_mut() {
+        m.remove("candidatesTruncated");
+    }
+    let (target, target_unit) = if candidates.len() == 1 && !truncated {
         payload["resolution"] = json!("Inferred");
         payload["candidates"] = json!(1);
         (candidates[0].2.clone(), Some(candidates[0].0.clone()))
@@ -2622,25 +2643,14 @@ fn visible_qualified(
     generation: &Id,
     lower: &[Id],
     qualified_name: &str,
+    cut: &Cell<bool>,
 ) -> Result<Vec<(String, String, String)>, StorageError> {
-    let mut out: Vec<(String, String, String)> = Vec::new();
-    let mut layers = vec![generation.clone()];
-    layers.extend(lower.iter().cloned());
-    for (i, g) in layers.iter().enumerate() {
-        for n in s.indexing().nodes_qualified(g, qualified_name, 64)? {
-            let mut masked = false;
-            for higher in &layers[..i] {
-                if s.indexing().unit(higher, &n.unit_key)?.is_some() {
-                    masked = true;
-                    break;
-                }
-            }
-            if !masked && !out.iter().any(|o| o.2 == n.node_id) {
-                out.push((n.unit_key.clone(), n.kind.clone(), n.node_id.clone()));
-            }
-        }
-    }
-    Ok(out)
+    Ok(
+        visible_nodes(s, generation, lower, qualified_name, true, cut)?
+            .into_iter()
+            .map(|n| (n.unit_key, n.kind, n.node_id))
+            .collect(),
+    )
 }
 
 /// Nodes named `name` visible from `generation` (then `lower` layers, skipping units a higher
@@ -2650,26 +2660,12 @@ fn visible_named(
     generation: &Id,
     lower: &[Id],
     name: &str,
+    cut: &Cell<bool>,
 ) -> Result<Vec<(String, String, String)>, StorageError> {
-    let mut out: Vec<(String, String, String)> = Vec::new();
-    let mut layers = vec![generation.clone()];
-    layers.extend(lower.iter().cloned());
-    for (i, g) in layers.iter().enumerate() {
-        for n in s.indexing().nodes_named(g, name, 64)? {
-            // A unit mentioned by a higher layer is masked here.
-            let mut masked = false;
-            for higher in &layers[..i] {
-                if s.indexing().unit(higher, &n.unit_key)?.is_some() {
-                    masked = true;
-                    break;
-                }
-            }
-            if !masked {
-                out.push((n.unit_key.clone(), n.kind.clone(), n.node_id.clone()));
-            }
-        }
-    }
-    Ok(out)
+    Ok(visible_nodes(s, generation, lower, name, false, cut)?
+        .into_iter()
+        .map(|n| (n.unit_key, n.kind, n.node_id))
+        .collect())
 }
 
 /// The retained `SwiftTypeReference` prefix of a symbolic Swift type endpoint.
@@ -2720,24 +2716,34 @@ impl CallNode {
     }
 }
 
+/// Most nodes of one name one layer answers a link lookup with. A layer that has more is
+/// reported through `cut`: the candidates are then incomplete, so no binding may treat them as
+/// unique (the edge stays unresolved, marked `candidatesTruncated`).
+const CANDIDATE_CAP: u16 = MAX_PAGE;
+
 /// Nodes named `name` (or, with `qualified`, whose qualified name is `name`) visible from
-/// `generation` and then `lower` layers, skipping units a higher layer mentions.
+/// `generation` and then `lower` layers, skipping units a higher layer mentions. Sets `cut` when
+/// a layer has more than [`CANDIDATE_CAP`] such nodes (the answer is then incomplete).
 fn visible_nodes(
     s: &dyn ReadSnapshot,
     generation: &Id,
     lower: &[Id],
     name: &str,
     qualified: bool,
+    cut: &Cell<bool>,
 ) -> Result<Vec<StoredNode>, StorageError> {
     let mut out: Vec<StoredNode> = Vec::new();
     let mut layers = vec![generation.clone()];
     layers.extend(lower.iter().cloned());
     for (i, g) in layers.iter().enumerate() {
         let found = if qualified {
-            s.indexing().nodes_qualified(g, name, 64)?
+            s.indexing().nodes_qualified(g, name, CANDIDATE_CAP)?
         } else {
-            s.indexing().nodes_named(g, name, 64)?
+            s.indexing().nodes_named(g, name, CANDIDATE_CAP)?
         };
+        if found.len() >= usize::from(CANDIDATE_CAP) {
+            cut.set(true);
+        }
         for n in found {
             let mut masked = false;
             for higher in &layers[..i] {
@@ -2792,10 +2798,11 @@ fn swift_type_nodes(
     generation: &Id,
     lower: &[Id],
     path: &str,
+    cut: &Cell<bool>,
 ) -> Result<Vec<CallNode>, StorageError> {
     let mut out: Vec<CallNode> = Vec::new();
     for qn in swift_type_qualified_names(path) {
-        for n in visible_nodes(s, generation, lower, &qn, true)? {
+        for n in visible_nodes(s, generation, lower, &qn, true, cut)? {
             if is_swift_unit(&n.unit_key) && !out.iter().any(|o| o.id == n.node_id) {
                 out.push(CallNode::of(&n));
             }
@@ -2900,9 +2907,10 @@ fn receiver_owner(
     lower: &[Id],
     unit: &str,
     receiver: &str,
+    cut: &Cell<bool>,
 ) -> Result<Option<(CallNode, bool)>, StorageError> {
     let owner_kind = |n: &StoredNode| RECEIVER_OWNER_KINDS.contains(&n.kind.as_str());
-    let exact = visible_nodes(s, generation, lower, receiver, true)?
+    let exact = visible_nodes(s, generation, lower, receiver, true, cut)?
         .into_iter()
         .find(|n| n.unit_key == unit && owner_kind(n));
     let owner = match exact {
@@ -2913,17 +2921,18 @@ fn receiver_owner(
             if normalized.is_empty() || normalized.contains('.') {
                 return Ok(None);
             }
-            let matches: Vec<StoredNode> = visible_nodes(s, generation, lower, normalized, false)?
-                .into_iter()
-                .filter(owner_kind)
-                .collect();
+            let matches: Vec<StoredNode> =
+                visible_nodes(s, generation, lower, normalized, false, cut)?
+                    .into_iter()
+                    .filter(owner_kind)
+                    .collect();
             if matches.len() != 1 {
                 return Ok(None);
             }
             CallNode::of(&matches[0])
         }
     };
-    let named: Vec<StoredNode> = visible_nodes(s, generation, lower, &owner.name, false)?
+    let named: Vec<StoredNode> = visible_nodes(s, generation, lower, &owner.name, false, cut)?
         .into_iter()
         .filter(owner_kind)
         .collect();
@@ -2951,6 +2960,7 @@ fn call_candidates(
     properties: &Value,
     kinds: &[&str],
     scopes: &mut Option<SwiftScopes>,
+    cut: &Cell<bool>,
 ) -> Result<(Candidates, bool), StorageError> {
     if call_binding_refused(properties) {
         return Ok((Vec::new(), false));
@@ -2960,7 +2970,7 @@ fn call_candidates(
         Some(_) => callee.to_owned(),
         None => simple_name(callee),
     };
-    let mut all: Vec<CallNode> = visible_nodes(s, generation, lower, &name, false)?
+    let mut all: Vec<CallNode> = visible_nodes(s, generation, lower, &name, false, cut)?
         .iter()
         .filter(|n| kinds.contains(&n.kind.as_str()))
         .map(CallNode::of)
@@ -2973,7 +2983,7 @@ fn call_candidates(
             .and_then(Value::as_str)
             .filter(|r| !r.is_empty());
         if let Some(path) = receiver.and_then(|r| r.strip_prefix(SWIFT_TYPE_REF)) {
-            let mut types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path)?
+            let mut types: Vec<CallNode> = swift_type_nodes(s, generation, lower, path, cut)?
                 .into_iter()
                 .filter(|t| RECEIVER_OWNER_KINDS.contains(&t.kind.as_str()))
                 .collect();
@@ -2998,7 +3008,7 @@ fn call_candidates(
             }
         } else {
             match match receiver {
-                Some(r) => receiver_owner(s, generation, lower, unit, r)?,
+                Some(r) => receiver_owner(s, generation, lower, unit, r, cut)?,
                 None => None,
             } {
                 Some((owner, symbolic)) => all.retain(|c| owned_by(c, &owner, symbolic)),

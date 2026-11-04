@@ -2958,3 +2958,48 @@ fn a_request_mixing_reused_and_new_runs_is_identified_by_its_own_batch() {
     assert_eq!(fx.run(&b.id).state, RUN_CANCELLED);
     assert_eq!(fx.run(&earlier.id).state, RUN_QUEUED);
 }
+
+#[test]
+fn a_capped_candidate_lookup_never_yields_a_unique_target() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("many");
+    // 499 properties named `f` sort before the two functions named `f`: the first page of the
+    // name lookup holds 500 nodes and only one callable among them.
+    let many: String = (0..499)
+        .map(|i| format!("struct T{i} {{\n    var f: Int {{ 0 }}\n}}\n"))
+        .collect();
+    repo(
+        &dir,
+        &[
+            ("A_many.swift", many.as_str()),
+            ("B_one.swift", "func f() {}\n"),
+            ("Z_two.swift", "func f() {}\n"),
+            ("main.swift", "func start() {\n    f()\n}\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let view = fx.published(&repo_id);
+    let properties = fx
+        .nodes(&view, "A_many.swift")
+        .into_iter()
+        .filter(|n| n.kind == "Property" && n.name == "f")
+        .count();
+    assert_eq!(properties, 499);
+    let v = view.clone();
+    let edges = fx.read(move |s| views::unit_edges(s.indexing(), &v, "main.swift"));
+    let call = edges
+        .iter()
+        .find(|(e, _)| e.kind == "CALLS" && e.payload["targetName"] == json!("f"))
+        .unwrap_or_else(|| panic!("no call of f: {edges:?}"))
+        .0
+        .clone();
+    assert_eq!(call.payload["resolution"], json!("Unresolved"), "{call:?}");
+    assert_eq!(call.payload["candidatesTruncated"], json!(true));
+    assert!(call.payload.get("targetUnit").is_none());
+}
