@@ -4,9 +4,11 @@
 //! [`Scheduler::tick`] claims due occurrences, settles native runs whose accepted operation
 //! ended, executes requested cancellations of runs it is not executing (owned process trees of the
 //! run's operations are stopped through the process owner, an inference run through its
-//! pipeline, then the verified outcome is recorded) and starts every queued run it is not already
-//! executing. Each run executes on its own task: start → dispatching → dispatch (off the async
-//! thread, holding no lock) → settle, each step one unit of work. In-flight runs are keyed by run
+//! pipeline, then the verified outcome is recorded), reclaims started runs no task executes any
+//! more, and starts every startable run it is not already executing. Each run executes on its own
+//! task: start → dispatching → dispatch (off the async thread, holding no lock) → settle, each
+//! step one unit of work. A step after the start that fails (the writer busy, say) is retried
+//! with backoff, never abandoned: the run is durably started. In-flight runs are keyed by run
 //! identity, so a cancellation or settle can never reach a later run of the job.
 //!
 //! Pacing uses the monotonic clock (`tokio::time`); whether an occurrence is due uses the store's
@@ -25,7 +27,7 @@ use devworks_core::services::jobs::runner::{
     Begun, InferenceJobs, NativeJobDispatch, Step, StopVerdict,
 };
 use devworks_core::services::process::{ProcessSupervisor, StopOutcome, StopScope};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -36,6 +38,8 @@ use tokio::time::Instant;
 /// Identical resubmissions of a native command whose acknowledgment was lost, before the run is
 /// recorded `OutcomeUnknown` (the gateway replays a committed receipt; it never applies twice).
 pub const UNKNOWN_RESUBMISSIONS: usize = 3;
+/// The longest wait between retries of a started run's failed step.
+pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 /// What one tick did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,6 +52,8 @@ pub struct SchedulerTick {
     pub cancelled: Vec<Id>,
     /// Native runs settled from their accepted operation.
     pub settled: usize,
+    /// Started runs no task executed any more, queued again or settled ([`JobService::reclaim`]).
+    pub reclaimed: Vec<Id>,
 }
 
 /// The schedule runner.
@@ -60,7 +66,15 @@ pub struct Scheduler {
     /// Cooperative grace and bound of one cancellation's process stop.
     pub stop_grace: Duration,
     pub stop_bound: Duration,
+    /// The first wait before retrying a started run's failed step (doubling up to
+    /// [`MAX_RETRY_BACKOFF`]).
+    pub retry_backoff: Duration,
     running: Mutex<HashMap<String, JoinHandle<()>>>,
+    /// The runs a task is executing, each removed by its own task when it ends (or is
+    /// abandoned): unlike the join handles, which [`Self::drain`] takes while it waits for them,
+    /// this never shows a live execution as gone, so a tick never reclaims or cancels a run its
+    /// task still executes.
+    live: Mutex<HashSet<String>>,
     /// One tick at a time (the loop's and an explicit one never interleave, so a cancellation's
     /// native stop runs once per tick).
     ticking: tokio::sync::Mutex<()>,
@@ -84,7 +98,9 @@ impl Scheduler {
             processes,
             stop_grace: Duration::from_secs(5),
             stop_bound: Duration::from_secs(30),
+            retry_backoff: Duration::from_millis(100),
             running: Mutex::new(HashMap::new()),
+            live: Mutex::new(HashSet::new()),
             ticking: tokio::sync::Mutex::new(()),
             wake: Notify::new(),
             stopping: AtomicBool::new(false),
@@ -95,19 +111,19 @@ impl Scheduler {
     }
     /// Runs currently executing on their own task.
     pub fn in_flight(&self) -> Vec<Id> {
-        let map = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        let mut ids: Vec<Id> = map
+        let live = self.live.lock().unwrap_or_else(|p| p.into_inner());
+        let mut ids: Vec<Id> = live
             .iter()
-            .filter(|(_, t)| !t.is_finished())
-            .filter_map(|(k, _)| Id::new(k.clone()).ok())
+            .filter_map(|k| Id::new(k.clone()).ok())
             .collect();
         ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         ids
     }
     fn executing(&self, run: &Id) -> bool {
-        let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        map.retain(|_, t| !t.is_finished());
-        map.contains_key(run.as_str())
+        self.live
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(run.as_str())
     }
     /// Requests a tick now (a committed Run now, cancel, enable or edit).
     pub fn notify(&self) {
@@ -142,6 +158,22 @@ impl Scheduler {
         }
         if self.stopping.load(Ordering::SeqCst) {
             return Ok(report);
+        }
+        // A start that committed after its task ended (its acknowledgment lost, or the task
+        // gone): queued again, or settled from what is known of its effect.
+        let svc = self.service.clone();
+        let unsettled = store::write(&self.store, move |tx| svc.unsettled_starts(tx)).await?;
+        for run in unsettled {
+            if self.executing(&run.id) {
+                continue;
+            }
+            let (svc, id) = (self.service.clone(), run.id.clone());
+            if store::write(&self.store, move |tx| svc.reclaim(tx, &id))
+                .await?
+                .is_some()
+            {
+                report.reclaimed.push(run.id);
+            }
         }
         let svc = self.service.clone();
         let runnable = store::write(&self.store, move |tx| svc.runnable(tx)).await?;
@@ -213,20 +245,54 @@ impl Scheduler {
     fn spawn(self: &Arc<Self>, run: Id) {
         let me = self.clone();
         let key = run.as_str().to_owned();
-        let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        map.retain(|_, t| !t.is_finished());
-        if map.contains_key(&key) {
+        if !self
+            .live
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key.clone())
+        {
             return;
         }
+        let mut map = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        map.retain(|_, t| !t.is_finished());
+        let k = key.clone();
         let task = tokio::spawn(async move {
+            let _live = Executing(&me, k);
             let _ = me.execute(run).await;
         });
         map.insert(key, task);
     }
 
-    /// Executes one queued run: start, mark dispatching, dispatch, settle.
+    /// Runs one transactional step of a started run, retrying it with backoff while it fails:
+    /// the run is durably started, so giving up would strand it. Every step re-reads the run and
+    /// is fenced by its identity and attempt, so a retry after a commit whose acknowledgment was
+    /// lost changes nothing. Once shutdown began it gives up; the next boot reconciles the run.
+    async fn persist<T, F>(&self, step: F) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: Fn(&mut dyn devworks_core::ports::storage::WriteTransaction) -> Result<T, StorageError>
+            + Clone
+            + Send
+            + 'static,
+    {
+        let mut wait = self.retry_backoff;
+        loop {
+            match store::write(&self.store, step.clone()).await {
+                Ok(v) => return Ok(v),
+                Err(e) if self.stopping.load(Ordering::SeqCst) => return Err(e),
+                Err(_) => {
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(MAX_RETRY_BACKOFF);
+                }
+            }
+        }
+    }
+
+    /// Executes one startable run: start, mark dispatching, dispatch, settle.
     pub async fn execute(&self, run: Id) -> Result<(), StorageError> {
         let (svc, inference, id) = (self.service.clone(), self.inference.clone(), run.clone());
+        // Not retried: a start that failed never started (the next tick starts it again), and
+        // one whose acknowledgment was lost is reclaimed by the next tick.
         let Some(begun) =
             store::write(&self.store, move |tx| svc.begin(tx, &id, &*inference)).await?
         else {
@@ -235,8 +301,8 @@ impl Scheduler {
         if self.stopping.load(Ordering::SeqCst) {
             return self.release(begun).await;
         }
-        let (svc, b) = (self.service.clone(), begun.clone());
-        if !store::write(&self.store, move |tx| svc.dispatching(tx, &b)).await? {
+        let (svc, b) = (self.service.clone(), Arc::new(begun.clone()));
+        if !self.persist(move |tx| svc.dispatching(tx, &b)).await? {
             return self.release(begun).await;
         }
         match begun.step.clone() {
@@ -260,18 +326,17 @@ impl Scheduler {
                     outcome
                 })
                 .await;
-                let svc = self.service.clone();
+                let (svc, begun) = (self.service.clone(), Arc::new(begun));
                 match dispatched {
                     Ok(outcome) => {
-                        store::write(&self.store, move |tx| {
-                            svc.settle_native(tx, &begun, &outcome)
-                        })
-                        .await?;
+                        let outcome = Arc::new(outcome);
+                        self.persist(move |tx| svc.settle_native(tx, &begun, &outcome))
+                            .await?;
                     }
                     // The call did not return: whether it committed is established from its
                     // receipt, never assumed.
                     Err(_) => {
-                        store::write(&self.store, move |tx| svc.reconcile_dispatch(tx, &begun))
+                        self.persist(move |tx| svc.reconcile_dispatch(tx, &begun))
                             .await?;
                     }
                 }
@@ -286,11 +351,10 @@ impl Scheduler {
                             reason: "the inference handoff panicked".into(),
                         })
                     });
-                let svc = self.service.clone();
-                store::write(&self.store, move |tx| {
-                    svc.settle_inference_start(tx, &begun, &started)
-                })
-                .await?;
+                let (svc, begun, started) =
+                    (self.service.clone(), Arc::new(begun), Arc::new(started));
+                self.persist(move |tx| svc.settle_inference_start(tx, &begun, &started))
+                    .await?;
             }
         }
         self.notify();
@@ -298,8 +362,8 @@ impl Scheduler {
     }
 
     async fn release(&self, begun: Begun) -> Result<(), StorageError> {
-        let svc = self.service.clone();
-        store::write(&self.store, move |tx| svc.undispatched(tx, &begun)).await
+        let (svc, begun) = (self.service.clone(), Arc::new(begun));
+        self.persist(move |tx| svc.undispatched(tx, &begun)).await
     }
 
     /// Ticks every `every` (or sooner when notified) until [`Self::stop`].
@@ -332,6 +396,19 @@ impl Scheduler {
                 task.abort();
             }
         }
+    }
+}
+
+/// Marks a run executing for as long as its task holds it (dropped when the task ends or is
+/// aborted).
+struct Executing<'a>(&'a Scheduler, String);
+impl Drop for Executing<'_> {
+    fn drop(&mut self) {
+        self.0
+            .live
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.1);
     }
 }
 

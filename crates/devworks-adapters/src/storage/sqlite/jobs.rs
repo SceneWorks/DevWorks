@@ -209,17 +209,17 @@ fn write_job(conn: &Connection, j: &StoredJob, revision: i64) -> Result<(), Stor
 // ---------------------------------------------------------------------------------------------
 // Runs
 
-const RUN_COLUMNS: &str = "id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch";
+const RUN_COLUMNS: &str = "id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch,restore_epoch";
 
-fn run_row(r: &Row<'_>) -> rusqlite::Result<[rusqlite::types::Value; 26]> {
-    let mut out: [rusqlite::types::Value; 26] =
+fn run_row(r: &Row<'_>) -> rusqlite::Result<[rusqlite::types::Value; 27]> {
+    let mut out: [rusqlite::types::Value; 27] =
         std::array::from_fn(|_| rusqlite::types::Value::Null);
     for (i, slot) in out.iter_mut().enumerate() {
         *slot = r.get(i)?;
     }
     Ok(out)
 }
-fn run_of(r: [rusqlite::types::Value; 26]) -> Result<StoredJobRun, StorageError> {
+fn run_of(r: [rusqlite::types::Value; 27]) -> Result<StoredJobRun, StorageError> {
     let status = need_text(&r[9])?;
     if !RUN_STATUSES.contains(&status.as_str()) {
         return Err(corrupt("stored run status"));
@@ -251,6 +251,7 @@ fn run_of(r: [rusqlite::types::Value; 26]) -> Result<StoredJobRun, StorageError>
         checkpoint: text(&r[23])?,
         created_at_ms: need_int(&r[24])?,
         project_epoch: need_int(&r[25])?,
+        restore_epoch: need_int(&r[26])?,
     })
 }
 fn runs_query(
@@ -319,8 +320,8 @@ fn write_run(
     revision: i64,
 ) -> Result<(), StorageError> {
     db(conn.execute(
-        "INSERT INTO job_runs(id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26) \
+        "INSERT INTO job_runs(id,schedule_id,seq,project_id,job_revision,definition_json,occurrence_key,occurrence_at,trigger,state,revision,operation_id,inner_operation_id,boot_id,started_at,finished_at,reason,hold,cancel_requested,resumptions,session_id,agent_actor,skipped_for,checkpoint_json,created_at,project_epoch,restore_epoch) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27) \
          ON CONFLICT(id) DO UPDATE SET state=excluded.state, revision=excluded.revision, operation_id=excluded.operation_id, \
          inner_operation_id=excluded.inner_operation_id, boot_id=excluded.boot_id, started_at=excluded.started_at, \
          finished_at=excluded.finished_at, reason=excluded.reason, hold=excluded.hold, cancel_requested=excluded.cancel_requested, \
@@ -353,6 +354,7 @@ fn write_run(
             r.checkpoint,
             r.created_at_ms,
             r.project_epoch,
+            r.restore_epoch,
         ],
     ))?;
     Ok(())

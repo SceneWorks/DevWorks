@@ -1094,9 +1094,13 @@ impl JobService {
                 Some(&p.0),
             ));
         }
-        // Another principal may run only what a person authorized (and not while a restore or
-        // project hold keeps it stopped); a person's Run now is itself the authorization.
-        if !authorizes(ctx) && (!job.authorized || job.hold.is_some()) {
+        // Another principal may run only what a person authorized under the current epochs:
+        // not while a hold keeps it stopped, and not when it was activated before a backup
+        // restore or an archival of its project (a disabled job is never held, so its epochs
+        // are checked here). A person's Run now is itself the authorization.
+        if !authorizes(ctx)
+            && (!job.authorized || job.hold.is_some() || runner::fence_of(tx, &job)?.is_some())
+        {
             return Err(refuse(
                 DomainErrorCode::ApprovalRequired,
                 "job_authorization",
@@ -1109,6 +1113,7 @@ impl JobService {
             ctx.principal(),
             &job,
             runner::Occurrence::Manual { at_ms: now },
+            authorizes(ctx),
         )?;
         let operation = run.operation_id.clone();
         Ok((

@@ -2,7 +2,7 @@
 -- Additive. schedules and job_runs (migration 1, never written by an earlier build) gain the
 -- job's title, scope, schedule, kind, authorization, hold, restore and project-archive
 -- activation epochs, interval anchor, interrupted run and lifecycle times, and the run's sequence, definition snapshot,
--- project archive epoch, occurrence instant, trigger, operations, boot, times, reason, preserved hold, cancellation,
+-- project archive and store restore epochs it was authorized under, occurrence instant, trigger, operations, boot, times, reason, preserved hold, cancellation,
 -- resumptions, agent principal and session, skipped-for link and project. A partial unique
 -- index allows one live title per scope and one active run (Queued, Running, Holding) per job.
 -- job_run_links, job_checkpoints, job_actions and job_run_usage hold the work a run started,
@@ -27,6 +27,7 @@ ALTER TABLE job_runs ADD COLUMN seq INTEGER NOT NULL DEFAULT 0 CHECK(seq >= 0);
 ALTER TABLE job_runs ADD COLUMN project_id TEXT REFERENCES projects;
 ALTER TABLE job_runs ADD COLUMN job_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE job_runs ADD COLUMN project_epoch INTEGER NOT NULL DEFAULT 0 CHECK(project_epoch >= 0);
+ALTER TABLE job_runs ADD COLUMN restore_epoch INTEGER NOT NULL DEFAULT 0 CHECK(restore_epoch >= 0);
 ALTER TABLE job_runs ADD COLUMN definition_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(definition_json));
 ALTER TABLE job_runs ADD COLUMN occurrence_at INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE job_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'Scheduled' CHECK(trigger IN ('Scheduled','Manual'));

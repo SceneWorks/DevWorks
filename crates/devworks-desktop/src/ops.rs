@@ -710,6 +710,13 @@ pub fn jobs_inspect(backend: &dyn Backend, job: &str, cursor: Option<&str>) -> V
         JOBS_REVISION,
     )
 }
+/// `jobs.inspect` of one named run of `job` (no history page).
+pub fn jobs_inspect_run(backend: &dyn Backend, job: &str, run: &str) -> Vec<u8> {
+    at_revision(
+        query_frame(backend, "jobs.inspect", json!({"jobId": job, "runId": run})),
+        JOBS_REVISION,
+    )
+}
 pub fn job_inspection(outcome: QueryOutcome) -> Result<JobInspection, Failure> {
     match query_result(outcome)? {
         (OperationResult::JobsInspect { value }, _) => Ok(value),

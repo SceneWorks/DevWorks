@@ -111,6 +111,9 @@ pub enum Slot {
     /// One job's inspection (its first run-history page) and an older history page (job ID).
     JobInspect(String),
     JobHistory(String),
+    /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
+    /// skipped one while the active run continues.
+    JobActiveRun(String),
     JobCreate,
     /// A command of one job or its run (one at a time per job).
     JobCommand(String),

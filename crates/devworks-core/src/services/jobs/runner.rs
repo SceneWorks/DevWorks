@@ -21,7 +21,9 @@
 //! A failure before the effect is recorded as such (`Failed`, never dispatched); a failure after
 //! it is `OutcomeUnknown` unless the effect's own receipt resolves it. Native runs submit one
 //! command whose request key is the run's identity, so a resubmission after a lost acknowledgment
-//! or a restart is resolved by the gateway's receipt (it never applies twice).
+//! or a restart is resolved by the gateway's receipt (it never applies twice). A start whose
+//! executor is gone (its task ended after the start committed) is reclaimed from what is known of
+//! its effect ([`JobService::reclaim`]), never left running with nothing executing it.
 //!
 //! # Interruption, restart and sleep
 //!
@@ -32,7 +34,9 @@
 //! one and resumes only when there is none; a dispatched inference run resumes its session and
 //! checkpoint, its actions guarded by their identities ([`super::discovery`]). The run keeps its
 //! identity, progress, history and any separate hold, and its resumption count advances; when its
-//! job, project or restore epoch no longer permits it, it ends instead. Then every enabled job's
+//! job, project or restore epoch no longer permits it, it ends instead. A run that was holding
+//! keeps its hold and is reattached by its next start: its session is handed to the pipeline
+//! again, still held, so clearing the hold continues it. Then every enabled job's
 //! next occurrence is recomputed from now with missed ones recorded, never caught up. Nothing
 //! here touches a feature or issue root: their restart holds stay until a manual Continue
 //! (CONTROL-10). Sleep and wake need nothing: runs are not leased, so they continue, and an
@@ -45,7 +49,8 @@
 //! its active run asked to stop, at once. `projects.restore` calls [`project_restored`]: those
 //! holds become `ReactivationRequired`, so the restored project's schedules stay stopped until a
 //! person enables each. Independently of both calls, a job records the project's archive epoch it
-//! was activated under and a run the epoch it was claimed under: a claim, start or dispatch under a
+//! was activated under and a run the epochs it was authorized under (a person's Run now: the
+//! current ones; anything else: its job's): a claim, start or dispatch under a
 //! later epoch (the project was archived since, even if already restored) holds the job and never
 //! dispatches the run, so no stale run of an archived epoch can act after a restore. A restored backup (a later store restore epoch)
 //! holds every job activated under an earlier epoch at boot and at claim (STORE-13).
@@ -94,13 +99,27 @@ fn reason_text(s: &str) -> String {
 
 /// Records an occurrence of `job`: `Queued` with its journal intent, or `Skipped` (nothing
 /// queued, no operation) while another run of the job is active.
+///
+/// The run is authorized under the epochs it records: a person's Run now (`by_person`)
+/// authorizes it in the current restore and project-archive epochs; a scheduled occurrence or
+/// another principal's Run now inherits the epochs its job was activated under, so a run of a job
+/// activated before a backup restore or an archival never dispatches ([`dispatch_fence`]).
 pub fn queue_run(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
     job: &StoredJob,
     occurrence: Occurrence,
+    by_person: bool,
 ) -> Result<StoredJobRun, StorageError> {
     let now = tx.now_ms();
+    let (restore_epoch, project_epoch) = if by_person {
+        (
+            tx.store().restore_epoch,
+            super::project_epoch(tx, job.project_id.as_ref())?,
+        )
+    } else {
+        (job.activated_epoch, job.project_epoch)
+    };
     let run_id = tx.new_id(IdKind::JobRun);
     let (key, at_ms, trigger) = match occurrence {
         Occurrence::Scheduled { at_ms } => {
@@ -114,7 +133,8 @@ pub fn queue_run(
         seq: 0,
         project_id: job.project_id.clone(),
         job_revision: job.revision,
-        project_epoch: super::project_epoch(tx, job.project_id.as_ref())?,
+        project_epoch,
+        restore_epoch,
         definition: job.definition.clone(),
         occurrence_key: key,
         occurrence_at_ms: at_ms,
@@ -372,7 +392,7 @@ fn miss(
 }
 
 /// Why a job may not dispatch now, as the hold it gets (`None`: it may).
-fn fence_of(
+pub(super) fn fence_of(
     tx: &mut dyn WriteTransaction,
     job: &StoredJob,
 ) -> Result<Option<(&'static str, &'static str)>, StorageError> {
@@ -407,7 +427,7 @@ fn fence_of(
     Ok(None)
 }
 
-/// Whether a run's project is still open under the archive epoch the run was claimed in (an
+/// Whether a run's project is still open under the archive epoch the run was authorized in (an
 /// archival since, even one already restored, stopped it).
 fn run_project_current(
     tx: &mut dyn WriteTransaction,
@@ -420,14 +440,29 @@ fn run_project_current(
         && super::project_epoch(tx, Some(p))? == run.project_epoch)
 }
 
-/// Whether a run was claimed before the store was restored from a backup (its job was activated
-/// under an earlier restore epoch): its receipts and effects belong to the earlier epoch.
+/// Whether a run was authorized under an earlier restore epoch (the store was restored from a
+/// backup since): its receipts and effects belong to the earlier epoch.
 fn run_restored(tx: &mut dyn WriteTransaction, run: &StoredJobRun) -> Result<bool, StorageError> {
-    let epoch = tx.store().restore_epoch;
-    Ok(tx
-        .jobs()
-        .job(&run.job_id)?
-        .is_some_and(|j| j.activated_epoch < epoch))
+    Ok(run.restore_epoch < tx.store().restore_epoch)
+}
+
+/// Why a run may not start or dispatch now (`None`: it may): its project was archived since
+/// the epoch it was authorized under, or the store was restored from a backup since.
+fn dispatch_fence(
+    tx: &mut dyn WriteTransaction,
+    run: &StoredJobRun,
+) -> Result<Option<&'static str>, StorageError> {
+    if !run_project_current(tx, run)? {
+        return Ok(Some(
+            "the project was archived since the run was authorized",
+        ));
+    }
+    if run_restored(tx, run)? {
+        return Ok(Some(
+            "the store was restored from a backup since the run was authorized",
+        ));
+    }
+    Ok(None)
 }
 
 /// Submits a native run's command through the application gateway (the engine's runtime, behind
@@ -484,6 +519,10 @@ pub struct InferenceStart {
     pub resume: bool,
     pub session_id: Option<Id>,
     pub checkpoint: Option<String>,
+    /// A separate hold the resumed run still waits on (a user pause, budget hold or approval
+    /// wait): the session is reattached held, and continues once the pipeline reports the hold
+    /// cleared ([`InferenceOutcome::Resumed`]).
+    pub hold: Option<String>,
 }
 
 /// Why the inference pipeline did not take a run.
@@ -643,7 +682,7 @@ impl JobService {
                 )?;
                 continue;
             }
-            match queue_run(tx, actor, &job, Occurrence::Scheduled { at_ms: at }) {
+            match queue_run(tx, actor, &job, Occurrence::Scheduled { at_ms: at }, false) {
                 Ok(run) if run.status == "Queued" => queued.push(run),
                 Ok(_) => {}
                 // Already recorded (it cannot be claimed twice): only advance past it.
@@ -670,7 +709,8 @@ impl JobService {
         Ok(())
     }
 
-    /// Queued runs ready to start (unheld, no cancellation requested), oldest first by ID.
+    /// Runs ready to start, oldest first by ID: queued and unheld, or holding with no owner (an
+    /// earlier boot's session to reattach, its hold kept); none with a cancellation requested.
     pub fn runnable(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -685,7 +725,7 @@ impl JobService {
             after = page.last().map(|r| r.id.clone());
             out.extend(
                 page.into_iter()
-                    .filter(|r| r.status == "Queued" && r.hold.is_none() && !r.cancel_requested),
+                    .filter(|r| startable(r) && !r.cancel_requested),
             );
             if !more {
                 return Ok(out);
@@ -729,9 +769,11 @@ impl JobService {
         let Some(run) = tx.jobs().job_run(run_id)? else {
             return Ok(None);
         };
-        if run.status != "Queued" || run.hold.is_some() {
+        if !startable(&run) {
             return Ok(None);
         }
+        // A holding run reattaches its interrupted session and keeps holding.
+        let reattach = run.status == "Holding";
         let Some(op_id) = run.operation_id.clone() else {
             return Ok(None);
         };
@@ -740,13 +782,13 @@ impl JobService {
             request_cancel(tx, &actor, &run, "cancelled before it started")?;
             return Ok(None);
         }
-        if !run_project_current(tx, &run)? {
+        if let Some(why) = dispatch_fence(tx, &run)? {
             finish(
                 tx,
                 &run,
                 "Cancelled",
                 Some(OperationState::CancelledBeforeDispatch),
-                Some("the project is archived or deleted"),
+                Some(why),
                 json!({"dispatched": false}),
             )?;
             return Ok(None);
@@ -771,7 +813,7 @@ impl JobService {
         let now = tx.now_ms();
         let started = tx.jobs().update_run(
             &StoredJobRun {
-                status: "Running".into(),
+                status: if reattach { "Holding" } else { "Running" }.into(),
                 started_at_ms: run.started_at_ms.or(Some(now)),
                 boot_id: Some(boot),
                 ..run.clone()
@@ -877,6 +919,7 @@ impl JobService {
                         resume,
                         session_id: started.session_id.clone(),
                         checkpoint: started.checkpoint.clone(),
+                        hold: started.hold.clone(),
                     }),
                     run: started,
                 }));
@@ -948,16 +991,19 @@ impl JobService {
         let Some(run) = tx.jobs().job_run(&begun.run.id)? else {
             return Ok(false);
         };
-        if run.status != "Running" || run.cancel_requested || run.revision != begun.run.revision {
+        if run.status != begun.run.status
+            || run.cancel_requested
+            || run.revision != begun.run.revision
+        {
             return Ok(false);
         }
-        if !run_project_current(tx, &run)? {
+        if let Some(why) = dispatch_fence(tx, &run)? {
             finish(
                 tx,
                 &run,
                 "Cancelled",
                 Some(OperationState::CancelledBeforeDispatch),
-                Some("the project was archived before dispatch"),
+                Some(why),
                 json!({"dispatched": false}),
             )?;
             return Ok(false);
@@ -965,6 +1011,13 @@ impl JobService {
         let Some(rec) = tx.operations().operation(&begun.operation)? else {
             return Ok(false);
         };
+        let current = rec.latest_attempt().map(|a| a.fence()) == Some(begun.fence.clone());
+        // A retry of this step after its commit's acknowledgment was lost: the attempt is
+        // already dispatching under this fence, and its executor has dispatched nothing yet (it
+        // dispatches only once this step returns).
+        if rec.state == OperationState::Dispatching && current {
+            return Ok(true);
+        }
         if rec.state != OperationState::Preflighted
             || rec.latest_attempt().map(|a| a.fence()) != Some(begun.fence.clone())
         {
@@ -993,7 +1046,7 @@ impl JobService {
         let Some(run) = tx.jobs().job_run(&begun.run.id)? else {
             return Ok(());
         };
-        if run.status != "Running" {
+        if !matches!(run.status.as_str(), "Running" | "Holding") {
             return Ok(());
         }
         if run.cancel_requested {
@@ -1019,13 +1072,143 @@ impl JobService {
         }
         tx.jobs().update_run(
             &StoredJobRun {
-                status: "Queued".into(),
+                status: requeued(&run),
                 boot_id: None,
                 ..run.clone()
             },
             run.revision,
         )?;
         Ok(())
+    }
+
+    /// Started runs of this boot whose attempt is not yet handed to anything that settles it
+    /// (no accepted operation, no session), oldest first by ID. The engine reclaims those it is
+    /// not executing ([`Self::reclaim`]): their executor ended after the start committed.
+    pub fn unsettled_starts(
+        &self,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Vec<StoredJobRun>, StorageError> {
+        let boot = tx.store().boot_id.clone();
+        let mut out = Vec::new();
+        let mut after: Option<Id> = None;
+        loop {
+            let page = tx
+                .jobs()
+                .runs_where(&RunFilter::Active, after.as_ref(), PAGE)?;
+            let more = page.len() == usize::from(PAGE);
+            after = page.last().map(|r| r.id.clone());
+            out.extend(page.into_iter().filter(|r| {
+                matches!(r.status.as_str(), "Running" | "Holding")
+                    && r.boot_id.is_some()
+                    && r.boot_id == boot
+                    && r.inner_operation_id.is_none()
+                    && r.session_id.is_none()
+            }));
+            if !more {
+                return Ok(out);
+            }
+        }
+    }
+
+    /// Reclaims a started run whose executor is gone (see [`Self::unsettled_starts`]). Never
+    /// dispatched, it is queued again for the same identity (or cancelled, when that was asked).
+    /// Possibly dispatched, a native run is settled from its command's receipt, or queued again
+    /// for the same identity when there is none (the command never committed, and its receipt
+    /// makes a resubmission apply at most once); an inference handoff whose answer was lost ends
+    /// `OutcomeUnknown`. `Ok(None)` when the run is not such a start (any more).
+    pub fn reclaim(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        run_id: &Id,
+    ) -> Result<Option<StoredJobRun>, StorageError> {
+        let boot = tx.store().boot_id.clone();
+        let Some(run) = tx.jobs().job_run(run_id)? else {
+            return Ok(None);
+        };
+        if !matches!(run.status.as_str(), "Running" | "Holding")
+            || run.boot_id.is_none()
+            || run.boot_id != boot
+            || run.inner_operation_id.is_some()
+            || run.session_id.is_some()
+        {
+            return Ok(None);
+        }
+        let Some(op) = run.operation_id.clone() else {
+            return Ok(None);
+        };
+        let Some(rec) = tx.operations().operation(&op)? else {
+            return Ok(None);
+        };
+        match rec.state {
+            OperationState::Preflighted if run.cancel_requested => {
+                finish(
+                    tx,
+                    &run,
+                    "Cancelled",
+                    Some(OperationState::CancelledBeforeDispatch),
+                    Some("cancelled before dispatch"),
+                    json!({"dispatched": false}),
+                )?;
+            }
+            OperationState::Preflighted => {
+                transition(
+                    tx,
+                    &op,
+                    OperationState::RetryPending,
+                    json!({"reclaimed": true, "dispatched": false}),
+                )?;
+                tx.jobs().update_run(
+                    &StoredJobRun {
+                        status: requeued(&run),
+                        boot_id: None,
+                        ..run.clone()
+                    },
+                    run.revision,
+                )?;
+            }
+            OperationState::Dispatching => {
+                let native = matches!(
+                    parse::<JobDefinition>(&run.definition)?,
+                    JobDefinition::Native { .. }
+                );
+                if !native {
+                    finish(
+                        tx,
+                        &run,
+                        "OutcomeUnknown",
+                        Some(OperationState::OutcomeUnknown),
+                        Some(
+                            "the pipeline's answer to the handoff was lost; what the run did is unknown",
+                        ),
+                        json!({"reclaimed": true}),
+                    )?;
+                } else if !self.settle_from_receipt(tx, &run)? {
+                    transition(
+                        tx,
+                        &op,
+                        OperationState::OutcomeUnknown,
+                        json!({"reclaimed": true}),
+                    )?;
+                    transition(
+                        tx,
+                        &op,
+                        OperationState::RetryPending,
+                        json!({"reconciled": "no receipt"}),
+                    )?;
+                    let current = tx.jobs().job_run(run_id)?.unwrap_or(run);
+                    tx.jobs().update_run(
+                        &StoredJobRun {
+                            status: requeued(&current),
+                            boot_id: None,
+                            ..current.clone()
+                        },
+                        current.revision,
+                    )?;
+                }
+            }
+            _ => return Ok(None),
+        }
+        tx.jobs().job_run(run_id)
     }
 
     /// Records a native run's command outcome. A committed decision settles it; an `Accepted`
@@ -1278,7 +1461,9 @@ impl JobService {
         let Some(run) = tx.jobs().job_run(&begun.run.id)? else {
             return Ok(None);
         };
-        if run.status != "Running" || run.operation_id.as_ref() != Some(&begun.operation) {
+        if !matches!(run.status.as_str(), "Running" | "Holding")
+            || run.operation_id.as_ref() != Some(&begun.operation)
+        {
             return Ok(None);
         }
         Ok(Some(match started {
@@ -1659,7 +1844,8 @@ impl JobService {
             return Ok(());
         }
         // Same identity, progress and history; a separate hold stays (a holding run stays
-        // holding), a running one is queued to continue.
+        // holding, unowned until the scheduler reattaches its session), a running one is queued
+        // to continue.
         let this_boot = tx.store().boot_id.clone();
         let polling = still.inner_operation_id.is_some();
         let resumed = tx.jobs().update_run(
@@ -1873,6 +2059,25 @@ pub fn project_restored(
         }
     }
     Ok(held)
+}
+
+/// Whether a run may be started: queued and unheld, or holding with no owner (its session to
+/// reattach, still holding).
+fn startable(run: &StoredJobRun) -> bool {
+    match run.status.as_str() {
+        "Queued" => run.hold.is_none(),
+        "Holding" => run.boot_id.is_none(),
+        _ => false,
+    }
+}
+
+/// The status a started run returns to when it is queued again: a holding run keeps holding.
+fn requeued(run: &StoredJobRun) -> String {
+    if run.status == "Holding" {
+        "Holding".into()
+    } else {
+        "Queued".into()
+    }
 }
 
 /// The counter value of a stored integer (re-exported for the engine's reports).

@@ -95,9 +95,12 @@ pub struct StoredJobRun {
     /// what an already claimed run executes.
     pub job_revision: i64,
     pub definition: String,
-    /// The project's archive epoch the run was claimed under: a run of an earlier epoch never
+    /// The project's archive epoch the run was authorized under: a run of an earlier epoch never
     /// dispatches (an archival stopped it).
     pub project_epoch: i64,
+    /// The store's restore epoch the run was authorized under: a run of an earlier epoch never
+    /// dispatches (the store was restored from a backup since).
+    pub restore_epoch: i64,
     pub occurrence_key: String,
     pub occurrence_at_ms: i64,
     /// `JobTrigger` wire name.

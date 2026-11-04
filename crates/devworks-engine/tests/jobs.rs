@@ -68,6 +68,43 @@ impl AuthorityPort for HostAuth {
 struct Docs {
     accept: AtomicBool,
     calls: AtomicUsize,
+    /// Once called, the store refuses this many further writes.
+    then_fail: std::sync::Mutex<Option<(Arc<Flaky>, usize)>>,
+}
+
+/// A store whose next `fail` writes are refused before admission (`Busy`, as from a full
+/// writer mailbox).
+struct Flaky {
+    inner: Arc<dyn ApplicationStore>,
+    fail: AtomicUsize,
+    refused: AtomicUsize,
+}
+impl ApplicationStore for Flaky {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        if self
+            .fail
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            self.refused.fetch_add(1, Ordering::SeqCst);
+            return Err(StorageError::Busy);
+        }
+        self.inner.submit_write(options, job)
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
 }
 impl CommandHandler for Docs {
     fn decide(
@@ -77,6 +114,9 @@ impl CommandHandler for Docs {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((store, n)) = self.then_fail.lock().unwrap().take() {
+            store.fail.store(n, Ordering::SeqCst);
+        }
         let op = OperationId(tx.new_id(IdKind::Operation));
         if self.accept.load(Ordering::SeqCst) {
             tx.operations().record_intent(NewOperation {
@@ -201,10 +241,25 @@ struct App {
 }
 
 fn boot_app(rt: &tokio::runtime::Runtime, h: &Harness, accept: bool) -> App {
-    let store = h.open();
+    boot_over(
+        rt,
+        h,
+        accept,
+        h.open(),
+        Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
+    )
+}
+fn boot_over(
+    rt: &tokio::runtime::Runtime,
+    h: &Harness,
+    accept: bool,
+    store: Arc<dyn ApplicationStore>,
+    inference: Arc<dyn devworks_core::services::jobs::runner::InferenceJobs>,
+) -> App {
     let docs = Arc::new(Docs {
         accept: AtomicBool::new(accept),
         calls: AtomicUsize::new(0),
+        then_fail: std::sync::Mutex::new(None),
     });
     let host = Arc::new(FakeHost::default());
     let mut config = RuntimeConfig::new(id("dispatcher-1"));
@@ -237,7 +292,10 @@ fn boot_app(rt: &tokio::runtime::Runtime, h: &Harness, accept: bool) -> App {
         artifacts,
         resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
         process_host: host.clone(),
-        runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        runs: RunComposition {
+            inference,
+            ..RunComposition::new(Arc::new(ControlService::new(h.ids.clone())))
+        },
         power: Arc::new(NoPower),
         diagnostics: Arc::new(
             devworks_core::services::diagnostics::DiagnosticService::new(
@@ -588,5 +646,225 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
             .contains("Nothing was sent to a model")
     );
     assert!(failed.session_id.is_none() && failed.agent_actor.is_none());
+    rt.block_on(app.runtime.shutdown());
+}
+
+/// A step of a started run that fails (the writer refusing it: `Busy`) is retried, never
+/// abandoned: the run's outcome is settled within the same tick and its command ran once.
+#[test]
+fn a_failed_step_after_the_start_is_retried_until_it_settles() {
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let rt = runtime();
+    let flaky = Arc::new(Flaky {
+        inner: h.open(),
+        fail: AtomicUsize::new(0),
+        refused: AtomicUsize::new(0),
+    });
+    let app = boot_over(
+        &rt,
+        &h,
+        false,
+        flaky.clone(),
+        Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
+    );
+    let job = value(app.command("jobs.create", job_body(json!({"kind": "Manual"}), true)));
+    let jid = id(job["id"].as_str().unwrap());
+    // Once its command committed, the settle of its outcome is refused three times.
+    *app.docs.then_fail.lock().unwrap() = Some((flaky.clone(), 3));
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId": jid.as_str(), "expectedRevision": "1"}),
+    ));
+    let rid = id(run["id"].as_str().unwrap());
+    app.tick(&rt);
+    assert_eq!(flaky.refused.load(Ordering::SeqCst), 3);
+    let settled = app.run(&rid);
+    assert_eq!(settled.status, "Succeeded");
+    assert_eq!(app.docs.calls.load(Ordering::SeqCst), 1);
+    // Settled by its own task's retried step, not reclaimed later from the command's receipt.
+    let op = settled.operation_id.unwrap();
+    let rec = read(&*app.store, move |s| s.operations().operation(&op)).unwrap();
+    assert_eq!(rec.state, OperationState::ObservedComplete);
+    let observed: Vec<Value> = rec
+        .attempts
+        .iter()
+        .flat_map(|a| a.observations.clone())
+        .collect();
+    assert!(
+        observed.iter().all(|o| o.get("reconciled").is_none()),
+        "{observed:?}"
+    );
+    rt.block_on(app.runtime.shutdown());
+}
+
+/// A run whose start committed but whose task is gone (here: started outside any task) is
+/// picked up by supervision: reclaimed and run, once.
+#[test]
+fn supervision_picks_up_a_started_run_no_task_executes() {
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let rt = runtime();
+    let app = boot_app(&rt, &h, false);
+    let job = value(app.command("jobs.create", job_body(json!({"kind": "Manual"}), true)));
+    let jid = id(job["id"].as_str().unwrap());
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId": jid.as_str(), "expectedRevision": "1"}),
+    ));
+    let rid = id(run["id"].as_str().unwrap());
+    // The scheduler has not run yet (nothing drives the runtime): start it here, with no task.
+    let (svc, r) = (app.runtime.scheduler().service().clone(), rid.clone());
+    let begun = write(&*app.store, move |tx| {
+        svc.begin(
+            tx,
+            &r,
+            &devworks_core::services::jobs::runner::NoInferencePipeline,
+        )
+    })
+    .unwrap();
+    assert!(begun.is_some());
+    assert_eq!(app.run(&rid).status, "Running");
+    app.tick(&rt);
+    assert_eq!(app.run(&rid).status, "Succeeded");
+    assert_eq!(app.docs.calls.load(Ordering::SeqCst), 1);
+    rt.block_on(app.runtime.shutdown());
+}
+
+/// A workspace prompt artifact, and an inference definition that runs it.
+fn seed_prompt(store: &Arc<dyn ApplicationStore>) {
+    write(&**store, |tx| {
+        let digest = "a".repeat(64);
+        tx.artifacts()
+            .put_blob(&digest, 12, "gen-1", "blobs/aa/prompt")?;
+        tx.artifacts().insert_artifact(&StoredArtifact {
+            id: id("prompt-1"),
+            origin_project_id: None,
+            origin_work_id: None,
+            title: "Scan".into(),
+            revision: 1,
+            scope: ArtifactScope::Workspace,
+            owner: Some(ActorId(id("user-a"))),
+            retention: ArtifactRetention::Explicit,
+            scope_revision: 1,
+            reference_revision: 1,
+            current_version_id: None,
+            state: ArtifactState::Live,
+            created_at_ms: T0,
+            provenance: json!({}),
+        })?;
+        tx.artifacts().insert_version(&StoredVersion {
+            id: id("prompt-v1"),
+            artifact_id: id("prompt-1"),
+            version_no: 1,
+            blob_digest: digest,
+            byte_count: 12,
+            blob_generation: "gen-1".into(),
+            media_type: "text/markdown".into(),
+            created_at_ms: T0,
+            deleted_at_ms: None,
+            source: json!({}),
+        })
+    })
+    .unwrap();
+}
+fn prompt_definition() -> Value {
+    json!({"kind": "Inference", "prompt": {"artifactId": "prompt-1", "versionId": "prompt-v1",
+        "sha256": "a".repeat(64), "byteLength": "12", "mediaType": "text/markdown"},
+        "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"})
+}
+
+/// A pipeline whose handoff waits until released.
+#[derive(Default)]
+struct SlowPipeline {
+    entered: AtomicBool,
+    open: std::sync::Mutex<bool>,
+    opened: std::sync::Condvar,
+}
+impl SlowPipeline {
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+impl devworks_core::services::jobs::runner::InferenceJobs for SlowPipeline {
+    fn availability(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn start(
+        &self,
+        run: &devworks_core::services::jobs::runner::InferenceStart,
+    ) -> Result<Option<Id>, devworks_core::services::jobs::runner::InferenceRefusal> {
+        self.entered.store(true, Ordering::SeqCst);
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.opened.wait(open).unwrap();
+        }
+        Ok(Some(id(&format!("session-{}", run.run_id.as_str()))))
+    }
+    fn cancel(&self, _: &Id) -> Result<bool, String> {
+        Ok(true)
+    }
+}
+
+/// While its runs are drained (their join handles taken), a tick never treats a run its task
+/// still executes as abandoned: an inference handoff in progress is not reclaimed, and settles
+/// once the pipeline answers.
+#[test]
+fn a_tick_while_runs_are_drained_never_reclaims_a_run_its_task_still_executes() {
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let rt = runtime();
+    let pipeline = Arc::new(SlowPipeline::default());
+    let app = boot_over(&rt, &h, false, h.open(), pipeline.clone());
+    seed_prompt(&app.store);
+    let job = value(app.command(
+        "jobs.create",
+        json!({"scope": {"kind": "Workspace"}, "title": "Scan", "schedule": {"kind": "Manual"},
+        "definition": prompt_definition(), "enabled": true}),
+    ));
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId": job["id"], "expectedRevision": "1"}),
+    ));
+    let rid = id(run["id"].as_str().unwrap());
+    let s = app.runtime.scheduler().clone();
+    let released = Arc::new(AtomicBool::new(false));
+    let reclaimed = rt.block_on(within("the handoff and a tick during the drain", {
+        let (pipeline, released) = (pipeline.clone(), released.clone());
+        async move {
+            s.tick().await.expect("tick");
+            while !pipeline.entered.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let draining = tokio::spawn({
+                let s = s.clone();
+                async move {
+                    s.drain(tokio::time::Instant::now() + Duration::from_secs(20))
+                        .await
+                }
+            });
+            // The drain has taken the run's handle and waits for it.
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            let report = s.tick().await.expect("tick");
+            released.store(true, Ordering::SeqCst);
+            pipeline.release();
+            draining.await.unwrap();
+            report.reclaimed
+        }
+    }));
+    assert!(released.load(Ordering::SeqCst));
+    assert!(reclaimed.is_empty(), "{reclaimed:?}");
+    let after = app.run(&rid);
+    assert_eq!(after.status, "Running");
+    assert_eq!(
+        after.session_id.as_ref().map(Id::as_str),
+        Some(format!("session-{}", rid.as_str()).as_str())
+    );
     rt.block_on(app.runtime.shutdown());
 }

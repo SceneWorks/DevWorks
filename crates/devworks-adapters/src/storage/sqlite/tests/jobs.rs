@@ -1771,3 +1771,249 @@ fn listing_pages_through_titles_that_contain_newlines() {
     assert!(cursor.is_none(), "the listing ends: {seen:?}");
     assert_eq!(seen, ["a", "a\nb", "a\nc", "b"]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Codex round 2
+
+fn disable(fx: &Fx, job: &str) {
+    let rev = fx.stored(job).revision.to_string();
+    applied(fx.command(
+        &fx.user(),
+        "jobs.disable",
+        json!({"jobId": job, "expectedRevision": rev}),
+    ));
+}
+fn run_now(fx: &Fx, ctx: &InvocationContext, job: &str) -> DomainCommandReply {
+    let rev = fx.stored(job).revision.to_string();
+    fx.command(
+        ctx,
+        "jobs.run_now",
+        json!({"jobId": job, "expectedRevision": rev}),
+    )
+}
+
+/// Another principal's Run now is fenced by the epochs a person activated the job under, also
+/// for a disabled job (which no restore or archival holds): after a backup restore, or an
+/// archival and restore of its project, an agent cannot run it, while a person still can (their
+/// Run now authorizes it now). A run authorized under an earlier epoch never starts.
+#[test]
+fn an_agent_cannot_run_a_job_activated_before_a_restore_or_an_archival() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let p = fx.project("P");
+    fx.bind_agent("agent-p", Some(&p.id));
+    let pjob = s(
+        &fx.job(
+            &user,
+            json!({"scope": {"kind": "Project", "projectId": p.id.0.as_str()}, "title": "Docs P",
+            "schedule": every(3600), "definition": native(), "enabled": true}),
+        ),
+        "id",
+    );
+    disable(&fx, &pjob);
+    fx.lifecycle("projects.archive", &p.id);
+    fx.archive_stop_ran(&p.id);
+    fx.lifecycle("projects.restore", &p.id);
+    assert!(
+        fx.stored(&pjob).hold.is_none(),
+        "a disabled job is not held"
+    );
+    let agent_p = fx.ctx("agent-p", PrincipalKind::Agent, Some(&p.id));
+    assert_eq!(
+        kind(&refused(run_now(&fx, &agent_p, &pjob))),
+        (
+            DomainErrorCode::ApprovalRequired,
+            "job_authorization".into()
+        )
+    );
+
+    fx.bind_agent("agent-a", None);
+    let job = s(
+        &fx.job(&user, body("Docs", every(3600), native(), true)),
+        "id",
+    );
+    disable(&fx, &job);
+    // A backup restore advances the store's restore epoch (DW-57).
+    fx.store
+        .with_writer_connection(|c| {
+            super::super::conn::db(
+                c.execute_batch("UPDATE store_meta SET restore_epoch=restore_epoch+1"),
+            )
+        })
+        .unwrap();
+    let fx = fx.restart();
+    assert!(fx.stored(&job).hold.is_none(), "a disabled job is not held");
+    assert_eq!(
+        kind(&refused(run_now(&fx, &fx.agent(), &job))),
+        (
+            DomainErrorCode::ApprovalRequired,
+            "job_authorization".into()
+        )
+    );
+    // A run authorized under the job's (earlier) activation never starts.
+    let stale = fx.stored(&job);
+    let stale_run = fx.write(move |tx| {
+        let host = tx.store().host_actor.clone();
+        devworks_core::services::jobs::runner::queue_run(
+            tx,
+            &host,
+            &stale,
+            devworks_core::services::jobs::runner::Occurrence::Manual { at_ms: T0 },
+            false,
+        )
+    });
+    assert!(fx.execute(stale_run.id.as_str(), &none()).is_none());
+    let cancelled = fx.run(stale_run.id.as_str());
+    assert_eq!(cancelled.status, "Cancelled");
+    assert!(cancelled.reason.unwrap().contains("restored"));
+    // A person's Run now authorizes it in the current epoch, and it runs.
+    let mine = value_of(&applied(run_now(&fx, &fx.user(), &job)));
+    assert_eq!(
+        fx.execute(&s(&mine, "id"), &none()).unwrap().status,
+        "Succeeded"
+    );
+    assert_eq!(fx.docs.calls.load(Ordering::SeqCst), 1);
+}
+
+/// A run holding at close (an approval wait, say) is reattached at reopen with its hold: its
+/// session is handed to the pipeline again, still held and owned by this boot, so its discovery
+/// writes are accepted and clearing the hold continues it.
+#[test]
+fn a_run_holding_at_close_is_reattached_with_its_hold_and_continues_once_cleared() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let def = seed_prompt(&fx, None);
+    let jid = s(
+        &fx.job(
+            &user,
+            json!({"scope": {"kind": "Workspace"}, "title": "Scan", "schedule": {"kind": "Manual"},
+            "definition": def, "enabled": true}),
+        ),
+        "id",
+    );
+    let pipeline = Arc::new(Pipeline {
+        available: true,
+        ..Pipeline::default()
+    });
+    let dyn_pipeline: Arc<dyn InferenceJobs> = pipeline.clone();
+    let rid = s(&value_of(&applied(run_now(&fx, &user, &jid))), "id");
+    let running = fx.execute(&rid, &dyn_pipeline).unwrap();
+    let svc = fx.jobs.clone();
+    let (r, rev) = (running.id.clone(), running.revision);
+    fx.write(move |tx| {
+        svc.finish_inference(
+            tx,
+            &r,
+            rev,
+            &InferenceOutcome::Holding("ApprovalWait".into()),
+        )
+    });
+    let hook = JobLifecycle(fx.jobs.clone());
+    fx.write(move |tx| hook.quiesce(tx));
+    let fx = fx.restart();
+    let interrupted = fx.run(&rid);
+    assert_eq!(
+        (interrupted.status.as_str(), interrupted.hold.as_deref()),
+        ("Holding", Some("ApprovalWait"))
+    );
+    // The scheduler picks it up and reattaches its session, still holding.
+    let svc = fx.jobs.clone();
+    let startable: Vec<Id> = fx
+        .write(move |tx| svc.runnable(tx))
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(startable, vec![id(&rid)]);
+    let reattached = fx.execute(&rid, &dyn_pipeline).unwrap();
+    assert_eq!(
+        (reattached.status.as_str(), reattached.hold.as_deref()),
+        ("Holding", Some("ApprovalWait"))
+    );
+    let handed = pipeline.started.lock().unwrap().last().cloned().unwrap();
+    assert!(handed.resume);
+    assert_eq!(handed.hold.as_deref(), Some("ApprovalWait"));
+    assert_eq!(handed.session_id, running.session_id);
+    // Owned by this boot: its discovery writes are accepted.
+    let r = id(&rid);
+    fx.write(move |tx| discovery::owned_run(tx, &r).map(|_| ()));
+    // Clearing the hold continues it.
+    let svc = fx.jobs.clone();
+    let (r, rev) = (reattached.id.clone(), reattached.revision);
+    let resumed = fx.write(move |tx| svc.finish_inference(tx, &r, rev, &InferenceOutcome::Resumed));
+    assert_eq!(
+        (resumed.status.as_str(), resumed.hold.as_deref()),
+        ("Running", None)
+    );
+}
+
+/// A start whose executor is gone (its task ended after the start committed) is reclaimed:
+/// never dispatched, it is queued again; dispatched with a committed command, it is settled from
+/// the command's receipt without running it again; dispatched without a receipt, it is queued
+/// again for the same identity and runs once.
+#[test]
+fn a_start_whose_executor_is_gone_is_reclaimed_from_what_is_known_of_its_effect() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let start = |job: &str| {
+        let rid = s(&value_of(&applied(run_now(&fx, &user, job))), "id");
+        let (svc, r, p) = (fx.jobs.clone(), id(&rid), none());
+        let begun = fx.write(move |tx| svc.begin(tx, &r, &*p)).unwrap();
+        (rid, begun)
+    };
+    let reclaim = |rid: &str| {
+        let (svc, r) = (fx.jobs.clone(), id(rid));
+        fx.write(move |tx| svc.reclaim(tx, &r))
+    };
+    let manual = |title: &str| {
+        s(
+            &fx.job(
+                &user,
+                body(title, json!({"kind": "Manual"}), native(), true),
+            ),
+            "id",
+        )
+    };
+    // Never dispatched.
+    let (a, _) = start(&manual("A"));
+    let svc = fx.jobs.clone();
+    let listed: Vec<Id> = fx
+        .write(move |tx| svc.unsettled_starts(tx))
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(listed, vec![id(&a)]);
+    assert_eq!(reclaim(&a).unwrap().status, "Queued");
+    assert_eq!(fx.execute(&a, &none()).unwrap().status, "Succeeded");
+    assert_eq!(fx.docs.calls.load(Ordering::SeqCst), 1);
+    // Dispatched, and its command committed.
+    let (b, begun) = start(&manual("B"));
+    let (svc, bg) = (fx.jobs.clone(), begun.clone());
+    assert!(fx.write(move |tx| svc.dispatching(tx, &bg)));
+    if let Step::Native {
+        ctx,
+        operation,
+        frame,
+    } = &begun.step
+    {
+        assert!(matches!(
+            Dispatch(&fx).command(ctx, operation, frame),
+            Ok(CommandReply::Recorded { .. })
+        ));
+    }
+    assert_eq!(fx.docs.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(reclaim(&b).unwrap().status, "Succeeded");
+    assert_eq!(fx.docs.calls.load(Ordering::SeqCst), 2, "not run again");
+    // Dispatched, but its command never committed. (A retry of the dispatching step, after its
+    // acknowledgment was lost, finds the attempt already dispatching under its fence.)
+    let (c, begun) = start(&manual("C"));
+    for _ in 0..2 {
+        let (svc, bg) = (fx.jobs.clone(), begun.clone());
+        assert!(fx.write(move |tx| svc.dispatching(tx, &bg)));
+    }
+    let requeued = reclaim(&c).unwrap();
+    assert_eq!(requeued.status, "Queued");
+    assert_eq!(fx.execute(&c, &none()).unwrap().status, "Succeeded");
+    assert_eq!(fx.docs.calls.load(Ordering::SeqCst), 3);
+    // Nothing is reclaimed twice, and a settled run is not a start.
+    assert!(reclaim(&c).is_none());
+}

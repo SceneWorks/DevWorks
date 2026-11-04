@@ -329,6 +329,9 @@ pub struct JobsUi {
     pub selected: Option<String>,
     pub inspection: Option<JobInspection>,
     pub inspection_error: Option<String>,
+    /// The selected job's active run (from its `activeRunId`, inspected by ID: the latest
+    /// occurrence may be a skipped one while it continues).
+    pub active_run: Option<JobRun>,
     /// History pages loaded after the first, and where the next one starts.
     pub older: Vec<JobRun>,
     pub older_cursor: Option<String>,
@@ -443,12 +446,14 @@ impl Shell {
                     self.jobs.scope = s;
                     self.jobs.selected = None;
                     self.jobs.inspection = None;
+                    self.jobs.active_run = None;
                     self.jobs.list = ListState::default();
                     self.jobs.list_cursor = None;
                     self.load_jobs();
                 }
                 JobAction::Select(id) => {
                     self.jobs.selected = Some(id.clone());
+                    self.jobs.active_run = None;
                     self.jobs.older.clear();
                     self.jobs.older_cursor = None;
                     self.load_job(&id);
@@ -601,12 +606,49 @@ impl Shell {
                 }
                 match ops::job_inspection(q) {
                     Ok(i) => {
+                        // The active run is the job's `activeRunId`, never assumed to be the
+                        // latest occurrence (a skipped one may be newer).
+                        match i.job.active_run_id.clone() {
+                            None => self.jobs.active_run = None,
+                            Some(a) if i.run.as_ref().is_some_and(|r| r.id == a) => {
+                                self.jobs.active_run = i.run.clone();
+                            }
+                            Some(a) => {
+                                let (job, run) = (j.clone(), a.as_str().to_owned());
+                                self.query(
+                                    Slot::JobActiveRun(j.clone()),
+                                    "Loading the active run",
+                                    "jobs.inspect",
+                                    move |b| ops::jobs_inspect_run(b, &job, &run),
+                                );
+                            }
+                        }
                         self.jobs.inspection = Some(i);
                         self.jobs.inspection_error = None;
                     }
                     Err(Failure::Refused(f)) if f.code == DomainErrorCode::NotFound => {
                         self.jobs.selected = None;
                         self.jobs.inspection = None;
+                        self.jobs.active_run = None;
+                    }
+                    Err(e) => self.jobs.inspection_error = Some(e.describe()),
+                }
+            }
+            (Slot::JobActiveRun(j), Reply::Query(q)) => {
+                if self.jobs.selected.as_deref() != Some(j.as_str()) {
+                    return None;
+                }
+                match ops::job_inspection(q) {
+                    Ok(i) => {
+                        // Still the job's active run (it may have ended meanwhile).
+                        let current = self
+                            .jobs
+                            .inspection
+                            .as_ref()
+                            .and_then(|s| s.job.active_run_id.clone());
+                        self.jobs.active_run = i
+                            .run
+                            .filter(|r| Some(&r.id) == current.as_ref() && is_active(r));
                     }
                     Err(e) => self.jobs.inspection_error = Some(e.describe()),
                 }
@@ -1022,10 +1064,10 @@ fn details(ui: &mut Ui, jobs: &mut JobsUi, actions: &mut Vec<JobAction>, busy: b
     if let Some(e) = &j.last_error {
         widgets::caption(ui, e.0.clone());
     }
-    if let Some(run) = i.run.as_ref().filter(|r| is_active(r)) {
+    if let Some(run) = jobs.active_run.clone().filter(is_active) {
         ui.add_space(4.0);
         ui.label(RichText::new("Active run").strong());
-        run_row(ui, run, actions, busy);
+        run_row(ui, &run, actions, busy);
     }
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {

@@ -319,3 +319,71 @@ fn editing_a_native_job_keeps_its_capability_when_the_build_no_longer_offers_it(
         "never replaced by another (or the first) capability"
     );
 }
+
+/// The Active run section follows the job's `activeRunId`, not its latest occurrence: while an
+/// occurrence skipped for the active run is the newest record, the active run and its Cancel stay
+/// shown, and Cancel reaches that run.
+#[test]
+fn the_active_run_stays_shown_when_a_skipped_occurrence_is_the_latest_run() {
+    let root = Root::new("jobs-active-run");
+    let engine = start(&root);
+    seed_prompt(&engine);
+    let backend = engine.backend();
+    let Ok(ops::JobChange::Job(job)) = ops::job_changed(backend.command(
+        "jobs.create",
+        &ops::job_create(
+            &*backend,
+            None,
+            "Issue triage",
+            &json!({"kind": "Manual"}),
+            &inference(),
+            true,
+        ),
+    )) else {
+        panic!("created")
+    };
+    // An active run waiting on an approval, then an occurrence skipped for it (the newest run).
+    let jid = job.id.clone();
+    let (active, skipped) = run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::default(),
+        move |tx| {
+            use devworks_core::services::jobs::runner::{Occurrence, queue_run};
+            let stored = tx.jobs().job(&jid)?.expect("job");
+            let host = tx.store().host_actor.clone();
+            let queued = queue_run(tx, &host, &stored, Occurrence::Manual { at_ms: 1 }, true)?;
+            let waiting = tx.jobs().update_run(
+                &StoredJobRun {
+                    hold: Some("ApprovalWait".into()),
+                    ..queued.clone()
+                },
+                queued.revision,
+            )?;
+            let skipped = queue_run(tx, &host, &stored, Occurrence::Manual { at_ms: 2 }, true)?;
+            Ok((waiting, skipped))
+        },
+    )
+    .unwrap();
+    assert_eq!(skipped.status, "Skipped");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    h.query_all_by_label_contains("Issue triage")
+        .next()
+        .expect("the job row")
+        .click();
+    settle(&mut h);
+    assert!(has_text(&h, "Active run"));
+    assert!(has_text(&h, "waiting: ApprovalWait"));
+    click(&mut h, Role::Button, "Cancel");
+    settle(&mut h);
+    let id = active.id.clone();
+    let after = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        move |s| s.jobs().job_run(&id),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(after.status, "Cancelled", "Cancel reached the active run");
+}
