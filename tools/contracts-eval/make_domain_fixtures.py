@@ -468,5 +468,34 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (jobs): scope, next/last run, status, hold and authorization on records;
+# status, trigger, occurrence instant, times, reason, preserved hold, cancellation, resumptions,
+# session, linked roots and the overlapped run on runs; paged run history and run usage on
+# inspection.
+for name in ['jobs.list']:
+ case('r2-input-'+name,'domain-request.r2',domain(name))
+for name in ['jobs.create','jobs.edit','jobs.enable','jobs.disable','jobs.delete','jobs.run_now','jobs.cancel']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-jobs.inspect','domain-request.r2',domain('jobs.inspect',runId='run-a',history={'limit':20,'cursor':'cursor-a'},usage={'limit':50}))
+case('r2-input-jobs.inspect-plain','domain-request.r2',domain('jobs.inspect'))
+case('reject-r1-inspect-history','domain-request',domain('jobs.inspect',None,history={'limit':20}),False,False)
+case('reject-r2-inspect-null-history','domain-request.r2',domain('jobs.inspect',history=None),False,False)
+case('reject-r2-inspect-history-over-limit','domain-request.r2',domain('jobs.inspect',history={'limit':501}),False,False)
+calendar={'kind':'Calendar','expression':'30 2 * * *','timezone':'America/New_York'}
+job_r2={**sample('JobRecord'),'schedule':calendar,'enabled':True,'scope':{'kind':'Project','projectId':'project-a'},'nextRunAtMs':'1793570000000','lastRunStartedAtMs':'1793560000000','lastRunFinishedAtMs':'1793560060000','lastRunStatus':'Succeeded','activeRunId':'run-b','hold':'ReactivationRequired','authorized':True,'createdAtMs':'1','updatedAtMs':'2'}
+run_r2={**sample('JobRun'),'status':'Skipped','trigger':'Scheduled','occurrenceAtMs':'1793570000000','finishedAtMs':'1793570000000','reason':'The previous run is still active','skippedForRunId':'run-b','resumptions':'0','cancelRequested':False,'linkedRootIds':['root-a'],'sessionId':'session-a','hold':'ApprovalWait'}
+for name in ['jobs.create','jobs.edit','jobs.enable','jobs.disable','jobs.delete']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':job_r2})
+case('r2-result-jobs.delete-tombstone','operation-result.r2',{'kind':'jobs.delete','value':{**job_r2,'enabled':False,'deletedAtMs':'3'}})
+for name in ['jobs.run_now','jobs.cancel']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':run_r2})
+case('r2-result-jobs.list','operation-result.r2',{'kind':'jobs.list','value':{'items':[job_r2,sample('JobRecord')],'hasMore':False}})
+case('r2-result-jobs.inspect','operation-result.r2',{'kind':'jobs.inspect','value':{'job':job_r2,'run':run_r2,'runs':[run_r2,sample('JobRun')],'runsNextCursor':'cursor-a'}})
+case('reject-r1-result-job-next-run','operation-result',{'kind':'jobs.enable','value':job_r2},False,False)
+case('reject-r1-result-run-status','operation-result',{'kind':'jobs.run_now','value':run_r2},False,False)
+case('reject-r1-result-inspection-runs','operation-result',{'kind':'jobs.inspect','value':{'job':sample('JobRecord'),'runs':[]}},False,False)
+case('reject-r2-result-run-unknown-status','operation-result.r2',{'kind':'jobs.run_now','value':{**run_r2,'status':'Missed'}},False,False)
+case('reject-r2-result-job-unknown-hold','operation-result.r2',{'kind':'jobs.enable','value':{**job_r2,'hold':'Paused'}},False,False)
+case('reject-r2-result-run-unknown-trigger','operation-result.r2',{'kind':'jobs.cancel','value':{**run_r2,'trigger':'Catchup'}},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

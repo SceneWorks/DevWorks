@@ -257,6 +257,46 @@ impl Check for JobKind {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobRunStatus {
+    Queued,
+    Running,
+    Holding,
+    Succeeded,
+    Failed,
+    Skipped,
+    Cancelled,
+    OutcomeUnknown,
+}
+impl Check for JobRunStatus {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobTrigger {
+    Scheduled,
+    Manual,
+}
+impl Check for JobTrigger {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum JobHold {
+    ReactivationRequired,
+    AuthorizationRequired,
+    ProjectClosed,
+}
+impl Check for JobHold {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum ProposalDecision {
     Approve,
     Reject,
@@ -3444,6 +3484,90 @@ pub struct JobRecord {
     pub interrupted_run_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub next_run_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub last_run_started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub last_run_finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobRunStatus", extend("x-since" = 2))]
+    pub last_run_status: Option<JobRunStatus>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub last_error: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub active_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobHold", extend("x-since" = 2))]
+    pub hold: Option<JobHold>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub authorized: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub deleted_at_ms: Option<Counter>,
 }
 impl Check for JobRecord {
     fn check(&self) -> Result<(), String> {
@@ -3455,11 +3579,64 @@ impl Check for JobRecord {
         self.enabled.check()?;
         self.interrupted_run_id.check()?;
         self.last_run_id.check()?;
+        self.scope.check()?;
+        self.next_run_at_ms.check()?;
+        self.last_run_started_at_ms.check()?;
+        self.last_run_finished_at_ms.check()?;
+        self.last_run_status.check()?;
+        self.last_error.check()?;
+        self.active_run_id.check()?;
+        self.hold.check()?;
+        self.authorized.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.deleted_at_ms.check()?;
         super::domain_rules::record(
             "JobRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.scope = None;
+        }
+        if revision < 2 {
+            self.next_run_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_started_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.last_run_status = None;
+        }
+        if revision < 2 {
+            self.last_error = None;
+        }
+        if revision < 2 {
+            self.active_run_id = None;
+        }
+        if revision < 2 {
+            self.hold = None;
+        }
+        if revision < 2 {
+            self.authorized = None;
+        }
+        if revision < 2 {
+            self.created_at_ms = None;
+        }
+        if revision < 2 {
+            self.updated_at_ms = None;
+        }
+        if revision < 2 {
+            self.deleted_at_ms = None;
+        }
     }
 }
 
@@ -3474,6 +3651,90 @@ pub struct JobRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
     pub usage: UsageReport,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobRunStatus", extend("x-since" = 2))]
+    pub status: Option<JobRunStatus>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "JobTrigger", extend("x-since" = 2))]
+    pub trigger: Option<JobTrigger>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub occurrence_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub started_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub finished_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub hold: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub cancel_requested: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub resumptions: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RootId>", extend("x-since" = 2))]
+    pub linked_root_ids: Option<Items<RootId>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub skipped_for_run_id: Option<Id>,
 }
 impl Check for JobRun {
     fn check(&self) -> Result<(), String> {
@@ -3484,11 +3745,64 @@ impl Check for JobRun {
         self.state.check()?;
         self.operation_id.check()?;
         self.usage.check()?;
+        self.status.check()?;
+        self.trigger.check()?;
+        self.occurrence_at_ms.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.reason.check()?;
+        self.hold.check()?;
+        self.cancel_requested.check()?;
+        self.resumptions.check()?;
+        self.session_id.check()?;
+        self.linked_root_ids.check()?;
+        self.skipped_for_run_id.check()?;
         super::domain_rules::record(
             "JobRun",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.status = None;
+        }
+        if revision < 2 {
+            self.trigger = None;
+        }
+        if revision < 2 {
+            self.occurrence_at_ms = None;
+        }
+        if revision < 2 {
+            self.started_at_ms = None;
+        }
+        if revision < 2 {
+            self.finished_at_ms = None;
+        }
+        if revision < 2 {
+            self.reason = None;
+        }
+        if revision < 2 {
+            self.hold = None;
+        }
+        if revision < 2 {
+            self.cancel_requested = None;
+        }
+        if revision < 2 {
+            self.resumptions = None;
+        }
+        if revision < 2 {
+            self.session_id = None;
+        }
+        if revision < 2 {
+            self.linked_root_ids = None;
+        }
+        if revision < 2 {
+            self.skipped_for_run_id = None;
+        }
     }
 }
 
@@ -5215,16 +5529,47 @@ pub struct JobInspection {
     pub job: JobRecord,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<JobRun>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<JobRun>", extend("x-since" = 2))]
+    pub runs: Option<Rows<JobRun>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 2))]
+    pub runs_next_cursor: Option<Cursor>,
 }
 impl Check for JobInspection {
     fn check(&self) -> Result<(), String> {
         self.job.check()?;
         self.run.check()?;
+        self.runs.check()?;
+        self.runs_next_cursor.check()?;
         super::domain_rules::record(
             "JobInspection",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for JobInspection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.job.retain_revision(revision);
+        self.run.retain_revision(revision);
+        if revision < 2 {
+            self.runs = None;
+        } else {
+            self.runs.retain_revision(revision);
+        }
+        if revision < 2 {
+            self.runs_next_cursor = None;
+        }
     }
 }
 
@@ -7001,6 +7346,20 @@ pub enum DomainQuery {
         job_id: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 2))]
+        history: Option<PageRequest>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 2))]
+        usage: Option<PageRequest>,
     },
     #[serde(rename = "settings.read_effective")]
     SettingsReadEffective {
@@ -8146,9 +8505,16 @@ impl Check for DomainQuery {
                 page.check()?;
                 enabled.check()?;
             }
-            Self::JobsInspect { job_id, run_id } => {
+            Self::JobsInspect {
+                job_id,
+                run_id,
+                history,
+                usage,
+            } => {
                 job_id.check()?;
                 run_id.check()?;
+                history.check()?;
+                usage.check()?;
             }
             Self::SettingsReadEffective { scope, keys, page } => {
                 scope.check()?;
@@ -8430,6 +8796,14 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *workspace = None;
+                }
+            }
+            Self::JobsInspect { history, usage, .. } => {
+                if revision < 2 {
+                    *history = None;
+                }
+                if revision < 2 {
+                    *usage = None;
                 }
             }
             Self::RouterAvailability { session_id, .. } => {
@@ -13232,6 +13606,15 @@ impl Revisioned for OperationResult {
             Self::ResourcesRelease { value } => value.retain_revision(revision),
             Self::ResourcesHolders { value } => value.retain_revision(revision),
             Self::ResourcesWaiters { value } => value.retain_revision(revision),
+            Self::JobsList { value } => value.retain_revision(revision),
+            Self::JobsCreate { value } => value.retain_revision(revision),
+            Self::JobsEdit { value } => value.retain_revision(revision),
+            Self::JobsEnable { value } => value.retain_revision(revision),
+            Self::JobsDisable { value } => value.retain_revision(revision),
+            Self::JobsDelete { value } => value.retain_revision(revision),
+            Self::JobsRunNow { value } => value.retain_revision(revision),
+            Self::JobsInspect { value } => value.retain_revision(revision),
+            Self::JobsCancel { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),

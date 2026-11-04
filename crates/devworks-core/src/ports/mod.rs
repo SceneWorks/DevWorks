@@ -57,6 +57,9 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Schedules (jobs) and their runs.
+    Job,
+    JobRun,
 }
 /// Opaque identifier allocation. IDs carry no order, authority or path meaning.
 pub trait IdSource: Send + Sync {

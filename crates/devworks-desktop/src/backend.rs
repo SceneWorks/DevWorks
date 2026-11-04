@@ -45,6 +45,11 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// The native maintenance capabilities a scheduled job may run in this build (only those
+    /// with a registered use case; none are advertised otherwise).
+    fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
+        Vec::new()
+    }
 }
 
 /// Who is waiting for a reply. Equal slots supersede each other.
@@ -97,6 +102,18 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// The jobs of the selected scope, and a further page of them.
+    JobsList,
+    /// A further page of a scope's jobs (the scope's project, empty for app-level jobs).
+    JobsMore(String),
+    /// The jobs of one project, for its run status on All projects.
+    ProjectJobs(String),
+    /// One job's inspection (its first run-history page) and an older history page (job ID).
+    JobInspect(String),
+    JobHistory(String),
+    JobCreate,
+    /// A command of one job or its run (one at a time per job).
+    JobCommand(String),
 }
 
 /// A finished request.
@@ -157,7 +174,7 @@ struct Pending {
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: [&str; 20] = [
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -171,6 +188,13 @@ pub const COMMANDS: [&str; 13] = [
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "jobs.create",
+    "jobs.edit",
+    "jobs.enable",
+    "jobs.disable",
+    "jobs.delete",
+    "jobs.run_now",
+    "jobs.cancel",
 ];
 
 /// A command whose outcome is still not known after its resubmissions.

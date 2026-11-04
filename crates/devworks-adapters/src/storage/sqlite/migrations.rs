@@ -202,7 +202,28 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0014_projects.sql"),
         rebuilds_tables: false,
     },
+    // Additive: columns (all defaulted or nullable) on `schedules` and `job_runs`, which no
+    // earlier build ever wrote (migration 1 declared them for this item), their indexes, and four
+    // new tables (run links, discovery checkpoints, action identities, per-run usage).
+    // Versions 15-18 are reserved by other open items; integration renumbers this one to the
+    // next free version. The writer floor stays at 14 (the highest so far): applying a migration
+    // overwrites the store's floors, so a lower value would re-admit the writers migration 14
+    // refuses (they would dispatch a deleted project's work). It need not rise: no earlier build reads or writes any of these
+    // records, so it cannot break the one-active-run index, the title uniqueness or the
+    // occurrence identities, and every record it does write is unchanged here. The reader floor
+    // stays at 8: no earlier build reads these tables, and every query an earlier reader makes
+    // returns the same results.
+    Migration {
+        version: 19,
+        minimum_reader: 8,
+        minimum_writer: 14,
+        sql: include_str!("migrations/0019_jobs.sql"),
+        rebuilds_tables: false,
+    },
 ];
+/// Recorded checksum of migration 19; a test fails if the shipped text changes.
+pub const MIGRATION_0019_SHA256: &str =
+    "d0f1a753dcbe99f2da5cf7352d6a0d4c53368c9503fcc5d74cae01112a7acd57";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";

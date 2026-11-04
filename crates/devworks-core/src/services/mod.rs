@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod cursor;
 pub mod diagnostics;
 pub mod history;
+pub mod jobs;
 pub mod power;
 pub mod process;
 pub mod projects;
@@ -146,6 +147,14 @@ impl UseCases {
     /// availability (`InferenceRouter`).
     pub fn with_router(mut self, service: Arc<router::InferenceRouter>) -> Self {
         for op in router::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the jobs family (`Scheduler`).
+    pub fn with_jobs(mut self, service: Arc<jobs::JobService>) -> Self {
+        for op in jobs::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

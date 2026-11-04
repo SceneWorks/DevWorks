@@ -8705,6 +8705,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "history": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 2
+            },
             "jobId": {
               "$ref": "#/$defs/Id"
             },
@@ -8721,6 +8725,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "usage": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 2
             }
           },
           "required": [

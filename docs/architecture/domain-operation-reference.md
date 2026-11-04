@@ -528,15 +528,15 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool` | `Page<JobRecord>` |
-| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool` | `JobRecord` |
-| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition` | `JobRecord` |
-| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id` | `JobInspection` |
-| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision` | `JobRun` |
-| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
-| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision` | `JobRecord` |
+| `jobs.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`enabled`: `?bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<JobRecord>` |
+| `jobs.create` | **Command**<br>`scope`: `DataScope`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br>`enabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.edit` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br>`title`: `Label`<br>`schedule`: `Schedule`<br>`definition`: `JobDefinition`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.enable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.run_now` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.inspect` | **Query**<br>`jobId`: `Id`<br>`runId`: `?Id`<br>`history`: `?PageRequest`<br>`usage`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobInspection` |
+| `jobs.cancel` | **Command**<br>`jobId`: `Id`<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRun` |
+| `jobs.delete` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
+| `jobs.disable` | **Command**<br>`jobId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `JobRecord` |
 
 ### Settings
 
@@ -771,6 +771,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### JobKind
 
 `Native`, `Inference`.
+
+### JobRunStatus
+
+`Queued`, `Running`, `Holding`, `Succeeded`, `Failed`, `Skipped`, `Cancelled`, `OutcomeUnknown`.
+
+### JobTrigger
+
+`Scheduled`, `Manual`.
+
+### JobHold
+
+`ReactivationRequired`, `AuthorizationRequired`, `ProjectClosed`.
 
 ### ProposalDecision
 
@@ -1882,6 +1894,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `enabled` | `bool` |
 | `interruptedRunId` | `?Id` |
 | `lastRunId` | `?Id` |
+| `scope` | `?DataScope` · *revision 2+* |
+| `nextRunAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStartedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunFinishedAtMs` | `?Counter` · *revision 2+* |
+| `lastRunStatus` | `?JobRunStatus` · *revision 2+* |
+| `lastError` | `?Text` · *revision 2+* |
+| `activeRunId` | `?Id` · *revision 2+* |
+| `hold` | `?JobHold` · *revision 2+* |
+| `authorized` | `?bool` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `deletedAtMs` | `?Counter` · *revision 2+* |
 
 ### JobRun
 
@@ -1894,6 +1918,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `state` | `OperationState` |
 | `operationId` | `?OperationId` |
 | `usage` | `UsageReport` |
+| `status` | `?JobRunStatus` · *revision 2+* |
+| `trigger` | `?JobTrigger` · *revision 2+* |
+| `occurrenceAtMs` | `?Counter` · *revision 2+* |
+| `startedAtMs` | `?Counter` · *revision 2+* |
+| `finishedAtMs` | `?Counter` · *revision 2+* |
+| `reason` | `?Text` · *revision 2+* |
+| `hold` | `?Label` · *revision 2+* |
+| `cancelRequested` | `?bool` · *revision 2+* |
+| `resumptions` | `?Counter` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
+| `linkedRootIds` | `?Items<RootId>` · *revision 2+* |
+| `skippedForRunId` | `?Id` · *revision 2+* |
 
 ### SchemaValue
 
@@ -2421,6 +2457,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `job` | `JobRecord` |
 | `run` | `?JobRun` |
+| `runs` | `?Rows<JobRun>` · *revision 2+* |
+| `runsNextCursor` | `?Cursor` · *revision 2+* |
 
 ### RepositoryIndexStatus
 

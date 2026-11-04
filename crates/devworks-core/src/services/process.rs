@@ -217,6 +217,8 @@ pub enum StopScope {
     /// later epoch, after a restore.
     ProjectBefore(ProjectId, i64),
     Lease(Id),
+    /// The trees launched for one journaled operation (a scheduled job run's operation).
+    Operation(OperationId),
 }
 
 struct Live {
@@ -638,6 +640,7 @@ impl ProcessSupervisor {
                                 && live.epoch.is_some_and(|e| e < *epoch)
                         }
                         StopScope::Lease(lease) => r.lease_id.as_ref() == Some(lease),
+                        StopScope::Operation(op) => r.operation_id.as_ref() == Some(op),
                     };
                     hit.then(|| r.id.clone())
                 })

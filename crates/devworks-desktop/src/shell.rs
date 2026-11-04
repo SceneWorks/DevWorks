@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod jobs;
 pub mod projects;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
@@ -142,6 +143,7 @@ pub struct Shell {
     pub resources: ListState<ResourceRecord>,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
+    pub jobs: jobs::JobsUi,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -279,6 +281,7 @@ impl Shell {
             artifacts: ListState::default(),
             resources: ListState::default(),
             projects: projects::ProjectsUi::default(),
+            jobs: jobs::JobsUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
@@ -401,10 +404,23 @@ impl Shell {
                 self.load_projects();
                 self.load_deleted_projects();
                 self.load_repositories();
+                if let Some(p) = self
+                    .routes
+                    .get(&Route::Portfolio)
+                    .and_then(|m| m.selection.clone())
+                {
+                    self.load_project_jobs(&p);
+                }
             }
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+            }
+            Route::Jobs => {
+                self.load_jobs();
+                if !self.projects.list.loaded {
+                    self.load_projects();
+                }
             }
             _ => {}
         }
@@ -1026,6 +1042,9 @@ impl Shell {
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
+            return;
+        };
+        let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
             return;
         };
         match (slot, reply) {
@@ -1651,6 +1670,8 @@ impl Shell {
             {
                 self.load_route();
             }
+            // Run status moves while the screen is open (claims, runs, cancellations).
+            Route::Jobs if !self.pending(&Slot::JobsList) => self.load_jobs(),
             _ => {}
         }
     }
@@ -1772,6 +1793,7 @@ impl Shell {
                     }
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
+                SettingsAction::OpenJobs => self.navigate(Route::Jobs),
             }
         }
     }
@@ -2680,6 +2702,7 @@ impl Shell {
             Route::Resources => self.resources_screen(ui),
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Jobs => self.jobs_screen(ui),
             _ => self.pending_screen(ui),
         }
     }

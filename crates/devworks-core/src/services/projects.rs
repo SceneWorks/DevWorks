@@ -821,6 +821,10 @@ impl ProjectService {
         // Its queued resource requests leave their queues: nothing is granted to it later.
         let cancelled =
             crate::services::resources::cancel_project_waiters(tx, ctx.principal(), &after.id)?;
+        // Its schedules stop at once in the same unit of work: every enabled job is held and its
+        // active run asked to stop (bound to that run; a run never dispatched ends here).
+        let stopped_runs =
+            crate::services::jobs::runner::project_archived(tx, ctx.principal(), &after.id)?;
         event(
             tx,
             ctx,
@@ -831,6 +835,7 @@ impl ProjectService {
                 "stoppedRoots": stopped.iter().map(|(r, _)| r.0.as_str()).collect::<Vec<_>>(),
                 "stopOperations": stopped.iter().map(|(_, o)| o.0.as_str()).collect::<Vec<_>>(),
                 "cancelledWaitingLeases": cancelled,
+                "stoppedJobRuns": stopped_runs.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
             }),
         )?;
         Ok(DomainDecision::Applied {
@@ -872,14 +877,16 @@ impl ProjectService {
         after.updated_at_ms = tx.now_ms();
         after.archived_at_ms = None;
         tx.projects().update_project(&after, before.revision)?;
-        // Work stays stopped: every root keeps the hold its archival left until a Continue.
+        // Work stays stopped: every root keeps the hold its archival left until a Continue, and
+        // every schedule stays held until a person enables it (ReactivationRequired).
+        let held_jobs = crate::services::jobs::runner::project_restored(tx, &after.id)?;
         event(
             tx,
             ctx,
             Some(&after.id),
             (PROJECT_AGGREGATE, &after.id.0, after.revision),
             "ProjectRestored",
-            json!({"workStopped": true}),
+            json!({"workStopped": true, "heldJobs": held_jobs.iter().map(|j| j.as_str()).collect::<Vec<_>>()}),
         )?;
         Ok(DomainDecision::Applied {
             result: OperationResult::ProjectsRestore {

@@ -754,6 +754,7 @@ name = "devworks-adapters"
 version = "0.1.0"
 dependencies = [
  "devworks-core",
+ "jiff",
  "libc",
  "rusqlite",
  "serde_json",
@@ -767,6 +768,7 @@ dependencies = [
 name = "devworks-core"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "schemars",
  "serde",
  "serde_json",
