@@ -41,10 +41,12 @@
 //! [`PackageHost::invoke`] admits an invocation only on a ready instance of the currently active
 //! version and only while no quiescence barrier is up for its package (both under one lock, so a
 //! barrier and an admission never interleave). It mints a short-lived invocation ID and token
-//! bound to that process session. [`InvocationHandle::cancel`] first revokes the token (fencing
-//! further broker effects), then sends `host.cancel` (an acknowledgement is not proof of stop),
-//! waits the cooperative grace and terminates the owned process tree when needed; whatever was
-//! not proven stopped is `OutcomeUnknown`.
+//! bound to that process session. A session that closes between that check and the send (its
+//! helper just ended) was sent nothing: the admission waits for the restart, within the same
+//! admission wait, as for any instance not yet ready. [`InvocationHandle::cancel`] first revokes
+//! the token (fencing further broker effects), then sends `host.cancel` (an acknowledgement is
+//! not proof of stop), waits the cooperative grace and terminates the owned process tree when
+//! needed; whatever was not proven stopped is `OutcomeUnknown`.
 //!
 //! The broker resolves every package request against the current session, invocation and token.
 //! `broker.state` reads and compare-and-sets the host-owned package state of the pinned
@@ -230,6 +232,7 @@ impl Instance {
 }
 
 /// What a running invocation is (the broker's rules differ for event handlers).
+#[derive(Clone)]
 pub enum InvocationKind {
     Ordinary,
     /// A claimed event delivery: the host-resolved binding `broker.commit_event` checks.
@@ -268,6 +271,13 @@ pub enum InvokeRefusal {
     NotReady(String),
     ShuttingDown,
     Storage(String),
+}
+
+/// Why an admitted invocation was not sent.
+enum Unsent {
+    /// The session closed after admission saw it serving; nothing reached the helper.
+    Closed,
+    Refused(InvokeRefusal),
 }
 
 /// How an invocation ended.
@@ -520,6 +530,19 @@ impl PackageHost {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .len()
+    }
+    /// The consecutive failures counted against the restart budget of the package's instance
+    /// key (the largest, should it have several), until sustained health resets the budget or
+    /// the key stops being the activation intent and its budget is forgotten.
+    pub fn failures(&self, package_id: &str) -> u32 {
+        self.attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|((p, _), _)| p == package_id)
+            .map(|(_, a)| a.failures)
+            .max()
+            .unwrap_or(0)
     }
     /// How many registry publications this host has announced (the admission epoch).
     pub fn publications(&self) -> u64 {
@@ -1526,7 +1549,14 @@ impl PackageHost {
                             inst.in_flight.fetch_add(1, Ordering::SeqCst);
                             inst.admitted.fetch_add(1, Ordering::SeqCst);
                             drop(b);
-                            return self.send_invoke(inst, req, &p);
+                            match self.send_invoke(inst, &req, &p) {
+                                // The session closed after the check above: nothing reached the
+                                // helper, so the admission waits for its restart as well, within
+                                // the same admission wait.
+                                Err(Unsent::Closed) => continue,
+                                Err(Unsent::Refused(r)) => return Err(r),
+                                Ok(h) => return Ok(h),
+                            }
                         }
                         Some(inst)
                             if matches!(inst.status(), InstanceStatus::Failed(_)) && started =>
@@ -1565,21 +1595,23 @@ impl PackageHost {
         }
     }
 
+    /// Sends an admitted invocation to `inst`. A session that closed after admission checked it
+    /// (its helper just ended) is [`Unsent::Closed`]: nothing reached the helper.
     fn send_invoke(
         &self,
         inst: Arc<Instance>,
-        req: InvokeRequest,
+        req: &InvokeRequest,
         p: &StoredPackage,
-    ) -> Result<InvocationHandle, InvokeRefusal> {
+    ) -> Result<InvocationHandle, Unsent> {
         let Some(session) = inst.session() else {
             self.release(&inst);
-            return Err(InvokeRefusal::NotReady("the helper session is gone".into()));
+            return Err(Unsent::Closed);
         };
         let invocation_id = self.ids.next_id(IdKind::Invocation).as_str().to_owned();
         let token = self.ids.next_id(IdKind::Invocation).as_str().to_owned();
         // An event invocation's commit binding is what the host minted here, never what the
         // caller or the package names.
-        let kind = match req.kind {
+        let kind = match req.kind.clone() {
             InvocationKind::Event(mut inv) => {
                 inv.package_id = req.package_id.clone();
                 inv.process_session_id = session.id.clone();
@@ -1611,7 +1643,7 @@ impl PackageHost {
         let contribution =
             wire::QualifiedId::try_from(req.contribution_id.clone()).map_err(|e| {
                 self.release(&inst);
-                InvokeRefusal::Storage(e.to_owned())
+                Unsent::Refused(InvokeRefusal::Storage(e.to_owned()))
             })?;
         let (sid, registry, generation) = (
             session.id.clone(),
@@ -1628,20 +1660,25 @@ impl PackageHost {
                 invocation_id: wid(&invocation_id),
                 invocation_token: wid(&token),
                 contribution_id: contribution,
-                scope: req.scope,
-                allowed_operations: req.allowed_operations,
+                scope: req.scope.clone(),
+                allowed_operations: req.allowed_operations.clone(),
                 registry_revision: rev_w(registry),
                 state_generation: rev_w(generation),
                 authority_revision: rev_w(1),
                 control_generation: rev_w(1),
                 operation_id: wire::OperationId(wid(req.operation_id.as_str())),
                 deadline_ms,
-                input: req.input,
+                input: req.input.clone(),
             },
         });
         if let Err(e) = sent {
             self.release(&inst);
-            return Err(InvokeRefusal::NotReady(e));
+            // The request is queued only on an open session: a closed one never sent it.
+            return Err(if session.is_closed() {
+                Unsent::Closed
+            } else {
+                Unsent::Refused(InvokeRefusal::NotReady(e))
+            });
         }
         self.attribute(
             &run_key(&inst, &req_package, &req_contribution),
@@ -1693,7 +1730,7 @@ impl PackageHost {
                 );
                 watched.release();
             })
-            .map_err(|e| InvokeRefusal::NotReady(e.to_string()))?;
+            .map_err(|e| Unsent::Refused(InvokeRefusal::NotReady(e.to_string())))?;
         Ok(InvocationHandle { run })
     }
 

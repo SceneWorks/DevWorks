@@ -27,6 +27,8 @@ use devworks_core::ports::packages::{
     RuntimeObservation,
 };
 use devworks_core::ports::storage::*;
+use devworks_core::ports::{IdKind, IdSource};
+use devworks_core::protocol::Id;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{PackageAvailability, PackageRecord, ProposalRecord};
 use devworks_core::protocol::results::{
@@ -57,12 +59,142 @@ use devworks_extension_protocol::scalars as wire;
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-fn serial() -> MutexGuard<'static, ()> {
+/// How long one test may hold the binary's test slot before its watchdog fails the binary.
+const WATCHDOG: Duration = Duration::from_secs(300);
+/// How long a wait for a durable package state fails after (failure-only: a passing run never
+/// waits for it). A loaded machine launches each helper slowly (files re-verified, process
+/// spawned, handshake), and a restart budget's failure takes several launches.
+const PATIENCE: Duration = Duration::from_secs(60);
+
+/// The binary's one test slot (the tests spawn processes, so they run one at a time), with a
+/// watchdog: a test still holding it after [`WATCHDOG`] aborts the binary, naming the test,
+/// instead of blocking every later test until the job's timeout.
+struct Serial {
+    _slot: MutexGuard<'static, ()>,
+    done: Arc<(Mutex<bool>, Condvar)>,
+}
+impl Drop for Serial {
+    fn drop(&mut self) {
+        *self.done.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        self.done.1.notify_all();
+    }
+}
+fn serial() -> Serial {
     static SERIAL: Mutex<()> = Mutex::new(());
-    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+    let slot = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let done = Arc::new((Mutex::new(false), Condvar::new()));
+    let (watched, test) = (
+        done.clone(),
+        std::thread::current().name().unwrap_or("a test").to_owned(),
+    );
+    std::thread::spawn(move || {
+        let (finished, cv) = &*watched;
+        let finished = cv
+            .wait_timeout_while(
+                finished.lock().unwrap_or_else(|p| p.into_inner()),
+                WATCHDOG,
+                |done| !*done,
+            )
+            .unwrap_or_else(|p| p.into_inner())
+            .0;
+        if !*finished {
+            // Written to the stream itself: the test harness's capture would drop it.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "{test}: still running after {WATCHDOG:?}; aborting the test binary"
+            );
+            std::process::abort();
+        }
+    });
+    Serial { _slot: slot, done }
+}
+
+/// Joins `t`, failing the test when it has not finished within `bound`.
+fn joined<T>(t: std::thread::JoinHandle<T>, bound: Duration, what: &str) -> T {
+    let until = Instant::now() + bound;
+    while !t.is_finished() {
+        assert!(
+            Instant::now() < until,
+            "{what}: not finished within {bound:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    t.join().unwrap()
+}
+
+/// A step that, once armed for an identifier kind, holds the next allocation of that kind until
+/// the test releases it. Failure-only bound: a test that never releases it (it failed first)
+/// lets the step go on after a minute instead of leaving a thread blocked.
+#[derive(Default)]
+struct Gate {
+    armed: Mutex<Option<IdKind>>,
+    state: Mutex<GateState>,
+    changed: Condvar,
+}
+#[derive(Default)]
+struct GateState {
+    entered: bool,
+    open: bool,
+    returned: bool,
+}
+impl Gate {
+    fn arm(&self, kind: IdKind) {
+        *self.armed.lock().unwrap() = Some(kind);
+    }
+    fn pass(&self, kind: IdKind) {
+        {
+            let mut armed = self.armed.lock().unwrap();
+            if *armed != Some(kind) {
+                return;
+            }
+            *armed = None;
+        }
+        let mut s = self.state.lock().unwrap();
+        s.entered = true;
+        self.changed.notify_all();
+        let mut s = self
+            .changed
+            .wait_timeout_while(s, Duration::from_secs(60), |s| !s.open)
+            .unwrap()
+            .0;
+        s.returned = true;
+        self.changed.notify_all();
+    }
+    /// Waits up to `bound` for the held step to be entered.
+    fn entered(&self, bound: Duration) -> bool {
+        let s = self.state.lock().unwrap();
+        self.changed
+            .wait_timeout_while(s, bound, |s| !s.entered)
+            .unwrap()
+            .0
+            .entered
+    }
+    fn returned(&self) -> bool {
+        self.state.lock().unwrap().returned
+    }
+    fn release(&self) {
+        self.state.lock().unwrap().open = true;
+        self.changed.notify_all();
+    }
+}
+/// Releases a gate when dropped (also when the test fails first).
+struct Release(Arc<Gate>);
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+/// The harness's identifiers, allocated through a gate.
+struct GatedIds(Arc<TestIds>, Arc<Gate>);
+impl IdSource for GatedIds {
+    fn next_id(&self, kind: IdKind) -> Id {
+        self.1.pass(kind);
+        self.0.next_id(kind)
+    }
 }
 
 const HELPER: &str = env!("CARGO_BIN_EXE_devworks-package-fixture");
@@ -288,6 +420,12 @@ struct App {
     files: Option<Arc<dyn PackageFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
+    /// The runtime's one shutdown bound (10 s otherwise).
+    shutdown_bound: Option<Duration>,
+    /// Gates the identifiers the package host allocates (invocations).
+    host_ids: Arc<Gate>,
+    /// Gates the identifiers of the package service's logs.
+    log_ids: Arc<Gate>,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -376,6 +514,9 @@ impl App {
             probe_path,
             files,
             restart_limit: None,
+            shutdown_bound: None,
+            host_ids: Arc::default(),
+            log_ids: Arc::default(),
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -415,6 +556,13 @@ impl App {
             h.clock(),
             None,
         ));
+        // The package service records its logs (in the same store) with gated identifiers.
+        let package_log = Arc::new(DiagnosticService::new(
+            store.clone(),
+            Arc::new(GatedIds(h.ids.clone(), self.log_ids.clone())),
+            h.clock(),
+            None,
+        ));
         let mut service = PackageService::new(
             store.clone(),
             h.ids.clone(),
@@ -430,18 +578,19 @@ impl App {
                 protocol_major: 1,
                 protocol_minor: 0,
             },
-            diagnostics.clone(),
+            package_log,
             Arc::new(JsonSchemaValidator),
         );
         service.quiesce_wait = Duration::from_millis(150);
         service.set_availability_consumers(vec![CODE_INTELLIGENCE.into()]);
         let mut config_rt = RuntimeConfig::new(id("dispatcher-1"));
         config_rt.collect_interval = Duration::from_secs(3600);
-        config_rt.shutdown_bound = Duration::from_secs(10);
+        config_rt.shutdown_bound = self.shutdown_bound.unwrap_or(Duration::from_secs(10));
         Composition {
             store: store.clone(),
             clock: h.clock(),
-            ids: h.ids.clone(),
+            // The package host allocates its invocation identifiers from these.
+            ids: Arc::new(GatedIds(h.ids.clone(), self.host_ids.clone())),
             authority: Arc::new(Authority),
             artifacts,
             resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
@@ -630,18 +779,24 @@ impl App {
         what: &str,
         f: impl Fn(&PackageRecord) -> bool,
     ) -> PackageRecord {
-        let until = Instant::now() + Duration::from_secs(20);
+        let until = Instant::now() + PATIENCE;
         loop {
             let r = self.record(package);
             if f(&r) {
                 return r;
             }
-            assert!(Instant::now() < until, "{what}: {r:?}");
+            assert!(
+                Instant::now() < until,
+                "{what}: {r:?}\nlogs: {:?}\ninstances: {:?}\nfailures: {}",
+                self.logs(package),
+                self.app().packages().unwrap().instance_status(package),
+                self.app().packages().unwrap().failures(package)
+            );
             std::thread::sleep(Duration::from_millis(25));
         }
     }
     fn ready(&self, package: &str) {
-        let until = Instant::now() + Duration::from_secs(20);
+        let until = Instant::now() + PATIENCE;
         loop {
             let s = self.app().packages().unwrap().instance_status(package);
             if s.iter()
@@ -654,6 +809,22 @@ impl App {
                 "{package} never became ready: {s:?}"
             );
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    /// How many of the package's log records have `code` (durable: they stay once recorded).
+    fn logged(&self, package: &str, code: &str) -> usize {
+        self.logs(package).iter().filter(|c| *c == code).count()
+    }
+    /// Waits until the package's log has a record with `code`.
+    fn until_logged(&self, package: &str, code: &str) {
+        let until = Instant::now() + PATIENCE;
+        while self.logged(package, code) == 0 {
+            assert!(
+                Instant::now() < until,
+                "{package} never logged {code}: {:?}",
+                self.logs(package)
+            );
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 }
@@ -791,7 +962,7 @@ fn a_person_installs_a_signed_pack_whose_helper_handshakes_and_serves_invocation
     );
     // Every invocation is attributed to the exact version, generation and contribution it ran.
     let digest = digest_of(&rec);
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + PATIENCE;
     loop {
         let events = read(&*a.store, |s| {
             s.history().page(
@@ -1329,6 +1500,119 @@ fn a_crashed_helper_leaves_unknown_outcomes_and_is_restarted() {
     assert!(a.logs("crash-pack").contains(&"HelperExited".to_owned()));
 }
 
+/// An invocation admitted to a ready instance whose session closes before it is sent (the
+/// helper just ended) sent nothing: it waits for the restart within its admission wait instead
+/// of being refused. The admitted invocation is held between the admission and the send while
+/// the helper crashes.
+#[test]
+fn an_admission_racing_a_closing_session_waits_for_the_restart() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("race-pack", "1.0.0")));
+    a.ready("race-pack");
+    let _release = Release(a.host_ids.clone());
+    // The next invocation is held once admitted, before its identifiers are minted and it is
+    // sent.
+    a.host_ids.arm(IdKind::Invocation);
+    let host = a.app().packages().unwrap().clone();
+    let request = InvokeRequest {
+        package_id: "race-pack".into(),
+        contribution_id: "race-pack/echo".into(),
+        scope: InvocationScope::Workspace,
+        input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
+        operation_id: id(&a.key("op")),
+        deadline: Duration::from_secs(30),
+        allowed_operations: vec![],
+        kind: InvocationKind::Ordinary,
+    };
+    let racing = std::thread::spawn(move || {
+        host.invoke(request)
+            .map(|h| (h.session_id().to_owned(), h.wait(Duration::from_secs(10))))
+    });
+    assert!(
+        a.host_ids.entered(Duration::from_secs(20)),
+        "the invocation was never admitted"
+    );
+    // Meanwhile the helper ends: its session is closed once its invocations ended unknown.
+    let crashing = a
+        .invoke("race-pack", "crash", InvocationKind::Ordinary)
+        .unwrap();
+    let crashed = crashing.session_id().to_owned();
+    assert!(matches!(
+        crashing.wait(Duration::from_secs(10)),
+        Some(InvokeOutcome::Unknown(_))
+    ));
+    a.host_ids.release();
+    let (session, outcome) = joined(racing, Duration::from_secs(30), "the held invocation")
+        .expect("admitted to the restarted helper, not refused");
+    assert_ne!(session, crashed, "sent to the restarted helper");
+    assert!(matches!(
+        finished(outcome),
+        InvocationOutcome::Completed { .. }
+    ));
+}
+
+/// The runtime's shutdown waits for the package host's cooperative stop only within what is
+/// left of its one bound (DW-86), and only after the live work was held for Continue: a host
+/// stop that does not return (held here while recording its helper's stop) is abandoned at the
+/// deadline, still blocked when shutdown returns, and the hold had committed before it began.
+#[test]
+fn shutdown_abandons_a_blocked_package_host_stop_at_its_bound_after_the_continue_hold() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    a.shutdown_bound = Some(Duration::from_secs(5));
+    a.boot();
+    // One live issue root, held for manual Continue at shutdown.
+    let c = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    c.busy_timeout(Duration::from_secs(5)).unwrap();
+    c.execute_batch(
+        "INSERT INTO work_items VALUES('root-i','project-a','issue',NULL,NULL,NULL,'root-i',1,0,1,1,1,'{}');",
+    )
+    .unwrap();
+    drop(c);
+    let frame = json!({"protocol": "1.0-draft.1", "requestKey": a.key("start"), "command": {"kind": "runs.start",
+        "rootId": "root-i", "expectedWorkRevision": "1", "expectedControlRevision": "1"}});
+    applied(
+        a.app()
+            .command(&a.user, "runs.start", frame.to_string().as_bytes())
+            .unwrap(),
+    );
+    let held = || {
+        read(&*a.store, |s| {
+            devworks_core::services::runs::active_blockers(
+                s.runs(),
+                &BlockerFilter::RootLevel(devworks_core::protocol::RootId(id("root-i"))),
+            )
+        })
+        .iter()
+        .any(|b| b.cause == HoldCause::RestartContinue)
+    };
+    assert!(!held());
+    package(a.install(&a.user, &Spec::new("stuck-pack", "1.0.0")));
+    a.ready("stuck-pack");
+    let gate = a.log_ids.clone();
+    let _release = Release(gate.clone());
+    // The package service's next log, the helper's stop recorded by the host's shutdown, is
+    // held until the test releases it (after shutdown returned).
+    gate.arm(IdKind::Diagnostic);
+    let app = a.app.take().unwrap();
+    let (held_when_blocked, blocked_at_return) = std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| gate.entered(Duration::from_secs(30)) && held());
+        a.rt.block_on(within("shutdown", app.shutdown()));
+        let blocked = gate.entered(Duration::ZERO) && !gate.returned();
+        (watcher.join().unwrap(), blocked)
+    });
+    assert!(
+        held_when_blocked,
+        "the work was held for Continue before the host's stop began"
+    );
+    assert!(
+        blocked_at_return,
+        "shutdown returned at its bound while the host's stop was still blocked"
+    );
+    assert!(held());
+}
+
 #[test]
 fn a_cancellation_the_helper_ignores_terminates_its_tree_and_reports_unknown() {
     let _s = serial();
@@ -1448,7 +1732,7 @@ fn disable_cancels_and_retires_and_uninstall_keeps_state_for_a_reinstall() {
         running.wait(Duration::from_secs(10)),
         Some(InvokeOutcome::Unknown(_))
     ));
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + PATIENCE;
     while !a
         .app()
         .packages()
@@ -1471,7 +1755,7 @@ fn disable_cancels_and_retires_and_uninstall_keeps_state_for_a_reinstall() {
     assert!(dir.exists());
     let rec = package(a.simple(&a.user, "addons.uninstall", "Uninstall", "life-pack"));
     assert_eq!(availability(&rec), "NotInstalled");
-    let until = Instant::now() + Duration::from_secs(10);
+    let until = Instant::now() + PATIENCE;
     while dir.exists() {
         assert!(
             Instant::now() < until,
@@ -1701,7 +1985,7 @@ fn the_host_enforces_deadlines_and_caps_concurrent_invocations() {
         finished(Some(running[0].cancel())),
         InvocationOutcome::CancelledBeforeEffect
     ));
-    let (admitted, waited) = fifth.join().unwrap();
+    let (admitted, waited) = joined(fifth, Duration::from_secs(30), "the fifth invocation");
     assert!(admitted.unwrap());
     assert!(waited >= Duration::from_millis(400));
     for r in &running[1..] {
@@ -2213,7 +2497,7 @@ fn a_staged_update_that_would_regress_stays_pending_until_it_is_compatible() {
         "dotnet".to_owned(),
         RuntimeObservation::Found("8.0.4".into()),
     )]));
-    let until = Instant::now() + Duration::from_secs(40);
+    let until = Instant::now() + PATIENCE;
     while a.record("compat-pack").version.0 != "1.1.0" {
         assert!(
             Instant::now() < until,
@@ -2324,7 +2608,7 @@ fn the_committed_configuration_reaches_the_helper_in_activation() {
     // The reconfigured helper is a new instance that received the value before it was ready.
     a.until("cfg-pack", "the new configuration is current", |_| true);
     let seen = {
-        let until = Instant::now() + Duration::from_secs(20);
+        let until = Instant::now() + PATIENCE;
         loop {
             let r = report();
             if r != "config:none" {
@@ -2833,27 +3117,31 @@ fn a_cancellation_shares_one_grace_between_the_acknowledgement_and_the_stop() {
     ));
     a.ready("graceful-pack");
     // The helper reads nothing: neither an acknowledgement nor a stop arrives.
-    let h = a
-        .invoke("graceful-pack", "wait", InvocationKind::Ordinary)
-        .unwrap();
-    let host = a.app().packages().unwrap().clone();
+    let h = Arc::new(
+        a.invoke("graceful-pack", "wait", InvocationKind::Ordinary)
+            .unwrap(),
+    );
     let started = Instant::now();
-    // When the termination begins (the instance is marked failed before the kill).
-    let terminating = std::thread::spawn(move || {
-        loop {
-            if host
-                .instance_status("graceful-pack")
-                .iter()
-                .any(|(_, s)| matches!(s, InstanceStatus::Failed(_)))
-            {
-                return started.elapsed();
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    });
-    assert!(matches!(h.cancel(), InvokeOutcome::Unknown(_)));
-    // One 500 ms grace, then the tree is terminated (not a grace per phase: 1 s).
-    let took = terminating.join().unwrap();
+    let cancelling = {
+        let h = h.clone();
+        std::thread::spawn(move || h.cancel())
+    };
+    // The termination begins by failing the helper's session (before the kill), which ends the
+    // invocation: an end that stays observed however late this thread looks (the instance's
+    // `Failed` status lasts only until reconciliation retires it).
+    let ended = h.wait(Duration::from_secs(10));
+    let took = started.elapsed();
+    assert!(
+        matches!(ended, Some(InvokeOutcome::Unknown(_))),
+        "{ended:?}"
+    );
+    assert!(matches!(
+        joined(cancelling, Duration::from_secs(10), "the cancellation"),
+        InvokeOutcome::Unknown(_)
+    ));
+    // The ignored cancellation terminated it...
+    a.until_logged("graceful-pack", "CancellationIgnored");
+    // ...after one 500 ms grace (not a grace per phase: 1 s).
     assert!(took < Duration::from_millis(850), "{took:?}");
 }
 
@@ -3156,7 +3444,7 @@ fn a_displaced_staged_version_without_a_live_proposal_is_collected() {
     // Nothing points at 1.1.0 any more and no proposal waits for it: it is retired and its
     // install directory removed (the pending 1.2.0 is kept).
     let dir = a.h.root.join("packages").join("displaced-pack").join(&d2);
-    let until = Instant::now() + Duration::from_secs(20);
+    let until = Instant::now() + PATIENCE;
     loop {
         let d = d2.clone();
         let phase = read(&*a.store, move |s| {
@@ -3276,7 +3564,7 @@ fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recor
     ));
     // The second (last budgeted) instance is running: from now on recording its failure has
     // to wait for the database, while reconciliation keeps reading the old registry.
-    let until = Instant::now() + Duration::from_secs(20);
+    let until = Instant::now() + PATIENCE;
     while helper_ready_events(&*a.store, "spent-pack") < 2 {
         assert!(Instant::now() < until, "the second instance never started");
         std::thread::sleep(Duration::from_millis(5));
@@ -3285,19 +3573,15 @@ fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recor
     lock.execute_batch("BEGIN IMMEDIATE;").unwrap();
     let host = a.app().packages().unwrap().clone();
     // The second instance exits and its failure is accounted (in memory) while the durable
-    // record cannot be written yet.
-    let until = Instant::now() + Duration::from_secs(10);
-    loop {
-        let s = host.instance_status("spent-pack");
-        if s.iter()
-            .any(|(_, st)| matches!(st, InstanceStatus::Failed(_)))
-            && !s.iter().any(|(_, st)| *st == InstanceStatus::Ready)
-        {
-            break;
-        }
+    // record cannot be written yet. The budget's count stays until that record is written (the
+    // instance's `Failed` status lasts only until reconciliation retires it); had the second
+    // instance failed before the lock, its logged exit stays instead.
+    let until = Instant::now() + Duration::from_secs(20);
+    while host.failures("spent-pack") < 2 && a.logged("spent-pack", "HelperExited") < 2 {
         assert!(
             Instant::now() < until,
-            "the second instance never failed: {s:?}"
+            "the second instance never failed: {:?}",
+            host.instance_status("spent-pack")
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -3311,7 +3595,7 @@ fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recor
     std::thread::sleep(Duration::from_millis(1000));
     lock.execute_batch("COMMIT;").unwrap();
     drop(lock);
-    pass.join().unwrap();
+    joined(pass, Duration::from_secs(30), "the reconciliation pass");
     a.until("spent-pack", "the failure is recorded", |r| {
         matches!(r.availability, Some(PackageAvailability::Failed))
     });
@@ -3321,7 +3605,7 @@ fn a_spent_restart_budget_never_starts_its_key_again_before_the_failure_is_recor
     assert_eq!(availability(&a.record("spent-pack")), "Failed");
     // And the spent budget itself is forgotten once the key is no longer the intent.
     let host = a.app().packages().unwrap().clone();
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + PATIENCE;
     while host.tracked_budgets() != 0 {
         assert!(Instant::now() < until, "budgets accumulate");
         std::thread::sleep(Duration::from_millis(50));
@@ -3361,6 +3645,21 @@ fn only_the_current_state_generation_and_its_seed_are_retained() {
 // Review round 5: launches overtaken by shutdown, configuration retries, terminal revocation,
 // registry capacity
 
+/// Whether the package's helper was launched: an instance of it is starting, running or not yet
+/// retired, or one became ready or its failure was recorded before (durable records).
+fn launched(a: &App, package: &str) -> bool {
+    !a.app()
+        .packages()
+        .unwrap()
+        .instance_status(package)
+        .is_empty()
+        || helper_ready_events(&*a.store, package) > 0
+        || matches!(
+            a.record(package).availability,
+            Some(PackageAvailability::Failed)
+        )
+}
+
 #[test]
 fn launches_queued_in_a_reconciliation_pass_never_outlive_shutdown() {
     let _s = serial();
@@ -3374,12 +3673,10 @@ fn launches_queued_in_a_reconciliation_pass_never_outlive_shutdown() {
         },
     ));
     let host = a.app().packages().unwrap().clone();
-    let until = Instant::now() + Duration::from_secs(10);
-    while !host
-        .instance_status("a-slow")
-        .iter()
-        .any(|(_, s)| *s == InstanceStatus::Starting)
-    {
+    // Usually it is still starting (its handshake takes 1.2 s; on a loaded machine this thread
+    // may look later, when it is running or, past its handshake bound, failed).
+    let until = Instant::now() + PATIENCE;
+    while !launched(&a, "a-slow") {
         assert!(Instant::now() < until, "a-slow never started");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -3394,12 +3691,8 @@ fn launches_queued_in_a_reconciliation_pass_never_outlive_shutdown() {
     package(a.install(&a.user, &Spec::new("z-normal", "1.0.0")));
     // Usually that pass is still starting m-slow (on a loaded machine the installs may take
     // longer than its handshake: then it is already running).
-    let until = Instant::now() + Duration::from_secs(30);
-    while !host
-        .instance_status("m-slow")
-        .iter()
-        .any(|(_, s)| matches!(s, InstanceStatus::Starting | InstanceStatus::Ready))
-    {
+    let until = Instant::now() + PATIENCE;
+    while !launched(&a, "m-slow") {
         assert!(Instant::now() < until, "m-slow never started");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -3467,19 +3760,21 @@ fn a_finished_invocation_can_no_longer_change_state() {
         finished(h.wait(Duration::from_secs(10))),
         InvocationOutcome::Completed { .. }
     ));
-    let until = Instant::now() + Duration::from_secs(10);
-    while !answer.0.exists() {
+    // The helper creates the file, then writes the answer: an empty file is not the answer yet.
+    let until = Instant::now() + PATIENCE;
+    let late = loop {
+        let late = std::fs::read_to_string(&answer.0).unwrap_or_default();
+        if !late.is_empty() {
+            break late;
+        }
         assert!(
             Instant::now() < until,
             "the late compare-and-set never answered"
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
     // The token was revoked with the terminal answer: the compare-and-set was refused.
-    assert_eq!(
-        std::fs::read_to_string(&answer.0).unwrap(),
-        "PermissionDenied"
-    );
+    assert_eq!(late, "PermissionDenied");
     let after = read(&*a.store, |s| s.packages().package_state("late-pack")).unwrap();
     assert_eq!(after.revision, before.revision);
 }
@@ -3589,7 +3884,7 @@ fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failur
     let composition = a.composition();
     let booted = std::thread::scope(|scope| {
         let booting = scope.spawn(|| a.rt.block_on(boot(composition)));
-        let until = Instant::now() + Duration::from_secs(20);
+        let until = Instant::now() + PATIENCE;
         loop {
             let p = read(&*store, |s| s.packages().package("retry-pack")).unwrap();
             if p.failure.is_some() {
@@ -3610,6 +3905,11 @@ fn an_explicit_retry_restarts_a_helper_even_before_reconciliation_saw_its_failur
             Ok(())
         })
         .unwrap();
+        let until = Instant::now() + Duration::from_secs(60);
+        while !booting.is_finished() {
+            assert!(Instant::now() < until, "the boot never finished");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         booting.join().unwrap()
     });
     a.app = Some(booted.expect("boot"));
