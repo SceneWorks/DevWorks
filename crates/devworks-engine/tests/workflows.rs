@@ -302,3 +302,36 @@ fn concurrent_creators_cannot_both_publish_against_one_workflow_revision() {
         2
     );
 }
+
+#[test]
+fn every_semantic_supports_custom_columns_and_after_anchor_keeps_exact_order() {
+    let f = Fx::new();
+    for category in [
+        "Backlog",
+        "Ready",
+        "InProgress",
+        "InReview",
+        "Done",
+        "Closed",
+    ] {
+        assert_eq!(
+            f.create(&format!("Custom {category}"), category).category.0,
+            category
+        );
+    }
+    let before = f.statuses();
+    let anchor = &before[1];
+    let value=applied(f.command("workflows.create_status",json!({"kind":"workflows.create_status","projectId":"project","expectedWorkflowRevision":anchor.workflow_revision,"label":"Inserted","category":"InReview","afterStatusId":anchor.id})));
+    let OperationResult::WorkflowsCreateStatus { value } = value else {
+        panic!()
+    };
+    let current = f.statuses();
+    assert_eq!(current[1].id, anchor.id);
+    assert_eq!(current[2].id, value.id);
+    let mut expected: Vec<_> = before.into_iter().map(|s| s.id).collect();
+    expected.insert(2, value.id);
+    assert_eq!(
+        current.into_iter().map(|s| s.id).collect::<Vec<_>>(),
+        expected
+    );
+}
