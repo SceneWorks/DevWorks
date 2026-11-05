@@ -74,7 +74,7 @@ pub(crate) fn identity_of(_: &Metadata) -> Option<FileIdentity> {
     None
 }
 
-fn identity_at(path: &Path, meta: &Metadata) -> Option<FileIdentity> {
+pub(crate) fn identity_at(path: &Path, meta: &Metadata) -> Option<FileIdentity> {
     #[cfg(windows)]
     {
         let _ = meta;
