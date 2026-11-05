@@ -6490,10 +6490,10 @@ pub(super) static CATALOG: [OperationDescriptor; 356] = [
             decode: decode_router_catalog_query,
             input_schema: schema_of::<ops::router::CatalogInput>,
         }],
-        result_type: "Page<RouteModel>",
-        result_schema: schema_of::<Page<RouteModel>>,
+        result_type: "Page<RouteCatalogModel>",
+        result_schema: schema_of::<Page<RouteCatalogModel>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "router.connections",

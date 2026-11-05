@@ -590,7 +590,7 @@ pub enum OperationResult {
     #[serde(rename = "settings.explain_source")]
     SettingsExplainSource { value: Page<SettingEntry> },
     #[serde(rename = "router.catalog")]
-    RouterCatalog { value: Page<RouteModel> },
+    RouterCatalog { value: Page<RouteCatalogModel> },
     #[serde(rename = "router.connections")]
     RouterConnections { value: Page<ConnectionRecord> },
     #[serde(rename = "router.route")]

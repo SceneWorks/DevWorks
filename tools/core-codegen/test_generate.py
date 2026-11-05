@@ -85,6 +85,17 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['runs.inspect'], set())
         self.assertEqual(carried['history.operation_status'], set())
 
+    def test_query_record_renames_at_its_declared_revision_without_widening_config_inputs(self):
+        record = generate.TYPES['RouteCatalogModel']
+        self.assertIn('"before": 3', generate.record_attrs(record))
+        self.assertEqual(record['since']['context_tokens'], 2)
+        self.assertEqual(record['since']['latest_family'], 3)
+        self.assertNotIn('latest_family', generate.TYPES['RouteModel']['fields'])
+        catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
+        configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
+        self.assertEqual(generate.introduced_in(catalog), {2, 3})
+        self.assertEqual(generate.introduced_in(configure), {2})
+
     def test_a_history_page_result_is_projected(self):
         # HistoryPage gates its own checkpoint, so every result carrying it is projected.
         results = generate.gen_results(generate.operations())

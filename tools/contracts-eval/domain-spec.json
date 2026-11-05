@@ -3776,6 +3776,37 @@
       "fields": {
         "value": "DynamicJson"
       }
+    },
+    "RouteCatalogModel": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "display_name": "Label",
+        "endpoint_profile": "EndpointKind",
+        "upstream_model_id": "Text",
+        "enabled": "bool",
+        "tier_memberships": "Items<TierName>",
+        "efforts": "Items<EffortName>",
+        "image_input": "bool",
+        "tools": "bool",
+        "revision": "Revision",
+        "context_tokens": "?PositiveCounter",
+        "connection_id": "?Id",
+        "latest_family": "?Id",
+        "resolves_to_model_ids": "?Items<Id>",
+        "available": "?bool",
+        "availability_reason": "?Label"
+      },
+      "since": {
+        "context_tokens": 2,
+        "connection_id": 2,
+        "latest_family": 3,
+        "resolves_to_model_ids": 3,
+        "available": 3,
+        "availability_reason": 3
+      },
+      "earlierName": "RouteModel",
+      "earlierBefore": 3
     }
   },
   "operations": {
@@ -6957,10 +6988,10 @@
         "page": "PageRequest",
         "include_disabled": "bool"
       },
-      "result": "Page<RouteModel>",
+      "result": "Page<RouteCatalogModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it)."
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -8129,7 +8160,8 @@
     ],
     "router.catalog": [
       1,
-      2
+      2,
+      3
     ],
     "router.connections": [
       1,
