@@ -137,6 +137,101 @@ impl GitFault {
     }
 }
 
+/// Represent a filesystem path for Git without changing stored paths or identity witnesses.
+/// Never apply this to remote URLs or configuration values: Git rewrites bind their original
+/// string. NT-only Windows names cannot safely lose their verbatim namespace.
+pub fn path_argument(path: &Path) -> Result<String, GitFault> {
+    let value = path.to_str().ok_or(GitFault::Unqualified)?;
+    #[cfg(windows)]
+    {
+        windows_path_argument(value).ok_or(GitFault::Unqualified)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(value.to_owned())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_path_argument(value: &str) -> Option<String> {
+    if value.starts_with(r"\\.\") {
+        return None;
+    }
+    if let Some(path) = value.strip_prefix(r"\\?\UNC\") {
+        return path
+            .split(['\\', '/'])
+            .all(windows_component_safe)
+            .then(|| format!(r"\\{path}"));
+    }
+    if let Some(path) = value.strip_prefix(r"\\?\") {
+        return (path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && path.as_bytes().get(1) == Some(&b':')
+            && path
+                .as_bytes()
+                .get(2)
+                .is_some_and(|b| matches!(b, b'\\' | b'/'))
+            && path[3..].split(['\\', '/']).all(windows_component_safe))
+        .then(|| path.to_owned());
+    }
+    Some(value.to_owned())
+}
+
+#[cfg(any(windows, test))]
+fn windows_component_safe(part: &str) -> bool {
+    if part.ends_with(['.', ' '])
+        || part
+            .chars()
+            .any(|c| c.is_control() || ":*?\"<>|".contains(c))
+    {
+        return false;
+    }
+    let stem = part
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    !matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) && !stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|n| {
+            matches!(
+                n,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+}
+
+#[cfg(test)]
+mod process_argument_tests {
+    use super::windows_path_argument;
+
+    #[test]
+    fn canonical_windows_paths_keep_their_target_in_git_arguments() {
+        for (input, expected) in [
+            (r"\\?\C:\work tree\checkout", r"C:\work tree\checkout"),
+            (r"\\?\UNC\server\share\tree", r"\\server\share\tree"),
+            (r"C:\ordinary\tree", r"C:\ordinary\tree"),
+        ] {
+            assert_eq!(windows_path_argument(input).as_deref(), Some(expected));
+        }
+        for input in [
+            r"\\?\Volume{device}\tree",
+            r"\\.\PhysicalDrive0",
+            r"\\?\C:\folder.\tree",
+            r"\\?\C:\folder \tree",
+            r"\\?\C:\AUX.txt\tree",
+            r"\\?\C:\COM¹\tree",
+            r"\\?\C:\folder\..\tree",
+        ] {
+            assert!(windows_path_argument(input).is_none(), "{input}");
+        }
+    }
+}
+
 impl Git<'_> {
     pub fn version(&self, dir: &Path) -> Result<String, GitFault> {
         self.line(dir, &["version"])?

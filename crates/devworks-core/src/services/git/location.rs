@@ -3,6 +3,29 @@ use super::*;
 use crate::authority::destructive::{EntryKind, FileIdentity};
 use crate::ports::storage::GitWorktreeLocation;
 impl GitService {
+    /// Git reports DOS paths on Windows while the ledger retains canonical verbatim paths.
+    pub(super) fn same_worktree_path(&self, left: &Path, right: &Path) -> bool {
+        let identity = |path: &Path| {
+            self.config
+                .filesystem
+                .as_ref()?
+                .resolve(path.to_str()?, None)
+                .ok()?
+                .target
+                .filter(|t| t.is_directory)?
+                .identity
+        };
+        if let (Some(a), Some(b)) = (identity(left), identity(right)) {
+            return a == b;
+        }
+        // A reservation or prunable registration may not exist on disk yet.
+        matches!(
+            (crate::services::indexing::git::path_argument(left),
+             crate::services::indexing::git::path_argument(right)),
+            (Ok(a), Ok(b)) if Path::new(&a) == Path::new(&b)
+        )
+    }
+
     pub(super) fn resolve_location(
         &self,
         git: &Git<'_>,

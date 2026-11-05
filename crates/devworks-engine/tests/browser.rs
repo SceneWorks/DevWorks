@@ -5003,20 +5003,14 @@ fn source_fixture(
     let primary = primary.canonicalize().unwrap();
     let owned = owned.canonicalize().unwrap();
     let tree = owned.join("tree");
+    let tree_argument = devworks_core::services::indexing::git::path_argument(&tree).unwrap();
     source_git(&primary, &["init", "-b", "main"]);
     std::fs::write(primary.join("source.txt"), "initial\n").unwrap();
     source_git(&primary, &["add", "source.txt"]);
     source_git(&primary, &["commit", "-m", "initial"]);
     source_git(
         &primary,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "tested",
-            tree.to_str().unwrap(),
-            "HEAD",
-        ],
+        &["worktree", "add", "-b", "tested", &tree_argument, "HEAD"],
     );
     let fs = NativeFilesystem::new();
     let identity = |path: &str| {

@@ -38,8 +38,8 @@ CDP/input behavior; this run specifically qualifies the new source binding and p
 evidence reads. Native admission covers 496 operation/mode/revision bindings; the
 candidate report separately records 489 catalog revision bindings.
 
-Local native coverage passes 1,274 distinct test cases with three existing ignored
-adapter cases: 553 adapter unit cases, 95 adapter integration cases, and 626 cases
+Local native coverage passes 1,275 distinct test cases with three existing ignored
+adapter cases: 553 adapter unit cases, 95 adapter integration cases, and 627 cases
 in the remaining workspace. Coverage combines the assembled suites with focused
 rechecks of the updated compatibility expectations and deterministic filter control;
 the final Git suite passes all three cases. Default workspace runs do not exercise
@@ -47,6 +47,15 @@ the installed-browser opt-ins; the explicit qualification above is separate proo
 Strict workspace/all-target Clippy, the native workspace build, rustfmt, all six
 generator tests, and generated-binding drift checks pass. Other operating systems
 require the PR's fresh exact-head CI results.
+
+Platform qualification additionally covers canonical Windows drive/UNC paths at the
+filesystem argument boundary. Stored paths and physical identity witnesses stay intact;
+NT-only names that would change meaning are refused, and remote URL inputs are untouched.
+Worktree registration/recovery compares directory identities across Windows path spellings.
+Headless UI actions render injected forms and settle scrolling before resolving clicks;
+concurrency fixtures use the actual Save control's accessibility action to retain in-flight
+requests without depending on its viewport position. The complete work/plan assertions
+remain in place, including the smaller-viewport requirement-ID regression.
 
 Migration 21 remains byte-identical to the previously reviewed browser candidate.
 Migration 22 adds durable owned-worktree identity. Migration 23 adds nullable browser

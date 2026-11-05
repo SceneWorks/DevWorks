@@ -167,6 +167,8 @@ impl GitService {
         {
             return Err(refuse(DomainErrorCode::PermissionDenied, "git_root", id));
         }
+        crate::services::indexing::git::path_argument(&root.path)
+            .map_err(|_| refuse(DomainErrorCode::UnsupportedTarget, "git_root", id))?;
         Ok(root.path.clone())
     }
 
@@ -933,8 +935,21 @@ impl GitService {
                 if self.root_path(&job.tree.registered_root_id).is_err() {
                     return denied("registered root changed");
                 }
+                let destination = match crate::services::indexing::git::path_argument(path) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return failed(
+                            DomainErrorCode::UnsupportedTarget,
+                            "Git worktree path is unsupported",
+                        );
+                    }
+                };
                 match git.worktrees(Path::new(&repository.location)) {
-                    Ok(trees) if trees.iter().any(|t| Path::new(&t.path) == path) => {
+                    Ok(trees)
+                        if trees
+                            .iter()
+                            .any(|t| self.same_worktree_path(Path::new(&t.path), path)) =>
+                    {
                         return denied("worktree path is already registered");
                     }
                     Err(_) => return denied("repository worktrees cannot be verified"),
@@ -951,7 +966,7 @@ impl GitService {
                             .strip_prefix("refs/heads/")
                             .expect("validated branch"),
                         "--",
-                        &job.tree.path,
+                        &destination,
                         &job.tree.head.hex,
                     ],
                     None,
@@ -1058,7 +1073,7 @@ impl GitService {
                     s.projects().repository(&job.tree.repository_id)
                 });
                 observed.head == job.tree.head.hex
-                    && matches!(repository, Ok(Some(repository)) if git.worktrees(Path::new(&repository.location)).is_ok_and(|trees| trees.iter().any(|tree| Path::new(&tree.path) == path && tree.branch.as_deref() == Some(&job.tree.branch))))
+                    && matches!(repository, Ok(Some(repository)) if git.worktrees(Path::new(&repository.location)).is_ok_and(|trees| trees.iter().any(|tree| self.same_worktree_path(Path::new(&tree.path), path) && tree.branch.as_deref() == Some(&job.tree.branch))))
             }
             Action::Inspect => true,
             Action::Commit { message, expected } => {
