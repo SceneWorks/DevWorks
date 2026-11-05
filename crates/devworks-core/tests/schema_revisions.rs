@@ -85,7 +85,7 @@ fn an_unregistered_revision_is_refused_before_authority_with_no_receipt() {
             "projects.edit",
             EDIT.replace(r#""mode""#, r#""schemaRevision":2,"mode""#),
         ),
-        ("artifacts.save", save("key-1", Some(4), None)),
+        ("artifacts.save", save("key-1", Some(5), None)),
         ("artifacts.save", save("key-1", Some(65535), None)),
     ] {
         let reply = h

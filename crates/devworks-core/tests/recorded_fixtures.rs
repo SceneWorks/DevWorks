@@ -181,11 +181,29 @@ fn request(case: &Fixture) -> Result<(), String> {
     let mut outcomes = Vec::new();
     for (operation, mode) in selected {
         let decoded = admission::decode(Selection { operation, mode }, case.raw.as_bytes());
+        // Aliases share an envelope, but negotiate revisions independently: artifacts.read
+        // exposes source metadata at revision 4 while documents.read remains revision 1.
+        if let Err(ref refusal) = decoded
+            && let admission::AdmissionError::UnsupportedSchemaRevision { revision, .. } =
+                &refusal.error
+        {
+            assert!(
+                registry::find(operation)
+                    .unwrap()
+                    .revisions
+                    .iter()
+                    .all(|r| { u64::from(r.0) != *revision })
+            );
+            continue;
+        }
         outcomes.push(
             decoded
                 .map(|d| (d.descriptor.name, d.fingerprint))
                 .map_err(|r| r.error.to_string()),
         );
+    }
+    if outcomes.is_empty() {
+        return Err("no selected alias supports this schema revision".into());
     }
     let first_ok = outcomes[0].is_ok();
     assert!(
@@ -308,7 +326,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1256), 1256);
+    assert_eq!(run("domain-fixtures.json", 1313), 1313);
 }
 
 #[test]
@@ -385,7 +403,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // readiness) and of the three prioritizations (placement).
     // Indexing status/runs/overlay and eight package operations also retain revision 2.
     // Those eight package operations expose saved project overrides at revision 3.
-    assert_eq!(admitted.len(), 473);
+    // Git grouped coverage, retained Git links, browser provenance and artifact source reads
+    // add 23 operation/mode/revision admissions without changing the 359 revision-1 bindings.
+    assert_eq!(admitted.len(), 496);
 }
 
 #[test]
@@ -514,6 +534,7 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-command-request/workspace",
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
+            "git-command-request/coveredWorkIds",
             "index-command-request/ref",
             "query-request/projectId"
         ]
