@@ -379,7 +379,10 @@ fn identity(_: &std::fs::Metadata) -> Option<FileIdentity> {
 /// Runtimes the tests declare available.
 /// Index documents and bundles served from memory (no network in tests).
 #[derive(Default)]
-struct FakeTransport(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+struct FakeTransport(
+    Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+    Mutex<Option<Arc<Gate>>>,
+);
 impl FakeTransport {
     fn serve(&self, location: &str, bytes: Vec<u8>) {
         self.0.lock().unwrap().insert(location.into(), bytes);
@@ -387,6 +390,10 @@ impl FakeTransport {
 }
 impl IndexTransport for FakeTransport {
     fn fetch(&self, location: &str, max: u64) -> Result<Vec<u8>, String> {
+        let gate = self.1.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.pass(IdKind::Operation);
+        }
         let b = self
             .0
             .lock()
@@ -4056,4 +4063,35 @@ fn saved_project_overrides_are_readable_at_revision_three_after_restart() {
         .map(|p| p.as_str())
         .collect();
     assert_eq!(projects, ["project-a", "project-b"]);
+}
+
+#[test]
+fn a_blocked_index_fetch_never_stalls_unrelated_package_reconciliation() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    set_index_sources(
+        &*a.store,
+        json!([{"location": "https://packs.example/devworks-index.json", "publicKey": hex(key(7).verifying_key().as_bytes())}]),
+    );
+    let gate = Arc::new(Gate::default());
+    let _release = Release(gate.clone());
+    gate.arm(IdKind::Operation);
+    *a.transport.1.lock().unwrap() = Some(gate.clone());
+    a.boot();
+    assert!(
+        gate.entered(Duration::from_secs(10)),
+        "startup index fetch began"
+    );
+    package(a.install(&a.user, &Spec::new("local-during-fetch", "1.0.0")));
+    let handle = a
+        .invoke("local-during-fetch", "echo", InvocationKind::Ordinary)
+        .expect("the local helper starts while index IO is blocked");
+    assert!(matches!(
+        finished(handle.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+    assert!(!gate.returned(), "fetch is still blocked");
+    a.shutdown();
+    assert!(!gate.returned(), "shutdown does not wait for the fetch");
+    gate.release();
 }

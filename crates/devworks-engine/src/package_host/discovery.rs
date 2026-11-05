@@ -266,7 +266,7 @@ impl PackageHost {
     }
 
     /// Probes every known and declared runtime, refreshes the cache and announces any
-    /// availability change. Blocking; runs on the host's own thread (or a caller's worker).
+    /// availability change. Blocking; runs on a dedicated discovery worker (or a caller's worker).
     pub fn refresh_runtimes(&self) -> BTreeMap<String, RuntimeObservation> {
         let Some(ports) = &self.runtimes else {
             return BTreeMap::new();
@@ -282,7 +282,7 @@ impl PackageHost {
     }
 
     /// Fetches and verifies every configured index source, records each outcome and announces
-    /// any availability change. Blocking (network); runs on the host's own thread.
+    /// any availability change. Blocking (network); runs on its independent discovery worker.
     pub fn refresh_indexes(&self) -> usize {
         let Some(ports) = &self.index else {
             return 0;
@@ -293,11 +293,17 @@ impl PackageHost {
         let _ = self.service.retain_configured_indexes(&sources);
         let mut verified = 0;
         for source in &sources {
+            if self.is_stopping() {
+                break;
+            }
             let outcome = ports
                 .verifier
                 .index_location(source)
                 .and_then(|location| ports.transport.fetch(&location, MAX_INDEX_BYTES))
                 .and_then(|bytes| ports.verifier.verify(source, &bytes));
+            if self.is_stopping() {
+                break;
+            }
             verified += usize::from(outcome.is_ok());
             let _ = self.service.record_index(&sources, source, outcome);
         }
