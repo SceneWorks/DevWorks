@@ -2289,10 +2289,11 @@ fn import_candidates(from: &str, module: &str) -> Vec<String> {
             join(dir, &format!("{}{}", "../".repeat(dots - 1), body))
         };
         if let Some(path) = path.filter(|p| !p.is_empty()) {
+            // A regular package takes precedence over a same-named module file.
+            out.push(format!("{path}/__init__.py"));
             if !module.ends_with('.') {
                 out.push(format!("{path}.py"));
             }
-            out.push(format!("{path}/__init__.py"));
         }
         return out;
     }
@@ -3373,15 +3374,15 @@ mod tests {
         assert!(py.contains(&"pkg/helpers.py".to_owned()));
         assert_eq!(
             import_candidates("pkg/consumer.py", "foo"),
-            vec!["foo.py", "foo/__init__.py"]
+            vec!["foo/__init__.py", "foo.py"]
         );
         assert_eq!(
             import_candidates("pkg/consumer.py", ".foo"),
-            vec!["pkg/foo.py", "pkg/foo/__init__.py"]
+            vec!["pkg/foo/__init__.py", "pkg/foo.py"]
         );
         assert_eq!(
             import_candidates("pkg/sub/consumer.py", "..foo"),
-            vec!["pkg/foo.py", "pkg/foo/__init__.py"]
+            vec!["pkg/foo/__init__.py", "pkg/foo.py"]
         );
         assert!(import_candidates("pkg/consumer.py", "..foo").is_empty());
         assert!(import_candidates("consumer.py", ".foo").is_empty());

@@ -3178,12 +3178,14 @@ fn python_absolute_and_explicit_relative_imports_choose_their_own_modules() {
         &dir,
         &[
             ("foo.py", "root_value = 1\n"),
+            ("bar.py", "shadowed_module = 0\n"),
+            ("bar/__init__.py", "package_value = 3\n"),
             ("pkg/__init__.py", ""),
             ("pkg/foo.py", "local_value = 2\n"),
             ("pkg/sub/__init__.py", ""),
             (
                 "pkg/consumer.py",
-                "import foo\nfrom .foo import local_value\n",
+                "import foo\nimport bar\nfrom .foo import local_value\n",
             ),
             ("pkg/sub/consumer.py", "from ..foo import local_value\n"),
         ],
@@ -3210,6 +3212,10 @@ fn python_absolute_and_explicit_relative_imports_choose_their_own_modules() {
     };
     let direct = imports("pkg/consumer.py");
     assert_eq!(direct.get("foo").map(String::as_str), Some("foo.py"));
+    assert_eq!(
+        direct.get("bar").map(String::as_str),
+        Some("bar/__init__.py")
+    );
     assert_eq!(direct.get(".foo").map(String::as_str), Some("pkg/foo.py"));
     assert_eq!(
         imports("pkg/sub/consumer.py")
