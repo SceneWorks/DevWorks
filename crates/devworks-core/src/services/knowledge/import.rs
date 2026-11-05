@@ -154,14 +154,19 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Candidate>, String> {
             Some("low") => 0.3,
             Some(_) => return Err(bad("confidence must be high, medium or low")),
         };
-        if c.entry.tags.len() > 32 || c.entry.tags.iter().any(|t| t.is_empty() || t.len() > 64) {
+        if c.entry.tags.len() > 32
+            || c.entry
+                .tags
+                .iter()
+                .any(|t| t.is_empty() || t.chars().count() > 64)
+        {
             return Err(bad("at most 32 tags of 1 to 64 characters"));
         }
         if c.entry.activities.len() > 16
             || c.entry
                 .activities
                 .iter()
-                .any(|t| t.is_empty() || t.len() > 64)
+                .any(|t| t.is_empty() || t.chars().count() > 64)
         {
             return Err(bad("at most 16 activities of 1 to 64 characters"));
         }
@@ -173,14 +178,17 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Candidate>, String> {
                 "verification must be verified, stale, unverifiable or personal",
             ));
         }
-        if c.source_file.is_empty() || c.source_file.len() > 4096 || c.source_file.contains('\0') {
-            return Err(bad("sourceFile must be 1 to 4096 bytes"));
+        if c.source_file.is_empty()
+            || c.source_file.chars().count() > 4096
+            || c.source_file.contains('\0')
+        {
+            return Err(bad("sourceFile must be 1 to 4096 characters"));
         }
         if c.verification_note
             .as_ref()
-            .is_some_and(|n| n.len() > 4096 || n.contains('\0'))
+            .is_some_and(|n| n.chars().count() > 4096 || n.contains('\0'))
         {
-            return Err(bad("verificationNote exceeds 4096 bytes"));
+            return Err(bad("verificationNote exceeds 4096 characters"));
         }
         out.push(Candidate {
             index,
@@ -341,6 +349,40 @@ mod tests {
         assert_eq!(parse(&many(MAX_CANDIDATES)).unwrap().len(), 200);
         assert!(parse(&many(MAX_CANDIDATES + 1)).is_err());
         assert!(IMPORT_SCHEMA.contains(r#""maxItems":200,"items":{"type":"object""#));
+    }
+
+    #[test]
+    fn import_string_limits_count_characters_instead_of_utf8_bytes() {
+        let entry = serde_json::json!({"entry": {"kind": "lesson", "summary": "Unicode bounds",
+            "tags": ["界".repeat(64)], "activities": ["🦀".repeat(64)]},
+            "sourceFile": "界".repeat(4096), "verification": "verified",
+            "verificationNote": "🦀".repeat(4096)});
+        let encode = |candidate| {
+            serde_json::to_vec(&serde_json::json!({
+            "format": "devworks/knowledge-import", "candidates": [candidate]}))
+            .unwrap()
+        };
+        let candidates = parse(&encode(entry.clone())).unwrap();
+        assert_eq!(candidates[0].tags[0].chars().count(), 64);
+        assert_eq!(candidates[0].activities[0].chars().count(), 64);
+        for pointer in [
+            "/entry/tags/0",
+            "/entry/activities/0",
+            "/sourceFile",
+            "/verificationNote",
+        ] {
+            let mut too_long = entry.clone();
+            let cap = if pointer.starts_with("/entry/") {
+                64
+            } else {
+                4096
+            };
+            *too_long.pointer_mut(pointer).unwrap() = serde_json::json!("界".repeat(cap + 1));
+            assert!(
+                parse(&encode(too_long)).is_err(),
+                "{pointer} must retain its character bound"
+            );
+        }
     }
 
     #[test]

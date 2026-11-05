@@ -871,3 +871,71 @@ fn cleanup_previews_and_deletes_an_exact_source_label_through_the_native_screen(
     click(&mut h, Role::Button, "Delete previewed entries");
     assert!(h.state().knowledge.items.is_empty());
 }
+
+#[test]
+fn a_replacement_draft_during_creation_is_never_rebound_or_cleared() {
+    for replacement in ["Separate entry", "First entry"] {
+        let root = Root::new("knowledge-draft-identity");
+        let engine = start(&root);
+        let gate = Gate::holding_replies("knowledge.record");
+        let mut h = harness(
+            shell_with(
+                Ok(gate.over(engine.backend())),
+                &root,
+                Script::default(),
+                None,
+            ),
+            1440.0,
+            900.0,
+        );
+        settle(&mut h);
+        h.state_mut().navigate(Route::Knowledge);
+        settle(&mut h);
+        click(&mut h, Role::Button, "New entry");
+        type_into(&mut h, "Entry subject", "Subject");
+        type_into(&mut h, "Entry text", "First entry");
+        gate.close();
+        h.get_by_role_and_label(Role::Button, "Save entry").click();
+        step_until(&mut h, "first creation pending", |s| {
+            s.knowledge.writing.is_some()
+        });
+        h.get_by_role_and_label(Role::Button, "New entry").click();
+        h.step();
+        type_into(&mut h, "Entry subject", "Subject");
+        type_into(&mut h, "Entry text", replacement);
+        gate.open();
+        settle(&mut h);
+        let draft = h
+            .state()
+            .knowledge
+            .draft
+            .as_ref()
+            .expect("a distinct draft stays even when its contents match");
+        assert!(
+            draft.revises.is_none(),
+            "the first creation cannot retarget a replacement draft"
+        );
+        assert_eq!(draft.value, replacement);
+        if replacement != "First entry" {
+            click(&mut h, Role::Button, "Save entry");
+            assert!(h.state().knowledge.draft.is_none());
+            assert_eq!(h.state().knowledge.items.len(), 2);
+            let first = h
+                .state()
+                .knowledge
+                .items
+                .iter()
+                .find(|c| c.value.as_ref().is_some_and(|v| v.0 == "First entry"))
+                .unwrap();
+            let second = h
+                .state()
+                .knowledge
+                .items
+                .iter()
+                .find(|c| c.value.as_ref().is_some_and(|v| v.0 == replacement))
+                .unwrap();
+            assert_ne!(first.id, second.id);
+            assert_eq!((first.revision.get(), second.revision.get()), (1, 1));
+        }
+    }
+}
