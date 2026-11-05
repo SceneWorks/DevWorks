@@ -48,6 +48,14 @@ pub struct Git<'a> {
     pub stop: &'a (dyn Fn() -> bool + Sync),
 }
 
+/// A repository revision observed around a bounded worktree status read.
+/// The owning Git service must first resolve the invocation's durable worktree identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RevisionObservation {
+    pub head: String,
+    pub dirty: bool,
+}
+
 /// One entry of a commit's tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeEntry {
@@ -171,6 +179,36 @@ impl Git<'_> {
             None => Ok(None),
         }
     }
+    /// Observe the tested revision and all staged, unstaged and untracked changes. Refuse
+    /// attribution if HEAD changes during observation; never substitute a repository's
+    /// primary checkout for the host-resolved invocation worktree.
+    pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
+        let before = self
+            .head(dir)?
+            .ok_or_else(|| GitFault::Malformed("unborn HEAD has no tested revision".into()))?;
+        let status = self.run(
+            dir,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=normal",
+                "--ignore-submodules=none",
+            ],
+            MAX_LISTING_BYTES,
+        )?;
+        let after = self.head(dir)?;
+        if after.as_deref() != Some(before.as_str()) {
+            return Err(GitFault::Malformed(
+                "HEAD changed during revision observation".into(),
+            ));
+        }
+        Ok(RevisionObservation {
+            head: before,
+            dirty: !status.is_empty(),
+        })
+    }
+
     /// The branch `HEAD` points at (`refs/heads/...`), `None` when detached.
     pub fn branch(&self, dir: &Path) -> Result<Option<String>, GitFault> {
         // `HEAD` itself when detached; an unborn branch has no resolvable `HEAD` (Git answers
@@ -515,6 +553,77 @@ pub fn parse_batch(out: &[u8], oids: &[String]) -> Result<Vec<Vec<u8>>, GitFault
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn revision_observation_refuses_head_races_and_keeps_non_utf8_dirty_paths() {
+        use crate::context::{InvocationContext, PrincipalKind};
+        use crate::protocol::{ActorId, Counter, Id, Revision, StoreId};
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+        struct Replies(Mutex<VecDeque<Vec<u8>>>);
+        impl HelperRunner for Replies {
+            fn run(
+                &self,
+                _: &InvocationContext,
+                _: ProcessSpec,
+                _: HelperLimits,
+                _: &(dyn Fn() -> bool + Sync),
+            ) -> Result<Vec<u8>, HelperFault> {
+                Ok(self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("expected Git call"))
+            }
+        }
+        let ctx = InvocationContext::new(
+            ActorId(Id::new("host").unwrap()),
+            PrincipalKind::Host,
+            Id::new("invocation").unwrap(),
+            Id::new("git").unwrap(),
+            StoreId(Id::new("store").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let head = "a".repeat(40);
+        for (status, changed) in [
+            (Vec::new(), false),
+            (b"?? invalid-\xff\0".to_vec(), false),
+            (Vec::new(), true),
+        ] {
+            let after = if changed {
+                "b".repeat(40)
+            } else {
+                head.clone()
+            };
+            let dirty = !status.is_empty();
+            let runner = Replies(Mutex::new(VecDeque::from([
+                head.as_bytes().to_vec(),
+                status,
+                after.into_bytes(),
+            ])));
+            let git = Git {
+                runner: &runner,
+                ctx: &ctx,
+                program: "git",
+                deadline: Duration::from_secs(5),
+                stop: &|| false,
+            };
+            match git.revision_observation(Path::new("/owned/worktree")) {
+                Ok(observed) => {
+                    assert!(!changed);
+                    assert_eq!(observed.head, head);
+                    assert_eq!(observed.dirty, dirty);
+                }
+                Err(GitFault::Malformed(message)) => {
+                    assert!(changed);
+                    assert!(message.contains("HEAD changed"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
