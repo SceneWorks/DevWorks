@@ -38,7 +38,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
             'router.route', 'router.pin',
-            'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
+            'projects.create', 'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
             'next_work.claim_project_queue', 'next_work.claim_feature_task',
             'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
@@ -63,7 +63,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
             'browser.upload', 'browser.console', 'browser.network'})
-        self.assertEqual(carried['features.edit'], {2})
+        self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})

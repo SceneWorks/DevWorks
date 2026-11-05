@@ -98,9 +98,9 @@ pub enum OperationResult {
     #[serde(rename = "workflows.reassign_and_remove")]
     WorkflowsReassignAndRemove { value: MutationSummary },
     #[serde(rename = "next_work.claim_project_queue")]
-    NextWorkClaimProjectQueue { value: AllocationClaimRecord },
+    NextWorkClaimProjectQueue { value: AllocationSelection },
     #[serde(rename = "next_work.claim_feature_task")]
-    NextWorkClaimFeatureTask { value: AllocationClaimRecord },
+    NextWorkClaimFeatureTask { value: AllocationSelection },
     #[serde(rename = "next_work.inspect_claim")]
     NextWorkInspectClaim { value: AllocationClaimRecord },
     #[serde(rename = "next_work.release_claim")]
@@ -1577,6 +1577,16 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             _ => {}
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
+            Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            _ => Ok(()),
         }
     }
 }

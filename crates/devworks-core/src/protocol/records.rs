@@ -9,8 +9,8 @@ use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 use crate::protocol::support::*;
 use crate::protocol::{
     Activation, ActorId, AssignmentId, Blockers, CommandId, CorrelationId, Counter,
-    EligibilityTarget, EventId, Id, OperationId, OperationState, ProjectId, Purpose, RequestKey,
-    ResourceId, Revision, RootControl, RootId,
+    EligibilityTarget, Event, EventId, Id, OperationId, OperationState, ProjectId, Purpose,
+    RequestKey, ResourceId, Revision, RootControl, RootId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10248,5 +10248,160 @@ pub enum WorkItemType {
 impl Check for WorkItemType {
     fn check(&self) -> Result<(), String> {
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationRecovery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_owner_id: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_session_id: Option<Id>,
+    pub links: Items<WorkLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_handoff: Option<HandoffRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<Event>,
+    pub unmet_acceptance: Items<AcceptanceCriterion>,
+}
+impl Check for AllocationRecovery {
+    fn check(&self) -> Result<(), String> {
+        self.previous_owner_id.check()?;
+        self.previous_session_id.check()?;
+        self.links.check()?;
+        self.latest_handoff.check()?;
+        self.last_activity.check()?;
+        self.unmet_acceptance.check()?;
+        crate::protocol::rules::record(
+            "AllocationRecovery",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum AllocationOutcome {
+    Claimed {
+        claim: AllocationClaimRecord,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work: Option<WorkRecord>,
+        reused: bool,
+    },
+    Recovered {
+        claim: AllocationClaimRecord,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work: Option<WorkRecord>,
+        reused: bool,
+        recovery: AllocationRecovery,
+    },
+    NoEligible {
+        reason: Label,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<DomainFault>,
+    },
+}
+impl Check for AllocationOutcome {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Claimed {
+                claim,
+                work,
+                reused,
+            } => {
+                claim.check()?;
+                work.check()?;
+                reused.check()?;
+            }
+            Self::Recovered {
+                claim,
+                work,
+                reused,
+                recovery,
+            } => {
+                claim.check()?;
+                work.check()?;
+                reused.check()?;
+                recovery.check()?;
+            }
+            Self::NoEligible { reason, evidence } => {
+                reason.check()?;
+                evidence.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for AllocationOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Claimed { claim, work, .. } => {
+                claim.retain_revision(revision);
+                work.retain_revision(revision);
+            }
+            Self::Recovered { claim, work, .. } => {
+                claim.retain_revision(revision);
+                work.retain_revision(revision);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "ClaimRecord", "before": 3}))]
+pub enum AllocationSelection {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(ClaimRecord),
+    #[schemars(extend("x-since" = 3))]
+    Current(AllocationOutcome),
+}
+impl Check for AllocationSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for AllocationSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy = match self {
+                Self::Current(
+                    AllocationOutcome::Claimed { claim, .. }
+                    | AllocationOutcome::Recovered { claim, .. },
+                ) => Some(ClaimRecord {
+                    id: claim.id.clone(),
+                    work_id: claim.work_id.clone(),
+                    owner_id: claim.owner_id.clone(),
+                    fence: claim.fence.clone(),
+                    expires_at_ms: claim.expires_at_ms.clone(),
+                    state: claim.state.clone(),
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy allocation result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("allocation outcome cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }

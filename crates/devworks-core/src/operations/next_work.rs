@@ -24,17 +24,73 @@ pub struct ClaimProjectQueueInput {
     pub project_id: ProjectId,
     pub expected_queue_revision: Revision,
     pub lease_ms: PositiveCounter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub label: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub another: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub idempotency_key: Option<Label>,
 }
 impl Check for ClaimProjectQueueInput {
     fn check(&self) -> Result<(), String> {
         self.project_id.check()?;
         self.expected_queue_revision.check()?;
         self.lease_ms.check()?;
+        self.repository_id.check()?;
+        self.task_type.check()?;
+        self.label.check()?;
+        self.another.check()?;
+        self.idempotency_key.check()?;
         Ok(())
     }
 }
 impl Revisioned for ClaimProjectQueueInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.repository_id = None;
+        }
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.label = None;
+        }
+        if revision < 3 {
+            self.another = None;
+        }
+        if revision < 3 {
+            self.idempotency_key = None;
+        }
+    }
 }
 
 /// `next_work.claim_feature_task` Command input.
@@ -44,17 +100,73 @@ pub struct ClaimFeatureTaskInput {
     pub root_id: RootId,
     pub expected_task_set_revision: Revision,
     pub lease_ms: PositiveCounter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub repository_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub label: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub another: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub idempotency_key: Option<Label>,
 }
 impl Check for ClaimFeatureTaskInput {
     fn check(&self) -> Result<(), String> {
         self.root_id.check()?;
         self.expected_task_set_revision.check()?;
         self.lease_ms.check()?;
+        self.repository_id.check()?;
+        self.task_type.check()?;
+        self.label.check()?;
+        self.another.check()?;
+        self.idempotency_key.check()?;
         Ok(())
     }
 }
 impl Revisioned for ClaimFeatureTaskInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.repository_id = None;
+        }
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.label = None;
+        }
+        if revision < 3 {
+            self.another = None;
+        }
+        if revision < 3 {
+            self.idempotency_key = None;
+        }
+    }
 }
 
 /// `next_work.inspect_claim` Query input.

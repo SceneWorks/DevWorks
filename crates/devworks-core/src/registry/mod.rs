@@ -214,6 +214,9 @@ fn later(v: &Value, revision: u32) -> bool {
     v.get("x-since")
         .and_then(Value::as_u64)
         .is_some_and(|s| s > u64::from(revision))
+        || v.get("x-until")
+            .and_then(Value::as_u64)
+            .is_some_and(|end| u64::from(revision) >= end)
 }
 /// Removes the members and union alternatives introduced after `revision`.
 fn strip(v: &mut Value, revision: u32) {
@@ -317,6 +320,21 @@ fn revision_document(canonical: &Value, revision: u32) -> Value {
         }
     }
     collapse(&mut v);
+    if let Some(Value::Object(defs)) = v.get_mut("$defs") {
+        for (from, to) in &renames {
+            let reference = format!("#/$defs/{to}");
+            if defs
+                .get(from)
+                .and_then(|d| d.get("$ref"))
+                .and_then(Value::as_str)
+                == Some(reference.as_str())
+            {
+                if let Some(original) = defs.get(to).cloned() {
+                    defs.insert(from.clone(), original);
+                }
+            }
+        }
+    }
     // Definitions named after a renamed one (`List_<name>_0_500`) take the recorded name too.
     if let Some(Value::Object(defs)) = v.get("$defs") {
         let primary = renames.clone();

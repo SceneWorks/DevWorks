@@ -175,6 +175,7 @@ impl<T: Check> Check for HistoryPage<T> {
 /// `x-since`). `retain_revision(r)` clears every member introduced after revision `r`.
 pub trait Revisioned {
     fn retain_revision(&mut self, revision: u32);
+    fn check_revision(&self, _revision: u32) -> Result<(), String> { Ok(()) }
 }
 impl<T: Revisioned> Revisioned for Option<T> {
     fn retain_revision(&mut self, revision: u32) {

@@ -12,7 +12,8 @@
     "../../../tools/contracts-eval/src/domain_support.rs",
     "../../../tools/contracts-eval/src/domain_rules.rs",
     "../../../tools/contracts-eval/domain_spec.py",
-    "../../../tools/contracts-eval/domain-spec.json"
+    "../../../tools/contracts-eval/domain-spec.json",
+    "../../../tools/contracts-eval/versioned_result.py"
   ],
   "schemas": [
     {

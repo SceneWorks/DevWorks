@@ -3906,6 +3906,47 @@
         "Task",
         "Bug"
       ]
+    },
+    "AllocationRecovery": {
+      "kind": "record",
+      "fields": {
+        "previous_owner_id": "?ActorId",
+        "previous_session_id": "?Id",
+        "links": "Items<WorkLink>",
+        "latest_handoff": "?HandoffRecord",
+        "last_activity": "?Event",
+        "unmet_acceptance": "Items<AcceptanceCriterion>"
+      }
+    },
+    "AllocationOutcome": {
+      "kind": "union",
+      "variants": {
+        "Claimed": {
+          "claim": "AllocationClaimRecord",
+          "work": "?WorkRecord",
+          "reused": "bool"
+        },
+        "Recovered": {
+          "claim": "AllocationClaimRecord",
+          "work": "?WorkRecord",
+          "reused": "bool",
+          "recovery": "AllocationRecovery"
+        },
+        "NoEligible": {
+          "reason": "Label",
+          "evidence": "?DomainFault"
+        }
+      }
+    },
+    "AllocationSelection": {
+      "kind": "versioned",
+      "legacy": "ClaimRecord",
+      "current": "AllocationOutcome",
+      "revision": 3,
+      "claimVariants": [
+        "Claimed",
+        "Recovered"
+      ]
     }
   },
   "operations": {
@@ -4451,12 +4492,24 @@
       "fields": {
         "project_id": "ProjectId",
         "expected_queue_revision": "Revision",
-        "lease_ms": "PositiveCounter"
+        "lease_ms": "PositiveCounter",
+        "repository_id": "?Id",
+        "task_type": "?WorkItemType",
+        "label": "?Label",
+        "another": "?bool",
+        "idempotency_key": "?Label"
       },
-      "result": "AllocationClaimRecord",
+      "result": "AllocationSelection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
+      "rules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn. Revision 3 supports repository/card-type/label filters and explicit another selection, preserves existing caller claims by default, and returns Claimed, Recovered or NoEligible outcomes with bounded current work/recovery evidence. Host actor/session and ingress identity replace caller-authored authority markers. Optional idempotencyKey is a project/caller-scoped allocation identity in addition to the runtime requestKey, preserving retries without another allocation. Recovery precedes new work where the retained source requires it; preserve previous-holder, Git/PR links, latest handoff, last activity and unmet acceptance truthfully. Legacy revision-1 successful results project to exact ClaimRecord; NoEligible remains a typed fault at revision1.",
+      "since": {
+        "repository_id": 3,
+        "task_type": 3,
+        "label": 3,
+        "another": 3,
+        "idempotency_key": 3
+      }
     },
     "next_work.claim_feature_task": {
       "operation": "next_work.claim_feature_task",
@@ -4464,12 +4517,24 @@
       "fields": {
         "root_id": "RootId",
         "expected_task_set_revision": "Revision",
-        "lease_ms": "PositiveCounter"
+        "lease_ms": "PositiveCounter",
+        "repository_id": "?Id",
+        "task_type": "?WorkItemType",
+        "label": "?Label",
+        "another": "?bool",
+        "idempotency_key": "?Label"
       },
-      "result": "AllocationClaimRecord",
+      "result": "AllocationSelection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
+      "rules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn. Revision 3 supports repository/card-type/label filters and explicit another selection, preserves existing caller claims by default, and returns Claimed, Recovered or NoEligible outcomes with bounded current work/recovery evidence. Host actor/session and ingress identity replace caller-authored authority markers. Optional idempotencyKey is a project/caller-scoped allocation identity in addition to the runtime requestKey, preserving retries without another allocation. Recovery precedes new work where the retained source requires it; preserve previous-holder, Git/PR links, latest handoff, last activity and unmet acceptance truthfully. Legacy revision-1 successful results project to exact ClaimRecord; NoEligible remains a typed fault at revision1.",
+      "since": {
+        "repository_id": 3,
+        "task_type": 3,
+        "label": 3,
+        "another": 3,
+        "idempotency_key": 3
+      }
     },
     "next_work.inspect_claim": {
       "operation": "next_work.inspect_claim",
