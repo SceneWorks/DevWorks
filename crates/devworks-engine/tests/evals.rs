@@ -23,7 +23,7 @@ use std::time::Duration;
 
 fn suite() -> EvalSuiteSnapshot {
     serde_json::from_value(
-        json!({"id":"suite","revision":1,"name":"Recorded proxy", "checks":[{
+        json!({"id":"suite","revision":"1","name":"Recorded proxy", "checks":[{
             "id":"check","ruleRef":"recorded text", "measurement":"Proxy",
             "predicate":{"kind":"TranscriptContains","entryKind":"UserMessage","text":"hello"}
         }]}),
@@ -58,7 +58,7 @@ fn composition(
         runs: RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
         power: Arc::new(NativePower),
         diagnostics: Arc::new(DiagnosticService::new(
-            store,
+            store.clone(),
             h.ids.clone(),
             h.clock(),
             None,
@@ -66,7 +66,9 @@ fn composition(
         browser: None,
         git: None,
         packages: None,
-        use_cases: UseCases::new(),
+        use_cases: UseCases::new().with_sessions(Arc::new(
+            devworks_core::services::sessions::SessionService::new(h.ids.clone(), store.clone()),
+        )),
         consumers: vec![],
         indexing: None,
         config,
@@ -288,6 +290,101 @@ fn unconfigured_runtime_does_not_grade_recorded_sessions() {
         let app = boot(composition(&h, store.clone(), vec![])).await.unwrap();
         assert_eq!(app.evals().tick().await.unwrap(), 0);
         assert!(reports(&*store, "closed").is_empty());
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn interrupted_automatic_grade_is_retried_without_persisting_partial_measurement() {
+    let h = Harness::new();
+    let store = h.open();
+    session(&*store, "closed", true, None);
+    let evals = EvalService::new(h.ids.clone(), h.clock());
+    assert!(
+        evals
+            .grade_automatically_cancellable(&*store, &id("closed"), &suite(), &|| true)
+            .is_err()
+    );
+    assert!(reports(&*store, "closed").is_empty());
+    evals
+        .grade_automatically(&*store, &id("closed"), &suite())
+        .unwrap();
+    let saved = reports(&*store, "closed");
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].report["outcome"], "passed");
+}
+
+#[test]
+fn session_end_command_wakes_grading_without_waiting_for_periodic_catchup() {
+    let h = Harness::new();
+    runtime().block_on(async {
+        let store = h.open();
+        session(&*store, "conversation", false, None);
+        let user = principal(
+            &*store,
+            "user",
+            devworks_core::context::PrincipalKind::Human,
+        );
+        let app = boot(composition(&h, store.clone(), vec![suite()]))
+            .await
+            .unwrap();
+        let mut passes = app.evals().watch();
+        within("initial eval sweep", async {
+            while passes.borrow_and_update().is_none() {
+                passes.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert!(reports(&*store, "conversation").is_empty());
+        let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"end",
+            "body":{"kind":"sessions.end","sessionId":"conversation","expectedRevision":"1"}});
+        let reply = app
+            .command(&user, "sessions.end", frame.to_string().as_bytes())
+            .unwrap();
+        assert!(matches!(
+            reply,
+            devworks_core::protocol::CommandReply::Recorded { .. }
+        ));
+        within("terminal command wake", passes.changed())
+            .await
+            .unwrap();
+        assert_eq!(reports(&*store, "conversation").len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn boot_grades_open_sessions_after_recovering_their_interrupted_activation() {
+    let h = Harness::new();
+    {
+        let store = h.open();
+        seed_work(&h);
+        session(&*store, "coordinator", false, Some("root"));
+        session(&*store, "worker-session", false, Some("root"));
+        activation(&*store, ActivationPhase::Running);
+        assignment(&*store, "coordinator", false, AssignmentState::Waiting);
+        assignment(&*store, "worker-session", true, AssignmentState::Waiting);
+    }
+    runtime().block_on(async {
+        let store = h.open();
+        let app = boot(composition(&h, store.clone(), vec![suite()]))
+            .await
+            .unwrap();
+        let mut passes = app.evals().watch();
+        within("post-recovery eval", async {
+            while passes.borrow_and_update().is_none() {
+                passes.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert_eq!(
+            read(&*store, |s| s.runs().activation(&id("activation")))
+                .unwrap()
+                .phase,
+            ActivationPhase::Stopped
+        );
+        assert_eq!(reports(&*store, "coordinator").len(), 1);
+        assert_eq!(reports(&*store, "worker-session").len(), 1);
         app.shutdown().await;
     });
 }

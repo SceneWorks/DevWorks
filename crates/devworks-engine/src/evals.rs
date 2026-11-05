@@ -18,6 +18,7 @@ const PAGE: u16 = 64;
 /// Latest completed background catch-up pass, including an observable storage failure.
 #[derive(Clone, Debug)]
 pub struct EvalPass {
+    /// Successful session/suite observations, including reports already recorded unchanged.
     pub result: Result<usize, StorageError>,
 }
 
@@ -168,6 +169,7 @@ impl EvalSupervisor {
                     match result {
                         Ok(true) => graded += 1,
                         Ok(false) => {}
+                        Err(StorageError::Cancelled) if self.stopping.load(Ordering::SeqCst) => {}
                         Err(StorageError::InvalidRecord(reason))
                             if reason == "eval session is no longer terminal"
                                 || reason == "automatic grading stopped" => {}
