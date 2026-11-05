@@ -840,3 +840,20 @@ fn coldfusion_script_component_and_template() {
         "a template has no component"
     );
 }
+
+#[test]
+fn deeply_nested_sql_statements_are_partial_instead_of_overflowing_the_stack() {
+    for prefix in [
+        "CREATE OR ALTER PROCEDURE p AS ",
+        "CREATE TRIGGER t ON dbo.T AFTER INSERT AS ",
+    ] {
+        let source = prefix.repeat(10_000) + "CREATE TABLE dbo.TooDeep (Id INT);";
+        let x = extract("db/nested.sql", &source);
+        assert!(
+            x.incomplete.iter().any(|why| why.contains("nesting")),
+            "{:?}",
+            x.incomplete
+        );
+        no_node(&x, "dbo.TooDeep");
+    }
+}

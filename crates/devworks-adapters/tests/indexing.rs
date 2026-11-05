@@ -3224,3 +3224,104 @@ fn python_absolute_and_explicit_relative_imports_choose_their_own_modules() {
         Some("pkg/foo.py")
     );
 }
+
+#[test]
+fn review_queued_index_can_be_promoted_to_a_rebuild_without_replacing_its_identity() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("queued-rebuild");
+    let dir = src.join("repo");
+    repo(&dir, &[("lib.rs", "pub fn indexed() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let queued = run_of(decision(fx.index(&repo_id, false, "1")));
+    let before = fx.run(&queued.id);
+    let promoted = run_of(decision(fx.index(&repo_id, true, "1")));
+    assert_eq!(promoted.id, queued.id);
+    let after = fx.run(&queued.id);
+    assert_eq!(after.kind, RUN_REINDEX);
+    assert_eq!(after.state, RUN_QUEUED);
+    assert_eq!(after.batch_id, before.batch_id);
+    assert_eq!(after.revision, before.revision + 1);
+    fx.drain();
+    assert_eq!(fx.run(&queued.id).state, RUN_SUCCEEDED);
+    assert!(has_node(
+        &fx.nodes(&fx.published(&repo_id), "lib.rs"),
+        "Function",
+        "#function:indexed()"
+    ));
+}
+
+#[test]
+fn review_overlay_records_its_build_configuration_when_the_queued_request_is_older() {
+    let _s = serial();
+    for is_ref in [false, true] {
+        let fx = Fx::new(|_| {});
+        let src = Temp::new("queued-config");
+        let dir = src.join("repo");
+        let head = repo(
+            &dir,
+            &[
+                ("lib.rs", "pub fn kept() {}\n"),
+                ("skip.rs", "pub fn excluded() {}\n"),
+            ],
+        );
+        fx.base_directory(&src.0);
+        fx.scan();
+        let repo_id = fx.repository_at(&dir);
+        run_of(decision(fx.index(&repo_id, false, "1")));
+        fx.drain();
+        let worktree = worktree_id(&repo_id, &fx.identity(&dir));
+        let mut command = json!({"kind": "RefreshOverlay", "repositoryId": repo_id, "expectedSourceRevision": "1"});
+        command[if is_ref { "ref" } else { "worktreeId" }] =
+            if is_ref { json!(head) } else { json!(worktree) };
+        let run = run_of(decision(fx.command_frame(&fx.user(), "indexing.refresh_overlay", json!({"protocol": "1.0-draft.1", "schemaRevision": 2, "requestKey": "queue-overlay", "command": command}))));
+        let requested_digest = fx.run(&run.id).config_digest;
+        let configure = |expected: &str, excludes: Value| {
+            let d = decision(fx.command("indexing.configure_sources", json!({"scope": {"kind": "Workspace"}, "expectedRevision": expected, "config": {"structuralLanguages": [], "semanticPackageIds": [], "excludePatterns": excludes, "maxFileBytes": "524288"}})));
+            assert!(matches!(d, DomainDecision::Applied { .. }), "{d:?}");
+        };
+        configure("1", json!(["skip.rs"]));
+        fx.drain();
+        let stored = fx.run(&run.id);
+        assert_eq!(stored.state, RUN_SUCCEEDED, "{stored:?}");
+        let overlay_id = stored.overlay_id.unwrap();
+        let overlay = fx.read(move |s| s.indexing().overlay(&overlay_id)).unwrap();
+        let status = fx.status(&repo_id);
+        assert!(
+            status
+                .overlays
+                .as_ref()
+                .unwrap()
+                .0
+                .iter()
+                .any(|o| o.overlay_id == overlay.id && matches!(o.state, OverlayState::Ready)),
+            "{status:?}"
+        );
+        let view = exact_view(&fx, overlay.view_id.as_ref().unwrap());
+        assert!(fx.unit(&view, "skip.rs").is_none());
+        assert!(has_node(
+            &fx.nodes(&view, "lib.rs"),
+            "Function",
+            "#function:kept()"
+        ));
+        assert_eq!(
+            fx.run(&run.id).config_digest,
+            requested_digest,
+            "retain request provenance"
+        );
+        configure("2", json!([]));
+        let status = fx.status(&repo_id);
+        assert!(
+            status
+                .overlays
+                .as_ref()
+                .unwrap()
+                .0
+                .iter()
+                .any(|o| o.overlay_id == overlay.id && matches!(o.state, OverlayState::Stale)),
+            "{status:?}"
+        );
+    }
+}

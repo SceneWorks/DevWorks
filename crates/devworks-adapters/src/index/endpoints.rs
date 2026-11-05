@@ -1080,25 +1080,18 @@ impl<'t, 's> Pass<'t, 's> {
 
 /// `use a::{b, c as d}`'s `x as y` split.
 fn split_as(text: &str) -> Vec<&str> {
-    let b = text.as_bytes();
-    let mut i = 0;
-    while i + 4 <= b.len() {
-        if (b[i] as char).is_whitespace() {
-            let mut j = i;
-            while j < b.len() && (b[j] as char).is_whitespace() {
-                j += 1;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c.is_whitespace() {
+            while chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+                chars.next();
             }
-            if text[j..].starts_with("as") && text[j + 2..].starts_with(|c: char| c.is_whitespace())
+            let j = chars.peek().map_or(text.len(), |(j, _)| *j);
+            if let Some(alias) = text[j..].strip_prefix("as")
+                && alias.starts_with(char::is_whitespace)
             {
-                let mut k = j + 2;
-                while k < b.len() && (b[k] as char).is_whitespace() {
-                    k += 1;
-                }
-                return vec![&text[..i], &text[k..]];
+                return vec![&text[..i], alias.trim_start()];
             }
-            i = j;
-        } else {
-            i += 1;
         }
     }
     vec![text]
@@ -1179,6 +1172,10 @@ mod tests {
         assert_eq!(module_of("api/mod.rs"), "api");
         assert_eq!(split_as("axum::Router as R"), ["axum::Router", "R"]);
         assert_eq!(split_as("axum::routing::get"), ["axum::routing::get"]);
+        assert_eq!(split_as("crate::pà as x"), ["crate::pà", "x"]);
+        assert_eq!(split_as("crate::àas as handler"), ["crate::àas", "handler"]);
+        assert_eq!(split_as("crate::pà\u{2003}as\u{2003}x"), ["crate::pà", "x"]);
+        assert_eq!(split_as("crate::àas"), ["crate::àas"]);
         assert!(may_contain(
             true,
             "let app = Router::new() . route(\"/\", get(h));"
