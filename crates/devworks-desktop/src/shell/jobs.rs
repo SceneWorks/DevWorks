@@ -13,8 +13,8 @@ use crate::route::Route;
 use crate::theme;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::records::{
-    ArtifactRecord, JobDefinition, JobHold, JobInspection, JobRecord, JobRun, JobRunStatus,
-    Schedule,
+    ArtifactRecord, EffortName, JobDefinition, JobHold, JobInspection, JobRecord, JobRun,
+    JobRunStatus, RouteCatalogModel, RouteIntent, Schedule,
 };
 use devworks_core::protocol::{Counter, DomainErrorCode};
 use devworks_core::services::jobs::NativeCapability;
@@ -963,6 +963,7 @@ impl Shell {
             || self.waiting(&Slot::JobCreate);
         self.load_prompt_candidates(&projects);
         let artifacts = self.prompt_candidates();
+        let catalog = self.chat.routing.catalog.clone();
         let jobs = &mut self.jobs;
         let mut new_tab = tab;
         {
@@ -1020,9 +1021,15 @@ impl Shell {
                     if let Some(form) = st.0.form.as_mut() {
                         let caps = st.0.capabilities.clone();
                         let error = st.0.form_error.clone();
-                        if let Some(done) =
-                            form_ui(ui, form, &caps, &artifacts, error.as_deref(), busy)
-                        {
+                        if let Some(done) = form_ui(
+                            ui,
+                            form,
+                            &caps,
+                            &artifacts,
+                            &catalog,
+                            error.as_deref(),
+                            busy,
+                        ) {
                             match done {
                                 FormEnd::Save => st.1.push(JobAction::Save(form.clone())),
                                 FormEnd::Close => st.0.form = None,
@@ -1343,6 +1350,7 @@ fn form_ui(
     form: &mut JobForm,
     caps: &[NativeCapability],
     artifacts: &[ArtifactRecord],
+    catalog: &[RouteCatalogModel],
     error: Option<&str>,
     busy: bool,
 ) -> Option<FormEnd> {
@@ -1476,17 +1484,74 @@ fn form_ui(
                     });
             }
             1 => {
-                field(ui, &mut form.model, "Model (its ID)", false);
+                let selected = if form.model.is_empty() {
+                    "Choose a model".into()
+                } else {
+                    devworks_core::protocol::Id::new(&form.model)
+                        .ok()
+                        .map(|model_id| {
+                            crate::routing::intent_label(catalog, &RouteIntent::Model { model_id })
+                        })
+                        .unwrap_or_else(|| form.model.clone())
+                };
+                egui::ComboBox::from_label("Model")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for (label, intent) in crate::routing::options(catalog) {
+                            if let RouteIntent::Model { model_id } = intent {
+                                ui.selectable_value(
+                                    &mut form.model,
+                                    model_id.as_str().to_owned(),
+                                    label,
+                                );
+                            }
+                        }
+                    });
+                // A saved legacy ID remains inspectable and is never replaced by whichever
+                // inventory entry now occupies its previous position.
+                if !form.model.is_empty() {
+                    widgets::caption(ui, format!("Model ID: {}", form.model));
+                }
             }
             _ => {}
         }
+        let intent = serde_json::from_value::<RouteIntent>(match form.route_kind {
+            0 => json!({"kind":"Tier", "tier":TIERS[form.tier.min(TIERS.len()-1)]}),
+            1 => json!({"kind":"Model", "modelId": if form.model.is_empty() { "unselected" } else { &form.model }}),
+            _ => json!({"kind":"OpenRouterAuto"}),
+        }).ok();
+        let offered = intent
+            .as_ref()
+            .map(|i| crate::routing::efforts(catalog, i))
+            .unwrap_or_else(|| vec![EffortName::Default]);
+        let chosen: EffortName =
+            serde_json::from_value(json!(EFFORTS[form.effort.min(EFFORTS.len() - 1)]))
+                .expect("effort");
         egui::ComboBox::from_label("Effort")
-            .selected_text(EFFORTS[form.effort.min(EFFORTS.len() - 1)])
+            .selected_text(crate::routing::effort_label(&chosen))
             .show_ui(ui, |ui| {
-                for (i, e) in EFFORTS.iter().enumerate() {
-                    ui.selectable_value(&mut form.effort, i, *e);
+                for effort in &offered {
+                    let wire = serde_json::to_value(effort).unwrap();
+                    let index = EFFORTS
+                        .iter()
+                        .position(|e| wire == json!(e))
+                        .expect("known effort");
+                    ui.selectable_value(
+                        &mut form.effort,
+                        index,
+                        crate::routing::effort_label(effort),
+                    );
                 }
             });
+        if !offered
+            .iter()
+            .any(|e| serde_json::to_value(e).ok() == serde_json::to_value(&chosen).ok())
+        {
+            widgets::caption(
+                ui,
+                "The saved effort is retained; no current model for this route declares support for it.",
+            );
+        }
         field(
             ui,
             &mut form.target_project,

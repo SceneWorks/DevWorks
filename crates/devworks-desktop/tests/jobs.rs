@@ -786,3 +786,39 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
     assert_eq!(h.state().jobs.list_pages, 2);
     assert!(!h.state().jobs.list.more && h.state().jobs.list_refresh.is_none());
 }
+
+#[test]
+fn scheduled_route_editor_offers_all_latest_aliases_and_keeps_saved_legacy_input() {
+    let root = Root::new("jobs-latest-selector");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1600.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    click(&mut h, Role::Button, "New job");
+    choose(&mut h, "Routing", "Named model");
+    h.get_by_role_and_label(Role::ComboBox, "Model")
+        .click_accesskit();
+    h.step();
+    h.step();
+    for (_, label) in devworks_desktop::routing::LATEST_FAMILIES {
+        assert!(
+            h.query_all_by_label(label).next().is_some(),
+            "{label} offered in job form: {:?}",
+            labels(&h, Role::Button)
+        );
+    }
+    h.key_press(eframe::egui::Key::Escape);
+    settle(&mut h);
+    choose(&mut h, "Model", "Sonnet Latest");
+    assert_eq!(h.state().jobs.form.as_ref().unwrap().model, "sonnet-latest");
+    let form = h.state_mut().jobs.form.as_mut().unwrap();
+    form.model = "saved-legacy-version".into();
+    form.effort = 4;
+    settle(&mut h);
+    assert_eq!(
+        h.state().jobs.form.as_ref().unwrap().model,
+        "saved-legacy-version"
+    );
+    assert_eq!(h.state().jobs.form.as_ref().unwrap().effort, 4);
+    assert!(has_text(&h, "The saved effort is retained"));
+}

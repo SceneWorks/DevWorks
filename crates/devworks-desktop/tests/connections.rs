@@ -35,7 +35,7 @@ impl HttpTransport for OpenRouter {
         {
             return Ok(HttpResponse {
                 status: 200,
-                body: br#"{"data":[{"id":"openrouter/auto"},{"id":"a/b","context_length":8000},{"id":"c/d","context_length":4000}]}"#.to_vec(),
+                body: br#"{"data":[{"id":"openrouter/auto"},{"id":"a/b","context_length":8000},{"id":"c/d","context_length":4000},{"id":"openai/gpt-6.1-sol","context_length":100000}]}"#.to_vec(),
             });
         }
         Ok(HttpResponse {
@@ -112,7 +112,7 @@ fn settings_adds_tests_and_routes_an_api_key_connection_without_exposing_the_key
     // Test it: an authenticated model list, no inference.
     click(&mut h, Role::Button, "Test connection");
     assert!(has_text(&h, "Test passed"), "{:?}", labels(&h, Role::Label));
-    assert!(has_text(&h, "3 models discovered"));
+    assert!(has_text(&h, "4 models discovered"));
     assert!(
         http.seen
             .lock()
@@ -134,6 +134,21 @@ fn settings_adds_tests_and_routes_an_api_key_connection_without_exposing_the_key
     .unwrap();
     assert!(a.available, "{a:?}");
     assert_eq!(a.eligible_model_ids.0[0].as_str(), "openrouter-auto");
+
+    let sol = h
+        .state()
+        .settings
+        .connections
+        .catalog
+        .iter()
+        .find(|m| m.id.as_str() == "sol-latest")
+        .unwrap();
+    assert_eq!(
+        sol.available,
+        Some(true),
+        "the manual check's completed inventory reached Settings"
+    );
+    assert_eq!(sol.resolves_to_model_ids.as_ref().unwrap().0.len(), 1);
 
     // Removing the key: the secret is deleted and routing needs credentials again.
     click(&mut h, Role::Button, "Remove key");
@@ -589,4 +604,134 @@ fn a_provider_command_held_during_close_is_confirmed_after_relaunch() {
     assert!(!String::from_utf8_lossy(&frame).contains("sk-recovery-private"));
     drop(h);
     assert_provider_recovery(&root, real, &frame);
+}
+
+#[test]
+fn settings_keeps_unavailable_versions_inspectable_and_aliases_read_only() {
+    let mut h = panel(Vec::new(), None);
+    let rows = serde_json::from_value(serde_json::json!([
+        {"id":"retired-version", "displayName":"Retired version", "endpointProfile":"CompatibleChat", "upstreamModelId":"retired-upstream",
+         "enabled":true, "tierMemberships":[], "efforts":[], "imageInput":false, "tools":true, "revision":"1",
+         "available":false, "availabilityReason":"NotDiscovered", "contextTokens":"8192"},
+        {"id":"astra-latest", "displayName":"Astra Latest", "endpointProfile":"CodexSubscriptionResponses", "upstreamModelId":"astra-latest",
+         "enabled":false, "tierMemberships":[], "efforts":[], "imageInput":false, "tools":false, "revision":"1",
+         "latestFamily":"astra", "resolvesToModelIds":[], "available":false, "availabilityReason":"InventoryIncomplete"}
+    ])).unwrap();
+    h.state_mut().panel.catalog_loaded(rows);
+    h.run();
+    assert!(h.query_by_label("Retired version").is_some());
+    assert!(h.query_by_label("retired-upstream").is_some());
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Retired version context tokens")
+            .is_some()
+    );
+    assert!(h.query_by_label("Astra Latest").is_some());
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Astra Latest context tokens")
+            .is_none()
+    );
+    assert!(h.query_by_label("No current version").is_some());
+}
+
+/// Holds a background inventory response so the UI can inspect the last completed snapshot.
+#[derive(Default)]
+struct BackgroundInventory {
+    gate: Mutex<(bool, bool)>,
+    changed: std::sync::Condvar,
+    provider: OpenRouter,
+}
+impl HttpTransport for BackgroundInventory {
+    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        let mut gate = self.gate.lock().unwrap();
+        gate.0 = true;
+        self.changed.notify_all();
+        while !gate.1 {
+            gate = self.changed.wait(gate).unwrap();
+        }
+        drop(gate);
+        self.provider.send(request)
+    }
+}
+impl BackgroundInventory {
+    fn wait_started(&self) {
+        let guard = self.gate.lock().unwrap();
+        let (guard, _) = self
+            .changed
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |s| !s.0)
+            .unwrap();
+        assert!(guard.0, "background refresh started");
+    }
+    fn finish(&self) {
+        self.gate.lock().unwrap().1 = true;
+        self.changed.notify_all();
+    }
+}
+struct FinishInventory(Arc<BackgroundInventory>);
+impl Drop for FinishInventory {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
+#[test]
+fn a_completed_background_inventory_updates_settings_and_the_shared_selected_alias() {
+    let root = Root::new("connections-background-latest");
+    let http = Arc::new(BackgroundInventory::default());
+    let _finish = FinishInventory(http.clone());
+    let mut c = config(&root.0);
+    c.http = Some(http.clone());
+    c.connection_tick = Some(std::time::Duration::from_millis(10));
+    let engine = Engine::start(c).unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 1000.0);
+    settle(&mut h);
+    let key = h.state().chat.draft_key();
+    h.state_mut().chat.routing.selections.insert(
+        key.clone(),
+        devworks_desktop::routing::Selection {
+            intent: serde_json::from_value(
+                serde_json::json!({"kind":"Model","modelId":"sol-latest"}),
+            )
+            .unwrap(),
+            effort: EffortName::Default,
+        },
+    );
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Provider connections");
+    click(&mut h, Role::ComboBox, "Kind");
+    click(&mut h, Role::Button, "OpenRouter");
+    type_into(&mut h, NEW_NAME_LABEL, "OpenRouter");
+    type_into(&mut h, NEW_KEY_LABEL, "sk-or-desktop");
+    click(&mut h, Role::Button, ADD_LABEL);
+    http.wait_started();
+    assert!(
+        !h.state()
+            .settings
+            .connections
+            .catalog
+            .iter()
+            .find(|m| m.id.as_str() == "sol-latest")
+            .unwrap()
+            .available
+            .unwrap()
+    );
+    // This completes without another UI action or configure receipt.
+    http.finish();
+    step_until(
+        &mut h,
+        "completed background inventory reaches Settings",
+        |s| {
+            s.settings
+                .connections
+                .catalog
+                .iter()
+                .any(|m| m.id.as_str() == "sol-latest" && m.available == Some(true))
+        },
+    );
+    settle(&mut h);
+    click_nav(&mut h, "Chat");
+    assert!(
+        matches!(&h.state().chat.routing.selections[&key].intent, RouteIntent::Model { model_id } if model_id.as_str() == "sol-latest")
+    );
+    assert!(has_text(&h, "Sol Latest"));
+    assert!(has_text(&h, "available:"));
 }

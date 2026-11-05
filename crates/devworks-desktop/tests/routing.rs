@@ -34,7 +34,22 @@ impl ConnectionDirectory for Connected {
             id: Id::new(id).unwrap(),
             profile: profile.into(),
             state: ConnectionState::Connected,
-            discovered: None,
+            discovered: Some(if profile == "ClaudeSubscriptionMessages" {
+                [
+                    "claude-fable-5-1",
+                    "claude-opus-5-5",
+                    "claude-sonnet-5-5",
+                    "claude-haiku-5-5",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+            } else {
+                ["gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            }),
             allowed: Vec::new(),
             excluded: Vec::new(),
         })
@@ -121,7 +136,7 @@ fn pin_of(backend: &dyn Backend, session: &str) -> Option<(String, RouteIntent, 
 #[test]
 fn the_composer_offers_tiers_then_named_models_and_a_separate_effort() {
     let root = Root::new("routing-selectors");
-    let engine = start(&root);
+    let engine = start_connected(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
     assert_eq!(
@@ -155,8 +170,13 @@ fn the_composer_offers_tiers_then_named_models_and_a_separate_effort() {
         })
         .collect();
     assert!(positions.windows(2).all(|p| p[0] < p[1]), "{routes:?}");
-    // Nothing is connected in this build: the selection's availability says so.
-    assert!(has_text(&h, "no eligible model: no provider connection"));
+    for (_, label) in devworks_desktop::routing::LATEST_FAMILIES {
+        assert!(
+            routes.iter().any(|r| r == label),
+            "{label} missing from {routes:?}"
+        );
+    }
+    assert!(has_text(&h, "available:"));
     // A named model is chosen directly; effort is a separate choice from what it declares.
     choose(&mut h, ROUTE_LABEL, "Opus");
     assert_eq!(combo_text(&h, ROUTE_LABEL), "Opus");
@@ -175,7 +195,7 @@ fn the_composer_offers_tiers_then_named_models_and_a_separate_effort() {
         "Opus",
         "effort never changes the route"
     );
-    assert!(has_text(&h, "Opus · High · no eligible model"));
+    assert!(has_text(&h, "Opus · High · available:"));
     // The sidebar shows the same conversation's selection.
     click_nav(&mut h, "Settings");
     click(&mut h, Role::Button, "Workspace coordinator");
@@ -247,7 +267,7 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
     });
     settle(&mut h);
     assert!(
-        has_text(&h, "Pinned: Opus · Provider default"),
+        has_text(&h, "Pinned: claude-opus-5-5 · Provider default"),
         "{:?}",
         labels(&h, Role::Label)
     );
@@ -262,7 +282,7 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
     assert_eq!(effort, "Default");
     choose(&mut h, EFFORT_LABEL, "Medium");
     assert_eq!(pin_of(&*backend, &session).unwrap().2, "Medium");
-    assert!(has_text(&h, "Pinned: Sonnet · Medium"));
+    assert!(has_text(&h, "Pinned: claude-sonnet-5-5 · Medium"));
     // Back to a tier: router selection with pinning.
     choose(&mut h, ROUTE_LABEL, "Tier Low");
     let (model, intent, effort) = pin_of(&*backend, &session).unwrap();
@@ -285,7 +305,7 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
     settle(&mut h);
     assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
     assert_eq!(combo_text(&h, ROUTE_LABEL), "Tier Low");
-    assert!(has_text(&h, "Pinned: Haiku · Medium"));
+    assert!(has_text(&h, "Pinned: claude-haiku-5-5 · Medium"));
 }
 
 #[test]
@@ -338,7 +358,7 @@ fn an_unconfirmed_pin_change_is_confirmed_with_its_frame_at_the_next_launch() {
         "{keys:?} vs {lost:?}"
     );
     assert_eq!(pin_of(&*real, &session).unwrap().0, "haiku");
-    assert!(has_text(&h, "Pinned: Haiku"));
+    assert!(has_text(&h, "Pinned: claude-haiku-5-5"));
 }
 
 /// Starts a conversation and saves one message while every availability query is held, so the
@@ -443,7 +463,7 @@ fn a_first_route_still_waiting_at_close_is_routed_once_at_the_next_launch() {
         "routed exactly once after the relaunch"
     );
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
-    assert!(has_text(&h, "Pinned: Opus"));
+    assert!(has_text(&h, "Pinned: claude-opus-5-5"));
 }
 
 #[test]
@@ -457,7 +477,7 @@ fn a_routing_settings_save_refreshes_the_selectors_catalog() {
         .drafts
         .insert("routing.tierLow.members".into(), json!(["astra"]));
     memory.save(&root.memory()).unwrap();
-    let engine = start(&root);
+    let engine = start_connected(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
     choose(&mut h, ROUTE_LABEL, "Tier Low");
@@ -517,7 +537,10 @@ fn returning_to_a_conversation_rereads_a_pin_changed_meanwhile() {
     click(&mut h, Role::Button, "Chat History");
     click(&mut h, Role::Button, "Conversation 1");
     assert_eq!(h.state().chat.selected.as_deref(), Some(first.as_str()));
-    assert!(has_text(&h, "Pinned: Haiku"), "not the stale Opus pin");
+    assert!(
+        has_text(&h, "Pinned: claude-haiku-5-5"),
+        "not the stale Opus pin"
+    );
     assert_eq!(combo_text(&h, ROUTE_LABEL), "Haiku");
 }
 
@@ -652,7 +675,11 @@ fn the_selectors_gather_every_catalog_page() {
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
     let catalog = &h.state().chat.routing.catalog;
-    assert_eq!(catalog.len(), 259, "every page of the catalog");
+    assert_eq!(
+        catalog.len(),
+        267,
+        "every page, including the eight logical aliases"
+    );
     assert_eq!(catalog.last().unwrap().id.as_str(), "custom-249");
     assert!(h.state().chat.routing.catalog_load.is_none());
     let routes = options(&mut h, ROUTE_LABEL);
@@ -1067,4 +1094,45 @@ fn refreshes_never_stack_availability_queries_on_a_slow_router() {
     held.open_all();
     settle(&mut h);
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+}
+
+#[test]
+fn unavailable_latest_routes_are_offered_shared_and_keep_the_selected_effort() {
+    let root = Root::new("routing-latest-unavailable");
+    let engine = start(&root);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    let choices = options(&mut h, ROUTE_LABEL);
+    for (_, label) in devworks_desktop::routing::LATEST_FAMILIES {
+        assert!(choices.iter().any(|x| x == label), "{label} in {choices:?}");
+    }
+    assert!(
+        !choices.iter().any(|x| x == "Opus"),
+        "unavailable concrete versions are not new choices"
+    );
+    choose(&mut h, ROUTE_LABEL, "Astra Latest");
+    assert_eq!(combo_text(&h, ROUTE_LABEL), "Astra Latest");
+    let efforts = options(&mut h, EFFORT_LABEL);
+    assert!(efforts.iter().any(|e| e == "Provider default"));
+    assert!(
+        !efforts.iter().any(|e| e == "High"),
+        "no declared current target, no invented effort"
+    );
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, "Workspace coordinator");
+    assert_eq!(combo_text(&h, ROUTE_LABEL), "Astra Latest");
+    let key = h.state().chat.draft_key();
+    h.state_mut()
+        .chat
+        .routing
+        .selections
+        .get_mut(&key)
+        .unwrap()
+        .effort = devworks_core::protocol::records::EffortName::High;
+    settle(&mut h);
+    assert_eq!(
+        combo_text(&h, EFFORT_LABEL),
+        "Effort: High",
+        "saved constraint is retained"
+    );
 }

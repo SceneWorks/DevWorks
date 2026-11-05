@@ -3,7 +3,7 @@
 //! compatible endpoints (Ollama, LM Studio), embedding and SystemOne endpoints, plus the
 //! conversational catalog's context windows and connection bindings.
 //!
-//! Everything shown comes from `router.connections` and `router.catalog` (schema revision 2) and
+//! Everything shown comes from `router.connections` and `router.catalog` (schema revision 3) and
 //! every change is a `router.configure` command: the panel decides nothing. Secrets never sit in
 //! this state longer than one submission: an API key or pasted sign-in code is handed to the host
 //! intake (the OS secret store, or memory for a pasted code) by the request that publishes it, and
@@ -14,7 +14,7 @@ use crate::widgets::{self, Tone, chip};
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
-    ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting, RouteModel,
+    ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting, RouteCatalogModel,
 };
 use devworks_core::services::router::connections::profiles::{
     Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
@@ -84,7 +84,7 @@ pub struct ConnectionsPanel {
     pub loaded: bool,
     pub loading: bool,
     pub error: Option<String>,
-    pub catalog: Vec<RouteModel>,
+    pub catalog: Vec<RouteCatalogModel>,
     pub catalog_error: Option<String>,
     pub message: Option<(Tone, String)>,
     /// Commands submitted and not answered yet (their labels).
@@ -94,7 +94,7 @@ pub struct ConnectionsPanel {
     pub generation: u64,
     pub gathering: Vec<ConnectionRecord>,
     pub catalog_generation: u64,
-    pub catalog_gathering: Vec<RouteModel>,
+    pub catalog_gathering: Vec<RouteCatalogModel>,
     pub last_load: Option<std::time::Instant>,
     pub sequence: u64,
     /// The secret facility, whether it is session-only and whether it is refusing requests
@@ -193,7 +193,7 @@ impl ConnectionsPanel {
         self.error = None;
     }
     /// Replaces the catalog (a complete load), keeping unsaved row edits.
-    pub fn catalog_loaded(&mut self, models: Vec<RouteModel>) {
+    pub fn catalog_loaded(&mut self, models: Vec<RouteCatalogModel>) {
         for m in &models {
             let stored = ModelEdit {
                 context: m
@@ -787,7 +787,47 @@ impl ConnectionsPanel {
                     let key = m.id.as_str().to_owned();
                     let e = self.models.entry(key.clone()).or_default();
                     let name = m.display_name.0.clone();
-                    ui.label(&name);
+                    ui.vertical(|ui| {
+                        ui.label(&name);
+                        let state = match m.available {
+                            Some(true) => "Available",
+                            Some(false) => "Unavailable",
+                            None => "Availability unknown",
+                        };
+                        widgets::caption(ui, state);
+                        if let Some(why) = &m.availability_reason {
+                            widgets::caption(ui, crate::routing::reason(&why.0));
+                        }
+                        if let Some(ids) = &m.resolves_to_model_ids {
+                            let names: Vec<_> = ids
+                                .0
+                                .iter()
+                                .map(|id| {
+                                    catalog.iter().find(|m| &m.id == id).map_or_else(
+                                        || id.as_str().to_owned(),
+                                        |m| m.display_name.0.clone(),
+                                    )
+                                })
+                                .collect();
+                            widgets::caption(
+                                ui,
+                                if names.is_empty() {
+                                    "No current version".into()
+                                } else {
+                                    format!("Current: {}", names.join(", "))
+                                },
+                            );
+                        }
+                    });
+                    if crate::routing::is_latest(m) {
+                        ui.label("Latest available version");
+                        ui.label("Managed");
+                        ui.label("From current versions");
+                        ui.label("From current versions");
+                        ui.label("");
+                        ui.end_row();
+                        continue;
+                    }
                     ui.label(&m.upstream_model_id.0);
                     let r = ui.checkbox(&mut e.enabled, "");
                     named(r, egui::Role::CheckBox, format!("{name} enabled"));
@@ -994,8 +1034,19 @@ fn sign_in(id: &str, action: &str, flow: Option<&Id>, label: &str) -> Connection
 }
 
 /// The `Model` action saving a catalog row's edits (its tier memberships unchanged).
-fn model_action(m: &RouteModel, e: &ModelEdit) -> Result<Value, String> {
+fn model_action(m: &RouteCatalogModel, e: &ModelEdit) -> Result<Value, String> {
     let mut model = serde_json::to_value(m).map_err(|e| e.to_string())?;
+    // The query-only availability and alias facts are never configure input.
+    if let Some(fields) = model.as_object_mut() {
+        for key in [
+            "latestFamily",
+            "resolvesToModelIds",
+            "available",
+            "availabilityReason",
+        ] {
+            fields.remove(key);
+        }
+    }
     model["enabled"] = json!(e.enabled);
     match e.context.trim() {
         "" => {
@@ -1017,4 +1068,36 @@ fn model_action(m: &RouteModel, e: &ModelEdit) -> Result<Value, String> {
     }
     Ok(json!({"kind": "Model", "model": model,
         "expectedRevision": m.revision.get().to_string()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn model_configuration_never_submits_query_facts() {
+        let model: RouteCatalogModel = serde_json::from_value(json!({
+            "id":"version-1", "displayName":"Version 1", "endpointProfile":"CompatibleChat", "upstreamModelId":"version-1",
+            "enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":true,"revision":"1",
+            "available":false,"availabilityReason":"NotDiscovered"
+        })).unwrap();
+        let action = model_action(
+            &model,
+            &ModelEdit {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let configured: devworks_core::protocol::records::RouteModel =
+            serde_json::from_value(action["model"].clone()).unwrap();
+        assert_eq!(configured.id.as_str(), "version-1");
+        for key in [
+            "available",
+            "availabilityReason",
+            "latestFamily",
+            "resolvesToModelIds",
+        ] {
+            assert!(action["model"].get(key).is_none());
+        }
+    }
 }
