@@ -13,7 +13,9 @@ use devworks_core::ports::http::{
 };
 use devworks_core::ports::secrets::{Secret, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::records::{ConnectionLifecycle, ConnectionRecord, RouteAvailability};
+use devworks_core::protocol::records::{
+    ConnectionLifecycle, ConnectionRecord, RouteAvailability, TierName,
+};
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
@@ -3025,4 +3027,133 @@ fn latest_alias_ids_cannot_be_created_as_mutable_concrete_model_configuration() 
         cx.read(|r| r.router().route_model(&id("sol-latest")))
             .is_none()
     );
+}
+
+#[test]
+fn catalog_projected_concrete_model_edits_preserve_raw_tiers_before_and_after_promotion() {
+    let cx = Cx::new();
+    let setting = || {
+        cx.read(|r| {
+            r.configuration().current(
+                &ConfigScope::Workspace,
+                devworks_core::settings::model::NAMESPACE,
+            )
+        })
+    };
+    let revision = setting().map_or(1, |s| s.revision);
+    summary(cx.configure(json!({"kind":"Tier", "tier":"High", "expectedRevision":revision.to_string(), "memberIds":["opus"]})));
+    let before = setting().unwrap();
+    let model_from_catalog = || {
+        let OperationResult::RouterCatalog { value } = result(cx.query(
+            &cx.user(),
+            "router.catalog",
+            json!({"page":{"limit":50},"includeDisabled":true}),
+            Some(3),
+        )) else {
+            panic!("catalog")
+        };
+        let row = value
+            .items
+            .0
+            .into_iter()
+            .find(|m| m.id.as_str() == "opus")
+            .unwrap();
+        assert!(
+            row.tier_memberships.0.is_empty(),
+            "the legacy family anchor projects onto opus-latest"
+        );
+        let mut row = serde_json::to_value(row).unwrap();
+        for key in [
+            "latestFamily",
+            "resolvesToModelIds",
+            "available",
+            "availabilityReason",
+        ] {
+            row.as_object_mut().unwrap().remove(key);
+        }
+        row
+    };
+    let mut model = model_from_catalog();
+    let expected = model["revision"].as_str().unwrap().to_owned();
+    model["contextTokens"] = json!("123456");
+    assert!(
+        summary(cx.configure(json!({"kind":"Model", "model":model, "expectedRevision":expected})))
+            .2
+    );
+    assert_eq!(setting().unwrap(), before);
+    // Publish an explicit higher version on a configured connection; the old seed anchor's
+    // projection remains editable without rewriting the user's saved raw membership.
+    cx.add("claude", "ClaudeSubscriptionMessages", ANTHROPIC, None);
+    cx.write(|tx| {
+        let mut c = tx.router().connection(&id("claude"))?.unwrap();
+        let revision = c.revision;
+        c.discovered = Some(vec![DiscoveredModel {
+            id: "claude-opus-6-10".into(),
+            context_tokens: None,
+        }]);
+        c.discovered_at_ms = Some(T0);
+        tx.router().put_connection(&c, Some(revision))?;
+        let mut m = tx.router().route_model(&id("opus"))?.unwrap();
+        m.id = id("opus-new");
+        m.upstream_model_id = "claude-opus-6-10".into();
+        m.connection_id = Some(id("claude"));
+        tx.router().put_route_model(&m, None)
+    });
+    let mut model = model_from_catalog();
+    let expected = model["revision"].as_str().unwrap().to_owned();
+    model["contextTokens"] = json!("234567");
+    assert!(
+        summary(cx.configure(
+            json!({"kind":"Model", "model":model.clone(), "expectedRevision":expected})
+        ))
+        .2
+    );
+    assert_eq!(setting().unwrap(), before);
+    model["tierMemberships"] = json!(["Low"]);
+    model["revision"] = json!((expected.parse::<i64>().unwrap() + 1).to_string());
+    assert_eq!(
+        refused(cx.configure(json!({"kind":"Model", "model":model,
+        "expectedRevision":(expected.parse::<i64>().unwrap()+1).to_string()})))
+        .code,
+        DomainErrorCode::InvalidArgument
+    );
+    assert_eq!(setting().unwrap(), before);
+    assert!(
+        summary(cx.configure(
+            json!({"kind":"Tier", "tier":"High", "expectedRevision":before.revision.to_string(),
+        "memberIds":["opus-latest"]})
+        ))
+        .2
+    );
+    let members = cx.read(|r| devworks_core::services::router::tier_members(r.configuration()));
+    assert_eq!(
+        members["High"].iter().map(Id::as_str).collect::<Vec<_>>(),
+        ["opus-latest"]
+    );
+    let before_legacy_edit = setting().unwrap();
+    let OperationResult::RouterCatalog { value } = result(cx.query(
+        &cx.user(),
+        "router.catalog",
+        json!({"page":{"limit":50},"includeDisabled":true}),
+        Some(2),
+    )) else {
+        panic!("catalog")
+    };
+    let row = value
+        .items
+        .0
+        .into_iter()
+        .find(|m| m.id.as_str() == "opus-new")
+        .unwrap();
+    assert!(matches!(
+        row.tier_memberships.0.as_slice(),
+        [TierName::High]
+    ));
+    let mut row = serde_json::to_value(row).unwrap();
+    let expected = row["revision"].as_str().unwrap().to_owned();
+    row["contextTokens"] = json!("345678");
+    assert!(
+        summary(cx.configure(json!({"kind":"Model", "model":row, "expectedRevision":expected}))).2
+    );
+    assert_eq!(setting().unwrap(), before_legacy_edit);
 }

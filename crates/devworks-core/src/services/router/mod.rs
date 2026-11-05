@@ -438,10 +438,15 @@ impl Facts {
         need: &Need,
     ) -> Option<Assessed> {
         self.contains_pin(intent, pin).then(|| {
+            let scope: Vec<_> = connections
+                .iter()
+                .filter(|c| c.id == pin.connection_id)
+                .cloned()
+                .collect();
             select::assess(
                 &pin.model_id,
                 self.models.get(pin.model_id.as_str()),
-                connections,
+                &scope,
                 &self.cooling,
                 need,
                 Some(&pin.connection_id),
@@ -460,10 +465,13 @@ impl Facts {
         let tier = matches!(intent, RouteIntent::Tier { .. });
         for slot in self.pool(intent) {
             let family = Self::family_slot(&slot, tier);
-            let targets = family.map(|f| latest::targets(f, &self.models, connections));
+            let targets = family.map(|f| latest::scoped_targets(f, &self.models, connections));
             let undiscovered = targets.as_ref().is_some_and(Vec::is_empty);
             let ids = match (family, targets) {
-                (Some(_), Some(targets)) if !targets.is_empty() => targets,
+                (Some(_), Some(targets)) if !targets.is_empty() => targets
+                    .into_iter()
+                    .map(|target| (target.model_id, Some(target.connection_id)))
+                    .collect(),
                 (Some(family), _) => {
                     // Keep the unavailable slot's actual configuration reasons visible.
                     let configured: Vec<Id> = self
@@ -478,21 +486,35 @@ impl Facts {
                         .cloned()
                         .collect();
                     if configured.is_empty() {
-                        vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
+                        vec![(
+                            Id::new(latest::alias_id(family)).expect("reserved alias"),
+                            None,
+                        )]
                     } else {
-                        configured
+                        configured.into_iter().map(|id| (id, None)).collect()
                     }
                 }
-                _ => vec![slot],
+                _ => vec![(slot, None)],
             };
             let mut assessed: Vec<Assessed> = ids
                 .into_iter()
-                .map(|id| {
-                    let conn = preferred.filter(|(m, _)| *m == &id).map(|(_, c)| c);
+                .map(|(id, target_connection)| {
+                    // A globally configured model may be latest only on one connection.
+                    // A preference would permit fallback and lose that identity constraint.
+                    let scope: Option<Vec<_>> = target_connection.as_ref().map(|target| {
+                        connections
+                            .iter()
+                            .filter(|c| &c.id == target)
+                            .cloned()
+                            .collect()
+                    });
+                    let conn = target_connection
+                        .as_ref()
+                        .or_else(|| preferred.filter(|(m, _)| *m == &id).map(|(_, c)| c));
                     let mut a = select::assess(
                         &id,
                         self.models.get(id.as_str()),
-                        connections,
+                        scope.as_deref().unwrap_or(connections),
                         &self.cooling,
                         need,
                         conn,
@@ -513,13 +535,43 @@ impl Facts {
                 assessed = vec![assessed.remove(at)];
             }
             for a in assessed {
-                if !out.iter().any(|old: &Assessed| old.model_id == a.model_id) {
+                if !out.iter().any(|old: &Assessed| {
+                    old.model_id == a.model_id
+                        && old.connection == a.connection
+                        && old.blocks == a.blocks
+                }) {
                     out.push(a);
                 }
             }
         }
         out
     }
+}
+
+/// The exact read-only tier annotations published by a qualified catalog revision. Reused
+/// when a concrete Model edit echoes catalog metadata; tier settings have their own command.
+fn catalog_tier_members(
+    members: &BTreeMap<&'static str, Vec<Id>>,
+    models: &BTreeMap<String, StoredRouteModel>,
+    connections: &[crate::ports::router::ConnectionStatus],
+    revision: u32,
+) -> BTreeMap<&'static str, Vec<Id>> {
+    members
+        .iter()
+        .map(|(tier, ids)| {
+            let ids = ids
+                .iter()
+                .flat_map(|id| match Facts::family_slot(id, true) {
+                    Some(family) if revision >= 3 => {
+                        vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
+                    }
+                    Some(family) => latest::targets(family, models, connections),
+                    None => vec![id.clone()],
+                })
+                .collect();
+            (*tier, ids)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -746,6 +798,12 @@ impl InferenceRouter {
             None => "Initial",
             Some(_) if !same_intent => "SelectionChanged",
             Some(_) if !same_effort => "EffortChanged",
+            Some(p)
+                if p.model_id == chosen.model_id
+                    && chosen.connection.as_ref() != Some(&p.connection_id) =>
+            {
+                "ConnectionChanged"
+            }
             Some(_) => "Failover",
         };
         let pin = self.write_pin(
@@ -932,23 +990,7 @@ impl InferenceRouter {
         )?;
         let connections = self.connections.connections(snapshot.router())?;
         let need = Need::parse("Default", []).expect("default request");
-        let projected_members: BTreeMap<&'static str, Vec<Id>> = f
-            .members
-            .iter()
-            .map(|(tier, members)| {
-                let ids = members
-                    .iter()
-                    .flat_map(|id| match Facts::family_slot(id, true) {
-                        Some(family) if revision >= 3 => {
-                            vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
-                        }
-                        Some(family) => latest::targets(family, &f.models, &connections),
-                        None => vec![id.clone()],
-                    })
-                    .collect();
-                (*tier, ids)
-            })
-            .collect();
+        let projected_members = catalog_tier_members(&f.members, &f.models, &connections, revision);
         let binding = CursorBinding::new(
             ctx,
             "router.catalog",
@@ -1241,10 +1283,15 @@ impl InferenceRouter {
         if let Some(session) = &request.session_id
             && let Some(pin) = snapshot.router().session_pin(session)?
         {
+            let scope: Vec<_> = connections
+                .iter()
+                .filter(|c| c.id == pin.connection_id)
+                .cloned()
+                .collect();
             let a = select::assess(
                 &pin.model_id,
                 f.models.get(pin.model_id.as_str()),
-                &connections,
+                &scope,
                 &f.cooling,
                 &need,
                 Some(&pin.connection_id),

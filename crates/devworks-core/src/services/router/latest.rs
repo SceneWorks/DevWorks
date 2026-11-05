@@ -98,18 +98,29 @@ pub fn parse(upstream: &str) -> Option<ParsedVersion> {
     })
 }
 
+/// One concrete target and the exact connection scope in which it is the numeric maximum.
+#[derive(Clone, Debug)]
+pub struct ScopedTarget {
+    pub model_id: crate::protocol::Id,
+    pub connection_id: crate::protocol::Id,
+}
+
 /// Current targets of a family, independently in each configured connection/provider scope.
 /// Inventory and policy establish identity first; credentials, cooldowns and request capability
 /// constraints are assessed afterwards and cannot relabel an older release as latest.
-pub fn targets(
+pub fn scoped_targets(
     family: &str,
     models: &std::collections::BTreeMap<String, crate::ports::storage::StoredRouteModel>,
     connections: &[crate::ports::router::ConnectionStatus],
-) -> Vec<crate::protocol::Id> {
-    use std::collections::{BTreeMap, BTreeSet};
+) -> Vec<ScopedTarget> {
+    use std::collections::BTreeMap;
     let mut best: BTreeMap<
-        (String, String, String),
-        (ParsedVersion, &crate::ports::storage::StoredRouteModel),
+        (String, String),
+        (
+            ParsedVersion,
+            &crate::ports::storage::StoredRouteModel,
+            crate::protocol::Id,
+        ),
     > = BTreeMap::new();
     for model in models.values() {
         let Some(parsed) = parse(&model.upstream_model_id).filter(|p| p.family == family) else {
@@ -129,9 +140,8 @@ pub fn targets(
             let key = (
                 model.endpoint_profile.clone(),
                 connection.id.as_str().to_owned(),
-                parsed.namespace.clone(),
             );
-            let replace = best.get(&key).is_none_or(|(old, previous)| {
+            let replace = best.get(&key).is_none_or(|(old, previous, _)| {
                 parsed.version > old.version
                     || parsed.version == old.version
                         && (
@@ -145,13 +155,32 @@ pub fn targets(
                         )
             });
             if replace {
-                best.insert(key, (parsed.clone(), model));
+                best.insert(key, (parsed.clone(), model, connection.id.clone()));
             }
         }
     }
-    let mut seen = BTreeSet::new();
     best.into_values()
-        .filter_map(|(_, m)| seen.insert(m.id.as_str().to_owned()).then(|| m.id.clone()))
+        .map(|(_, m, connection_id)| ScopedTarget {
+            model_id: m.id.clone(),
+            connection_id,
+        })
+        .collect()
+}
+
+/// Deduplicated catalog projection of current targets. Routing must use `scoped_targets` so a
+/// global row cannot escape the connection where it actually is the numeric maximum.
+pub fn targets(
+    family: &str,
+    models: &std::collections::BTreeMap<String, crate::ports::storage::StoredRouteModel>,
+    connections: &[crate::ports::router::ConnectionStatus],
+) -> Vec<crate::protocol::Id> {
+    let mut seen = std::collections::BTreeSet::new();
+    scoped_targets(family, models, connections)
+        .into_iter()
+        .filter_map(|target| {
+            seen.insert(target.model_id.as_str().to_owned())
+                .then_some(target.model_id)
+        })
         .collect()
 }
 
