@@ -76,7 +76,7 @@ fn get(s: &SqliteStore) -> StoredBrowserSession {
 }
 
 #[test]
-fn migration_16_adds_browser_sessions_on_top_of_version_12() {
+fn migration_21_adds_browser_sessions_on_top_of_version_12() {
     let m = MIGRATIONS
         .iter()
         .find(|m| m.version == 21)
@@ -86,7 +86,7 @@ fn migration_16_adds_browser_sessions_on_top_of_version_12() {
         MIGRATION_0021_SHA256,
         "an applied migration was edited"
     );
-    // The writer floor keeps migration 14's: applying 21 must not lower it.
+    // The writer floor keeps indexing migration 19's: applying 21 must not lower it.
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 19));
     assert!(!m.rebuilds_tables);
     let h = Harness::new();
