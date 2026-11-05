@@ -19,16 +19,17 @@ use crate::ports::storage::{
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     AcceptanceCriterion, CriterionState, DetailLevel, FeaturePatch, HandoffRecord, MutationSummary,
-    PageRequest, QueuePlacement, QueueSide, TouchRef, WorkComment, WorkLink, WorkRecord,
+    PageRequest, QueuePlacement, QueueSide, TouchRef, WorkComment, WorkItemType, WorkLink,
+    WorkRecord,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Page};
+use crate::protocol::support::{BoundedList, BoundedText, Label, Page};
 use crate::protocol::{EventId, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::{control_of, ensure_control};
 use crate::services::sessions::{Failure, rev};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Which entry point a request came through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,10 +299,15 @@ pub(crate) struct NewCard<'a> {
     pub priority: i64,
     pub caller_ref: Option<Id>,
     pub acceptance: Vec<AcceptanceCriterion>,
+    pub task_type: Option<WorkItemType>,
+    pub labels: Vec<Label>,
 }
 
 /// A planning card's normalized patch (TaskPatch and IssuePatch).
 struct CardPatch {
+    task_type: Option<WorkItemType>,
+    clear_task_type: bool,
+    labels: Option<Vec<Label>>,
     title: Option<String>,
     description: Option<String>,
     status_id: Option<Id>,
@@ -316,6 +322,54 @@ struct CardPatch {
     handoff: Option<HandoffRecord>,
     acceptance_report: Option<ArtifactRef>,
     priority: Option<i32>,
+}
+
+/// Metadata changes share the normal work revision and history. Label spelling and order
+/// are authored values; uniqueness uses the same case-insensitive identity as allocation.
+pub(crate) fn apply_metadata(
+    brief: &mut WorkBrief,
+    task_type: Option<&WorkItemType>,
+    clear_task_type: bool,
+    labels: Option<&[Label]>,
+    changed: &mut Vec<&'static str>,
+) -> R<bool> {
+    if clear_task_type && task_type.is_some() {
+        return Err(invalid("task_type", None));
+    }
+    let mut touched = false;
+    if clear_task_type || task_type.is_some() {
+        let next = if clear_task_type {
+            None
+        } else {
+            task_type.cloned()
+        };
+        if serde_json::to_value(&brief.task_type).ok() != serde_json::to_value(&next).ok() {
+            brief.task_type = next;
+            changed.push("taskType");
+            touched = true;
+        }
+    }
+    if let Some(labels) = labels {
+        let mut seen = BTreeSet::new();
+        if labels.len() > 128
+            || labels
+                .iter()
+                .any(|l| l.0.trim().is_empty() || !seen.insert(l.0.to_lowercase()))
+        {
+            return Err(invalid("labels", None));
+        }
+        if !brief
+            .labels
+            .iter()
+            .map(|l| &l.0)
+            .eq(labels.iter().map(|l| &l.0))
+        {
+            brief.labels = labels.to_vec();
+            changed.push("labels");
+            touched = true;
+        }
+    }
+    Ok(touched)
 }
 
 impl WorkService {
@@ -476,11 +530,18 @@ impl WorkService {
             None => PROJECT_QUEUE.to_owned(),
         };
         let now = tx.now_ms();
-        let brief = WorkBrief {
+        let mut brief = WorkBrief {
             description: c.description.to_owned(),
             acceptance: c.acceptance,
             ..WorkBrief::default()
         };
+        apply_metadata(
+            &mut brief,
+            c.task_type.as_ref(),
+            false,
+            Some(&c.labels),
+            &mut Vec::new(),
+        )?;
         let w = StoredWork {
             id: tx.new_id(IdKind::Link),
             project_id: c.project.clone(),
@@ -544,6 +605,8 @@ impl WorkService {
                 priority: i64::from(i.priority),
                 caller_ref: None,
                 acceptance: Vec::new(),
+                task_type: i.task_type.clone(),
+                labels: i.labels.as_ref().map(|l| l.0.clone()).unwrap_or_default(),
             },
         )?;
         Ok(DomainDecision::Applied {
@@ -573,6 +636,8 @@ impl WorkService {
                 priority: i64::from(i.priority),
                 caller_ref: None,
                 acceptance: Vec::new(),
+                task_type: i.task_type.clone(),
+                labels: i.labels.as_ref().map(|l| l.0.clone()).unwrap_or_default(),
             },
         )?;
         Ok(DomainDecision::Applied {
@@ -634,6 +699,13 @@ impl WorkService {
         let mut brief = WorkBrief::of(&before)?;
         let mut changed: Vec<&str> = Vec::new();
         let mut queues: Vec<String> = Vec::new();
+        let metadata_changed = apply_metadata(
+            &mut brief,
+            patch.task_type.as_ref(),
+            patch.clear_task_type,
+            patch.labels.as_deref(),
+            &mut changed,
+        )?;
         if let Some(t) = &patch.title {
             require_title(t)?;
             if t != &before.title {
@@ -782,6 +854,9 @@ impl WorkService {
         if changed.is_empty() {
             return Ok((before, false));
         }
+        if metadata_changed && !queues.contains(&before.queue()) {
+            queues.push(before.queue());
+        }
         let statuses = tx.work().statuses(&before.project_id)?;
         let semantic = after
             .status_id
@@ -826,6 +901,9 @@ impl WorkService {
     ) -> R<DomainDecision> {
         let c = &i.changes;
         let patch = CardPatch {
+            task_type: c.task_type.clone(),
+            clear_task_type: c.clear_task_type.unwrap_or(false),
+            labels: c.labels.as_ref().map(|l| l.0.clone()),
             title: c.title.as_ref().map(|t| t.0.clone()),
             description: c.description.as_ref().map(|t| t.0.clone()),
             status_id: c.status_id.clone(),
@@ -862,6 +940,9 @@ impl WorkService {
     ) -> R<DomainDecision> {
         let c = &i.changes;
         let patch = CardPatch {
+            task_type: c.task_type.clone(),
+            clear_task_type: c.clear_task_type.unwrap_or(false),
+            labels: c.labels.as_ref().map(|l| l.0.clone()),
             title: c.title.as_ref().map(|t| t.0.clone()),
             description: c.description.as_ref().map(|t| t.0.clone()),
             status_id: c.status_id.clone(),
@@ -904,6 +985,13 @@ impl WorkService {
         let mut after = before.clone();
         let mut brief = WorkBrief::of(&before)?;
         let mut changed: Vec<&str> = Vec::new();
+        let metadata_changed = apply_metadata(
+            &mut brief,
+            None,
+            false,
+            c.labels.as_ref().map(|l| l.0.as_slice()),
+            &mut changed,
+        )?;
         let approved = tx
             .work()
             .feature_plan(&before.id)?
@@ -1014,6 +1102,9 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        if metadata_changed {
+            bump(tx, &before.project_id, &[before.queue()])?;
+        }
         if readiness_changed {
             changed.push("readiness");
         }
