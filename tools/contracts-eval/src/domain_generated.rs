@@ -9615,6 +9615,7 @@ pub struct EvalReport {
     pub outcome: EvalOutcome,
     pub coverage: EvalCoverage,
     pub runs: Rows<EvalRunResult>,
+    pub session_sequence: Counter,
 }
 impl Check for EvalReport {
     fn check(&self) -> Result<(), String> {
@@ -9629,6 +9630,7 @@ impl Check for EvalReport {
         self.outcome.check()?;
         self.coverage.check()?;
         self.runs.check()?;
+        self.session_sequence.check()?;
         super::domain_rules::record(
             "EvalReport",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,

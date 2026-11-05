@@ -3732,7 +3732,8 @@
         "measurement_digest": "Digest",
         "outcome": "EvalOutcome",
         "coverage": "EvalCoverage",
-        "runs": "Rows<EvalRunResult>"
+        "runs": "Rows<EvalRunResult>",
+        "session_sequence": "Counter"
       }
     },
     "EvalRevisionSource": {

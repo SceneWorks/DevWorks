@@ -3510,6 +3510,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `outcome` | `EvalOutcome` |
 | `coverage` | `EvalCoverage` |
 | `runs` | `Rows<EvalRunResult>` |
+| `sessionSequence` | `Counter` |
 
 ### EvalRevisionSource
 
