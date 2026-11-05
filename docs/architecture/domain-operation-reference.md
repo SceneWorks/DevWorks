@@ -703,7 +703,7 @@ All 356 qualified operations have typed input/result candidates. Existing input 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
 | `evals.grade` | **Command**<br>`sessionId`: `Id`<br>`suite`: `EvalSuiteSnapshot` | `EvalReport` |
-| `evals.results` | **Query**<br>`sessionId`: `Id`<br>`page`: `PageRequest` | `Page<EvalReport>` |
+| `evals.results` | **Query**<br>`sessionId`: `Id`<br>`page`: `PageRequest` | `EvalReportPage` |
 
 ## Domain types
 
@@ -3520,6 +3520,14 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `kind` | `Label` |
 | `revision` | `Revision` |
 | `disposition` | `Label` |
+
+### EvalReportPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<EvalReport>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
 
 ## Machine sources
 

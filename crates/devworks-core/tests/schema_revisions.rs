@@ -589,8 +589,8 @@ const RELATIVE_PATH: &str = r"^(?![A-Za-z]:)(?:(?!\.{1,2}(?:[/\\]|$))[^/\\\u0000
 const RECORDED_RELATIVE_PATH: &str =
     r"^(?:(?!\.{1,2}(?:/|$))[^/\u0000]+)(?:/(?:(?!\.{1,2}(?:/|$))[^/\u0000]+))*$";
 
-/// Removes the two documented exceptions from a revision-1 document: the branches of the new
-/// `artifacts.tag` operation (with the definitions only they use) and the hardened
+/// Removes documented exceptions from a revision-1 document: newly registered operation
+/// branches (`artifacts.tag`, `evals.grade`, `evals.results`) and their private definitions; the hardened
 /// `RelativePath` pattern (a fix applied at every revision).
 fn without_exceptions(mut doc: Value) -> Value {
     fn walk(v: &mut Value) {
@@ -599,7 +599,10 @@ fn without_exceptions(mut doc: Value) -> Value {
                 for key in ["oneOf", "anyOf"] {
                     if let Some(Value::Array(alts)) = m.get_mut(key) {
                         alts.retain(|a| {
-                            a.pointer("/properties/kind/const") != Some(&json!("artifacts.tag"))
+                            !matches!(
+                                a.pointer("/properties/kind/const").and_then(Value::as_str),
+                                Some("artifacts.tag" | "evals.grade" | "evals.results")
+                            )
                         });
                     }
                 }

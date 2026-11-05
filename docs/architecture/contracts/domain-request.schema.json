@@ -6031,6 +6031,27 @@
             "tags"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "evals.grade",
+              "type": "string"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "suite": {
+              "$ref": "#/$defs/EvalSuiteSnapshot"
+            }
+          },
+          "required": [
+            "kind",
+            "sessionId",
+            "suite"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9427,6 +9448,27 @@
             "page"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "evals.results",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "sessionId",
+            "page"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9514,6 +9556,103 @@
       },
       "required": [
         "name"
+      ],
+      "type": "object"
+    },
+    "EvalDeterministicCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "measurement": {
+          "$ref": "#/$defs/EvalMeasurementKind"
+        },
+        "predicate": {
+          "$ref": "#/$defs/EvalPredicate"
+        },
+        "ruleRef": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "id",
+        "ruleRef",
+        "measurement",
+        "predicate"
+      ],
+      "type": "object"
+    },
+    "EvalMeasurementKind": {
+      "enum": [
+        "Proxy",
+        "EnforcedRule"
+      ],
+      "type": "string"
+    },
+    "EvalPredicate": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ToolSucceeded",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/Text1To256"
+            }
+          },
+          "required": [
+            "kind",
+            "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryKind": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "TranscriptContains",
+              "type": "string"
+            },
+            "text": {
+              "$ref": "#/$defs/Text1To4096"
+            }
+          },
+          "required": [
+            "kind",
+            "entryKind",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EvalSuiteSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/List_EvalDeterministicCheck_1_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "name",
+        "checks"
       ],
       "type": "object"
     },
@@ -10399,6 +10538,14 @@
       },
       "maxItems": 128,
       "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalDeterministicCheck_1_128": {
+      "items": {
+        "$ref": "#/$defs/EvalDeterministicCheck"
+      },
+      "maxItems": 128,
+      "minItems": 1,
       "type": "array"
     },
     "List_FeaturePlanDraft_1_20": {

@@ -732,7 +732,7 @@ pub enum OperationResult {
     #[serde(rename = "evals.grade")]
     EvalsGrade { value: EvalReport },
     #[serde(rename = "evals.results")]
-    EvalsResults { value: Page<EvalReport> },
+    EvalsResults { value: EvalReportPage },
 }
 impl OperationResult {
     pub fn operation(&self) -> &'static str {

@@ -2485,6 +2485,422 @@
       ],
       "type": "string"
     },
+    "EvalCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "eligible": {
+          "$ref": "#/$defs/Counter"
+        },
+        "failed": {
+          "$ref": "#/$defs/Counter"
+        },
+        "graded": {
+          "$ref": "#/$defs/Counter"
+        },
+        "passRate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Probability"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "passed": {
+          "$ref": "#/$defs/Counter"
+        },
+        "ungraded": {
+          "$ref": "#/$defs/Counter"
+        },
+        "ungradedReasons": {
+          "$ref": "#/$defs/List_EvalOutcomeCount_0_500"
+        }
+      },
+      "required": [
+        "eligible",
+        "graded",
+        "ungraded",
+        "passed",
+        "failed",
+        "ungradedReasons"
+      ],
+      "type": "object"
+    },
+    "EvalDeterministicCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "measurement": {
+          "$ref": "#/$defs/EvalMeasurementKind"
+        },
+        "predicate": {
+          "$ref": "#/$defs/EvalPredicate"
+        },
+        "ruleRef": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "id",
+        "ruleRef",
+        "measurement",
+        "predicate"
+      ],
+      "type": "object"
+    },
+    "EvalInstanceResult": {
+      "additionalProperties": false,
+      "properties": {
+        "checkId": {
+          "$ref": "#/$defs/Id"
+        },
+        "coverage": {
+          "$ref": "#/$defs/EvalCoverage"
+        },
+        "detail": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EvalOutcome"
+        },
+        "revision": {
+          "$ref": "#/$defs/EvalRevisionContext"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvalStepSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "checkId",
+        "revision",
+        "outcome",
+        "coverage",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "EvalMeasurementKind": {
+      "enum": [
+        "Proxy",
+        "EnforcedRule"
+      ],
+      "type": "string"
+    },
+    "EvalOutcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "unclear",
+        "not_applicable",
+        "evidence_unavailable",
+        "grader_error",
+        "cancelled",
+        "budget_exhausted"
+      ],
+      "type": "string"
+    },
+    "EvalOutcomeCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EvalOutcome"
+        }
+      },
+      "required": [
+        "outcome",
+        "count"
+      ],
+      "type": "object"
+    },
+    "EvalPredicate": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ToolSucceeded",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/Text1To256"
+            }
+          },
+          "required": [
+            "kind",
+            "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryKind": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "TranscriptContains",
+              "type": "string"
+            },
+            "text": {
+              "$ref": "#/$defs/Text1To4096"
+            }
+          },
+          "required": [
+            "kind",
+            "entryKind",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EvalReport": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/EvalCoverage"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "measurementDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EvalOutcome"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runs": {
+          "$ref": "#/$defs/List_EvalRunResult_0_500"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sessionRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sessionSequence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "sourceWatermark": {
+          "$ref": "#/$defs/Counter"
+        },
+        "suite": {
+          "$ref": "#/$defs/EvalSuiteSnapshot"
+        }
+      },
+      "required": [
+        "id",
+        "sessionId",
+        "suite",
+        "createdAtMs",
+        "sourceWatermark",
+        "sessionRevision",
+        "measurementDigest",
+        "outcome",
+        "coverage",
+        "runs",
+        "sessionSequence"
+      ],
+      "type": "object"
+    },
+    "EvalReportPage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_EvalReport_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "EvalRevisionContext": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contextEpoch": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "Exact",
+              "type": "string"
+            },
+            "sources": {
+              "$ref": "#/$defs/List_EvalRevisionSource_1_128"
+            }
+          },
+          "required": [
+            "kind",
+            "contextEpoch",
+            "sources"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contextEpoch": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "Mixed",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "sources": {
+              "$ref": "#/$defs/List_EvalRevisionSource_0_128"
+            }
+          },
+          "required": [
+            "kind",
+            "contextEpoch",
+            "sources",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EvalRevisionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sourceId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceId",
+        "kind",
+        "revision",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    "EvalRunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/EvalCoverage"
+        },
+        "instances": {
+          "$ref": "#/$defs/List_EvalInstanceResult_0_500"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EvalOutcome"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sessionId",
+        "outcome",
+        "coverage",
+        "instances"
+      ],
+      "type": "object"
+    },
+    "EvalStepSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sessionId",
+        "sequence",
+        "entryId",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "EvalSuiteSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/List_EvalDeterministicCheck_1_128"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "name",
+        "checks"
+      ],
+      "type": "object"
+    },
     "Event": {
       "additionalProperties": false,
       "properties": {
@@ -5094,6 +5510,62 @@
         "$ref": "#/$defs/EffortName"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalDeterministicCheck_1_128": {
+      "items": {
+        "$ref": "#/$defs/EvalDeterministicCheck"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "List_EvalInstanceResult_0_500": {
+      "items": {
+        "$ref": "#/$defs/EvalInstanceResult"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalOutcomeCount_0_500": {
+      "items": {
+        "$ref": "#/$defs/EvalOutcomeCount"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalReport_0_500": {
+      "items": {
+        "$ref": "#/$defs/EvalReport"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalRevisionSource_0_128": {
+      "items": {
+        "$ref": "#/$defs/EvalRevisionSource"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_EvalRevisionSource_1_128": {
+      "items": {
+        "$ref": "#/$defs/EvalRevisionSource"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "List_EvalRunResult_0_500": {
+      "items": {
+        "$ref": "#/$defs/EvalRunResult"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -11809,6 +12281,40 @@
             },
             "value": {
               "$ref": "#/$defs/MutationSummary"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "evals.grade",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EvalReport"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "evals.results",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EvalReportPage"
             }
           },
           "required": [

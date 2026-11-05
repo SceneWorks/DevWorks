@@ -3744,6 +3744,14 @@
         "revision": "Revision",
         "disposition": "Label"
       }
+    },
+    "EvalReportPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<EvalReport>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
     }
   },
   "operations": {
@@ -7871,7 +7879,7 @@
         "session_id": "Id",
         "page": "PageRequest"
       },
-      "result": "Page<EvalReport>",
+      "result": "EvalReportPage",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query."

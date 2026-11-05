@@ -2320,7 +2320,7 @@
 <tr>
 <td><code>evals.results</code></td>
 <td><strong>Query</strong><br><code>sessionId</code>: <code>Id</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;EvalReport&gt;</code></td>
+<td><code>EvalReportPage</code></td>
 </tr>
 </tbody></table>
 <h2 id="domain-types">Domain types</h2>
@@ -10009,6 +10009,27 @@
 <tr>
 <td><code>disposition</code></td>
 <td><code>Label</code></td>
+</tr>
+</tbody></table>
+<h3 id="evalreportpage">EvalReportPage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;EvalReport&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
 </tr>
 </tbody></table>
 <h2 id="machine-sources">Machine sources</h2>

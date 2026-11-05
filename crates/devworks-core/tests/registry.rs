@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 359);
+    assert_eq!(count, 361);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated

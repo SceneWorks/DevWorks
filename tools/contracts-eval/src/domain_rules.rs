@@ -482,7 +482,12 @@ fn eval_record(name: &str, v: &Value) -> Result<(), String> {
             "empty transcript match is not a measurement",
         )?;
     }
+    if name == "EvalReportPage" {
+        require(v["hasMore"] == present(v, "nextCursor"), "eval page continuation mismatch")?;
+    }
     if name == "EvalSuiteSnapshot" {
+        require(serde_json::to_vec(v).map_err(|e| e.to_string())?.len() <= 64 * 1024,
+            "eval suite snapshot exceeds 64 KiB")?;
         let checks = v["checks"].as_array().ok_or("missing eval checks")?;
         let mut seen = std::collections::HashSet::new();
         require(
