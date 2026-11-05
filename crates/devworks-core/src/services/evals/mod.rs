@@ -20,7 +20,7 @@ use crate::ports::{
 use crate::protocol::provider::{Digest, TranscriptBody, UserContent};
 use crate::protocol::records::*;
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Check, Page, Probability};
+use crate::protocol::support::{BoundedList, BoundedText, Check, Probability};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::cursor::CursorBinding;
 use crate::services::sessions::{
@@ -83,6 +83,11 @@ impl EvalService {
                 stopped,
             )
         })?;
+        // Interrupted automatic work remains retryable after restart. Persisting a cancelled
+        // report under this source identity would prevent catch-up from ever grading it.
+        if stopped() {
+            return Err(invalid("automatic grading stopped"));
+        }
         run_write(store, WriteOptions::default(), move |tx| {
             persist(tx, &report, true)
         })
@@ -609,7 +614,7 @@ impl QueryHandler for EvalService {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((
                 OperationResult::EvalsResults {
-                    value: Page {
+                    value: EvalReportPage {
                         items: BoundedList(reports),
                         next_cursor: next,
                         has_more: more,
