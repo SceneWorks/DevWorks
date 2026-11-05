@@ -748,19 +748,20 @@ impl KnowledgeScreen {
     }
     /// The diagnostics query that previews deleting `cleanup_source` in the listed scope.
     pub fn preview_body(&self) -> Result<(String, Value), String> {
-        let source = self.cleanup_source.trim();
-        if Id::new(source).is_err() {
-            return Err("A source is 1-128 letters, digits, '-' or '_'.".into());
+        let source = self.cleanup_source.as_str();
+        if serde_json::from_value::<devworks_core::protocol::support::Label>(json!(source)).is_err()
+        {
+            return Err("A source is a nonempty label of at most 256 characters.".into());
         }
         Ok((
             source.to_owned(),
-            json!({"scope": self.scope(), "sourceId": source}),
+            json!({"scope": self.scope(), "sourceLabel": source}),
         ))
     }
     /// Applies a preview reply for `source` (ignored when the field names another source now).
     pub fn preview_reply(&mut self, source: &str, outcome: QueryOutcome) {
         self.source_preview = None;
-        if self.cleanup_source.trim() != source {
+        if self.cleanup_source.as_str() != source {
             return;
         }
         match ops::query_result(outcome) {
@@ -795,11 +796,11 @@ impl KnowledgeScreen {
         let p = self
             .source_preview
             .as_ref()
-            .filter(|p| p.source == self.cleanup_source.trim())
+            .filter(|p| p.source == self.cleanup_source.as_str())
             .ok_or("Preview the source first.")?;
         Ok((
             "knowledge.delete_by_source",
-            json!({"scope": self.scope(), "sourceId": p.source,
+            json!({"scope": self.scope(), "sourceLabel": p.source,
                 "expectedScopeRevision": p.scope_revision.to_string(),
                 "previewDigest": p.digest}),
         ))
@@ -810,7 +811,8 @@ impl KnowledgeScreen {
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let r = ui.add(
-                        egui::TextEdit::singleline(&mut self.cleanup_source)
+                        egui::TextEdit::multiline(&mut self.cleanup_source)
+                            .desired_rows(1)
                             .hint_text("Source, such as a test run")
                             .desired_width(220.0),
                     );
@@ -1640,8 +1642,16 @@ impl KnowledgeScreen {
                 for a in &l.addressed_by.0 {
                     widgets::caption(ui, format!("Addressed by {} {}", wire(&a.kind), a.name.0));
                 }
-                for ch in &l.challenges.0 {
-                    widgets::caption(ui, format!("Challenge ({}): {}", wire(&ch.state), ch.reason.0));
+            }
+            let challenges = c.challenges.as_ref().map(|v| v.0.as_slice())
+                .or_else(|| c.lesson.as_ref().map(|l| l.challenges.0.as_slice())).unwrap_or_default();
+            for ch in challenges {
+                widgets::caption(ui, format!("Challenge ({}): {}", wire(&ch.state), ch.reason.0));
+                if !ch.evidence_ids.0.is_empty() {
+                    widgets::caption(ui, format!("Citations: {}", ch.evidence_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
+                }
+                if let Some(resolution) = &ch.resolution {
+                    widgets::caption(ui, format!("Resolution: {}", resolution.0));
                 }
             }
             if !bundle.conflicts.0.is_empty() {

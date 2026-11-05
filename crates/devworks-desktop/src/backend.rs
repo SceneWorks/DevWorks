@@ -153,6 +153,11 @@ pub enum Slot {
     AddonsLogs(String),
     /// The Add-ons screen's one lifecycle command (or install-from-file task) at a time.
     AddonsCommand,
+    /// Bundle artifact save before the exact install/update command; retained at close.
+    AddonsSave {
+        update: Option<String>,
+        registry: i64,
+    },
     /// The runtime probe and index refresh behind the Add-ons screen.
     AddonsDiscovery,
     /// A page of the router catalog for the composer's selectors (its load generation).
@@ -285,7 +290,7 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
-    /// An attachment's prepared `artifacts.save` frame, not admitted yet.
+    /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared { frame: Vec<u8> },
     /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
     /// outcome is confirmed by resubmitting that frame, never a new one).
@@ -295,8 +300,6 @@ pub enum TaskOutput {
     },
     /// A decoded preview image (RGBA, unmultiplied).
     Preview { size: [usize; 2], rgba: Vec<u8> },
-    /// An add-on install or update from a bundle file (its artifact saved first).
-    Package { outcome: CommandOutcome },
     /// Package runtimes and indexes were refreshed.
     Refreshed,
 }
@@ -342,6 +345,7 @@ pub const COMMANDS: &[&str] = &[
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "artifacts.save",
     "addons.install",
     "addons.update",
     "addons.enable",
@@ -349,6 +353,7 @@ pub const COMMANDS: &[&str] = &[
     "addons.rollback",
     "addons.uninstall",
     "addons.configure",
+    "router.configure",
     "router.pin",
     "router.route",
     "projects.create",

@@ -623,7 +623,7 @@ pub struct PickedBundle {
 // ---------------------------------------------------------------------------------------------
 // Frames and replies (the same use cases agent tools reach)
 
-use crate::backend::{Backend, TaskOutput, resolve_command};
+use crate::backend::{Backend, TaskOutput};
 use crate::ops::{self, Failure, PROTOCOL};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::protocol::results::OperationResult;
@@ -842,13 +842,11 @@ fn hash_file(path: &std::path::Path) -> Result<(String, u64), String> {
     Ok((digest.iter().map(|b| format!("{b:02x}")).collect(), n))
 }
 
-/// Saves the picked bundle as the person's workspace artifact, then installs it (or updates
-/// `update` with it) at `registry`: the person's install of exactly those bytes.
-pub fn install_from_file(
+/// Prepares the picked bundle's artifact frame without admitting effects. The shell retains
+/// it through the command client before saving, then submits the exact install/update intent.
+pub fn prepare_install_from_file(
     backend: &dyn Backend,
     path: &std::path::Path,
-    update: Option<&str>,
-    registry: i64,
 ) -> Result<TaskOutput, String> {
     let (digest, bytes) = hash_file(path)?;
     let ticket = backend.mint_workspace_upload(path)?;
@@ -864,9 +862,17 @@ pub fn install_from_file(
         bytes,
         &[],
     );
-    let saved = ops::saved_artifact(resolve_command(backend, "artifacts.save", &save))
-        .map_err(|e| e.describe())?;
-    let bundle = serde_json::to_value(&saved.artifact).map_err(|e| e.to_string())?;
+    Ok(TaskOutput::Prepared { frame: save })
+}
+
+/// Builds the install/update frame from the saved artifact; the durable client submits it.
+pub fn install_saved(
+    backend: &dyn Backend,
+    artifact: &devworks_core::protocol::provider::ArtifactRef,
+    update: Option<&str>,
+    registry: i64,
+) -> (&'static str, Vec<u8>) {
+    let bundle = serde_json::to_value(artifact).expect("artifact reference");
     let expected = registry.max(1).to_string();
     let (op, command) = match update {
         Some(p) => (
@@ -880,9 +886,7 @@ pub fn install_from_file(
         ),
     };
     let frame = lifecycle_frame(backend, command);
-    Ok(TaskOutput::Package {
-        outcome: resolve_command(backend, op, &frame),
-    })
+    (op, frame)
 }
 
 #[cfg(test)]

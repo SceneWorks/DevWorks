@@ -1,10 +1,10 @@
 # Local implementation plan
 
-Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 209 Confirmed and 141 Proposed; a planned slice does not approve a Proposed requirement. No Shortcut records or production application have been created.
+Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 223 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
 
 ## Success and remaining commitments
 
-The register assigns all 356 requirements, 354 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 63 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 370 requirements, 354 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 75 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -12,19 +12,19 @@ All 351 operation inputs now have candidate schema bindings, with typed qualifie
 
 ## Execution and dependency rules
 
-Complete concrete contracts before exposing their operations. Build vertical UI/service/tool behavior in its owning slice, using the shared shell and authority boundary. Foundation slices do not create a second UI-only data model. Language/semantic packs and all eight SDK contribution types remain retained scope. Release acceptance awaits every slice; optional dependencies must fail visibly and locally without making a server, VM or preinstalled general-purpose runtime a core requirement.
+Complete concrete contracts before exposing their operations. Build vertical UI/service/tool behavior in its owning slice, using the shared shell and authority boundary. Foundation slices do not create a second UI-only data model. Language/semantic packs and all eight SDK contribution types remain retained scope. The native baseline and EVAL feature each retain their approved terminal acceptance dependencies. Optional dependencies must fail visibly and locally without making a server, VM or preinstalled general-purpose runtime a core requirement.
 
 The dependency order is a valid topological order, not a timeline or resource estimate. It allows independent work once prerequisites are satisfied. Integration qualification may hold a particular capability without falsely declaring the product ready. Routine engineering decisions remain delegated; no further product question arose from the native probes.
 
 Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.
 
-DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 63 active slices remain. No HelixDB source adapter or engine is an app dependency.
+DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 75 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.
 
 ![Coverage and qualification gates](architecture-diagrams/41-implementation-coverage.svg)
 
 ## Dependency order
 
-DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-062
+DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082
 
 ## Slice register
 
@@ -93,6 +93,18 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-062](#dw-062) | Reconcile full retained behavior and release readiness | DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064 | G11 |
 | [DW-063](#dw-063) | Expose indexed code, planned work and Knowledge to MCP clients | DW-001, DW-028, DW-029, DW-012, DW-013, DW-030, DW-033, DW-035, DW-007, DW-008, DW-064 | G04, G06, G10, G11 |
 | [DW-064](#dw-064) | Authorize external MCP clients and selected work or Knowledge commands | DW-005, DW-018, DW-004, DW-010, DW-009, DW-014 | G04, G10, G11 |
+| [DW-071](#dw-071) | Grade recorded work end to end | None | G11 |
+| [DW-072](#dw-072) | Manage versioned suites with separate measurement | DW-014, DW-071 | G11 |
+| [DW-073](#dw-073) | Judge rubrics with votes and calibration | DW-017, DW-019, DW-071 | G11 |
+| [DW-074](#dw-074) | Run repeatable trials in throwaway workspaces | DW-015, DW-020, DW-039, DW-049, DW-071 | G11 |
+| [DW-075](#dw-075) | Compare revisions honestly and label evidence | DW-071, DW-072 | G11 |
+| [DW-076](#dw-076) | Gate improvement proposals on eval evidence | DW-014, DW-017, DW-032, DW-033, DW-034, DW-059, DW-074, DW-075 | G11 |
+| [DW-077](#dw-077) | Run suites on demand, on proposal and on schedule within budget | DW-021, DW-051, DW-076 | G11 |
+| [DW-078](#dw-078) | Act on results after adoption | DW-014, DW-030, DW-032, DW-033, DW-034, DW-059, DW-075 | G11 |
+| [DW-079](#dw-079) | Show evals in the app and to agents | DW-014, DW-020, DW-053, DW-075, DW-076 | G11 |
+| [DW-080](#dw-080) | Accept suites contributed by packages | DW-045, DW-072 | G11 |
+| [DW-081](#dw-081) | Grade external MCP client activity | DW-064, DW-071 | G11 |
+| [DW-082](#dw-082) | Integrate and accept DW-F13 | DW-071, DW-072, DW-073, DW-074, DW-075, DW-076, DW-077, DW-078, DW-079, DW-080, DW-081 | G11 |
 
 ## Concrete outcomes and acceptance
 
@@ -1111,6 +1123,222 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 **Primary requirement cases:** See supporting and integration obligations.
 
 **Supporting requirements:** MCP-07, MCP-08, MCP-09, MCP-10, MCP-11
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-071
+
+**Grade recorded work end to end** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Walking skeleton: add the evals architecture section, routing rule, evals.* operation contracts and implementation slices, and grade recorded DevWorks sessions with deterministic checks into persisted, revision-attributed results. Closes the traceability gap left when EVAL requirements were added. AC1: Running a suite with a deterministic check over recorded sessions persists results attributed to the revision in effect at each step, puts steps that cannot be attributed in an explicit mixed-revision group, and changes no work, repository or Knowledge record. AC2: Every instance, run and suite result has exactly one explicit outcome (passed, failed, unclear, not applicable, evidence unavailable, grader error, cancelled, budget exhausted) with eligible, graded and ungraded coverage counts; only passed and failed enter rates. AC3: The architecture reader, requirements traceability and implementation plan regenerate with every EVAL requirement and every evals.* operation owned, and no unowned requirement or operation.
+
+**Tracked work:** DW-71 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-02, AT-EVAL-14
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-072
+
+**Manage versioned suites with separate measurement** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Suites become versioned assets stored apart from the subjects they measure, with documentation, and changes to measurement go through their own approval so a subject can never change how it is measured. AC1: Shared and harness-specific suites (cases, graders, rubrics, fixtures, accepted exceptions and documentation) are versioned and show origin, location and active revision, stored apart from the subjects they measure. AC2: An agent-drafted suite change takes effect only through its own user-approved proposal, and a proposal that changes both a subject and a suite measuring it is refused. AC3: Only a person can accept an exception, and it records the check, matched instance, reason and approver.
+
+**Tracked work:** DW-72 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-01, AT-EVAL-06, AT-EVAL-13
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-073
+
+**Judge rubrics with votes and calibration** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Model-graded rubrics run through the internal router with repeated votes and recorded configuration, and are calibrated against human verdicts before they can gate an approval. AC1: A model-graded rubric runs through the internal router with several votes per instance and records the judge model and settings, rubric revision, sample and population, verdict reasons and vote splits. AC2: Human verdicts on a sample produce a calibration agreement rate shown with the judge's results, and results from an uncalibrated judge are marked unable to gate approval. AC3: Tests of the judging code use scripted judges and make no live inference calls.
+
+**Tracked work:** DW-73 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-03
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-074
+
+**Run repeatable trials in throwaway workspaces** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Trials run agent work repeatedly against frozen snapshots in isolated workspaces, writing only to disposable copies and stand-ins, so delivery behavior can be evaluated without touching real systems. AC1: A trial case runs a configured number of times against a frozen snapshot that records its source, time, content identity and expected answer, and reports each run's score, the pass share and whether every run passed. AC2: Trials write only to throwaway repositories and remotes and to stateful tracker and GitHub stand-ins exposing the real tool schemas; production destinations and real credentials are unreachable from a trial.
+
+**Tracked work:** DW-74 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-04
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-075
+
+**Compare revisions honestly and label evidence** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Comparisons between revisions report declared methods, uncertainty and coverage, match settings except the subject under test, and produce evidence labels bound to exactly what was measured. AC1: A comparison reports each metric's declared method, uncertainty and minimum effect with counts, coverage and revision groups; a difference within uncertainty or below the minimum effect is inconclusive, and evidence below the suite's minimum sample or coverage is unvalidated. AC2: Both arms match every setting except the declared subject under test; production cohorts graded under different measurement revisions are regraded under one or reported non-comparable, and cohort differences and confounding changes are disclosed. AC3: Evidence is bound to immutable candidate, baseline and measurement identities, and a change to any of them returns it to unvalidated.
+
+**Tracked work:** DW-75 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-05, AT-EVAL-09
+
+**Supporting requirements:** EVAL-14
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-076
+
+**Gate improvement proposals on eval evidence** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Every self-improvement subject's proposal path carries a before-and-after comparison, and agent-authored changes with bad or missing evidence cannot be approved without a recorded override. Delivers SKILL-08's validation hook. AC1: Proposals for skills, roles, overrides, conventions, lesson rules, routing and app builds carry a baseline-versus-candidate comparison; changes that take effect without approval are recorded and monitored without a new approval step. AC2: An agent-authored proposal with regressed or unvalidated evidence cannot be approved without a recorded user override, inconclusive evidence does not block, and the user's own edits are not gated. AC3: Approval applies only to the evaluated candidate identity, and a change to the candidate after evaluation returns the proposal to unvalidated.
+
+**Tracked work:** DW-76 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** See supporting and integration obligations.
+
+**Supporting requirements:** EVAL-05
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-077
+
+**Run suites on demand, on proposal and on schedule within budget** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Suites run from all three triggers with cost estimates and attributed usage, with spending limits where the decisions require them and none on scheduled runs. AC1: Suites run on demand, on proposal creation and on a schedule, show the expected run count and cost estimate before a trial run, and attribute usage and costs to the suite run and any proposal. AC2: On-demand and proposal-triggered runs pause when their spending limit is reached, and scheduled runs report usage and costs without a limit.
+
+**Tracked work:** DW-77 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-10
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-078
+
+**Act on results after adoption** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+After a change is adopted, regressions lead to approval-gated rollback proposals through each subject's own mechanism, and recurring failures become verified improvement candidates. AC1: A regression past a metric's declared criterion notifies the user and proposes a rollback through the subject's own mechanism, never rolls back automatically, and non-comparable comparisons trigger nothing. AC2: An app-build rollback proposal requires SELF-03 approval and a stored-data compatibility check, or reports the build as not rollback-capable with the reason; every rollback keeps later unrelated edits or reports the conflict. AC3: A recurring failure becomes a candidate improvement linked to the rule it enforces and its evidence, after a recorded spot-check of sampled failing instances.
+
+**Tracked work:** DW-78 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-07, AT-EVAL-08
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-079
+
+**Show evals in the app and to agents** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+People inspect suites, results and proposal evidence in a dedicated Evals area and the approval queue, agents reach the same operations through tools, and Help documents each shipped suite. AC1: The Evals area shows suites, cases, graders, results by revision, trends, failing instances linked to evidence and accepted exceptions, and each approval-queue proposal shows its comparison and evidence status. AC2: Agents list, read, run and draft through the same operations as the UI and cannot approve proposals, accept exceptions or activate suites. AC3: Help documents each shipped suite at its version: what it measures, what its graders cannot check, how to run it and how to read its results.
+
+**Tracked work:** DW-79 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** AT-EVAL-11, AT-EVAL-12
+
+**Supporting requirements:** EVAL-13
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-080
+
+**Accept suites contributed by packages** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Installed packages can contribute eval suites for what they contribute, under the same versioning, activation and separation rules as other suites. AC1: An installed package can contribute suites only for what it contributes, shown with origin and version, and they follow the same activation and separation rules as other suites.
+
+**Tracked work:** DW-80 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** See supporting and integration obligations.
+
+**Supporting requirements:** EVAL-01, EVAL-06
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-081
+
+**Grade external MCP client activity** · Feature · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Commands that external harnesses make through DevWorks as MCP clients are graded from their attributed records, the external part of EVAL-02 under P1. AC1: Commands external MCP clients made through DevWorks are graded from their attributed records like native sessions, with explicit outcomes and coverage.
+
+**Tracked work:** DW-81 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** See supporting and integration obligations.
+
+**Supporting requirements:** EVAL-02, EVAL-14
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-082
+
+**Integrate and accept DW-F13** · Chore · Approved plan metadata; native implementation and operation-contract acceptance pending.
+
+Terminal integration: run the feature acceptance tests on the integrated branch, keep the architecture and plan readers covering every EVAL requirement, and own the feature-end review, the merge to main and the completion check. AC1: Every DW-F13 acceptance test passes on the integrated branch, reusing item evidence where it still applies. AC2: The architecture, requirements traceability and implementation plan readers regenerate with every EVAL requirement covered by a complete item.
+
+**Tracked work:** DW-82 in DW-F13.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+
+**Primary requirement cases:** See supporting and integration obligations.
+
+**Supporting requirements:** EVAL-01, EVAL-02, EVAL-03, EVAL-04, EVAL-05, EVAL-06, EVAL-07, EVAL-08, EVAL-09, EVAL-10, EVAL-11, EVAL-12, EVAL-13, EVAL-14
 
 **Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
 

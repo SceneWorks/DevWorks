@@ -768,20 +768,21 @@ impl Shell {
                     update,
                 } => {
                     if let Some(c) = &mut self.client {
-                        self.addons.busy =
-                            c.task(Slot::AddonsCommand, "Downloading the add-on", move |b| {
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave {
+                                update: update.then_some(package.clone()),
+                                registry,
+                            },
+                            "Downloading the add-on",
+                            move |b| {
                                 let path = b.fetch_index_bundle(&package, &digest)?;
-                                let installed = a::install_from_file(
-                                    b,
-                                    &path,
-                                    update.then_some(package.as_str()),
-                                    registry,
-                                );
+                                let installed = a::prepare_install_from_file(b, &path);
                                 // The download was saved as an artifact (or refused): it
                                 // never accumulates in the scratch directory.
                                 let _ = std::fs::remove_file(&path);
                                 installed
-                            });
+                            },
+                        );
                     }
                     None
                 }
@@ -801,10 +802,11 @@ impl Shell {
                     if let Some(path) = self.dialogs.pick_package()
                         && let Some(c) = &mut self.client
                     {
-                        self.addons.busy =
-                            c.task(Slot::AddonsCommand, "Installing the add-on", move |b| {
-                                a::install_from_file(b, &path, update.as_deref(), registry)
-                            });
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave { update, registry },
+                            "Preparing the add-on",
+                            move |b| a::prepare_install_from_file(b, &path),
+                        );
                     }
                     None
                 }
@@ -1978,7 +1980,6 @@ impl Shell {
                     Ok(
                         TaskOutput::Preview { .. }
                         | TaskOutput::Prepared { .. }
-                        | TaskOutput::Package { .. }
                         | TaskOutput::Refreshed,
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
@@ -2039,7 +2040,6 @@ impl Shell {
                         Ok(
                             TaskOutput::Stored { .. }
                             | TaskOutput::Prepared { .. }
-                            | TaskOutput::Package { .. }
                             | TaskOutput::Refreshed,
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
@@ -2312,7 +2312,7 @@ impl Shell {
                 }
             },
             (Slot::AddonsCommand, Reply::Command(outcome)) => {
-                self.addons.busy = false;
+                self.addons.busy = is_unknown(&outcome);
                 // A configuration refused by the package's schema names the diagnostic that
                 // carries its field errors: fetch it for the form.
                 if let Some(package) = crate::addons::configured_package(&outcome) {
@@ -2332,14 +2332,52 @@ impl Shell {
                 }
                 self.load_addons();
             }
-            (Slot::AddonsCommand, Reply::Task(t)) => {
+            (
+                Slot::AddonsSave { update, registry },
+                Reply::Task(Ok(TaskOutput::Prepared { frame })),
+            ) => {
+                if let Some(client) = &mut self.client {
+                    client.command(
+                        Slot::AddonsSave { update, registry },
+                        "Saving the add-on bundle",
+                        "artifacts.save",
+                        frame,
+                    );
+                }
+            }
+            (Slot::AddonsSave { update, registry }, Reply::Command(outcome)) => {
+                let unknown = is_unknown(&outcome);
+                match ops::saved_artifact(outcome) {
+                    Ok(saved) => {
+                        if let Some(backend) = self.backend() {
+                            let (op, frame) = crate::addons::install_saved(
+                                &*backend,
+                                &saved.artifact,
+                                update.as_deref(),
+                                registry,
+                            );
+                            if let Some(client) = &mut self.client {
+                                client.command(
+                                    Slot::AddonsCommand,
+                                    "Installing the add-on",
+                                    op,
+                                    frame,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.addons.busy = unknown;
+                        self.addons.notice = Some(e.describe());
+                    }
+                }
+            }
+            (Slot::AddonsSave { .. }, Reply::Task(t)) => {
                 self.addons.busy = false;
                 self.addons.notice = Some(match t {
-                    Ok(TaskOutput::Package { outcome }) => crate::addons::describe(outcome),
-                    Ok(_) => "unexpected reply".into(),
                     Err(e) => e,
+                    Ok(_) => "unexpected reply".into(),
                 });
-                self.load_addons();
             }
             (Slot::KnowledgeList(generation), Reply::Query(q)) => {
                 if self.knowledge.listed(generation, q) {
@@ -2456,6 +2494,40 @@ impl Shell {
                     Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
                 }
             }
+            (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                let label = self
+                    .settings
+                    .connections
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_else(|| "Configuring provider".into());
+                // Preparation has no router effects. The client owns the exact frame before
+                // admission, including when a close has already stopped new requests.
+                if let Some(client) = &mut self.client {
+                    client.command(Slot::Configure(n), &label, "router.configure", frame);
+                }
+            }
+            (Slot::Configure(n), Reply::Command(outcome)) => {
+                let p = &mut self.settings.connections;
+                let label = p
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_default();
+                if !is_unknown(&outcome) {
+                    p.busy.retain(|(k, _)| *k != n);
+                }
+                p.message = Some(match ops::configured(outcome) {
+                    Ok(true) => (Tone::Good, format!("{label}: done.")),
+                    Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
+                    Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                });
+                self.load_connections();
+                self.invalidate_routing();
+            }
             (Slot::Configure(n), Reply::Task(t)) => {
                 let p = &mut self.settings.connections;
                 let label = p
@@ -2464,18 +2536,13 @@ impl Shell {
                     .position(|(k, _)| *k == n)
                     .map(|i| p.busy.remove(i).1)
                     .unwrap_or_default();
-                p.message = Some(match t {
-                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::configured(outcome) {
-                        Ok(true) => (Tone::Good, format!("{label}: done.")),
-                        Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
-                        Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                p.message = Some((
+                    Tone::Bad,
+                    match t {
+                        Err(e) => format!("{label}: {e}"),
+                        Ok(_) => format!("{label}: unexpected reply."),
                     },
-                    Ok(_) => (Tone::Bad, format!("{label}: unexpected reply.")),
-                    Err(e) => (Tone::Bad, format!("{label}: {e}")),
-                });
-                // Connections and the catalog changed: reload them, and what the composer shows.
-                self.load_connections();
-                self.invalidate_routing();
+                ));
             }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
@@ -2857,10 +2924,9 @@ impl Shell {
                         if let Some((flow, pasted)) = code {
                             b.submit_sign_in_code(&flow, pasted)?;
                         }
-                        let frame = ops::router_configure(b, action);
-                        let outcome =
-                            crate::backend::resolve_command(b, "router.configure", &frame);
-                        Ok(TaskOutput::Stored { outcome, frame })
+                        Ok(TaskOutput::Prepared {
+                            frame: ops::router_configure(b, action),
+                        })
                     })
                 });
                 if submitted {
@@ -3150,6 +3216,12 @@ impl Shell {
                             .filter_map(|r| serde_json::from_value(r.clone()).ok())
                             .collect();
                     }
+                }
+                Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
+                Slot::Configure(n) => {
+                    let p = &mut self.settings.connections;
+                    p.sequence = p.sequence.max(*n);
+                    p.busy.push((*n, u.label.clone()));
                 }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
