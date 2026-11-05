@@ -153,6 +153,8 @@ pub struct AuxiliaryRequest {
 pub struct AuxiliaryRoute {
     pub model_id: Id,
     pub connection_id: Id,
+    pub upstream_model_id: String,
+    pub endpoint_profile: String,
     /// `EffortName` wire names.
     pub requested_effort: String,
     pub effective_effort: String,
@@ -212,6 +214,12 @@ fn wire_label(s: &str) -> BoundedText<1, 256> {
     label(s, "unknown")
 }
 
+/// A concrete pin never follows identity edits to its mutable catalog configuration row.
+fn pin_matches_model(pin: &StoredPin, model: &StoredRouteModel) -> bool {
+    pin.upstream_model_id.as_deref() == Some(model.upstream_model_id.as_str())
+        && pin.endpoint_profile.as_deref() == Some(model.endpoint_profile.as_str())
+}
+
 /// The wire choice of a stored pin.
 pub fn choice_of(pin: &StoredPin) -> Result<RouteChoice, StorageError> {
     Ok(RouteChoice {
@@ -223,6 +231,13 @@ pub fn choice_of(pin: &StoredPin) -> Result<RouteChoice, StorageError> {
         pin_id: pin.pin_id.clone(),
         pin_revision: rev(pin.revision),
         replaced_pin_id: pin.replaced_pin_id.clone(),
+        resolved_upstream_model_id: pin.upstream_model_id.clone().map(BoundedText),
+        resolved_endpoint_profile: pin
+            .endpoint_profile
+            .as_deref()
+            .map(parse_wire)
+            .transpose()?,
+        resolved_identity_origin: Some(wire_label(&pin.identity_origin)),
     })
 }
 
@@ -403,6 +418,9 @@ impl Facts {
         let Some(model) = self.models.get(pin.model_id.as_str()) else {
             return false;
         };
+        if !pin_matches_model(pin, model) {
+            return false;
+        }
         let family = latest::parse(&model.upstream_model_id).map(|p| p.family);
         self.pool(intent).iter().any(|id| {
             match Self::family_slot(id, matches!(intent, RouteIntent::Tier { .. })) {
@@ -634,7 +652,7 @@ impl InferenceRouter {
     }
 
     /// Resolves the session's route for `intent` and `need` in the command's unit of work.
-    /// `explicit` is `router.pin`: an unchanged selection is kept as it is.
+    /// An unchanged selection is kept only while its retained concrete identity is eligible.
     #[allow(clippy::too_many_arguments)]
     fn resolve(
         &self,
@@ -644,7 +662,6 @@ impl InferenceRouter {
         current: Option<StoredPin>,
         intent: &RouteIntent,
         need: &Need,
-        explicit: bool,
     ) -> Result<Resolution, Failure> {
         let now = tx.now_ms();
         let key = intent_key(intent);
@@ -655,9 +672,6 @@ impl InferenceRouter {
         let same_effort = current
             .as_ref()
             .is_some_and(|p| p.requested_effort == need.effort);
-        if explicit && same_intent && same_effort {
-            return Ok(Resolution::Kept(current.expect("pin")));
-        }
         let preferred = current
             .as_ref()
             .filter(|_| same_intent)
@@ -774,6 +788,9 @@ impl InferenceRouter {
             revision: current.map_or(1, |p| p.revision + 1),
             model_id: chosen.model_id.clone(),
             connection_id: chosen.connection.clone().expect("eligible"),
+            upstream_model_id: chosen.model.as_ref().map(|m| m.upstream_model_id.clone()),
+            endpoint_profile: chosen.model.as_ref().map(|m| m.endpoint_profile.clone()),
+            identity_origin: "Resolved".into(),
             intent: intent_key(intent),
             requested_effort: need.effort.clone(),
             // The effective effort is the requested one: `Default` is left to the provider, and
@@ -809,6 +826,12 @@ impl InferenceRouter {
                 "requiredCapabilities": stored.required_capabilities,
                 "replacedPinId": stored.replaced_pin_id.as_ref().map(Id::as_str),
                 "previousModelId": current.map(|p| p.model_id.as_str()),
+                "resolvedUpstreamModelId": stored.upstream_model_id,
+                "resolvedEndpointProfile": stored.endpoint_profile,
+                "identityOrigin": stored.identity_origin,
+                "previousUpstreamModelId": current.and_then(|p| p.upstream_model_id.as_deref()),
+                "previousEndpointProfile": current.and_then(|p| p.endpoint_profile.as_deref()),
+                "previousIdentityOrigin": current.map(|p| p.identity_origin.as_str()),
                 "reason": reason,
             }),
         })?;
@@ -829,15 +852,7 @@ impl InferenceRouter {
         .map_err(|_| invalid(CAPABILITY))?;
         let current = tx.router().session_pin(&session.id)?;
         Ok(
-            match self.resolve(
-                tx,
-                &session,
-                ctx.principal(),
-                current,
-                &i.intent,
-                &need,
-                false,
-            )? {
+            match self.resolve(tx, &session, ctx.principal(), current, &i.intent, &need)? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterRoute {
                         value: choice_of(&p)?,
@@ -885,7 +900,6 @@ impl InferenceRouter {
                 Some(current),
                 &i.intent,
                 &need,
-                true,
             )? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterPin {
@@ -959,9 +973,9 @@ impl InferenceRouter {
                 continue;
             }
             let mut row = catalog_model(m, &projected_members)?;
-            let a = select::assess(&m.id, Some(m), &connections, &f.cooling, &need, None);
-            row.available = Some(a.eligible());
-            row.availability_reason = a.blocks.first().map(|b| wire_label(b.code()));
+            let inventory = select::inventory(m, &connections);
+            row.available = inventory.available;
+            row.availability_reason = inventory.reason.map(wire_label);
             rows.push((m.position, m.id.as_str().to_owned(), row));
         }
         if revision >= 3 {
@@ -1009,22 +1023,67 @@ impl InferenceRouter {
                 let mut name = family.to_owned();
                 name[..1].make_ascii_uppercase();
                 m.display_name = format!("{name} Latest");
-                m.enabled = f.models.values().any(|m| {
-                    m.enabled
-                        && latest::parse(&m.upstream_model_id).is_some_and(|p| p.family == family)
+                let configured: Vec<_> = f
+                    .models
+                    .values()
+                    .filter(|m| {
+                        latest::parse(&m.upstream_model_id).is_some_and(|p| p.family == family)
+                    })
+                    .collect();
+                let target_rows: Vec<_> = targets
+                    .iter()
+                    .filter_map(|id| f.models.get(id.as_str()))
+                    .collect();
+                m.enabled = if target_rows.is_empty() {
+                    configured.iter().any(|m| m.enabled)
+                } else {
+                    target_rows.iter().any(|m| m.enabled)
+                };
+                // Metadata describes what some current concrete scope declares. It does not
+                // imply one scope jointly supports this union; assess_pool checks the full
+                // request on each exact target before selecting it.
+                m.efforts = target_rows
+                    .iter()
+                    .flat_map(|m| m.efforts.iter().cloned())
+                    .collect();
+                m.efforts.sort_by_key(|effort| {
+                    ["Minimal", "Low", "Medium", "High", "XHigh", "Max"]
+                        .iter()
+                        .position(|e| *e == effort)
                 });
+                m.efforts.dedup();
+                m.image_input = target_rows.iter().any(|m| m.image_input);
+                m.tools = target_rows.iter().any(|m| m.tools);
+                m.context_tokens = target_rows.iter().filter_map(|m| m.context_tokens).max();
                 // The alias is a logical family slot, not a configuration row bound to one
                 // credential. Every concrete target retains its own binding in metadata.
                 m.connection_id = None;
                 let mut row = catalog_model(&m, &projected_members)?;
                 row.latest_family = Some(Id::new(family).expect("family"));
-                row.resolves_to_model_ids = Some(BoundedList(targets));
-                row.available = Some(pool.iter().any(Assessed::eligible));
-                row.availability_reason = if row.available == Some(true) {
+                row.available = if !targets.is_empty() {
+                    Some(true)
+                } else if configured
+                    .iter()
+                    .any(|m| select::inventory(m, &connections).available.is_none())
+                {
                     None
                 } else {
-                    select::block_codes(&pool).first().map(|s| wire_label(s))
+                    Some(false)
                 };
+                row.availability_reason = match row.available {
+                    Some(true) => None,
+                    None => Some(wire_label("NoInventory")),
+                    Some(false)
+                        if !configured.is_empty()
+                            && configured.iter().all(|m| {
+                                select::inventory(m, &connections).reason == Some("Excluded")
+                            }) =>
+                    {
+                        Some(wire_label("Excluded"))
+                    }
+                    Some(false) => Some(wire_label("NoListedFamilyVersion")),
+                };
+                row.resolves_to_model_ids = Some(BoundedList(targets));
                 rows.push((i64::MIN + position as i64, id.as_str().to_owned(), row));
             }
         }
@@ -1190,10 +1249,12 @@ impl InferenceRouter {
                 &need,
                 Some(&pin.connection_id),
             );
-            if a.eligible() {
+            if a.eligible() && a.model.as_ref().is_some_and(|m| pin_matches_model(&pin, m)) {
                 return Ok(Ok(AuxiliaryRoute {
                     model_id: pin.model_id,
                     connection_id: a.connection.expect("eligible"),
+                    upstream_model_id: pin.upstream_model_id.expect("matched concrete identity"),
+                    endpoint_profile: pin.endpoint_profile.expect("matched concrete identity"),
                     requested_effort: need.effort.clone(),
                     effective_effort: need.effort,
                     pin_id: Some(pin.pin_id),
@@ -1205,6 +1266,13 @@ impl InferenceRouter {
             Some(a) => Ok(AuxiliaryRoute {
                 model_id: a.model_id.clone(),
                 connection_id: a.connection.clone().expect("eligible"),
+                upstream_model_id: a
+                    .model
+                    .as_ref()
+                    .expect("eligible")
+                    .upstream_model_id
+                    .clone(),
+                endpoint_profile: a.model.as_ref().expect("eligible").endpoint_profile.clone(),
                 requested_effort: need.effort.clone(),
                 effective_effort: need.effort,
                 pin_id: None,

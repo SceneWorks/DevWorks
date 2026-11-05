@@ -332,7 +332,7 @@ fn browser_source_migration_keeps_old_evidence_nullable_and_blocks_old_writers()
         Ok(())
     }).unwrap();
     drop(legacy);
-    let store = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    let store = SqliteStore::open_with(h.config(), &through(23)).unwrap();
     assert_eq!(store.compatibility().unwrap().minimum_writer, 23);
     let old = read_snapshot(&store, &ReadOptions::default(), |snapshot| {
         snapshot.browser().browser_session(&id("old-browser"))

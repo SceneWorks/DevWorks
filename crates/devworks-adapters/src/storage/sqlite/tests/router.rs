@@ -240,11 +240,21 @@ impl Fx {
         ctx: &InvocationContext,
         op: &str,
         key: &str,
+        body: Value,
+    ) -> DomainCommandReply {
+        self.command_keyed_at(ctx, op, key, body, 1)
+    }
+    fn command_keyed_at(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        key: &str,
         mut body: Value,
+        revision: u32,
     ) -> DomainCommandReply {
         body["kind"] = json!(op);
-        let frame =
-            json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key, "body": body});
+        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
+            "schemaRevision":revision, "body": body});
         let authority = self.authority();
         let gateway = Gateway {
             authority: &authority,
@@ -1757,5 +1767,305 @@ fn catalog_revision_three_exposes_eight_virtual_aliases_and_exact_inventory_avai
                 .all(|m| !m.id.as_str().ends_with("-latest"))
         );
     }
+    assert_eq!(fx.cursor("High"), 0);
+}
+
+#[test]
+fn manual_catalog_identity_changes_replace_pins_and_replay_retains_recorded_upstream() {
+    let fx = Fx::new();
+    let body = json!({"sessionId":"s1", "expectedContextEpoch":"0", "intent":named("sol"),
+        "effort":"Default", "requiredCapabilities":[]});
+    let (before, _) = chosen(fx.command_keyed_at(
+        &fx.user(),
+        "router.route",
+        "identity-first",
+        body.clone(),
+        3,
+    ));
+    assert_eq!(
+        before.resolved_upstream_model_id.as_ref().unwrap().0,
+        "gpt-6.1-sol"
+    );
+    assert_eq!(
+        before.resolved_identity_origin.as_ref().unwrap().0,
+        "Resolved"
+    );
+    fx.write(|tx| {
+        let mut m = tx.router().route_model(&id("sol"))?.unwrap();
+        m.upstream_model_id = "gpt-8-sol".into();
+        let revision = m.revision;
+        tx.router().put_route_model(&m, Some(revision))
+    });
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-8-sol", "gpt-6.1-sol"]),
+    );
+    let OperationResult::RouterAvailability { value: availability } = result(fx.query_at(&fx.user(), "router.availability",
+        json!({"intent":named("sol"), "effort":"Default", "requiredCapabilities":[], "sessionId":"s1"}), Some(3))) else { panic!("availability") };
+    assert_eq!(availability.pin_eligible, Some(false));
+    assert_eq!(
+        availability
+            .pin
+            .unwrap()
+            .resolved_upstream_model_id
+            .as_ref()
+            .unwrap()
+            .0,
+        "gpt-6.1-sol"
+    );
+    let auxiliary = fx
+        .read(|snapshot| {
+            fx.router.route_auxiliary(
+                snapshot,
+                &AuxiliaryRequest {
+                    purpose: Purpose::Title,
+                    session_id: Some(id("s1")),
+                    intent: serde_json::from_value(named("sol")).unwrap(),
+                    effort: EffortName::Default,
+                    required_capabilities: vec![],
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(auxiliary.pin_id, None);
+    assert_eq!(auxiliary.upstream_model_id, "gpt-8-sol");
+    let (after, wrote) = chosen(fx.command_keyed_at(
+        &fx.user(),
+        "router.route",
+        "identity-after",
+        body.clone(),
+        3,
+    ));
+    assert!(wrote);
+    assert_ne!(after.pin_id, before.pin_id);
+    assert_eq!(after.replaced_pin_id, Some(before.pin_id.clone()));
+    assert_eq!(
+        after.resolved_upstream_model_id.as_ref().unwrap().0,
+        "gpt-8-sol"
+    );
+    assert_eq!(fx.pin_row("s1").unwrap().reason, "Failover");
+    let (replay, wrote) =
+        chosen(fx.command_keyed_at(&fx.user(), "router.route", "identity-first", body, 3));
+    assert!(wrote, "replay returns the original applied decision");
+    assert_eq!(replay.pin_id, before.pin_id);
+    assert_eq!(
+        replay.resolved_upstream_model_id.as_ref().unwrap().0,
+        "gpt-6.1-sol"
+    );
+    assert_eq!(fx.cursor("High"), 0);
+}
+
+#[test]
+fn pin_identity_migration_captures_only_upgrade_catalog_semantics_and_fences_old_writers() {
+    use crate::storage::sqlite::MIGRATION_0025_SHA256;
+    let migration = MIGRATIONS.iter().find(|m| m.version == 25).unwrap();
+    assert_eq!(migration.checksum(), MIGRATION_0025_SHA256);
+    assert_eq!(
+        (migration.minimum_reader, migration.minimum_writer),
+        (8, 25)
+    );
+    assert!(!migration.rebuilds_tables);
+    let h = Harness::new();
+    let through24: Vec<_> = MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|m| m.version <= 24)
+        .collect();
+    let old = SqliteStore::open_with(h.config(), &through24).unwrap();
+    old.with_writer_connection(|c| {
+        super::super::conn::db(c.execute_batch(
+            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,reason,updated_at)
+             VALUES('old-current','pin-current',1,'sol','conn-codex','{}','Default','Default','[]','Initial',1),
+                   ('old-missing','pin-missing',1,'removed','conn-codex','{}','Default','Default','[]','Initial',1);"))
+    }).unwrap();
+    drop(old);
+    let store = h.store();
+    let current = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.router().session_pin(&id("old-current"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(current.upstream_model_id.as_deref(), Some("gpt-6.1-sol"));
+    assert_eq!(current.endpoint_profile.as_deref(), Some(CODEX));
+    assert_eq!(current.identity_origin, "Migration25CurrentCatalog");
+    let missing = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.router().session_pin(&id("old-missing"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(missing.upstream_model_id, None);
+    assert_eq!(missing.endpoint_profile, None);
+    assert_eq!(missing.identity_origin, "Unknown");
+    drop(store);
+    let old = SqliteStore::open_with(h.config(), &through24).unwrap();
+    assert!(matches!(
+        old.compatibility().unwrap().access,
+        AccessMode::ReadOnly { .. }
+    ));
+}
+
+#[test]
+fn other_publishers_numeric_models_remain_custom_and_never_promote_known_family_aliases() {
+    let fx = Fx::new();
+    fx.add_model(versioned(
+        "other-sol",
+        "another-publisher/gpt-99-sol",
+        CODEX,
+        "conn-codex",
+    ));
+    assert_eq!(
+        ids(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["sol"]
+    );
+    assert_eq!(
+        model_of(fx.route("s1", named("other-sol"), "Default", &[])),
+        "other-sol"
+    );
+    fx.set_members("High", &["other-sol"]);
+    assert_eq!(
+        model_of(fx.route("s2", tier("High"), "Default", &[])),
+        "other-sol"
+    );
+}
+
+#[test]
+fn inventory_availability_is_independent_of_enablement_credentials_and_cooldowns() {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-new", "gpt-7-sol", CODEX, "conn-codex"));
+    fx.cool("sol-new", T0 + 60_000);
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Refreshing,
+        Some(&["gpt-7-sol", "gpt-6.1-sol"]),
+    );
+    fx.write(|tx| {
+        let mut m = tx.router().route_model(&id("sol-new"))?.unwrap();
+        let revision = m.revision;
+        m.enabled = false;
+        tx.router().put_route_model(&m, Some(revision))
+    });
+    let OperationResult::RouterCatalog { value } = result(fx.query_at(
+        &fx.user(),
+        "router.catalog",
+        json!({"page":{"limit":50},"includeDisabled":true}),
+        Some(3),
+    )) else {
+        panic!("catalog")
+    };
+    for model in ["sol-new", "sol-latest"] {
+        let row = value
+            .items
+            .0
+            .iter()
+            .find(|m| m.id.as_str() == model)
+            .unwrap();
+        assert_eq!(
+            row.available,
+            Some(true),
+            "{model} is in exact inventory despite runtime blocks"
+        );
+        assert!(row.availability_reason.is_none());
+        assert!(!row.enabled);
+    }
+    let alias = value
+        .items
+        .0
+        .iter()
+        .find(|m| m.id.as_str() == "sol-latest")
+        .unwrap();
+    assert_eq!(
+        alias.resolves_to_model_ids.as_ref().unwrap().0,
+        [id("sol-new")]
+    );
+    let blocked = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert!(!blocked.available);
+    assert_eq!(
+        codes(&blocked),
+        ["ConnectionUnavailable", "Cooling", "Disabled"]
+    );
+    // A disabled newest release never silently renames an older enabled release to latest.
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-7-sol", "gpt-6.1-sol"]),
+    );
+    fx.uncool("sol-new");
+    assert_eq!(
+        codes(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["Disabled"]
+    );
+    assert!(
+        fx.availability(named("sol"), "Default", &[], None)
+            .available
+    );
+}
+
+#[test]
+fn alias_metadata_unions_current_scope_declarations_but_requests_require_one_jointly_capable_scope()
+{
+    let fx = Fx::new();
+    let mut a = versioned("sol-scope-a", "gpt-6.9-sol", CODEX, "conn-codex");
+    a.efforts = vec!["Low".into()];
+    a.image_input = false;
+    a.tools = true;
+    a.context_tokens = Some(100_000);
+    let mut b = versioned("sol-scope-b", "gpt-7-sol", CODEX, "conn-codex-b");
+    b.efforts = vec!["High".into()];
+    b.image_input = true;
+    b.tools = false;
+    b.context_tokens = Some(200_000);
+    fx.add_model(a);
+    fx.add_model(b);
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.9-sol"]),
+    );
+    fx.dir.set(
+        CODEX,
+        "conn-codex-b",
+        ConnectionState::Connected,
+        Some(&["gpt-7-sol"]),
+    );
+    let OperationResult::RouterCatalog { value } = result(fx.query_at(
+        &fx.user(),
+        "router.catalog",
+        json!({"page":{"limit":50},"includeDisabled":false}),
+        Some(3),
+    )) else {
+        panic!("catalog")
+    };
+    let alias = value
+        .items
+        .0
+        .iter()
+        .find(|m| m.id.as_str() == "sol-latest")
+        .unwrap();
+    assert_eq!(
+        alias.efforts.0.iter().map(effort).collect::<Vec<_>>(),
+        ["Low", "High"]
+    );
+    assert!(alias.image_input && alias.tools);
+    assert_eq!(alias.context_tokens.as_ref().unwrap().0, "200000");
+    assert_eq!(
+        model_of(fx.route(
+            "s1",
+            named("sol-latest"),
+            "High",
+            &["vision", "context:200000"]
+        )),
+        "sol-scope-b"
+    );
+    assert!(
+        !fx.availability(named("sol-latest"), "Default", &["vision", "tools"], None)
+            .available
+    );
+    let both = fx.availability(named("sol-latest"), "Default", &["vision", "tools"], None);
+    assert_eq!(codes(&both), ["ToolsUnsupported", "VisionUnsupported"]);
     assert_eq!(fx.cursor("High"), 0);
 }

@@ -56,6 +56,13 @@ pub struct StoredPin {
     pub revision: i64,
     pub model_id: Id,
     pub connection_id: Id,
+    /// Concrete identity captured when routed. A catalog edit cannot silently change it.
+    /// Nullable only for a legacy pin whose catalog row was absent during migration 25.
+    pub upstream_model_id: Option<String>,
+    pub endpoint_profile: Option<String>,
+    /// `Resolved`, `Migration25CurrentCatalog`, or `Unknown`; migration never invents the
+    /// historical upstream of a pin that did not record one.
+    pub identity_origin: String,
     /// Canonical JSON of the wire `RouteIntent`.
     pub intent: String,
     /// `EffortName` wire names; an explicit request is never changed (`Default` may resolve).

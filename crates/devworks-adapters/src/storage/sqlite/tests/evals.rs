@@ -90,7 +90,7 @@ fn eval_migration_is_additive_checksummed_and_preserves_compatibility_floors() {
     let old = SqliteStore::open_with(harness.config(), &through(23)).unwrap();
     seed(&old);
     drop(old);
-    let store = harness.store();
+    let store = SqliteStore::open_with(harness.config(), &through(24)).unwrap();
     assert_eq!(store.compatibility().unwrap().store_schema_version, 24);
     insert(&store, report("run-a")).unwrap();
     drop(store);

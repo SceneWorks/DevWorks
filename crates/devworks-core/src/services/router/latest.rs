@@ -63,6 +63,14 @@ pub fn parse(upstream: &str) -> Option<ParsedVersion> {
             }
             (family, digits, &['.', '-'])
         };
+    let publisher = if FAMILIES[..4].contains(&family) {
+        "openai"
+    } else {
+        "anthropic"
+    };
+    if !namespace.is_empty() && namespace != publisher {
+        return None;
+    }
     let mut version = Vec::new();
     for part in digits.split(separators) {
         // Eight digits are a snapshot date, never a version component; leading zeroes and
@@ -103,7 +111,7 @@ pub fn targets(
         (String, String, String),
         (ParsedVersion, &crate::ports::storage::StoredRouteModel),
     > = BTreeMap::new();
-    for model in models.values().filter(|m| m.enabled) {
+    for model in models.values() {
         let Some(parsed) = parse(&model.upstream_model_id).filter(|p| p.family == family) else {
             continue;
         };
@@ -167,6 +175,7 @@ mod tests {
             vec![3, 7]
         );
         assert_eq!(parse("claude-5.5-opus").unwrap().family, "opus");
+        assert_eq!(parse("openai/gpt-6.10-sol").unwrap().family, "sol");
         assert_eq!(parse("gpt-6.0-sol").unwrap().version, vec![6]);
     }
 
@@ -194,6 +203,11 @@ mod tests {
             "claude-sonnet-5-",
             "gpt-6-sol/",
             "gpt-6-solitude",
+            "otherpublisher/gpt-99-sol",
+            "otherpublisher/claude-opus-99",
+            "openai/claude-opus-99",
+            "anthropic/gpt-99-sol",
+            "nested/openai/gpt-99-sol",
         ] {
             assert!(parse(invalid).is_none(), "{invalid}");
         }

@@ -3011,3 +3011,18 @@ fn mixed_inventories_keep_all_types_without_advertising_unknown_or_nontext_model
     summary(cx.configure(json!({"kind": "SignIn", "connectionId": "mixed", "action": "Inspect"})));
     assert!(cx.availability("my-custom-chat").available);
 }
+
+#[test]
+fn latest_alias_ids_cannot_be_created_as_mutable_concrete_model_configuration() {
+    let cx = Cx::new();
+    let fault = refused(cx.configure(json!({"kind":"Model", "model": {
+        "id":"sol-latest", "displayName":"Forged alias", "endpointProfile":"CodexSubscriptionResponses",
+        "upstreamModelId":"gpt-1-sol", "enabled":true, "tierMemberships":[], "efforts":[],
+        "imageInput":false, "tools":false, "revision":"1"
+    }})));
+    assert_eq!(fault.code, DomainErrorCode::InvalidArgument);
+    assert!(
+        cx.read(|r| r.router().route_model(&id("sol-latest")))
+            .is_none()
+    );
+}

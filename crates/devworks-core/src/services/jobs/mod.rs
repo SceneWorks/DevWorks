@@ -716,6 +716,7 @@ impl JobService {
                     return Err(not_found("prompt", &prompt.artifact_id).into());
                 }
                 if let RouteIntent::Model { model_id } = route
+                    && crate::services::router::latest::alias_family(model_id.as_str()).is_none()
                     && tx.router().route_model(model_id)?.is_none()
                 {
                     return Err(not_found("route_model", model_id).into());

@@ -225,6 +225,62 @@ pub fn lists(profile: &str, discovered: &BTreeSet<String>, upstream: &str) -> bo
         .any(|id| id.eq_ignore_ascii_case(upstream))
 }
 
+/// Exact provider inventory availability, independent of enablement, credentials, cooldowns
+/// and request requirements. Unknown remains unknown until every applicable permitted scope
+/// has a complete inventory, unless one already proves the identity is listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inventory {
+    pub available: Option<bool>,
+    pub reason: Option<&'static str>,
+}
+
+pub fn inventory(model: &StoredRouteModel, connections: &[ConnectionStatus]) -> Inventory {
+    let serving: Vec<_> = connections
+        .iter()
+        .filter(|c| c.profile == model.endpoint_profile)
+        .filter(|c| model.connection_id.as_ref().is_none_or(|id| id == &c.id))
+        .collect();
+    if serving.is_empty() {
+        return Inventory {
+            available: None,
+            reason: Some("NoInventory"),
+        };
+    }
+    let permitted: Vec<_> = serving
+        .into_iter()
+        .filter(|c| c.permits(&model.upstream_model_id))
+        .collect();
+    if permitted.is_empty() {
+        return Inventory {
+            available: Some(false),
+            reason: Some("Excluded"),
+        };
+    }
+    if model.endpoint_profile == OPEN_ROUTER_PROFILE
+        && model.upstream_model_id == OPEN_ROUTER_AUTO_UPSTREAM
+        || permitted.iter().any(|c| {
+            c.discovered
+                .as_ref()
+                .is_some_and(|d| lists(&model.endpoint_profile, d, &model.upstream_model_id))
+        })
+    {
+        Inventory {
+            available: Some(true),
+            reason: None,
+        }
+    } else if permitted.iter().any(|c| c.discovered.is_none()) {
+        Inventory {
+            available: None,
+            reason: Some("NoInventory"),
+        }
+    } else {
+        Inventory {
+            available: Some(false),
+            reason: Some("NotDiscovered"),
+        }
+    }
+}
+
 /// The usable connection of `model` (preferring `preferred`), or why there is none.
 fn connection_for(
     model: &StoredRouteModel,

@@ -3029,6 +3029,9 @@ fn configure_model(
     model: &RouteModel,
     expected: Option<i64>,
 ) -> Result<DomainDecision, Failure> {
+    if super::latest::alias_family(model.id.as_str()).is_some() {
+        return Err(invalid("reserved_latest_alias"));
+    }
     let profile_name = wire(&model.endpoint_profile);
     if profile_name == "SystemOne" {
         return Err(invalid("endpoint_profile"));
