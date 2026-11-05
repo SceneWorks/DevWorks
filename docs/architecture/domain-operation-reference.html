@@ -9724,6 +9724,10 @@
 <td><code>TranscriptContains</code></td>
 <td><code>entryKind</code>: <code>Label</code><br><code>text</code>: <code>Text</code></td>
 </tr>
+<tr>
+<td><code>RecordFieldEquals</code></td>
+<td><code>source</code>: <code>EvalRecordSource</code><br><code>pointer</code>: <code>Text</code><br><code>expected</code>: <code>DynamicJson</code></td>
+</tr>
 </tbody></table>
 <h3 id="evaldeterministiccheck">EvalDeterministicCheck</h3>
 <table>
@@ -9903,6 +9907,10 @@
 <td><code>detail</code></td>
 <td><code>Text</code></td>
 </tr>
+<tr>
+<td><code>observedValue</code></td>
+<td><code>?EvalObservedValue</code></td>
+</tr>
 </tbody></table>
 <h3 id="evalrunresult">EvalRunResult</h3>
 <table>
@@ -9985,6 +9993,10 @@
 <td><code>sessionSequence</code></td>
 <td><code>Counter</code></td>
 </tr>
+<tr>
+<td><code>evidenceDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
 </tbody></table>
 <h3 id="evalrevisionsource">EvalRevisionSource</h3>
 <table>
@@ -10030,6 +10042,21 @@
 <tr>
 <td><code>hasMore</code></td>
 <td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="evalrecordsource">EvalRecordSource</h3>
+<p><code>Session</code>, <code>HistoryEvent</code>, <code>GitLink</code>, <code>PullRequestLink</code>, <code>ReviewLink</code>, <code>WorkState</code>.</p>
+<h3 id="evalobservedvalue">EvalObservedValue</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>value</code></td>
+<td><code>DynamicJson</code></td>
 </tr>
 </tbody></table>
 <h2 id="machine-sources">Machine sources</h2>

@@ -10067,8 +10067,44 @@
             "text"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected": {
+              "$ref": "#/$defs/BoundedUntrustedJson"
+            },
+            "kind": {
+              "const": "RecordFieldEquals",
+              "type": "string"
+            },
+            "pointer": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "source": {
+              "$ref": "#/$defs/EvalRecordSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "pointer",
+            "expected"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "EvalRecordSource": {
+      "enum": [
+        "Session",
+        "HistoryEvent",
+        "GitLink",
+        "PullRequestLink",
+        "ReviewLink",
+        "WorkState"
+      ],
+      "type": "string"
     },
     "EvalSuiteSnapshot": {
       "additionalProperties": false,

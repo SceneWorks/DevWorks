@@ -21421,6 +21421,7 @@
             "ungradedReasons": []
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "not_applicable",
@@ -23924,6 +23925,311 @@
       "typedValid": true
     },
     {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-Session",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "Session"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-HistoryEvent",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "HistoryEvent"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-GitLink",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "GitLink"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-PullRequestLink",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "PullRequestLink"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-ReviewLink",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "ReviewLink"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-record-field-WorkState",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": {
+                    "observed": true
+                  },
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/state",
+                  "source": "WorkState"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": "unknown variant `ArbitrarySql`, expected one of `Session`, `HistoryEvent`, `GitLink`, `PullRequestLink`, `ReviewLink`, `WorkState`",
+      "expectedSchemaValid": false,
+      "id": "reject-eval-unknown-record-source",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-invalid-record-pointer-is-runtime-grader-error",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": null,
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/bad~2escape",
+                  "source": "WorkState"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-escaped-record-pointer",
+      "normalized": {
+        "body": {
+          "kind": "evals.grade",
+          "sessionId": "id-a",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "expected": [
+                    true,
+                    1,
+                    "value"
+                  ],
+                  "kind": "RecordFieldEquals",
+                  "pointer": "/a~1b/~0key",
+                  "source": "Session"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a"
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
       "entry": "operation-result",
       "error": null,
       "expectedSchemaValid": true,
@@ -23941,6 +24247,7 @@
             "ungradedReasons": []
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "passed",
@@ -24024,6 +24331,7 @@
             "ungradedReasons": []
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "failed",
@@ -24111,6 +24419,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "unclear",
@@ -24206,6 +24515,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "not_applicable",
@@ -24301,6 +24611,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "evidence_unavailable",
@@ -24396,6 +24707,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "grader_error",
@@ -24491,6 +24803,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "cancelled",
@@ -24586,6 +24899,7 @@
             ]
           },
           "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "id": "id-a",
           "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "outcome": "budget_exhausted",
@@ -24631,6 +24945,185 @@
                 }
               ],
               "outcome": "budget_exhausted",
+              "sessionId": "session-a"
+            }
+          ],
+          "sessionId": "id-a",
+          "sessionRevision": "1",
+          "sessionSequence": "0",
+          "sourceWatermark": "0",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "kind": "ToolSucceeded",
+                  "operation": "fixture"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-retains-observed-record-field",
+      "normalized": {
+        "kind": "evals.grade",
+        "value": {
+          "coverage": {
+            "eligible": "1",
+            "failed": "0",
+            "graded": "1",
+            "passRate": 1.0,
+            "passed": "1",
+            "ungraded": "0",
+            "ungradedReasons": []
+          },
+          "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "id-a",
+          "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "passed",
+          "runs": [
+            {
+              "coverage": {
+                "eligible": "1",
+                "failed": "0",
+                "graded": "1",
+                "passRate": 1.0,
+                "passed": "1",
+                "ungraded": "0",
+                "ungradedReasons": []
+              },
+              "instances": [
+                {
+                  "checkId": "check-a",
+                  "coverage": {
+                    "eligible": "1",
+                    "failed": "0",
+                    "graded": "1",
+                    "passRate": 1.0,
+                    "passed": "1",
+                    "ungraded": "0",
+                    "ungradedReasons": []
+                  },
+                  "detail": "Fixture evidence",
+                  "observedValue": {
+                    "value": {
+                      "review": {
+                        "findings": 0
+                      },
+                      "state": "complete"
+                    }
+                  },
+                  "outcome": "passed",
+                  "revision": {
+                    "contextEpoch": "0",
+                    "kind": "Mixed",
+                    "reason": "No complete historical manifest",
+                    "sources": []
+                  }
+                }
+              ],
+              "outcome": "passed",
+              "sessionId": "session-a"
+            }
+          ],
+          "sessionId": "id-a",
+          "sessionRevision": "1",
+          "sessionSequence": "0",
+          "sourceWatermark": "0",
+          "suite": {
+            "checks": [
+              {
+                "id": "id-a",
+                "measurement": "Proxy",
+                "predicate": {
+                  "kind": "ToolSucceeded",
+                  "operation": "fixture"
+                },
+                "ruleRef": "fixture"
+              }
+            ],
+            "id": "id-a",
+            "name": "fixture",
+            "revision": "1"
+          }
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "eval-retains-observed-json-null",
+      "normalized": {
+        "kind": "evals.grade",
+        "value": {
+          "coverage": {
+            "eligible": "1",
+            "failed": "0",
+            "graded": "1",
+            "passRate": 1.0,
+            "passed": "1",
+            "ungraded": "0",
+            "ungradedReasons": []
+          },
+          "createdAtMs": "0",
+          "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "id-a",
+          "measurementDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "passed",
+          "runs": [
+            {
+              "coverage": {
+                "eligible": "1",
+                "failed": "0",
+                "graded": "1",
+                "passRate": 1.0,
+                "passed": "1",
+                "ungraded": "0",
+                "ungradedReasons": []
+              },
+              "instances": [
+                {
+                  "checkId": "check-a",
+                  "coverage": {
+                    "eligible": "1",
+                    "failed": "0",
+                    "graded": "1",
+                    "passRate": 1.0,
+                    "passed": "1",
+                    "ungraded": "0",
+                    "ungradedReasons": []
+                  },
+                  "detail": "Fixture evidence",
+                  "observedValue": {
+                    "value": null
+                  },
+                  "outcome": "passed",
+                  "revision": {
+                    "contextEpoch": "0",
+                    "kind": "Mixed",
+                    "reason": "No complete historical manifest",
+                    "sources": []
+                  }
+                }
+              ],
+              "outcome": "passed",
               "sessionId": "session-a"
             }
           ],
@@ -38371,7 +38864,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-13-1258",
+      "id": "r3-preview-source-13-1269",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -38392,7 +38885,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-13-1258",
+      "id": "r3-delete-source-13-1269",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -38415,7 +38908,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-15-1260",
+      "id": "r3-preview-source-15-1271",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -38436,7 +38929,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-15-1260",
+      "id": "r3-delete-source-15-1271",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -38459,7 +38952,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-256-1262",
+      "id": "r3-preview-source-256-1273",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -38480,7 +38973,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-256-1262",
+      "id": "r3-delete-source-256-1273",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",

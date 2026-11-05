@@ -3421,6 +3421,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `ToolSucceeded` | `operation`: `Label` |
 | `TranscriptContains` | `entryKind`: `Label`<br>`text`: `Text` |
+| `RecordFieldEquals` | `source`: `EvalRecordSource`<br>`pointer`: `Text`<br>`expected`: `DynamicJson` |
 
 ### EvalDeterministicCheck
 
@@ -3485,6 +3486,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `outcome` | `EvalOutcome` |
 | `coverage` | `EvalCoverage` |
 | `detail` | `Text` |
+| `observedValue` | `?EvalObservedValue` |
 
 ### EvalRunResult
 
@@ -3511,6 +3513,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `coverage` | `EvalCoverage` |
 | `runs` | `Rows<EvalRunResult>` |
 | `sessionSequence` | `Counter` |
+| `evidenceDigest` | `Digest` |
 
 ### EvalRevisionSource
 
@@ -3528,6 +3531,16 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `items` | `Rows<EvalReport>` |
 | `nextCursor` | `?Cursor` |
 | `hasMore` | `bool` |
+
+### EvalRecordSource
+
+`Session`, `HistoryEvent`, `GitLink`, `PullRequestLink`, `ReviewLink`, `WorkState`.
+
+### EvalObservedValue
+
+| Field | Type |
+| --- | --- |
+| `value` | `DynamicJson` |
 
 ## Machine sources
 

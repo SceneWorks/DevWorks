@@ -91,6 +91,12 @@ mutate('eval-text-proxy-predicate','input-evals.grade-Command',['body','suite','
 mutate('reject-eval-false-enforced-rule','input-evals.grade-Command',['body','suite','checks',0,'measurement'],'EnforcedRule',typed=False,schema=True)
 mutate('eval-valid-text-proxy','input-evals.grade-Command',['body','suite','checks',0],{'id':'check-a','ruleRef':'RULE-1','measurement':'Proxy','predicate':{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'}},typed=True,schema=True)
 
+for source in TYPES['EvalRecordSource']['values']:
+ mutate('eval-record-field-'+source,'input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':source,'pointer':'/state','expected':{'observed':True}},typed=True,schema=True)
+mutate('reject-eval-unknown-record-source','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':'ArbitrarySql','pointer':'/state','expected':'value'})
+mutate('eval-invalid-record-pointer-is-runtime-grader-error','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':'WorkState','pointer':'/bad~2escape','expected':None},typed=True,schema=True)
+mutate('eval-escaped-record-pointer','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':'Session','pointer':'/a~1b/~0key','expected':[True,1,'value']},typed=True,schema=True)
+
 for outcome in TYPES['EvalOutcome']['values']:
  coverage={'eligible':'1','graded':'1' if outcome in ['passed','failed'] else '0',
    'ungraded':'0' if outcome in ['passed','failed'] else '1','passed':'1' if outcome=='passed' else '0',
@@ -100,6 +106,8 @@ for outcome in TYPES['EvalOutcome']['values']:
  instance={'checkId':'check-a','revision':{'kind':'Mixed','contextEpoch':'0','sources':[],'reason':'No complete historical manifest'},'outcome':outcome,'coverage':copy.deepcopy(coverage),'detail':'Fixture evidence'}
  report['value'].update(outcome=outcome,coverage=copy.deepcopy(coverage),runs=[{'sessionId':'session-a','outcome':outcome,'coverage':copy.deepcopy(coverage),'instances':[instance]}])
  case('eval-explicit-outcome-'+outcome,'operation-result',report)
+mutate('eval-retains-observed-record-field','eval-explicit-outcome-passed',['value','runs',0,'instances',0,'observedValue'],{'value':{'state':'complete','review':{'findings':0}}},typed=True,schema=True)
+mutate('eval-retains-observed-json-null','eval-explicit-outcome-passed',['value','runs',0,'instances',0,'observedValue'],{'value':None},typed=True,schema=True)
 mutate('reject-eval-graded-ungraded-reason','eval-explicit-outcome-unclear',['value','coverage','ungradedReasons',0,'outcome'],'passed',typed=False,schema=True)
 mutate('reject-eval-wrong-reason-count','eval-explicit-outcome-unclear',['value','coverage','ungradedReasons',0,'count'],'2',typed=False,schema=True)
 mutate('reject-eval-rate-using-eligible','eval-explicit-outcome-passed',['value','coverage','passRate'],0.5,typed=False,schema=True)

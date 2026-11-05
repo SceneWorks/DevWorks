@@ -2488,6 +2488,16 @@
         "detail": {
           "$ref": "#/$defs/Text1To4096"
         },
+        "observedValue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvalObservedValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "outcome": {
           "$ref": "#/$defs/EvalOutcome"
         },
@@ -2520,6 +2530,18 @@
         "EnforcedRule"
       ],
       "type": "string"
+    },
+    "EvalObservedValue": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/BoundedUntrustedJson"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "type": "object"
     },
     "EvalOutcome": {
       "enum": [
@@ -2589,8 +2611,44 @@
             "text"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected": {
+              "$ref": "#/$defs/BoundedUntrustedJson"
+            },
+            "kind": {
+              "const": "RecordFieldEquals",
+              "type": "string"
+            },
+            "pointer": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "source": {
+              "$ref": "#/$defs/EvalRecordSource"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "pointer",
+            "expected"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "EvalRecordSource": {
+      "enum": [
+        "Session",
+        "HistoryEvent",
+        "GitLink",
+        "PullRequestLink",
+        "ReviewLink",
+        "WorkState"
+      ],
+      "type": "string"
     },
     "EvalReport": {
       "additionalProperties": false,
@@ -2600,6 +2658,9 @@
         },
         "createdAtMs": {
           "$ref": "#/$defs/Counter"
+        },
+        "evidenceDigest": {
+          "$ref": "#/$defs/Digest"
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -2650,7 +2711,8 @@
         "outcome",
         "coverage",
         "runs",
-        "sessionSequence"
+        "sessionSequence",
+        "evidenceDigest"
       ],
       "type": "object"
     },

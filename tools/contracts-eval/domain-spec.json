@@ -3636,6 +3636,11 @@
         "TranscriptContains": {
           "entry_kind": "Label",
           "text": "Text"
+        },
+        "RecordFieldEquals": {
+          "source": "EvalRecordSource",
+          "pointer": "Text",
+          "expected": "DynamicJson"
         }
       }
     },
@@ -3707,7 +3712,8 @@
         "revision": "EvalRevisionContext",
         "outcome": "EvalOutcome",
         "coverage": "EvalCoverage",
-        "detail": "Text"
+        "detail": "Text",
+        "observed_value": "?EvalObservedValue"
       }
     },
     "EvalRunResult": {
@@ -3733,7 +3739,8 @@
         "outcome": "EvalOutcome",
         "coverage": "EvalCoverage",
         "runs": "Rows<EvalRunResult>",
-        "session_sequence": "Counter"
+        "session_sequence": "Counter",
+        "evidence_digest": "Digest"
       }
     },
     "EvalRevisionSource": {
@@ -3751,6 +3758,23 @@
         "items": "Rows<EvalReport>",
         "next_cursor": "?Cursor",
         "has_more": "bool"
+      }
+    },
+    "EvalRecordSource": {
+      "kind": "enum",
+      "values": [
+        "Session",
+        "HistoryEvent",
+        "GitLink",
+        "PullRequestLink",
+        "ReviewLink",
+        "WorkState"
+      ]
+    },
+    "EvalObservedValue": {
+      "kind": "record",
+      "fields": {
+        "value": "DynamicJson"
       }
     }
   },
@@ -7870,7 +7894,7 @@
       "result": "EvalReport",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Grade one visible recorded session using an immutable supplied/draft suite snapshot; no suite activation, adoption authority or evidence-gate approval is conferred. Only evaluator report/receipt/history records may be written. Attribute each matching durable step to complete host-recorded effective revision sources, otherwise keep known sources in the explicit Mixed group. ToolSucceeded grades each matching call response; both built-in predicates require Proxy. No-match is not_applicable; missing durable evidence is evidence_unavailable. No inference."
+      "rules": "Grade one visible recorded session using an immutable supplied/draft suite snapshot; no suite activation, adoption authority or evidence-gate approval is conferred. Only evaluator report/receipt/history records may be written. Attribute each matching durable step to complete host-recorded effective revision sources, otherwise keep known sources in the explicit Mixed group. ToolSucceeded grades each matching call response; all built-in predicates require Proxy. RecordFieldEquals compares a bounded expected JSON value at an RFC 6901 pointer in the fixed Session, HistoryEvent, GitLink, PullRequestLink, ReviewLink or WorkState projection captured in the coherent session snapshot; no arbitrary storage or network reads. Invalid pointers produce grader_error, missing durable record/field evidence produces evidence_unavailable. No matching transcript/tool step is not_applicable; missing durable response or selected record/field evidence is evidence_unavailable. No inference."
     },
     "evals.results": {
       "operation": "evals.results",

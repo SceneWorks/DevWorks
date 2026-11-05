@@ -9383,8 +9383,18 @@ impl Check for EvalMeasurementKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum EvalPredicate {
-    ToolSucceeded { operation: Label },
-    TranscriptContains { entry_kind: Label, text: Text },
+    ToolSucceeded {
+        operation: Label,
+    },
+    TranscriptContains {
+        entry_kind: Label,
+        text: Text,
+    },
+    RecordFieldEquals {
+        source: EvalRecordSource,
+        pointer: Text,
+        expected: DynamicJson,
+    },
 }
 impl Check for EvalPredicate {
     fn check(&self) -> Result<(), String> {
@@ -9395,6 +9405,15 @@ impl Check for EvalPredicate {
             Self::TranscriptContains { entry_kind, text } => {
                 entry_kind.check()?;
                 text.check()?;
+            }
+            Self::RecordFieldEquals {
+                source,
+                pointer,
+                expected,
+            } => {
+                source.check()?;
+                pointer.check()?;
+                expected.check()?;
             }
         }
         Ok(())
@@ -9561,6 +9580,8 @@ pub struct EvalInstanceResult {
     pub outcome: EvalOutcome,
     pub coverage: EvalCoverage,
     pub detail: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_value: Option<EvalObservedValue>,
 }
 impl Check for EvalInstanceResult {
     fn check(&self) -> Result<(), String> {
@@ -9570,6 +9591,7 @@ impl Check for EvalInstanceResult {
         self.outcome.check()?;
         self.coverage.check()?;
         self.detail.check()?;
+        self.observed_value.check()?;
         super::domain_rules::record(
             "EvalInstanceResult",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -9616,6 +9638,7 @@ pub struct EvalReport {
     pub coverage: EvalCoverage,
     pub runs: Rows<EvalRunResult>,
     pub session_sequence: Counter,
+    pub evidence_digest: Digest,
 }
 impl Check for EvalReport {
     fn check(&self) -> Result<(), String> {
@@ -9631,6 +9654,7 @@ impl Check for EvalReport {
         self.coverage.check()?;
         self.runs.check()?;
         self.session_sequence.check()?;
+        self.evidence_digest.check()?;
         super::domain_rules::record(
             "EvalReport",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -9676,6 +9700,37 @@ impl Check for EvalReportPage {
         self.has_more.check()?;
         super::domain_rules::record(
             "EvalReportPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalRecordSource {
+    Session,
+    HistoryEvent,
+    GitLink,
+    PullRequestLink,
+    ReviewLink,
+    WorkState,
+}
+impl Check for EvalRecordSource {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalObservedValue {
+    pub value: DynamicJson,
+}
+impl Check for EvalObservedValue {
+    fn check(&self) -> Result<(), String> {
+        self.value.check()?;
+        super::domain_rules::record(
+            "EvalObservedValue",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
