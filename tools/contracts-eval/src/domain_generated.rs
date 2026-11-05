@@ -5501,6 +5501,13 @@ pub struct PackageRecord {
     )]
     #[schemars(with = "Items<Id>", extend("x-since" = 3))]
     pub disabled_projects: Option<Items<Id>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaValue", extend("x-since" = 3))]
+    pub configuration: Option<SchemaValue>,
 }
 impl Check for PackageRecord {
     fn check(&self) -> Result<(), String> {
@@ -5539,6 +5546,7 @@ impl Check for PackageRecord {
         self.available.check()?;
         self.installed.check()?;
         self.disabled_projects.check()?;
+        self.configuration.check()?;
         super::domain_rules::record(
             "PackageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -5631,6 +5639,9 @@ impl Revisioned for PackageRecord {
         }
         if revision < 3 {
             self.disabled_projects = None;
+        }
+        if revision < 3 {
+            self.configuration = None;
         }
     }
 }

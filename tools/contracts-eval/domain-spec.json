@@ -2068,7 +2068,8 @@
         "pending_bundle": "?ArtifactRef",
         "available": "?Items<PackageOffer>",
         "installed": "?bool",
-        "disabled_projects": "?Items<Id>"
+        "disabled_projects": "?Items<Id>",
+        "configuration": "?SchemaValue"
       },
       "since": {
         "registry_revision": 2,
@@ -2097,7 +2098,8 @@
         "pending_bundle": 2,
         "available": 2,
         "installed": 2,
-        "disabled_projects": 3
+        "disabled_projects": 3,
+        "configuration": 3
       }
     },
     "HelpTopic": {

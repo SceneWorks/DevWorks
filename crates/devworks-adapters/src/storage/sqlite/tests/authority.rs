@@ -2975,3 +2975,66 @@ fn a_blocked_command_records_every_refused_step_with_its_rationale() {
     );
     assert_eq!(event.payload["authoritySources"], json!(["approval-3"]));
 }
+
+#[test]
+fn package_activation_requires_an_exact_native_grant_in_project_scope() {
+    let fx = Fx::new();
+    let user = fx.ctx("user-a", PrincipalKind::Human);
+    fx.user_saves(
+        json!({"kind":"Project","projectId":"project-a"}),
+        1,
+        "safety.accessProfile",
+        json!("projectScope"),
+    );
+    let agent = fx
+        .agent("agent-p")
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None);
+    let artifact = json!({"artifactId":"bundle-a","versionId":"v1","sha256":"a".repeat(64),"byteLength":"8","mediaType":"application/vnd.devworks.package"});
+    for (op, command) in [
+        (
+            "addons.install",
+            json!({"kind":"Install","bundle":artifact,"expectedRegistryRevision":"1"}),
+        ),
+        (
+            "addons.update",
+            json!({"kind":"Update","packageId":"pack-a","bundle":artifact,"expectedRegistryRevision":"1"}),
+        ),
+        (
+            "addons.enable",
+            json!({"kind":"Enable","packageId":"pack-a","expectedRegistryRevision":"1"}),
+        ),
+        (
+            "addons.rollback",
+            json!({"kind":"Rollback","packageId":"pack-a","targetManifestDigest":"a".repeat(64),"expectedRegistryRevision":"1","expectedStateGeneration":"1"}),
+        ),
+        (
+            "addons.configure",
+            json!({"kind":"addons.configure","packageId":"pack-a","expectedRevision":"1","config":{"schema":{"schemaId":"pack-a/config","revision":"1","sha256":"a".repeat(64)},"value":{}}}),
+        ),
+    ] {
+        let frame = if op == "addons.configure" { json!({"protocol":"1.0-draft.1","mode":"Command","requestKey":"native-pack","body":command}) } else { json!({"protocol":"1.0-draft.1","requestKey":"native-pack","command":command}) }.to_string();
+        assert_eq!(
+            reason(decide(&fx, &agent, op, Mode::Command, &frame)),
+            Some(DenialReason::EnforcementUnavailable),
+            "{op}"
+        );
+        let grant = fx.mint(
+            &user,
+            "agent-p",
+            GrantKind::NativeExecution,
+            GrantBinding {
+                operation: op.into(),
+                action: None,
+                request_digest: Some(digest(op, Mode::Command, &frame)),
+                project_id: Some(ProjectId(id("project-a"))),
+                root_id: None,
+                policy_digest: Some(fx.policy_digest("project-a")),
+            },
+            Some(1),
+        );
+        assert!(grant.is_ok(), "{op}: {grant:?}");
+        let granted = agent.clone().with_authority_source(grant.unwrap().id);
+        let allowed = decide(&fx, &granted, op, Mode::Command, &frame);
+        assert!(allowed.is_ok(), "{op}: {allowed:?}");
+    }
+}

@@ -79,15 +79,22 @@ fn version_matches(requirement: &str, version: &str) -> bool {
     }
 }
 
+type AvailabilityCache = BTreeMap<(String, String, usize), (PackageAvailability, String)>;
+
 impl Registry<'_> {
     /// The prerequisites of `i` with their current state. A package dependency is satisfied
     /// only by an installed, enabled package whose active version has exactly the pinned
     /// manifest digest, matches the version requirement and is itself available.
     pub fn prerequisites(&self, i: &Inspection) -> Vec<Prerequisite> {
-        self.prerequisites_at(i, 0)
+        self.prerequisites_at(i, 0, &mut BTreeMap::new())
     }
 
-    fn prerequisites_at(&self, i: &Inspection, depth: usize) -> Vec<Prerequisite> {
+    fn prerequisites_at(
+        &self,
+        i: &Inspection,
+        depth: usize,
+        cache: &mut AvailabilityCache,
+    ) -> Vec<Prerequisite> {
         let mut out = Vec::new();
         for d in &i.dependencies {
             let reason = match self.packages.get(&d.package_id) {
@@ -114,7 +121,7 @@ impl Registry<'_> {
                             d.package_id
                         ))
                     } else {
-                        match self.availability_depth(p, Some(v), depth + 1) {
+                        match self.availability_depth(p, Some(v), depth + 1, cache) {
                             (PackageAvailability::Ready, _) => None,
                             (_, why) => {
                                 Some(format!("Package {} is unavailable: {why}", d.package_id))
@@ -181,7 +188,7 @@ impl Registry<'_> {
         p: &StoredPackage,
         active: Option<&StoredPackageVersion>,
     ) -> (PackageAvailability, String) {
-        self.availability_depth(p, active, 0)
+        self.availability_depth(p, active, 0, &mut BTreeMap::new())
     }
 
     fn availability_depth(
@@ -189,6 +196,32 @@ impl Registry<'_> {
         p: &StoredPackage,
         active: Option<&StoredPackageVersion>,
         depth: usize,
+        cache: &mut AvailabilityCache,
+    ) -> (PackageAvailability, String) {
+        // The remaining depth budget affects availability, even when the same node was
+        // already reached along a shorter path. Cache only within this immutable traversal.
+        let key = (
+            p.package_id.clone(),
+            active
+                .map(|v| v.manifest_digest.clone())
+                .unwrap_or_default(),
+            depth,
+        );
+        if let Some(result) = cache.get(&key) {
+            return result.clone();
+        }
+        let (state, reason) = self.evaluate_availability(p, active, depth, cache);
+        let result = (state, reason.chars().take(4096).collect());
+        cache.insert(key, result.clone());
+        result
+    }
+
+    fn evaluate_availability(
+        &self,
+        p: &StoredPackage,
+        active: Option<&StoredPackageVersion>,
+        depth: usize,
+        cache: &mut AvailabilityCache,
     ) -> (PackageAvailability, String) {
         let Some(v) = active.filter(|_| p.installed) else {
             return (
@@ -212,13 +245,25 @@ impl Registry<'_> {
             return (PackageAvailability::Incompatible, why);
         }
         let unmet: Vec<String> = self
-            .prerequisites_at(&i, depth)
+            .prerequisites_at(&i, depth, cache)
             .into_iter()
             .filter(|q| q.required && !q.satisfied)
             .filter_map(|q| q.reason)
             .collect();
         if !unmet.is_empty() {
-            return (PackageAvailability::MissingDependency, unmet.join("; "));
+            return (
+                PackageAvailability::MissingDependency,
+                unmet
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(n, reason)| {
+                        (if n == 0 { "" } else { "; " })
+                            .chars()
+                            .chain(reason.chars())
+                    })
+                    .take(4096)
+                    .collect(),
+            );
         }
         if let Some(f) = p
             .failure
@@ -482,4 +527,159 @@ pub fn parse_wait(s: &str) -> Option<PackageWaitReason> {
         "Quiescence" => PackageWaitReason::Quiescence,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod closure_tests {
+    use super::*;
+    use crate::fingerprint::sha256_hex;
+    use crate::ports::storage::VersionPhase;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Probe {
+        calls: AtomicUsize,
+        budget: usize,
+        available: bool,
+    }
+    impl RuntimeProbe for Probe {
+        fn runtime(&self, _: &str) -> Option<String> {
+            assert!(
+                self.calls.fetch_add(1, Ordering::Relaxed) < self.budget,
+                "shared dependency closure exceeded a linear evaluation budget"
+            );
+            self.available.then(|| "1.0.0".into())
+        }
+    }
+    fn entry(id: &str, dependencies: &[String]) -> (StoredPackage, Option<StoredPackageVersion>) {
+        let digest = sha256_hex(id.as_bytes());
+        let facts = json!({"packageId": id, "version": "1.0.0", "publisherId": "acme",
+            "manifestDigest": digest, "bundleDigest": digest, "signerKey": null,
+            "protocolMin": [1,0], "protocolMax": [1,0], "minimumHostVersion": "0.1.0",
+            "targets": [{"targetTriple": "test-target", "entrypoint": "helper"}],
+            "files": [{"path": "helper", "sha256": "a".repeat(64), "byteLength": 1, "executable": true}],
+            "dependencies": dependencies.iter().map(|d| json!({"packageId": d, "versionRequirement": "^1", "manifestDigest": sha256_hex(d.as_bytes()), "required": true})).collect::<Vec<_>>(),
+            "runtimes": [{"runtimeId": "counter", "versionRequirement": "^1", "required": true}],
+            "access": [], "contributions": [], "stateSchema": {}, "configurationSchema": {},
+            "limits": {"maxConcurrent": 1, "queueCapacity": 1, "maxMemoryBytes": 1048576, "streamCreditBytes": 4096}, "helpFile": "help.md"});
+        let p = StoredPackage {
+            package_id: id.into(),
+            revision: 1,
+            enabled: true,
+            installed: true,
+            active_digest: Some(digest.clone()),
+            predecessor_digest: None,
+            pending_digest: None,
+            state_generation: 1,
+            config: None,
+            config_revision: 1,
+            trust: None,
+            failure: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let v = StoredPackageVersion {
+            package_id: id.into(),
+            manifest_digest: digest.clone(),
+            bundle_digest: digest,
+            version: "1.0.0".into(),
+            publisher_id: "acme".into(),
+            signer_key: None,
+            inspection: facts,
+            provenance: json!({}),
+            phase: VersionPhase::Installed,
+            waits: vec![],
+            approval: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        (p, Some(v))
+    }
+    fn host() -> HostPlatform {
+        HostPlatform {
+            target_triple: "test-target".into(),
+            host_version: "0.1.0".into(),
+            protocol_major: 1,
+            protocol_minor: 0,
+        }
+    }
+
+    #[test]
+    fn shared_dependency_dags_have_bounded_work_and_failure_diagnostics() {
+        let mut packages = BTreeMap::new();
+        for level in (0..=8).rev() {
+            for n in 0..if level == 0 { 1 } else { 10 } {
+                let id = format!("level-{level}-{n}");
+                let deps = if level == 8 {
+                    vec![]
+                } else {
+                    (0..10)
+                        .map(|n| format!("level-{}-{n}", level + 1))
+                        .collect()
+                };
+                packages.insert(id.clone(), entry(&id, &deps));
+            }
+        }
+        let host = host();
+        for available in [true, false] {
+            let probe = Probe {
+                calls: AtomicUsize::new(0),
+                budget: packages.len() * 4,
+                available,
+            };
+            let registry = Registry {
+                packages: &packages,
+                runtimes: &probe,
+                host: &host,
+            };
+            let (p, v) = &packages["level-0-0"];
+            let (state, reason) = registry.availability(p, v.as_ref());
+            assert!(if available {
+                matches!(state, PackageAvailability::Ready)
+            } else {
+                matches!(state, PackageAvailability::MissingDependency)
+            });
+            assert!(reason.chars().count() <= 4096);
+        }
+    }
+
+    #[test]
+    fn dependency_memoization_preserves_depth_and_cycle_refusals() {
+        let mut packages = BTreeMap::new();
+        packages.insert("leaf".into(), entry("leaf", &[]));
+        packages.insert("shared".into(), entry("shared", &["leaf".into()]));
+        packages.insert(
+            "root".into(),
+            entry("root", &["shared".into(), "chain-1".into()]),
+        );
+        for n in 1..=7 {
+            let id = format!("chain-{n}");
+            let next = if n == 7 {
+                "shared".into()
+            } else {
+                format!("chain-{}", n + 1)
+            };
+            packages.insert(id.clone(), entry(&id, &[next]));
+        }
+        let host = host();
+        for cycle in [false, true] {
+            if cycle {
+                packages.insert("chain-7".into(), entry("chain-7", &["root".into()]));
+            }
+            let probe = Probe {
+                calls: AtomicUsize::new(0),
+                budget: packages.len() * 8,
+                available: true,
+            };
+            let registry = Registry {
+                packages: &packages,
+                runtimes: &probe,
+                host: &host,
+            };
+            let (p, v) = &packages["root"];
+            let (state, why) = registry.availability(p, v.as_ref());
+            assert!(matches!(state, PackageAvailability::MissingDependency));
+            assert!(why.contains("too deep or cyclic"), "{why}");
+        }
+    }
 }

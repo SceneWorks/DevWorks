@@ -427,6 +427,8 @@ struct App {
     files: Option<Arc<dyn PackageFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
+    host_tick: Option<Duration>,
+    retry_backoff: Option<Duration>,
     /// The runtime's one shutdown bound (10 s otherwise).
     shutdown_bound: Option<Duration>,
     /// Gates the identifiers the package host allocates (invocations).
@@ -521,6 +523,8 @@ impl App {
             probe_path,
             files,
             restart_limit: None,
+            host_tick: None,
+            retry_backoff: None,
             shutdown_bound: None,
             host_ids: Arc::default(),
             log_ids: Arc::default(),
@@ -617,6 +621,8 @@ impl App {
                 },
                 config: HostConfig {
                     restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
+                    tick: self.host_tick.unwrap_or(config().tick),
+                    restart_backoff: self.retry_backoff.unwrap_or(config().restart_backoff),
                     ..config()
                 },
                 runtimes: self.probe_path.as_ref().map(|p| RuntimePorts {
@@ -4066,6 +4072,48 @@ fn saved_project_overrides_are_readable_at_revision_three_after_restart() {
 }
 
 #[test]
+fn saved_configuration_is_readable_at_revision_three_after_restart() {
+    let _s = serial();
+    let mut a = App::new();
+    let spec = Spec {
+        config_schema: Some(
+            json!({"type": "object", "properties": {"threads": {"type": "integer"}, "mode": {"type": "string"}}}),
+        ),
+        ..Spec::new("saved-config-pack", "1.0.0")
+    };
+    let rec = package(a.install(&a.user, &spec));
+    let schema = serde_json::to_value(rec.configuration_schema.unwrap()).unwrap();
+    let configured = package(a.domain(&a.user, "addons.configure", json!({"kind": "addons.configure", "packageId": "saved-config-pack", "expectedRevision": a.record("saved-config-pack").revision.get().to_string(), "config": {"schema": schema, "value": {"threads": 3, "mode": "fast"}}})));
+    assert!(
+        configured.configuration.is_none(),
+        "revision two stays unchanged"
+    );
+    a.shutdown();
+    a.boot();
+    let frame = json!({"protocol": "1.0-draft.1", "mode": "Query", "queryId": "saved-config", "schemaRevision": 3, "body": {"kind": "addons.catalog", "page": {"limit": 100}}});
+    let reply = a
+        .app()
+        .query(&a.user, "addons.catalog", frame.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result {
+        result: OperationResult::AddonsCatalog { value },
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}");
+    };
+    let record = value
+        .items
+        .0
+        .iter()
+        .find(|p| p.id.as_str() == "saved-config-pack")
+        .unwrap();
+    let config = record.configuration.as_ref().unwrap();
+    assert_eq!(serde_json::to_value(&config.schema).unwrap(), schema);
+    assert_eq!(config.value.0, json!({"threads": 3, "mode": "fast"}));
+}
+
+#[test]
 fn a_blocked_index_fetch_never_stalls_unrelated_package_reconciliation() {
     let _s = serial();
     let mut a = App::unbooted(Harness::new(), None, None);
@@ -4094,4 +4142,163 @@ fn a_blocked_index_fetch_never_stalls_unrelated_package_reconciliation() {
     a.shutdown();
     assert!(!gate.returned(), "shutdown does not wait for the fetch");
     gate.release();
+}
+
+#[test]
+fn abandoning_a_runtime_releases_idle_discovery_workers() {
+    let _s = serial();
+    let mut a = App::new();
+    // Let the initial empty-index observation finish and both periodic workers become idle.
+    std::thread::sleep(Duration::from_millis(100));
+    let weak = Arc::downgrade(a.app().packages().unwrap());
+    drop(a.app.take().unwrap());
+    let until = Instant::now() + Duration::from_secs(3);
+    while weak.upgrade().is_some() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        weak.upgrade().is_none(),
+        "abandoned workers must release the host and its store"
+    );
+}
+
+#[test]
+fn restart_backoff_wakes_reconciliation_before_a_long_periodic_tick() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    a.host_tick = Some(Duration::from_secs(60));
+    a.retry_backoff = Some(Duration::from_secs(2));
+    a.boot();
+    package(a.install(&a.user, &Spec::new("retry-wakeup-pack", "1.0.0")));
+    a.ready("retry-wakeup-pack");
+    let first = a
+        .invoke("retry-wakeup-pack", "crash", InvocationKind::Ordinary)
+        .unwrap();
+    let old_session = first.session_id().to_owned();
+    assert!(matches!(
+        first.wait(Duration::from_secs(10)),
+        Some(InvokeOutcome::Unknown(_))
+    ));
+    let next = a
+        .invoke("retry-wakeup-pack", "echo", InvocationKind::Ordinary)
+        .expect("retry must not wait for the60second maintenance tick");
+    assert_ne!(next.session_id(), old_session);
+    assert!(matches!(
+        finished(next.wait(Duration::from_secs(10))),
+        InvocationOutcome::Completed { .. }
+    ));
+}
+
+struct SubmissionCounter {
+    inner: Arc<dyn ApplicationStore>,
+    submitted: AtomicUsize,
+}
+impl ApplicationStore for SubmissionCounter {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        self.inner.submit_write(options, job)?;
+        self.submitted.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+}
+#[test]
+fn queued_package_state_writes_are_refused_after_completion_or_cancellation() {
+    let _s = serial();
+    for cancel in [false, true] {
+        let mut a = App::unbooted(Harness::new(), None, None);
+        let store = Arc::new(SubmissionCounter {
+            inner: a.store.clone(),
+            submitted: AtomicUsize::new(0),
+        });
+        a.store = store.clone();
+        a.boot();
+        let mut spec = Spec::new("queued-state-pack", "1.0.0");
+        spec.contributions.push("queued-state");
+        package(a.install(&a.user, &spec));
+        a.ready("queued-state-pack");
+        let ready = Marker::absent("queued-state-pack", "cas-ready");
+        let go = Marker::absent("queued-state-pack", "cas-go");
+        let finish = Marker::absent("queued-state-pack", "cas-finish");
+        let result = Marker::absent("queued-state-pack", "cas-result");
+        let before = read(&*a.store, |s| {
+            s.packages().package_state("queued-state-pack")
+        })
+        .unwrap();
+        let h = a
+            .invoke(
+                "queued-state-pack",
+                "queued-state",
+                InvocationKind::Ordinary,
+            )
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !ready.0.exists() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Drain invocation attribution before holding the writer; the helper has not sent CAS.
+        write(&*a.store, |_| Ok(())).unwrap();
+        let gate = Arc::new(Gate::default());
+        let _release = Release(gate.clone());
+        gate.arm(IdKind::Event);
+        let held = gate.clone();
+        a.store
+            .submit_write(
+                WriteOptions::default(),
+                write_job(
+                    move |_| {
+                        held.pass(IdKind::Event);
+                        Ok(())
+                    },
+                    |_| {},
+                ),
+            )
+            .unwrap();
+        assert!(gate.entered(Duration::from_secs(10)));
+        let submitted = store.submitted.load(Ordering::SeqCst);
+        std::fs::write(&go.0, "go").unwrap();
+        while store.submitted.load(Ordering::SeqCst) == submitted {
+            assert!(Instant::now() < until, "CAS was not queued");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if cancel {
+            h.cancel();
+        } else {
+            std::fs::write(&finish.0, "finish").unwrap();
+        }
+        assert!(
+            h.wait(Duration::from_secs(3)).is_some(),
+            "the invocation must end while the writer is held"
+        );
+        gate.release();
+        while std::fs::read_to_string(&result.0)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&result.0).unwrap(),
+            "PermissionDenied"
+        );
+        let after = read(&*a.store, |s| {
+            s.packages().package_state("queued-state-pack")
+        })
+        .unwrap();
+        assert_eq!(after.revision, before.revision);
+    }
 }

@@ -2298,6 +2298,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `available` | `?Items<PackageOffer>` · *revision 2+* |
 | `installed` | `?bool` · *revision 2+* |
 | `disabledProjects` | `?Items<Id>` · *revision 3+* |
+| `configuration` | `?SchemaValue` · *revision 3+* |
 
 ### HelpTopic
 

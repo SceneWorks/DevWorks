@@ -81,6 +81,11 @@ pub struct SlotState {
     pub cancel_acknowledged: bool,
 }
 impl Slot {
+    /// Serialize revocation with broker mutations already executing in a store transaction.
+    pub fn revoke(&self) {
+        let _guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.revoked.store(true, Ordering::SeqCst);
+    }
     pub fn terminal(&self) -> Option<Reply> {
         self.state
             .lock()
@@ -269,7 +274,7 @@ impl Session {
             .cloned()
             .collect();
         for s in slots {
-            s.revoked.store(true, Ordering::SeqCst);
+            s.revoke();
             s.finish(Reply::Lost(reason.to_owned()));
         }
         let _g = self.closed_mx.lock().unwrap_or_else(|p| p.into_inner());
@@ -553,7 +558,7 @@ impl Session {
             }
             // Terminal: the token is revoked before anything else is read, so a broker request
             // the package sends after its answer can never act for the finished invocation.
-            slot.revoked.store(true, Ordering::SeqCst);
+            slot.revoke();
             slot.finish(reply);
             return Ok(());
         }
