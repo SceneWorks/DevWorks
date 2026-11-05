@@ -34,7 +34,9 @@ fn git(path: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "git {args:?} exited {:?}: stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().into()
@@ -154,7 +156,7 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
         }
         other => panic!("{other:?}"),
     }
-    // A real configured filter is executable during ordinary Git status. A verified read
+    // Git's working-file hashing can execute a configured filter. A verified read
     // refuses it before launch, rather than running it or substituting a false dirty bit.
     std::fs::write(source.join(".gitattributes"), "a.txt filter=fixture\n").unwrap();
     git(&source, &["add", ".gitattributes"]);
@@ -186,7 +188,9 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
         Some(1),
         "verified inspection never executes the filter"
     );
-    git(&source, &["status", "--porcelain"]);
+    // Status may reuse clean stat data; force hashing so this positive control does not
+    // depend on whether the index still considers the working file racily clean.
+    git(&source, &["hash-object", "--path=a.txt", "a.txt"]);
     assert_eq!(
         git(&source, &["config", "--get", "probe.executed"]),
         "yes",
