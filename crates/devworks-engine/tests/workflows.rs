@@ -61,7 +61,10 @@ impl Fx {
             .unwrap()
     }
     fn statuses(&self) -> Vec<StatusRecord> {
-        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"statuses","body":{"kind":"workflows.list","projectId":"project","page":{"limit":500}}});
+        self.statuses_at(3)
+    }
+    fn statuses_at(&self, revision: u32) -> Vec<StatusRecord> {
+        let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":revision,"queryId":"statuses","body":{"kind":"workflows.list","projectId":"project","page":{"limit":500}}});
         match self
             .cases
             .query(
@@ -113,6 +116,13 @@ fn virtual_defaults_and_custom_labels_keep_six_explicit_semantics_and_revisioned
     let f = Fx::new();
     let defaults = f.statuses();
     assert_eq!(defaults.len(), 6);
+    assert!(
+        f.statuses_at(1)
+            .iter()
+            .all(|s| s.workflow_revision.is_none()
+                && s.affected_work_digest.is_none()
+                && s.affected_work_count.is_none())
+    );
     assert!(
         read(&*f.store, |s| s.work().statuses(&ProjectId(id("project")))).is_empty(),
         "query is read-only"
@@ -268,5 +278,27 @@ fn status_removal_cannot_promote_unverified_work_to_done_or_change_execution_hol
     assert_eq!(
         read(&*f.store, |s| s.runs().root_control(&RootId(work.clone()))),
         Some(control)
+    );
+}
+
+#[test]
+fn concurrent_creators_cannot_both_publish_against_one_workflow_revision() {
+    let f = Arc::new(Fx::new());
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let calls:Vec<_>=["First","Second"].into_iter().map(|label|{
+        let f=f.clone();let barrier=barrier.clone();
+        std::thread::spawn(move ||{
+            barrier.wait();
+            f.command("workflows.create_status",json!({"kind":"workflows.create_status","projectId":"project","expectedWorkflowRevision":"1","label":label,"category":"Ready"}))
+        })
+    }).collect();
+    let replies: Vec<_> = calls.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(replies.iter().filter(|reply|matches!(reply,CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Applied{..}))).count(),1);
+    assert_eq!(f.statuses().len(), 7);
+    assert_eq!(
+        read(&*f.store, |s| s
+            .work()
+            .queue_revision(&ProjectId(id("project")), WORKFLOW_QUEUE)),
+        2
     );
 }
