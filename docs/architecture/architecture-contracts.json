@@ -687,6 +687,24 @@
       "owner": "McpServerAdapter and ApplicationGateway",
       "validationFamily": "Independent-client context parity, authenticated scope, explicit command grants and recovery",
       "gate": "G11"
+    },
+    "ROUTE-25": {
+      "section": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "gate": "G03"
+    },
+    "ROUTE-26": {
+      "section": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "gate": "G03"
+    },
+    "ROUTE-27": {
+      "section": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "gate": "G03"
     }
   },
   "capabilityFamilies": [

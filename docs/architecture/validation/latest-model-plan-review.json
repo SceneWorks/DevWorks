@@ -1,0 +1,139 @@
+{
+  "date": "2026-11-05",
+  "scope": "Approved planning publication only; no runtime or inference acceptance",
+  "requirementsVerified": 377,
+  "unrelatedRequirementsPreserved": 374,
+  "counts": {
+    "slices": 77,
+    "operationFamilies": 48,
+    "operations": 354,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 354,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "word": {
+    "pages": 73,
+    "sourceParagraphsVerified": 377,
+    "visualReview": {
+      "date": "2026-11-05",
+      "scope": "Document layout review only; no native application or provider acceptance",
+      "pagesRendered": 73,
+      "pagesInspectedInContactSheets": 73,
+      "fullSizePagesInspected": [
+        19,
+        20
+      ],
+      "result": "All page layouts inspected in contact sheets; the new ROUTE-25\u201327 text and routing-to-work section transition inspected at full size. No clipping, overlap or missing glyphs observed. Existing document styling and figures retained."
+    },
+    "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19"
+  },
+  "readers": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/latest-model-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "codegraphVersions": {
+    "DW-F6": 6,
+    "DW-61": 8,
+    "DW-108": 1,
+    "DW-22": 6,
+    "DW-107": 4
+  },
+  "passed": true
+}

@@ -2,8 +2,8 @@
   "title": "DevWorks architecture requirement traceability",
   "status": "Proposed design coverage, not implemented or tested capability",
   "date": "2026-11-02",
-  "requirementsInputSha256": "6439805c7461819576e920416c0e289e21e05a3991d705ff2a87d8477b7eb28c",
-  "requirementsCount": 374,
+  "requirementsInputSha256": "6de34b24444a5f0601d8219173e01a8c9d7c15054fde4626788783dfbcc1a8dc",
+  "requirementsCount": 377,
   "architectureVersion": "1.1",
   "requirements": [
     {
@@ -1300,6 +1300,42 @@
       "validationFamily": "Deterministic provider/routing/budget conformance",
       "validationGate": "G03",
       "plannedCase": "AT-ROUTE-24",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "ROUTE-25",
+      "requirementStatus": "Confirmed",
+      "statement": "Provide stable -latest aliases for OpenAI Astra (Max), Sol (High), Terra (Mid), Luna (Low), and Anthropic Fable (Max), Opus (High), Sonnet (Mid), Haiku (Low). Refresh complete provider model lists hourly while the app is open, recheck overdue lists on reopening, and retain manual refresh. Resolve each family alias to the highest available numeric version in its configured provider/connection scope, promoting newly listed higher versions automatically. If the highest version disappears, use the highest version still listed; if none remains, the alias is unavailable. Compare parsed version components, not lexical order, response order or discovery time. Preserve connection/billing boundaries and configured allow/exclude constraints.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-25",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "ROUTE-26",
+      "requirementStatus": "Confirmed",
+      "statement": "For all providers and models, including custom and SystemOne decision models, reconcile availability from successful complete model-list refreshes. Keep missing model records, user enablement/configuration and historical references; mark them unavailable for new selection and routing, and restore availability when they return without re-enabling user-disabled models. Failed, malformed or partial refreshes must not become authoritative shorter catalogs. Availability is scoped to the serving connection and remains distinct from user enablement, authentication, cooldowns and request-specific capability eligibility.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-26",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result"
+    },
+    {
+      "requirement": "ROUTE-27",
+      "requirementStatus": "Confirmed",
+      "statement": "Every model-selection input, particularly Workspace/Home chat and its shared sidebar, offers the eight family -latest aliases alongside available explicit versions. New/replacement tier assignments round-robin across the configured latest aliases for those eight families, retaining configured custom tier members outside them. Preserve editable tier membership, independent effort and direct named-version/upstream-auto choices. Allocate once per chat and persist its resolved concrete version pin across turns, tool continuations, compaction and restart; an alias promotion alone neither invalidates an eligible pin nor reclassifies its Auto tier. Unavailable pins use normal eligible same-tier replacement. Alias intent, concrete catalog identity and provider-resolved identity remain distinguishable, and known request replay does not re-resolve an alias or consume another round-robin turn.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "latest-model-aliases-and-catalog-availability",
+      "owner": "Shared model discovery and alias/pin resolution",
+      "validationFamily": "Hourly complete catalogs, numeric promotion/fallback, reversible availability, selection and concrete pin preservation",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-27",
       "designStatus": "Proposed architecture mapping; not an implementation/test result"
     },
     {
