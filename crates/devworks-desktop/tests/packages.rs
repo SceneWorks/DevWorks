@@ -112,3 +112,28 @@ fn either_package_command_held_past_close_is_confirmed_after_relaunch() {
         confirm_after_relaunch(&root, real, operation, &frame);
     }
 }
+
+#[test]
+fn unused_download_preparation_cleans_its_owned_scratch_file() {
+    let root = Root::new("package-preparation-drop");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let dir = backend.scratch_dir().join("packages");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("unused.dwpkg");
+    std::fs::write(&path, b"not yet submitted").unwrap();
+    let prepared =
+        devworks_desktop::addons::prepare_downloaded_install(&*backend, path.clone()).unwrap();
+    assert!(path.is_file());
+    assert!(
+        ops::artifacts(backend.query("artifacts.list", &ops::workspace_artifacts(&*backend)))
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    drop(prepared);
+    assert!(
+        !path.exists(),
+        "a dropped reply cannot leave an unused download"
+    );
+}

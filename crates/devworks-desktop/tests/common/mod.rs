@@ -309,6 +309,12 @@ impl Backend for Gated {
         }
         out
     }
+    fn refresh_packages(&self) -> Result<(), String> {
+        self.inner.refresh_packages()
+    }
+    fn fetch_index_bundle(&self, package: &str, digest: &str) -> Result<PathBuf, String> {
+        self.inner.fetch_index_bundle(package, digest)
+    }
     fn stage_api_key(
         &self,
         key: devworks_core::ports::secrets::Secret,
@@ -426,6 +432,12 @@ impl Backend for LoseAcks {
             "protocol": "1.0-draft.1", "requestKey": "lost", "correlationId": "lost"}))
             .unwrap(),
         )
+    }
+    fn refresh_packages(&self) -> Result<(), String> {
+        self.inner.refresh_packages()
+    }
+    fn fetch_index_bundle(&self, package: &str, digest: &str) -> Result<PathBuf, String> {
+        self.inner.fetch_index_bundle(package, digest)
     }
     fn stage_api_key(
         &self,

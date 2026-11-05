@@ -865,6 +865,39 @@ pub fn prepare_install_from_file(
     Ok(TaskOutput::Prepared { frame: save })
 }
 
+/// Removes an unused download when preparation is refused or its UI reply is dropped.
+/// Once submitted, the durable command slot owns its path until the save is confirmed.
+pub struct PreparedDownload {
+    path: Option<std::path::PathBuf>,
+    root: std::path::PathBuf,
+}
+impl PreparedDownload {
+    pub fn into_path(mut self) -> std::path::PathBuf {
+        self.path.take().expect("owned download")
+    }
+}
+impl Drop for PreparedDownload {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            crate::attachments::remove_owned(path, &self.root);
+        }
+    }
+}
+
+pub fn prepare_downloaded_install(
+    backend: &dyn Backend,
+    path: std::path::PathBuf,
+) -> Result<TaskOutput, String> {
+    let download = PreparedDownload {
+        path: Some(path.clone()),
+        root: backend.scratch_dir().join("packages"),
+    };
+    let TaskOutput::Prepared { frame } = prepare_install_from_file(backend, &path)? else {
+        return Err("unexpected package preparation".into());
+    };
+    Ok(TaskOutput::PackagePrepared { frame, download })
+}
+
 /// Builds the install/update frame from the saved artifact; the durable client submits it.
 pub fn install_saved(
     backend: &dyn Backend,
