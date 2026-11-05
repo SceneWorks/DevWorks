@@ -16,7 +16,7 @@ use crate::protocol::Id;
 use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 use crate::protocol::records::{
     ApprovalState, Diagnostic, PackageAvailability, PackageOffer, PackagePrerequisite,
-    PackageRecord, PrerequisiteState, ProposalRecord,
+    PackageRecord, PrerequisiteState, ProposalRecord, SchemaValue,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -168,7 +168,19 @@ pub fn package_record(
                 .ok_or_else(|| StorageError::InvalidRecord("package disabled project id".into()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let configuration = p
+        .config
+        .as_ref()
+        .filter(|c| c.get("schema").is_some() && c.get("value").is_some())
+        .map(|c| {
+            serde_json::from_value::<SchemaValue>(
+                json!({"schema": c["schema"], "value": c["value"]}),
+            )
+        })
+        .transpose()
+        .map_err(|_| StorageError::InvalidRecord("package configuration".into()))?;
     Ok(PackageRecord {
+        configuration,
         disabled_projects: Some(BoundedList(disabled_projects)),
         id: Id::new(&p.package_id).map_err(|_| StorageError::InvalidRecord("package id".into()))?,
         version: label(&version_label, "0.0.0"),
@@ -301,6 +313,7 @@ pub fn offered_record(
         .or_else(|| offers.first())?;
     let supported = super::index::supported(&best.entry, &host.target_triple);
     let mut r = PackageRecord {
+        configuration: None,
         disabled_projects: Some(BoundedList(Vec::new())),
         installed: Some(false),
         id: Id::new(package_id).ok()?,

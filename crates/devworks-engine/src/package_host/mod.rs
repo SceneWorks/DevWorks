@@ -308,7 +308,7 @@ impl Running {
     /// cooperative grace and terminates the owned tree when the invocation did not stop. Runs
     /// once; afterwards the slot is terminal (a terminated session ends it `Lost`).
     fn cancel(&self) {
-        self.slot.revoked.store(true, Ordering::SeqCst);
+        self.slot.revoke();
         if self.slot.terminal().is_some() || self.cancelling.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -627,13 +627,15 @@ impl PackageHost {
         std::thread::Builder::new()
             .name("package-host".into())
             .spawn(move || {
+                let mut reconciled_at = None;
                 while host.running.load(Ordering::SeqCst) {
+                    let wait = host.reconciliation_wait(reconciled_at);
                     {
                         let (m, cv) = &host.wake;
                         let mut woken = m.lock().unwrap_or_else(|p| p.into_inner());
                         if !*woken {
                             woken = cv
-                                .wait_timeout(woken, host.config.tick)
+                                .wait_timeout(woken, wait)
                                 .unwrap_or_else(|p| p.into_inner())
                                 .0;
                         }
@@ -642,6 +644,8 @@ impl PackageHost {
                     if !host.running.load(Ordering::SeqCst) {
                         break;
                     }
+                    // Deadlines reached after this pass began still need another pass.
+                    reconciled_at = Some(Instant::now());
                     host.reconcile();
                     host.retry_staged();
                     let in_use = host.in_use();
@@ -649,6 +653,20 @@ impl PackageHost {
                 }
             })
             .expect("spawn package host");
+    }
+
+    fn reconciliation_wait(&self, reconciled_at: Option<Instant>) -> Duration {
+        let now = Instant::now();
+        self.attempts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .filter(|attempt| !attempt.exhausted)
+            .filter_map(|attempt| attempt.next_at)
+            .filter(|deadline| reconciled_at.is_none_or(|seen| *deadline > seen))
+            .map(|deadline| deadline.saturating_duration_since(now))
+            .min()
+            .map_or(self.config.tick, |wait| self.config.tick.min(wait))
     }
 
     /// Discovery may block on external IO; neither worker owns reconciliation's wake flag.
@@ -999,6 +1017,7 @@ impl PackageHost {
             .unwrap_or_else(|p| p.into_inner())
             .stopping = true;
         self.poke();
+        self.changed.notify_all();
         let all: Vec<Arc<Instance>> = self
             .instances
             .lock()
@@ -2078,7 +2097,7 @@ impl Broker for HostBroker {
                         let expected: i64 = String::from(expected_revision.clone())
                             .parse()
                             .unwrap_or(-1);
-                        self.cas_state(&ctx.package_id, pinned, expected, proposal)
+                        self.cas_state(&ctx.package_id, pinned, expected, proposal, slot.clone())
                     }
                 }
             }
@@ -2098,6 +2117,10 @@ impl Broker for HostBroker {
                 }
                 let (inv, commit) = (inv.as_ref().clone(), params.clone());
                 let outcome = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
+                    let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+                    if slot.revoked.load(Ordering::SeqCst) {
+                        return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
+                    }
                     commit_event(tx, &inv, &commit)
                 });
                 match outcome {
@@ -2143,10 +2166,18 @@ impl HostBroker {
         generation: i64,
         expected: i64,
         proposal: &wire::ArtifactRef,
+        slot: Arc<Slot>,
     ) -> Result<RpcResult, devworks_extension_protocol::package::RpcError> {
         let pkg = package.to_owned();
         let value = json!({"artifact": proposal});
         let written = run_write(&*self.host.store, WriteOptions::default(), move |tx| {
+            let _guard = slot.state.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.revoked.load(Ordering::SeqCst) {
+                return Err(StorageError::LeaseLost {
+                    kind: "package_invocation",
+                    id: slot.invocation_id.clone(),
+                });
+            }
             match tx.packages().package_state(&pkg)? {
                 Some(s) if s.generation != generation => {
                     return Err(StorageError::LeaseLost {
@@ -2167,6 +2198,13 @@ impl HostBroker {
         });
         match written {
             Ok(st) => Ok(snapshot(&st.state, generation, st.revision)),
+            Err(StorageError::LeaseLost {
+                kind: "package_invocation",
+                ..
+            }) => Err(rpc_error(
+                RpcErrorClass::PermissionDenied,
+                "the invocation is no longer live",
+            )),
             Err(StorageError::LeaseLost { .. }) => Err(rpc_error(
                 RpcErrorClass::Conflict,
                 "the state generation was replaced",

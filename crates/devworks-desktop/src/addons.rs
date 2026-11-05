@@ -89,6 +89,7 @@ pub struct AddonsScreen {
     /// Project IDs the package is disabled for, being edited (comma separated), per package.
     pub projects_text: HashMap<String, String>,
     project_bases: HashMap<String, (String, i64)>,
+    config_bases: HashMap<String, (String, i64, serde_json::Value)>,
     pub filter: String,
     pub busy: bool,
     /// A configuration refusal whose field errors are being fetched: (package, diagnostic).
@@ -544,10 +545,37 @@ impl AddonsScreen {
                 if let Some(errors) = self.config_errors.get(&id) {
                     ui.label(RichText::new(errors).color(theme::RED));
                 }
+                let saved_value = r
+                    .configuration
+                    .as_ref()
+                    .map(|c| c.value.0.clone())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let saved =
+                    serde_json::to_string_pretty(&saved_value).unwrap_or_else(|_| "{}".into());
+                let saved_schema = serde_json::to_value(schema).unwrap_or_default();
                 let text = self
                     .config_text
                     .entry(id.clone())
-                    .or_insert_with(|| "{}".into());
+                    .or_insert_with(|| saved.clone());
+                let base = self
+                    .config_bases
+                    .entry(id.clone())
+                    .or_insert_with(|| (saved.clone(), revision, saved_schema.clone()));
+                let matches_saved = serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .as_ref()
+                    == Some(&saved_value);
+                if revision != base.1 && (text == &base.0 || matches_saved) {
+                    *text = saved.clone();
+                    *base = (saved.clone(), revision, saved_schema.clone());
+                }
+                if ui.button("Reload saved configuration").clicked() {
+                    *text = saved.clone();
+                    *base = (saved, revision, saved_schema);
+                }
+                // Unsaved edits retain the schema and CAS revision they started against.
+                let revision = base.1;
+                let schema = base.2.clone();
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .code_editor()
@@ -565,7 +593,7 @@ impl AddonsScreen {
                         Ok(value) => actions.push(AddonsAction::Configure {
                             package: id.clone(),
                             revision,
-                            schema: serde_json::to_value(schema).unwrap_or_default(),
+                            schema,
                             value,
                         }),
                         Err(e) => self.notice = Some(format!("The configuration is not JSON: {e}")),
@@ -1066,5 +1094,56 @@ mod tests {
         assert!(
             matches!(state.borrow().2.last(), Some(AddonsAction::ProjectEnablement { disabled, revision: 2, .. }) if disabled == &["project-a", "project-b", "project-c"])
         );
+    }
+    #[test]
+    fn saved_configuration_initializes_refreshes_and_fences_unsaved_edits() {
+        let mut r = record(true);
+        r.configuration = Some(
+            serde_json::from_value(
+                json!({"schema": r.configuration_schema, "value": {"threads": 3, "mode": "fast"}}),
+            )
+            .unwrap(),
+        );
+        let state = Rc::new(RefCell::new((AddonsScreen::default(), r, Vec::new())));
+        let ui_state = state.clone();
+        let mut h = Harness::new_ui(move |ui| {
+            let mut st = ui_state.borrow_mut();
+            let (screen, record, actions) = &mut *st;
+            screen.detail(ui, record, actions);
+        });
+        h.run();
+        h.get_by_label("Configuration").click();
+        h.run();
+        let read =
+            || serde_json::from_str::<Value>(&state.borrow().0.config_text["first-pack"]).unwrap();
+        assert_eq!(read(), json!({"threads": 3, "mode": "fast"}));
+        state.borrow_mut().1.configuration.as_mut().unwrap().value.0 =
+            json!({"threads": 4, "mode": "fast"});
+        state.borrow_mut().1.revision = devworks_core::protocol::Revision::new(2).unwrap();
+        h.run();
+        assert_eq!(read(), json!({"threads": 4, "mode": "fast"}));
+        state
+            .borrow_mut()
+            .0
+            .config_text
+            .insert("first-pack".into(), r#"{"threads":5,"mode":"fast"}"#.into());
+        state.borrow_mut().1.configuration.as_mut().unwrap().value.0 =
+            json!({"threads": 6, "mode": "fast"});
+        state.borrow_mut().1.revision = devworks_core::protocol::Revision::new(3).unwrap();
+        h.run();
+        h.get_by_label("Save configuration").click();
+        h.run();
+        assert!(
+            matches!(state.borrow().2.last(), Some(AddonsAction::Configure { revision: 2, value, .. }) if value == &json!({"threads":5,"mode":"fast"}))
+        );
+        h.get_by_label("Reload saved configuration").click();
+        h.run();
+        assert_eq!(read(), json!({"threads": 6, "mode": "fast"}));
+        h.get_by_label("Save configuration").click();
+        h.run();
+        assert!(matches!(
+            state.borrow().2.last(),
+            Some(AddonsAction::Configure { revision: 3, .. })
+        ));
     }
 }

@@ -35,4 +35,4 @@ The authoring Python must match the installed jsonschema/rpds wheel ABI. The ret
 
 Knowledge revision 3 adds independent challenge records on every claim and full sourceLabel cleanup selectors alongside the legacy sourceId form. Earlier revision schemas stay byte-identical. The shared revision-3 result document also carries the existing artifact revision-3 outputs, so recorded fixtures cover both families.
 
-Package revision 3 exposes saved disabled-project overrides in package catalog and lifecycle replies. Revision 1/2 documents remain unchanged. The native Add-ons editor reads revision 3, retains unsaved text and its original compare-and-set revision across refreshes, and reloads saved overrides after restart. No operation or SQLite migration is added.
+Package revision 3 exposes saved schema-bound configuration and disabled-project overrides in package catalog and lifecycle replies. Revision 1/2 documents remain unchanged. The native Add-ons editor reads revision 3, retains unsaved text and its original compare-and-set revision across refreshes, and reloads saved overrides after restart. No operation or SQLite migration is added.

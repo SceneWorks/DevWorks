@@ -478,7 +478,7 @@ case('reject-r2-result-package-offer-missing-digest','operation-result.r2',{'kin
 case('reject-r2-result-package-unknown-wait','operation-result.r2',{'kind':'addons.update','value':{**package_r2,'pendingWaits':['Coffee']}},False,False)
 case('reject-r2-result-package-prerequisite-missing-satisfied','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'prerequisites':[{k:v for k,v in prereq.items() if k!='satisfied'}]}},False,False)
 # Schema revision 3: saved project enablement is readable without erasing existing overrides.
-package_r3={**package_r2,'disabledProjects':['project-a','project-b']}
+package_r3={**package_r2,'disabledProjects':['project-a','project-b'],'configuration':{'schema':package_r2['configurationSchema'],'value':{'format':'compact','enabled':True}}}
 for kind,command in [('Install',{'bundle':addon_art,'expectedRegistryRevision':'1'}),('Update',{'packageId':'fixture','bundle':addon_art,'expectedRegistryRevision':'1'}),('Enable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Disable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Rollback',{'packageId':'fixture','targetManifestDigest':'a'*64,'expectedRegistryRevision':'1','expectedStateGeneration':'1'}),('Uninstall',{'packageId':'fixture','expectedRegistryRevision':'1'})]:
  case('r3-input-addons.'+kind.lower(),'addon-command-request',{'protocol':'1.0-draft.1','requestKey':'addon-a','command':{'kind':kind,**command},'schemaRevision':3})
 case('r3-input-addons.catalog','domain-request.r3',domain('addons.catalog',3))
@@ -488,6 +488,8 @@ for name in ['addons.install','addons.configure','addons.enable','addons.disable
 case('r3-result-addons.catalog','operation-result.r3',{'kind':'addons.catalog','value':{'items':[package_r3,{**package_r3,'disabledProjects':[]}],'hasMore':False}})
 case('reject-r2-result-package-projects','operation-result.r2',{'kind':'addons.install','value':package_r3},False,False)
 case('reject-r3-result-package-invalid-project','operation-result.r3',{'kind':'addons.install','value':{**package_r3,'disabledProjects':['not a project id']}},False,False)
+case('reject-r2-result-package-configuration','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'configuration':package_r3['configuration']}},False,False)
+case('reject-r3-result-package-invalid-configuration','operation-result.r3',{'kind':'addons.install','value':{**package_r3,'configuration':{'value':{}}}},False,False)
 # Schema revision 2 (router availability): with sessionId, the session's current pin, whether
 # it is eligible for the asked intent/effort/capabilities and why it was last set.
 case('r2-input-router.availability','domain-request.r2',domain('router.availability',sessionId='session-a'))

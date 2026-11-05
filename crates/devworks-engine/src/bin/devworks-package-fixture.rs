@@ -136,6 +136,30 @@ fn invoke(st: Arc<State>, id: Value, inv: Value, cancel: mpsc::Receiver<()>, pac
             let _ = cancel.recv();
             std::thread::sleep(Duration::from_secs(3600));
         }
+        "queued-state" => {
+            let root = std::env::temp_dir();
+            let marker = |suffix: &str| root.join(format!("devworks-fixture-{package}-{suffix}"));
+            let _ = std::fs::write(marker("cas-ready"), "ready");
+            let until = std::time::Instant::now() + Duration::from_secs(10);
+            while !marker("cas-go").exists() && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let params = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"], "invocationToken": inv["invocationToken"], "stateGeneration": inv["stateGeneration"], "actionKey":"queued-cas", "action":{"kind":"CompareAndSet","expectedRevision":"1","proposal":inv["input"]}});
+            let child = st.clone();
+            let result_path = marker("cas-result");
+            let worker = std::thread::spawn(move || {
+                let result = child.call("broker.state", params);
+                let _ = std::fs::write(result_path, class(&result));
+            });
+            while !marker("cas-finish").exists() && std::time::Instant::now() < until {
+                if cancel.try_recv().is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            finished(&st, &id, &inv, json!({"kind":"Completed","artifacts":[]}));
+            let _ = worker.join();
+        }
         "late-state" => {
             let base = json!({"processSessionId": inv["processSessionId"], "invocationId": inv["invocationId"],
                 "invocationToken": inv["invocationToken"], "stateGeneration": inv["stateGeneration"]});

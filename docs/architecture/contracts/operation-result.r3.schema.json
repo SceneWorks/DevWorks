@@ -6919,6 +6919,10 @@
           "$ref": "#/$defs/List_PackageOffer_0_128",
           "x-since": 2
         },
+        "configuration": {
+          "$ref": "#/$defs/SchemaValue",
+          "x-since": 3
+        },
         "configurationRevision": {
           "$ref": "#/$defs/Revision",
           "x-since": 2
