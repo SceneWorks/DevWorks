@@ -62,7 +62,7 @@ impl EvalService {
         self.grade_automatically_cancellable(store, session_id, suite, &|| false)
     }
 
-    /// Cancellation bounds retained grading work; the remaining population is explicit.
+    /// An interrupted attempt commits no report and remains retryable from durable sources.
     pub fn grade_automatically_cancellable(
         &self,
         store: &dyn ApplicationStore,
@@ -764,7 +764,7 @@ impl CommandHandler for EvalService {
                 &input.suite,
                 self.clock.now_ms().get(),
                 || env.stopped(self.clock.now_ms().get()),
-                false,
+                true,
             )
             .map(Ok)
         })?;
