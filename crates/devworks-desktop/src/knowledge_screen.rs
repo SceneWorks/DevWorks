@@ -107,6 +107,8 @@ pub fn revision_of_claim(c: &KnowledgeClaim, d: &Draft, kind: &str) -> Value {
 /// A create or edit draft.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draft {
+    /// Identity of this logical draft, retained by cloning and rebasing.
+    identity: u64,
     /// The claim and revision it revises (`None`: a new entry).
     pub revises: Option<(Id, i64)>,
     pub entry_kind: &'static str,
@@ -116,9 +118,16 @@ pub struct Draft {
     /// Lessons: the activities it applies to (comma-separated).
     pub activities: String,
 }
+fn next_draft_identity() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Default for Draft {
     fn default() -> Self {
         Self {
+            identity: next_draft_identity(),
             revises: None,
             entry_kind: "Fact",
             subject: String::new(),
@@ -134,6 +143,7 @@ impl Draft {
     pub fn of(c: &KnowledgeClaim) -> Self {
         let join = |items: Vec<String>| items.join(", ");
         Self {
+            identity: next_draft_identity(),
             revises: Some((c.id.clone(), c.revision.get())),
             entry_kind: ENTRY_KINDS
                 .iter()
@@ -164,6 +174,7 @@ impl Draft {
             if mine == *base { clone(stored) } else { mine }
         }
         Self {
+            identity: self.identity,
             revises: stored.revises.clone(),
             entry_kind: pick(self.entry_kind, &base.entry_kind, &stored.entry_kind, |k| k),
             subject: self.subject,
@@ -1192,6 +1203,7 @@ impl KnowledgeScreen {
                         // The stored entry holds what was submitted: a field still equal to it is
                         // not an edit made since.
                         if let Some(live) = self.draft.as_mut()
+                            && live.identity == d.identity
                             && live.revises == d.revises
                         {
                             if d.revises.is_none()
@@ -1282,6 +1294,7 @@ impl KnowledgeScreen {
                     |ui, st| {
                         if widgets::secondary_button(ui, "New entry").clicked() {
                             st.0.draft = Some(Draft::default());
+                            st.0.draft_base = None;
                         }
                     },
                     |ui, st, tab| {
@@ -1785,6 +1798,7 @@ mod tests {
         let c = general_lesson();
         let s = showing(c.clone());
         let d = Draft {
+            identity: next_draft_identity(),
             revises: Some((c.id.clone(), 4)),
             entry_kind: "Lesson",
             subject: String::new(),
