@@ -296,6 +296,16 @@ pub(super) fn update(
     if (c.owner_id != old.owner_id || c.session_id != old.session_id) && c.fence <= old.fence {
         return Err(invalid("ownership transfer advances the fence"));
     }
+    if c.fence > old.fence {
+        let previous: i64 = db(unit.conn.query_row(
+            "SELECT COALESCE(MAX(fence),0) FROM allocation_claims WHERE work_id=?1 AND id<>?2",
+            params![c.work_id.as_str(), c.id.as_str()],
+            |row| row.get(0),
+        ))?;
+        if c.fence <= previous {
+            return Err(invalid("allocation fence must advance prior ownership"));
+        }
+    }
     let allowed = match old.state.as_str() {
         "Active" => matches!(
             c.state.as_str(),
@@ -314,6 +324,14 @@ pub(super) fn update(
     };
     if !allowed {
         return Err(invalid("invalid allocation transition"));
+    }
+    if old.execution_id.is_some()
+        && c.execution_id != old.execution_id
+        && executing(unit.conn, &old.work_id, old.execution_id.as_ref())?
+    {
+        return Err(invalid(
+            "live allocation execution binding cannot be replaced",
+        ));
     }
     if c.state == "Expired" && c.expires_at_ms > unit.now_ms() {
         return Err(invalid("allocation lease has not expired"));
