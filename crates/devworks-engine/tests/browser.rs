@@ -1766,6 +1766,37 @@ fn a_session_is_launched_driven_inspected_and_closed_through_the_process_owner()
 }
 
 #[test]
+fn asynchronous_navigation_returns_a_revision_for_nonmutating_inspection_recovery() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let b = fx.platform.browser(&session);
+    let navigations = requests(&b, "Page.navigate");
+    b.lock().unwrap().emit(
+        Some("S1"),
+        "Page.frameNavigated",
+        json!({"frame":{"id":"T1","url":"https://app.test/next","loaderId":"Lasync"}}),
+    );
+    let mut target = target_json(&snap);
+    let fault = fx.fault(&user, "browser.inspect", json!({"target":target}));
+    assert_eq!(fault.code, DomainErrorCode::SourceChanged);
+    let current = fault
+        .current_revision
+        .expect("stale reads must return the observed current revision");
+    assert!(current.get() > snap.target.document_revision.get());
+    target["documentRevision"] = json!(current.as_str());
+    let fresh = fx.inspect(&user, &target);
+    assert_eq!(fresh.target.document_revision, current);
+    assert_eq!(
+        requests(&b, "Page.navigate"),
+        navigations,
+        "recovery must not navigate"
+    );
+}
+
+#[test]
 fn stale_frame_document_and_node_references_are_refused_never_retargeted() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();

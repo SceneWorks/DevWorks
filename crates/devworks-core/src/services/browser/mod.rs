@@ -3156,9 +3156,32 @@ impl QueryHandler for BrowserService {
                 .map(|()| Observed::Published),
             _ => return Ok(None),
         };
-        observed
-            .map(|o| Some(Prepared::new(o)))
-            .map_err(|f| query_fault(f, "browser_session", self.correlation()))
+        observed.map(|o| Some(Prepared::new(o))).map_err(|f| {
+            let mut fault = query_fault(f, "browser_session", self.correlation());
+            let target = match input {
+                ops::Input::Inspect(i) => Some(&i.target),
+                ops::Input::Screenshot(i) => Some(&i.target),
+                _ => None,
+            };
+            if fault
+                .target_kind
+                .as_ref()
+                .is_some_and(|k| k.0 == "browser_document")
+                && let Some(target) = target
+                && let Some(view) = self.view(&target.session_id)
+                && let Some(current) = view.targets.get(target.target_id.as_str())
+                && !current.crashed
+                && current.frames.iter().any(|f| f == target.frame_id.as_str())
+            {
+                // The target and frame still exist. Return the observed revision so a
+                // fresh read needs no navigation or guessed revision.
+                fault.expected_revision = Some(target.document_revision.clone());
+                fault.current_revision = Some(rev(current.document_revision));
+                fault.revision_dimension =
+                    Some(crate::protocol::support::RevisionDimension::Source);
+            }
+            fault
+        })
     }
 
     fn query(
