@@ -416,3 +416,217 @@ fn more_than_one_transcript_page_preserves_every_candidate_in_bounded_coverage()
     let persisted = page(results(&fx, &fx.user(), "session-a", None));
     assert_eq!(persisted.items.0[0].coverage.eligible.get(), 513);
 }
+
+fn record_check(name: &str, source: &str, pointer: &str, expected: Value) -> Value {
+    json!({"id":name,"ruleRef":"native recorded source acceptance","measurement":"Proxy",
+        "predicate":{"kind":"RecordFieldEquals","source":source,"pointer":pointer,"expected":expected}})
+}
+
+#[test]
+fn every_native_record_source_is_graded_without_replaying_or_mutating_observed_work() {
+    let fx = fixture();
+    fx.store.with_writer_connection(|c| {
+        super::super::super::conn::db(c.execute_batch("INSERT INTO workflow_statuses VALUES('ready-a','project-a','Ready','Ready',1,1); UPDATE work_items SET status_id='ready-a' WHERE id='root-a';"))
+    }).unwrap();
+    let user = fx.user();
+    fx.write(move |tx| {
+        for kind in [LinkKind::Git, LinkKind::PullRequest, LinkKind::Review] {
+            let is_review = kind == LinkKind::Review;
+            record_link(
+                tx,
+                &user,
+                NewHistoryLink {
+                    root_id: root("root-a"),
+                    kind,
+                    git: (!is_review).then(|| GitFacts {
+                        repository_id: id("repo-a"),
+                        worktree_id: None,
+                        branch: Some("feature/recorded".into()),
+                        pull_request_url: Some("https://example.test/pr/42".into()),
+                        head: serde_json::from_value(json!({"format":"Sha1","hex":"d".repeat(40)}))
+                            .unwrap(),
+                    }),
+                    artifact: None,
+                    target: is_review.then(|| ("review_run".into(), "review-a".into())),
+                    summary: "Native recorded acceptance".into(),
+                    supersedes: None,
+                },
+            )?
+            .map_err(|r| StorageError::InvalidRecord(format!("{r:?}")))?;
+        }
+        let event_id =
+            devworks_core::protocol::EventId(tx.new_id(devworks_core::ports::IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event_id,
+            actor: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: Some(root("root-a")),
+            operation_id: None,
+            aggregate_kind: "custom_native_fact".into(),
+            aggregate_id: "acceptance-a".into(),
+            aggregate_revision: 1,
+            kind: "NativeAcceptanceRecorded".into(),
+            payload: json!({"accepted":true}),
+        })?;
+        Ok(())
+    });
+    let before = protected_rows(&fx);
+    let measurement = suite(vec![
+        record_check("session", "Session", "/title", json!("Seeded")),
+        record_check("history", "HistoryEvent", "/rootId", json!("root-a")),
+        record_check("git", "GitLink", "/body/head/hex", json!("d".repeat(40))),
+        record_check(
+            "pr",
+            "PullRequestLink",
+            "/body/pullRequestUrl",
+            json!("https://example.test/pr/42"),
+        ),
+        record_check("review", "ReviewLink", "/targetId", json!("review-a")),
+        record_check("work", "WorkState", "/statusId", json!("ready-a")),
+    ]);
+    let report = grade(&fx, &measurement);
+    assert!(matches!(report.outcome, EvalOutcome::Passed));
+    for kind in [
+        "Session",
+        "HistoryEvent",
+        "GitLink",
+        "PullRequestLink",
+        "ReviewLink",
+        "WorkState",
+    ] {
+        assert!(
+            report.runs.0[0]
+                .instances
+                .0
+                .iter()
+                .any(|i| i.source.as_ref().is_some_and(|s| s.kind.0 == kind)),
+            "missing {kind}"
+        );
+    }
+    assert!(
+        report.runs.0[0]
+            .instances
+            .0
+            .iter()
+            .all(|i| matches!(i.revision, EvalRevisionContext::Mixed { .. }))
+    );
+    assert_eq!(protected_rows(&fx), before);
+    // An arbitrary native domain event outside the public command-history projection must
+    // still be visible to the full durable HistoryEvent source.
+    let custom = grade(
+        &fx,
+        &suite(vec![record_check(
+            "custom",
+            "HistoryEvent",
+            "/kind",
+            json!("NativeAcceptanceRecorded"),
+        )]),
+    );
+    assert!(
+        custom.runs.0[0]
+            .instances
+            .0
+            .iter()
+            .any(|i| matches!(i.outcome, EvalOutcome::Passed))
+    );
+    let failures = grade(
+        &fx,
+        &suite(vec![
+            record_check("wrong", "Session", "/title", json!("different")),
+            record_check("missing", "Session", "/does-not-exist", Value::Null),
+            record_check("invalid", "Session", "/title~2", Value::Null),
+        ]),
+    );
+    for expected in [
+        EvalOutcome::Failed,
+        EvalOutcome::EvidenceUnavailable,
+        EvalOutcome::GraderError,
+    ] {
+        assert!(outcome(&failures, expected));
+    }
+    assert_eq!(protected_rows(&fx), before);
+    let transcript = fx.session("session-a");
+    fx.write(|tx| {
+        let mut work = tx.work().work(&id("root-a"))?.unwrap();
+        let prior = work.revision;
+        work.status_id = None;
+        work.revision += 1;
+        tx.work().update_work(&work, prior)
+    });
+    let changed = grade(&fx, &measurement);
+    assert_ne!(
+        changed.id, report.id,
+        "a changed recorded source must produce a fresh report"
+    );
+    assert!(matches!(changed.outcome, EvalOutcome::Failed));
+    assert_ne!(
+        changed.evidence_digest.as_str(),
+        report.evidence_digest.as_str()
+    );
+    assert_eq!(fx.session("session-a"), transcript);
+    let old_id = report.id.clone();
+    let mut reopened = fx.restart();
+    enable(&mut reopened);
+    let stored = reopened
+        .read(|snapshot| snapshot.evals().eval_run(&old_id))
+        .unwrap()
+        .report;
+    let work = stored
+        .pointer("/runs/0/instances")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i.get("checkId") == Some(&json!("work")))
+        .unwrap();
+    assert_eq!(
+        work.pointer("/observedValue/value"),
+        Some(&json!("ready-a")),
+        "persisted report must retain the earlier observed mutable status after change and reopen"
+    );
+}
+
+#[test]
+fn native_history_grading_excludes_its_own_root_scoped_audit_receipts() {
+    let fx = fixture();
+    let worker = fx.worker("agent-a", "session-a");
+    let missing = grade(
+        &fx,
+        &suite(vec![record_check(
+            "missing-git",
+            "GitLink",
+            "/revision",
+            json!("missing"),
+        )]),
+    );
+    assert!(outcome(&missing, EvalOutcome::EvidenceUnavailable));
+    // Provide at least one ordinary domain event, then grade with root-bound authority so the
+    // gateway's own evals.grade CommandDecided event is attached to the same root.
+    append_values(
+        &fx,
+        "history-input",
+        vec![assistant("original", false)],
+        vec![],
+    );
+    let measurement = suite(vec![record_check(
+        "history",
+        "HistoryEvent",
+        "/rootId",
+        json!("root-a"),
+    )]);
+    let body = json!({"sessionId":"session-a","suite":measurement});
+    let extract = |reply| match applied(reply) {
+        OperationResult::EvalsGrade { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let first = extract(fx.command(&worker, "evals.grade", body.clone()));
+    let second = extract(fx.command(&worker, "evals.grade", body));
+    assert_eq!(
+        first.id, second.id,
+        "evaluation audit output must not create a new source digest"
+    );
+    assert_eq!(
+        first.coverage.eligible.get(),
+        second.coverage.eligible.get()
+    );
+}
