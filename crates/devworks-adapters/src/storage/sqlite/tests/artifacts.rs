@@ -124,7 +124,7 @@ impl Fx {
         std::fs::create_dir_all(&src).unwrap();
         let sources = Arc::new(Sources {
             root: ReadRoot {
-                identity: crate::fs::identity_of(&std::fs::metadata(&src).unwrap()),
+                identity: crate::fs::identity_at(&src, &std::fs::metadata(&src).unwrap()),
                 location: src,
             },
             handles: Mutex::new(HashMap::new()),
@@ -3848,7 +3848,7 @@ fn tag_bounds_duplicates_and_unregistered_revisions_are_refused_without_receipts
         Rejection::InvalidRequest
     );
     // A revision the operation does not register is refused before authority.
-    frame["schemaRevision"] = json!(4);
+    frame["schemaRevision"] = json!(5);
     assert_eq!(
         rejected(fx.command(&fx.user(), "artifacts.save", frame)),
         Rejection::UnsupportedSchema
@@ -4251,7 +4251,7 @@ fn revision_three_saves_and_lists_workspace_artifacts_for_their_audience() {
         fault(fx.query_frame(
             &user,
             "artifacts.list",
-            &list_frame(Some(4), None, None, 50)
+            &list_frame(Some(5), None, None, 50)
         ))
         .code,
         DomainErrorCode::SchemaMismatch

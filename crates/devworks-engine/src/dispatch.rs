@@ -156,6 +156,8 @@ pub enum EffectResult {
     Unknown(String),
 }
 pub type EffectFuture = Pin<Box<dyn Future<Output = EffectResult> + Send>>;
+/// Resolves once an operation may be dispatched (see [`EffectExecutor::ready`]).
+pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// External effect execution and observation for one consumer's operations.
 pub trait EffectExecutor: Send + Sync {
@@ -164,6 +166,13 @@ pub trait EffectExecutor: Send + Sync {
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
+    /// Resolves once `operation` may be dispatched, for example once the effect it is ordered
+    /// behind has settled. Until then the dispatcher keeps the delivery's claim (renewing its
+    /// lease) but releases its worker permit, so waiting work never takes capacity from other
+    /// deliveries; waiting is not an attempt. `None`, the default, dispatches at once.
+    fn ready(&self, _operation: &OperationRecord) -> Option<ReadyFuture> {
+        None
+    }
 }
 
 /// What an [`AsyncDeliveryHandler`] reports when it finishes.
@@ -345,6 +354,8 @@ struct Inner {
     stopping: AtomicBool,
     rotation: AtomicUsize,
     passes: AtomicU64,
+    /// Claimed deliveries waiting for their operation to become ready, without a permit.
+    parked: AtomicUsize,
 }
 
 /// What one running delivery holds; released on drop (normal return or a panic unwinding its
@@ -450,6 +461,7 @@ impl Dispatcher {
                 stopping: AtomicBool::new(false),
                 rotation: AtomicUsize::new(0),
                 passes: AtomicU64::new(0),
+                parked: AtomicUsize::new(0),
             }),
         })
     }
@@ -666,8 +678,10 @@ impl Dispatcher {
             };
             let me = self.clone();
             tokio::spawn(async move {
-                let _slot = slot;
-                me.deliver(idx, entry).await;
+                let mut slot = slot;
+                if me.park(idx, &entry, &mut slot).await {
+                    me.deliver(idx, entry).await;
+                }
             });
         }
         if report.claimed > 0 {
@@ -754,12 +768,110 @@ impl Dispatcher {
         Ok(resumed)
     }
 
-    /// Waits until no delivery is in flight.
+    /// Waits until no delivery is in flight (parked deliveries included).
     pub async fn idle(&self) {
         let n = u32::try_from(self.inner.cfg.max_in_flight).unwrap_or(u32::MAX);
-        if let Ok(all) = self.inner.permits.acquire_many(n).await {
-            drop(all);
+        loop {
+            let mut changed = self.inner.status.subscribe();
+            if let Ok(all) = self.inner.permits.acquire_many(n).await {
+                drop(all);
+            }
+            if self.inner.parked.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            let _ = tokio::time::timeout(Duration::from_millis(20), changed.changed()).await;
         }
+    }
+
+    /// Holds a claimed effect delivery until its executor reports its operation ready, without
+    /// a worker permit: the permit is released while it waits (more work may be claimed) and
+    /// reacquired before delivery. The claim's lease is renewed for the whole wait, the
+    /// readiness wait and the reacquisition of a permit alike (every permit may be taken for
+    /// longer than a lease). Returns `false` when the dispatcher stops or the claim is lost
+    /// while waiting: the operation was never dispatched, so the claim is recovered as safely
+    /// redeliverable.
+    async fn park(&self, idx: usize, entry: &QueueEntry, slot: &mut Slot) -> bool {
+        let consumer = &self.inner.consumers[idx];
+        let (None, Some(executor), Some(op_id)) = (
+            &consumer.async_handler,
+            &consumer.effect,
+            &entry.operation_id,
+        ) else {
+            return true;
+        };
+        let id = op_id.clone();
+        let Ok(Some(op)) =
+            store::read(&self.inner.store, move |r| r.operations().operation(&id)).await
+        else {
+            return true;
+        };
+        if !matches!(
+            op.state,
+            OperationState::IntentRecorded | OperationState::RetryPending
+        ) {
+            return true;
+        }
+        let Some(ready) = executor.ready(&op) else {
+            return true;
+        };
+        let Some(fence) = entry.fence() else {
+            return true;
+        };
+        drop(slot.permit.take());
+        self.inner.parked.fetch_add(1, Ordering::SeqCst);
+        // Capacity freed: other ready work may be claimed while this one waits.
+        self.inner.wake.notify_one();
+        let lease = self.inner.cfg.lease_ms;
+        let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
+        // Ready, then a worker permit: one wait, so the lease is renewed (and a stop or a lost
+        // claim honoured) until the delivery can actually run.
+        let permits = self.inner.permits.clone();
+        let mut admitted = std::pin::pin!(async move {
+            ready.await;
+            permits.acquire_owned().await.ok()
+        });
+        let mut proceed = true;
+        let mut renew_at = tokio::time::Instant::now() + every;
+        loop {
+            if self.inner.stopping.load(Ordering::SeqCst) {
+                proceed = false;
+                break;
+            }
+            // Wakeups may arrive continuously. Preserve the renewal deadline across them
+            // instead of restarting a full interval after each notification.
+            let pause = first(
+                self.inner.changed.notified(),
+                tokio::time::sleep_until(renew_at),
+            );
+            match first(&mut admitted, pause).await {
+                Either::Left(Some(p)) => {
+                    slot.permit = Some(p);
+                    break;
+                }
+                Either::Left(None) => {
+                    proceed = false;
+                    break;
+                }
+                Either::Right(_) => {
+                    if tokio::time::Instant::now() < renew_at {
+                        continue;
+                    }
+                    let (id, f) = (entry.id.clone(), fence.clone());
+                    let renewed = store::write(&self.inner.store, move |tx| {
+                        tx.queue().renew(&id, &f, lease)
+                    })
+                    .await;
+                    if renewed.is_err() {
+                        proceed = false;
+                        break;
+                    }
+                    renew_at = tokio::time::Instant::now() + every;
+                }
+            }
+        }
+        self.inner.parked.fetch_sub(1, Ordering::SeqCst);
+        self.notify_status();
+        proceed && !self.inner.stopping.load(Ordering::SeqCst)
     }
 
     /// Delivers everything currently eligible: passes until one, made while no delivery was in

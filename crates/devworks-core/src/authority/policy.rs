@@ -44,7 +44,10 @@ pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "b
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
 /// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 13] = [
+pub const NATIVE_EXECUTION: [&str; 16] = [
+    "git.worktree",
+    "git.commit",
+    "git.push",
     "process.execute",
     "process.install_project_dependencies",
     "containers.build",
@@ -342,6 +345,17 @@ pub fn evaluate(
     request: &AuthorityRequest<'_>,
     protected_branches: &[String],
 ) -> Verdict {
+    evaluate_with_owned_task(ctx, binding, policy, request, protected_branches, false)
+}
+
+pub(crate) fn evaluate_with_owned_task(
+    ctx: &InvocationContext,
+    binding: Option<&PrincipalBinding>,
+    policy: &EffectivePolicy,
+    request: &AuthorityRequest<'_>,
+    protected_branches: &[String],
+    owned_task_force: bool,
+) -> Verdict {
     let kind = ctx.principal_kind();
     let op = request.descriptor.name;
     let fam = family(op);
@@ -358,6 +372,13 @@ pub fn evaluate(
     match kind {
         PrincipalKind::Human => return Verdict::Allow,
         PrincipalKind::Host => {
+            if force_push_target(request.input).is_some() {
+                return Verdict::NeedsGrant {
+                    kind: GrantKind::Operation,
+                    exact: true,
+                    reason: DenialReason::ApprovalRequired,
+                };
+            }
             return if matches!(
                 class,
                 AuthorityClass::HumanConfiguration
@@ -443,7 +464,9 @@ pub fn evaluate(
     {
         return Verdict::Deny(DenialReason::HumanOnly);
     }
-    if force_push_target(request.input).is_some() || APPROVAL_REQUIRED.contains(&op) {
+    if (force_push_target(request.input).is_some() && !owned_task_force)
+        || APPROVAL_REQUIRED.contains(&op)
+    {
         // Explicit approvals stay effective under Full access.
         return Verdict::NeedsGrant {
             kind: GrantKind::Operation,

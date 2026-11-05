@@ -372,8 +372,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }),
                         "git-command-request" => serde_json::from_str::<GitCommandRequest>(&raw)
                             .map_err(|e| e.to_string())
-                            .and_then(|v| {
+                            .and_then(|mut v| {
+                                at_revision(&v, revision)?;
                                 v.validate().map_err(str::to_owned)?;
+                                v.normalize();
                                 serde_json::to_value(v).map_err(|e| e.to_string())
                             }),
                         "delivery-snapshot" => serde_json::from_str::<DeliverySnapshot>(&raw)
@@ -676,7 +678,10 @@ mod revision {
                     *v = alt;
                     return collapse(v);
                 }
-                if alt.as_object().is_some_and(|a| a.len() == 1 && a.contains_key("required")) {
+                if alt
+                    .as_object()
+                    .is_some_and(|a| a.len() == 1 && a.contains_key("required"))
+                {
                     m.remove(key);
                     m.insert("required".into(), alt["required"].clone());
                 }
@@ -713,7 +718,9 @@ mod revision {
             for (name, d) in defs.iter_mut() {
                 let Some(m) = d.as_object_mut() else { continue };
                 if let Some(e) = m.remove("x-earlier")
-                    && e["before"].as_u64().is_some_and(|b| u64::from(revision) < b)
+                    && e["before"]
+                        .as_u64()
+                        .is_some_and(|b| u64::from(revision) < b)
                     && let Some(to) = e["name"].as_str()
                 {
                     m.remove("description");
@@ -751,9 +758,9 @@ mod revision {
                     continue;
                 }
                 let member = defs.iter().find(|(name, existing)| {
-                    name.strip_prefix(to.as_str()).is_some_and(|n| {
-                        !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
-                    }) && **existing == def
+                    name.strip_prefix(to.as_str())
+                        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                        && **existing == def
                 });
                 if let Some((name, _)) = member {
                     *to = name.clone();

@@ -1148,6 +1148,15 @@ pub enum GitCommand {
         base_ref: String,
         expected_head: GitOid,
         description: ArtifactRef,
+        /// Complete explicit task coverage of a grouped PR (revision 2). Absence covers its
+        /// owning task only, preserving revision 1.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with = "Vec<Id>", extend("x-since" = 2), length(min = 1, max = 256))]
+        covered_work_ids: Option<Vec<Id>>,
     },
     Integrate {
         delivery_id: Id,
@@ -1216,9 +1225,22 @@ impl GitCommandRequest {
                 base_ref,
                 expected_head,
                 description,
+                covered_work_ids,
                 ..
             } => {
                 expected_head.validate()?;
+                if let Some(ids) = covered_work_ids
+                    && (ids.is_empty()
+                        || ids.len() > 256
+                        || ids
+                            .iter()
+                            .map(|id| id.as_str())
+                            .collect::<HashSet<_>>()
+                            .len()
+                            != ids.len())
+                {
+                    return Err("invalid or duplicate PR task coverage");
+                }
                 description.validate()?;
                 if !branch_ref(head_ref) || !branch_ref(base_ref) || head_ref == base_ref {
                     return Err("invalid PR refs");
@@ -1228,6 +1250,28 @@ impl GitCommandRequest {
             | GitCommand::Cleanup { expected_head, .. } => expected_head.validate()?,
         }
         Ok(())
+    }
+}
+impl super::support::Revisioned for GitCommandRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2
+            && let GitCommand::OpenPullRequest {
+                covered_work_ids, ..
+            } = &mut self.command
+        {
+            *covered_work_ids = None;
+        }
+    }
+}
+impl GitCommandRequest {
+    pub fn normalize(&mut self) {
+        if let GitCommand::OpenPullRequest {
+            covered_work_ids: Some(ids),
+            ..
+        } = &mut self.command
+        {
+            ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        }
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

@@ -247,7 +247,7 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     assert_eq!(body["requirements"][1], draft["requirements"][1]);
     let root = Root::new("requirement-id-reserved");
     let engine = start(&root);
-    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 720.0);
     settle(&mut h);
     let backend = engine.backend();
     let project = ops::project_changed(backend.command(
@@ -633,8 +633,9 @@ fn save_plan_now(
         }];
     }
     h.run_steps(3);
+    // Keep uploads in flight while activating the actual Save control, even offscreen.
     h.get_by_role_and_label(Role::Button, "Save plan draft")
-        .click();
+        .click_accesskit();
     h.run_steps(3);
 }
 fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {

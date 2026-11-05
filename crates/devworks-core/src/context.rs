@@ -26,6 +26,44 @@ pub enum PrincipalKind {
     Host,
 }
 
+/// A worktree identity resolved by trusted ingress from the durable ownership ledger.
+/// Tool arguments cannot construct this value or replace its ownership revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundWorktree {
+    id: Id,
+    repository_id: Id,
+    work_id: Id,
+    ownership_revision: i64,
+}
+impl BoundWorktree {
+    pub(crate) fn resolved(
+        id: Id,
+        repository_id: Id,
+        work_id: Id,
+        ownership_revision: i64,
+    ) -> Self {
+        Self {
+            id,
+            repository_id,
+            work_id,
+            ownership_revision,
+        }
+    }
+
+    pub fn id(&self) -> &Id {
+        &self.id
+    }
+    pub fn repository_id(&self) -> &Id {
+        &self.repository_id
+    }
+    pub fn work_id(&self) -> &Id {
+        &self.work_id
+    }
+    pub fn ownership_revision(&self) -> i64 {
+        self.ownership_revision
+    }
+}
+
 /// Host-bound invocation context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationContext {
@@ -42,6 +80,7 @@ pub struct InvocationContext {
     assignment_id: Option<AssignmentId>,
     capability_registration: Option<Id>,
     authority_sources: Vec<Id>,
+    worktree: Option<BoundWorktree>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
 /// [`InvocationContext`]. It is created from the store itself, so only code the composition
@@ -113,6 +152,7 @@ impl InvocationContext {
             assignment_id: None,
             capability_registration: None,
             authority_sources: Vec::new(),
+            worktree: None,
         }
     }
     pub fn with_session(mut self, session_id: Id) -> Self {
@@ -126,6 +166,7 @@ impl InvocationContext {
         root_id: Option<RootId>,
         assignment_id: Option<AssignmentId>,
     ) -> Self {
+        self.worktree = None;
         self.project_id = project_id;
         self.root_id = root_id;
         self.assignment_id = assignment_id;
@@ -141,6 +182,14 @@ impl InvocationContext {
     pub fn with_authority_source(mut self, source: Id) -> Self {
         self.authority_sources.push(source);
         self
+    }
+
+    pub(crate) fn bind_worktree(mut self, binding: BoundWorktree) -> Self {
+        self.worktree = Some(binding);
+        self
+    }
+    pub fn worktree(&self) -> Option<&BoundWorktree> {
+        self.worktree.as_ref()
     }
 
     pub fn principal(&self) -> &ActorId {
@@ -190,12 +239,18 @@ impl InvocationContext {
 pub struct ScopeKey(String);
 impl ScopeKey {
     pub fn of(ctx: &InvocationContext) -> Self {
-        Self(format!(
+        let base = format!(
             "{}/{}/{}",
             ctx.store_id.0.as_str(),
             ctx.restore_epoch.as_str(),
             ctx.ingress_namespace.as_str()
-        ))
+        );
+        // Preserve every unbound receipt namespace. A bound retry selects the immutable
+        // worktree identity, not its changing head or ownership epoch.
+        Self(match ctx.worktree() {
+            Some(tree) => format!("{base}/worktree/{}", tree.id().as_str()),
+            None => base,
+        })
     }
     pub fn as_str(&self) -> &str {
         &self.0

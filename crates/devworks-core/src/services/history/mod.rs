@@ -378,6 +378,7 @@ struct GitBody {
     worktree_id: Option<Id>,
     branch: Option<String>,
     pull_request_url: Option<String>,
+    agent_session_id: Option<Value>,
     head: GitOid,
 }
 
@@ -877,7 +878,12 @@ impl HistoryService {
     }
 }
 
-fn git_link(root: &WorkRoot, l: StoredLink) -> Result<AttributedGitLink, Failure> {
+fn git_link(
+    snapshot: &dyn ReadSnapshot,
+    root: &WorkRoot,
+    l: StoredLink,
+    revision: SchemaRevision,
+) -> Result<AttributedGitLink, Failure> {
     let body: GitBody = serde_json::from_value(l.body).map_err(|_| stored("git link"))?;
     let branch = body
         .branch
@@ -889,8 +895,57 @@ fn git_link(root: &WorkRoot, l: StoredLink) -> Result<AttributedGitLink, Failure
         .map(|u| serde_json::from_value::<Url>(json!(u)))
         .transpose()
         .map_err(|_| stored("pull request URL"))?;
+    let repository_id = l.repository_id.ok_or_else(|| stored("git repository"))?;
+    let tree = if revision >= SchemaRevision(3) {
+        body.worktree_id
+            .as_ref()
+            .map(|id| snapshot.git().git_worktree(id))
+            .transpose()?
+            .flatten()
+            .filter(|t| t.repository_id == repository_id)
+    } else {
+        None
+    };
+    let tree = match tree {
+        Some(tree)
+            if snapshot
+                .work()
+                .work(&tree.work_id)?
+                .is_some_and(|work| work.project_id == root.project_id) =>
+        {
+            Some(tree)
+        }
+        _ => None,
+    };
+    let repository_url = if revision >= SchemaRevision(3) {
+        snapshot
+            .projects()
+            .repository(&repository_id)?
+            .and_then(|r| r.remote_url)
+            .and_then(|url| crate::services::git::github::Repository::from_remote(&url))
+            .and_then(|r| {
+                serde_json::from_value(json!(format!("https://github.com/{}/{}", r.owner, r.name)))
+                    .ok()
+            })
+    } else {
+        None
+    };
     Ok(AttributedGitLink {
-        repository_id: l.repository_id.ok_or_else(|| stored("git repository"))?,
+        repository_id,
+        worktree_path: tree
+            .as_ref()
+            .map(|t| text_of("worktree path", &t.path))
+            .transpose()?,
+        worktree_removed: tree.as_ref().map(|t| t.removed),
+        agent_session_id: if revision >= SchemaRevision(3) {
+            body.agent_session_id
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|_| stored("git agent session"))?
+        } else {
+            None
+        },
+        repository_url,
         work_id: root.id.0.clone(),
         worktree_id: body.worktree_id,
         branch,
@@ -1018,7 +1073,7 @@ impl QueryHandler for HistoryService {
                 &["git", "pull_request"],
                 &i.page,
                 revision,
-                git_link,
+                |root, link| git_link(snapshot, root, link, revision),
             )
             .map(|value| {
                 (

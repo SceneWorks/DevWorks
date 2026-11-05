@@ -552,7 +552,10 @@ fn verified_reads_stay_inside_the_root_and_within_bounds() {
     let fs = NativeFilesystem::new();
     let root = ReadRoot {
         location: t.s.0.join("repo"),
-        identity: super::identity_of(&std::fs::metadata(t.s.0.join("repo")).unwrap()),
+        identity: super::identity_at(
+            &t.s.0.join("repo"),
+            &std::fs::metadata(t.s.0.join("repo")).unwrap(),
+        ),
     };
     let read = |rel: &str, max: u64| {
         fs.read(&ReadRequest {
@@ -1465,4 +1468,50 @@ fn windows_path_forms_resolve_through_identity_or_are_held() {
         )),
         Some(&repo_block())
     );
+}
+
+#[test]
+fn physical_identity_survives_rename_and_refuses_replaced_read_roots() {
+    let t = Scratch::new("physical-identity");
+    let fs = NativeFilesystem::new();
+    let repo = t.0.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("data"), b"original").unwrap();
+    let locate = |path: &std::path::Path| {
+        fs.resolve(path.to_str().unwrap(), None)
+            .unwrap()
+            .target
+            .unwrap()
+    };
+    let original = locate(&repo);
+    let identity = original
+        .identity
+        .expect("native physical directory identity");
+    assert_eq!(
+        locate(&std::fs::canonicalize(&repo).unwrap()).identity,
+        Some(identity)
+    );
+    let root = ReadRoot {
+        location: original.path,
+        identity: Some(identity),
+    };
+    let request = ReadRequest {
+        root: &root,
+        relative: "data",
+        max_bytes: 64,
+        allow_hard_links: false,
+    };
+    assert_eq!(fs.read(&request).unwrap().bytes, b"original");
+    let moved = t.0.join("moved");
+    std::fs::rename(&repo, &moved).unwrap();
+    assert_eq!(locate(&moved).identity, Some(identity));
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("data"), b"replacement").unwrap();
+    assert_ne!(locate(&repo).identity, Some(identity));
+    assert!(
+        locate(&repo.join("data"))
+            .ancestors
+            .contains(&locate(&repo).identity.unwrap())
+    );
+    assert_eq!(fs.read(&request), Err(ReadRefusal::RootChanged));
 }

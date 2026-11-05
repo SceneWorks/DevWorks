@@ -24,7 +24,7 @@
 //! no-follow reader, so a root replaced or a component swapped for a link since is refused.
 //! Each kind has its own namespace; registering an ID twice is refused, never overwritten.
 //! Handles live in process memory: they are short-lived and never survive a restart.
-use super::identity_of;
+use super::identity_at;
 use devworks_core::authority::reads::ReadRoot;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
@@ -80,8 +80,7 @@ pub struct HostArtifactSources {
     handles: Mutex<HashMap<Kind, HashMap<String, Handle>>>,
 }
 
-/// A read root for `dir` with the identity it has now (Unix); Windows reads use held
-/// no-delete-share handles and register no identity.
+/// A read root bound to the directory identity observed at registration.
 fn root_of(dir: &Path) -> Result<ReadRoot, IssueRefusal> {
     let meta =
         std::fs::symlink_metadata(dir).map_err(|_| IssueRefusal::Invalid("no such directory"))?;
@@ -90,7 +89,7 @@ fn root_of(dir: &Path) -> Result<ReadRoot, IssueRefusal> {
     }
     Ok(ReadRoot {
         location: dir.to_path_buf(),
-        identity: identity_of(&meta),
+        identity: identity_at(dir, &meta),
     })
 }
 

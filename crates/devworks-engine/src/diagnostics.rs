@@ -226,6 +226,7 @@ pub fn record_boot_failure(service: &DiagnosticService, error: &BootError) {
         BootError::Resources(e) => ("resources", e),
         BootError::Settings(e) => ("settings", e),
         BootError::Runs(e) => ("runs", e),
+        BootError::Browser(e) => ("browser", e),
         BootError::Packages(e) => ("packages", e),
     };
     let class = match cause {
@@ -440,6 +441,7 @@ mod tests {
             resources: Default::default(),
             runs,
             keep_awake: KeepAwakeStatus::Off,
+            browser: None,
             index_runs_resumed: 0,
         }
     }

@@ -102,7 +102,7 @@ impl Fx {
         std::fs::create_dir_all(&src).unwrap();
         let sources = Arc::new(Sources {
             root: ReadRoot {
-                identity: crate::fs::identity_of(&std::fs::metadata(&src).unwrap()),
+                identity: crate::fs::identity_at(&src, &std::fs::metadata(&src).unwrap()),
                 location: src,
             },
             handles: Mutex::new(HashMap::new()),

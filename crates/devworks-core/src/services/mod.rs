@@ -6,8 +6,10 @@
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
 pub mod artifacts;
+pub mod browser;
 pub mod cursor;
 pub mod diagnostics;
+pub mod git;
 pub mod history;
 pub mod indexing;
 pub mod jobs;
@@ -108,6 +110,21 @@ impl UseCases {
         self
     }
 
+    /// The six owned Git task operations share one service and gateway on every surface.
+    pub fn with_git(mut self, service: Arc<git::GitService>) -> Self {
+        for operation in [
+            "git.worktree",
+            "git.inspect",
+            "git.diff",
+            "git.commit",
+            "git.push",
+            "git.pull_request",
+        ] {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the artifacts family (`ArtifactService`).
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {
@@ -195,6 +212,13 @@ impl UseCases {
         self
     }
 
+    /// Registers the browser family (`BrowserBackend`).
+    pub fn with_browser(mut self, service: Arc<browser::BrowserService>) -> Self {
+        for op in browser::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
     /// Registers the addons family (`PackageService`).
     pub fn with_packages(mut self, service: Arc<packages::PackageService>) -> Self {
         for op in packages::OPERATIONS {

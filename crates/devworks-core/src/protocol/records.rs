@@ -2899,6 +2899,34 @@ pub struct AttributedGitLink {
     )]
     #[schemars(with = "Counter", extend("x-since" = 2))]
     pub occurred_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub worktree_path: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub worktree_removed: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub agent_session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Url", extend("x-since" = 3))]
+    pub repository_url: Option<Url>,
 }
 impl Check for AttributedGitLink {
     fn check(&self) -> Result<(), String> {
@@ -2910,6 +2938,10 @@ impl Check for AttributedGitLink {
         self.head.check()?;
         self.actor_id.check()?;
         self.occurred_at_ms.check()?;
+        self.worktree_path.check()?;
+        self.worktree_removed.check()?;
+        self.agent_session_id.check()?;
+        self.repository_url.check()?;
         crate::protocol::rules::record(
             "AttributedGitLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2925,6 +2957,18 @@ impl Revisioned for AttributedGitLink {
         }
         if revision < 2 {
             self.occurred_at_ms = None;
+        }
+        if revision < 3 {
+            self.worktree_path = None;
+        }
+        if revision < 3 {
+            self.worktree_removed = None;
+        }
+        if revision < 3 {
+            self.agent_session_id = None;
+        }
+        if revision < 3 {
+            self.repository_url = None;
         }
     }
 }
@@ -3302,6 +3346,13 @@ pub struct BrowserSession {
     pub state: ItemState,
     pub target_ids: Items<Id>,
     pub process_owner_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 3))]
+    pub tested_repository: Option<TestedRepositoryRevision>,
 }
 impl Check for BrowserSession {
     fn check(&self) -> Result<(), String> {
@@ -3310,11 +3361,20 @@ impl Check for BrowserSession {
         self.state.check()?;
         self.target_ids.check()?;
         self.process_owner_id.check()?;
+        self.tested_repository.check()?;
         crate::protocol::rules::record(
             "BrowserSession",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for BrowserSession {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.tested_repository = None;
+        }
     }
 }
 
@@ -3469,6 +3529,13 @@ pub struct BrowserObservation {
     pub sequence: Counter,
     pub evidence: ArtifactRef,
     pub truncated: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 3))]
+    pub tested_repository: Option<TestedRepositoryRevision>,
 }
 impl Check for BrowserObservation {
     fn check(&self) -> Result<(), String> {
@@ -3476,11 +3543,20 @@ impl Check for BrowserObservation {
         self.sequence.check()?;
         self.evidence.check()?;
         self.truncated.check()?;
+        self.tested_repository.check()?;
         crate::protocol::rules::record(
             "BrowserObservation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for BrowserObservation {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.tested_repository = None;
+        }
     }
 }
 
@@ -7308,6 +7384,13 @@ pub struct ArtifactRecord {
     )]
     #[schemars(with = "ArtifactTags", extend("x-since" = 2))]
     pub tags: Option<ArtifactTags>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 4))]
+    pub tested_repository: Option<TestedRepositoryRevision>,
 }
 impl Check for ArtifactRecord {
     fn check(&self) -> Result<(), String> {
@@ -7317,6 +7400,7 @@ impl Check for ArtifactRecord {
         self.scope.check()?;
         self.reference_count.check()?;
         self.tags.check()?;
+        self.tested_repository.check()?;
         crate::protocol::rules::record(
             "ArtifactRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -7330,6 +7414,9 @@ impl Revisioned for ArtifactRecord {
         if revision < 2 {
             self.tags = None;
         }
+        if revision < 4 {
+            self.tested_repository = None;
+        }
     }
 }
 
@@ -7342,6 +7429,13 @@ pub enum ArtifactReadContent {
         next_byte: Counter,
         content: Content,
         truncated: bool,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 4))]
+        tested_repository: Option<TestedRepositoryRevision>,
     },
     Binary {
         artifact: ArtifactRef,
@@ -7349,6 +7443,13 @@ pub enum ArtifactReadContent {
         first_byte: Counter,
         byte_length: Counter,
         expires_at_ms: Counter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 4))]
+        tested_repository: Option<TestedRepositoryRevision>,
     },
 }
 impl Check for ArtifactReadContent {
@@ -7360,12 +7461,14 @@ impl Check for ArtifactReadContent {
                 next_byte,
                 content,
                 truncated,
+                tested_repository,
             } => {
                 artifact.check()?;
                 first_byte.check()?;
                 next_byte.check()?;
                 content.check()?;
                 truncated.check()?;
+                tested_repository.check()?;
             }
             Self::Binary {
                 artifact,
@@ -7373,15 +7476,38 @@ impl Check for ArtifactReadContent {
                 first_byte,
                 byte_length,
                 expires_at_ms,
+                tested_repository,
             } => {
                 artifact.check()?;
                 stream_id.check()?;
                 first_byte.check()?;
                 byte_length.check()?;
                 expires_at_ms.check()?;
+                tested_repository.check()?;
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for ArtifactReadContent {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Text {
+                tested_repository, ..
+            } => {
+                if revision < 4 {
+                    *tested_repository = None;
+                }
+            }
+            Self::Binary {
+                tested_repository, ..
+            } => {
+                if revision < 4 {
+                    *tested_repository = None;
+                }
+            }
+        }
     }
 }
 
@@ -9187,6 +9313,35 @@ pub enum QueueSide {
 }
 impl Check for QueueSide {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TestedRepositoryRevision {
+    pub repository_id: Id,
+    pub worktree_id: Id,
+    pub head: GitOid,
+    pub dirty: bool,
+    pub ownership_revision: Revision,
+    pub observed_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<Url>,
+}
+impl Check for TestedRepositoryRevision {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.worktree_id.check()?;
+        self.head.check()?;
+        self.dirty.check()?;
+        self.ownership_revision.check()?;
+        self.observed_at_ms.check()?;
+        self.repository_url.check()?;
+        crate::protocol::rules::record(
+            "TestedRepositoryRevision",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }

@@ -54,6 +54,7 @@
 //! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
 //! diagnostic log ([`DiagnosticRepository`]), the project and repository registration
 //! records ([`ProjectRepository`]) and the repository indexing records ([`IndexRepository`]).
+//! Owned browser sessions and observations use BrowserRepository.
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -71,8 +72,10 @@ use std::sync::mpsc;
 
 mod artifacts;
 mod authority;
+mod browser;
 mod configuration;
 mod diagnostics;
+mod git;
 mod indexing;
 mod jobs;
 mod knowledge;
@@ -85,8 +88,10 @@ mod sessions;
 mod work;
 pub use artifacts::*;
 pub use authority::*;
+pub use browser::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use git::*;
 pub use indexing::*;
 pub use jobs::*;
 pub use knowledge::*;
@@ -487,6 +492,8 @@ pub trait WriteTransaction {
     fn resources(&mut self) -> &mut dyn ResourceRepository;
     fn runs(&mut self) -> &mut dyn RunRepository;
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
+    fn browser(&mut self) -> &mut dyn BrowserRepository;
+    fn git(&mut self) -> &mut dyn GitRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
     fn indexing(&mut self) -> &mut dyn IndexRepository;
@@ -533,6 +540,8 @@ pub trait ReadSnapshot {
     fn resources(&self) -> &dyn ResourceRead;
     fn runs(&self) -> &dyn RunRead;
     fn diagnostics(&self) -> &dyn DiagnosticRead;
+    fn browser(&self) -> &dyn BrowserRead;
+    fn git(&self) -> &dyn GitRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
     fn indexing(&self) -> &dyn IndexRead;

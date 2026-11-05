@@ -10,6 +10,7 @@
 //! [`InvocationContext`], exactly as an agent tool reaches the same use cases (ARCH-02).
 use crate::backend::{Backend, Waker};
 use crate::platform::{HostIds, StoreAuthority, SystemClock, user_display_name};
+use devworks_adapters::browser::NativeBrowserPlatform;
 use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
@@ -88,6 +89,9 @@ pub struct DesktopConfig {
     pub app_build: String,
     /// Shared bound of the owned-process stop at shutdown (AD20 default 30 s).
     pub shutdown_bound: Duration,
+    /// An explicitly configured Chromium-family browser executable (`DEVWORKS_BROWSER`), offered
+    /// as the `configured` browser asset beside the discovered Chrome, Chromium and Edge.
+    pub browser_path: Option<PathBuf>,
     /// Replaces the connection directory the router reads (tests script connection states).
     /// `None` (production) routes through the provider connection service's durable rows.
     pub connections: Option<Arc<dyn ConnectionDirectory>>,
@@ -126,6 +130,9 @@ impl DesktopConfig {
             user_name: user_display_name(),
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             shutdown_bound: Duration::from_secs(30),
+            browser_path: std::env::var_os("DEVWORKS_BROWSER")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
             connections: None,
             secrets: None,
             http: None,
@@ -247,7 +254,7 @@ async fn compose(
         id_source.clone(),
         clock.clone(),
         store.clone(),
-        http,
+        http.clone(),
         secrets,
         Arc::new(devworks_adapters::OsEntropy),
     ));
@@ -338,6 +345,28 @@ async fn compose(
     runtime_config.shutdown_grace = runtime_config
         .shutdown_grace
         .min(quiesce_bound(config.shutdown_bound));
+    let git_root = config.data_root.join("worktrees");
+    let git = std::fs::create_dir_all(&git_root)
+        .and_then(|()| std::fs::canonicalize(&git_root))
+        .ok()
+        .and_then(|path| {
+            let name = path.to_str()?;
+            let digest = devworks_core::fingerprint::sha256_hex(name.as_bytes());
+            let root = Id::new(format!("git-root-{}", &digest[..24])).ok()?;
+            Some(devworks_engine::git::GitComposition {
+                config: devworks_core::services::git::GitConfig {
+                    roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
+                    filesystem: Some(Arc::new(NativeFilesystem::new())),
+                    github: Some(Arc::new(
+                        devworks_core::services::git::github::GitHubClient {
+                            http,
+                            secrets: connections.clone(),
+                        },
+                    )),
+                    ..devworks_core::services::git::GitConfig::default()
+                },
+            })
+        });
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
@@ -351,6 +380,18 @@ async fn compose(
         runs: RunComposition::new(Arc::new(ControlService::new(id_source.clone()))),
         power: Arc::new(NativePower),
         diagnostics,
+        // Owned browser sessions: discovered or configured Chromium-family browsers, owned
+        // profiles under the data root, launched through the process owner.
+        git,
+        browser: Some(devworks_engine::browser::BrowserComposition {
+            platform: Arc::new(NativeBrowserPlatform::new(
+                &config.data_root,
+                config.browser_path.clone(),
+            )),
+            fs: Arc::new(NativeFilesystem::new()),
+            app_data_root: Some(config.data_root.to_string_lossy().into_owned()),
+            config: devworks_core::services::browser::BrowserConfig::default(),
+        }),
         packages: Some(PackageComposition {
             service: packages,
             launch: LaunchPorts {

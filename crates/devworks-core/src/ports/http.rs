@@ -13,6 +13,7 @@ use std::fmt;
 pub enum Method {
     Get,
     Post,
+    Patch,
 }
 
 /// A header value: plain, or a credential that must never be printed.

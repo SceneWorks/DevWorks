@@ -141,6 +141,12 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    /// The workspace's browser sessions.
+    BrowserSessions,
+    /// The browser sessions of one project (its ID).
+    ProjectBrowserSessions(String),
+    /// Closing a browser session (its ID).
+    BrowserClose(String),
     /// The Add-ons catalog.
     AddonsList,
     /// One package's logs.
@@ -249,6 +255,11 @@ pub enum Slot {
     WorkActivity(String),
     /// One work item's current record (readiness included).
     WorkDetail(String),
+    WorkGit(String),
+    WorkGitInspect(String, String),
+    GitInspect(String),
+    GitDiff(String),
+    GitDiffContent(String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
     /// A new feature, task or issue in a project.

@@ -1576,7 +1576,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "HistoryPage<AttributedGitLink>",
         result_schema: schema_of::<HistoryPage<AttributedGitLink>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "history.evidence_links",
@@ -3919,7 +3919,12 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "ArtifactRecord",
         result_schema: schema_of::<ArtifactRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
+        revisions: &[
+            SchemaRevision(1),
+            SchemaRevision(2),
+            SchemaRevision(3),
+            SchemaRevision(4),
+        ],
     },
     OperationDescriptor {
         name: "artifacts.list",
@@ -3943,7 +3948,12 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<ArtifactRecord>",
         result_schema: schema_of::<Page<ArtifactRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
+        revisions: &[
+            SchemaRevision(1),
+            SchemaRevision(2),
+            SchemaRevision(3),
+            SchemaRevision(4),
+        ],
     },
     OperationDescriptor {
         name: "artifacts.read",
@@ -3967,7 +3977,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "ArtifactReadContent",
         result_schema: schema_of::<ArtifactReadContent>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(4)],
     },
     OperationDescriptor {
         name: "artifacts.preview",
@@ -4956,7 +4966,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "GitLink",
         result_schema: schema_of::<GitLink>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "git.integrate",
@@ -5558,7 +5568,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<BrowserSession>",
         result_schema: schema_of::<Page<BrowserSession>>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.inspect",
@@ -5580,7 +5590,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.navigate",
@@ -5602,7 +5612,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "BrowserSnapshot",
         result_schema: schema_of::<BrowserSnapshot>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.input",
@@ -5624,7 +5634,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.upload",
@@ -5646,7 +5656,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "BrowserObservation",
         result_schema: schema_of::<BrowserObservation>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.screenshot",
@@ -5668,7 +5678,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "ArtifactRef",
         result_schema: schema_of::<ArtifactRef>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.console",
@@ -5690,7 +5700,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "browser.network",
@@ -5712,7 +5722,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<BrowserObservation>",
         result_schema: schema_of::<Page<BrowserObservation>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "desktop.inspect",

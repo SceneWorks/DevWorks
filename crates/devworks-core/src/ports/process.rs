@@ -25,6 +25,9 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
+    /// Give the child a private control channel ([`ProcessTree::take_control`]) that no other
+    /// process can reach: anonymous pipes, never a name or a port.
+    pub control_pipe: Option<ControlPipe>,
     /// Give the child a stdin pipe ([`ProcessTree::take_input`]); otherwise stdin is null. A
     /// package helper's control channel is its stdin and stdout.
     pub pipe_stdin: bool,
@@ -32,6 +35,20 @@ pub struct ProcessSpec {
     /// `git cat-file --batch` reads); `None` gives the child no stdin.
     pub stdin: Option<Vec<u8>>,
 }
+
+/// A private bidirectional control channel of a child. On Unix the child reads what the host
+/// writes from file descriptor 3 and writes what the host reads to file descriptor 4. On
+/// Windows the child inherits two anonymous pipe handles, named on its command line by
+/// [`Self::windows_args`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlPipe {
+    /// Windows only: arguments appended at launch, with `{read}` replaced by the decimal value
+    /// of the handle the child reads and `{write}` by the handle it writes.
+    pub windows_args: Vec<String>,
+}
+
+/// The host's ends of a control channel: what it writes to the child, what it reads from it.
+pub type ControlChannel = (Box<dyn Write + Send>, Box<dyn Read + Send>);
 impl ProcessSpec {
     pub fn new(argv: &[String]) -> Option<Self> {
         let (program, args) = argv.split_first()?;
@@ -42,6 +59,7 @@ impl ProcessSpec {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            control_pipe: None,
             pipe_stdin: false,
             stdin: None,
         })
@@ -119,6 +137,16 @@ pub trait ProcessTree: Send {
     fn poll(&mut self) -> Result<TreeStatus, ProcessError>;
     /// The captured stdout and stderr pipes, once.
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>;
+    /// The host's ends of the control channel of a tree launched with a control pipe, once.
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        None
+    }
+    /// Whether the tree's root has exited, whatever its descendants do (a program whose main
+    /// process died while helpers linger has ended). Never collects anything. The default is
+    /// the tree's emptiness.
+    fn root_exited(&mut self) -> Result<bool, ProcessError> {
+        self.poll().map(|s| s.empty)
+    }
     /// The stdin pipe of a tree launched with `pipe_stdin`, once.
     fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
         None

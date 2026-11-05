@@ -180,14 +180,13 @@ pub fn click_nav(h: &mut Harness<'_, Shell>, label: &str) {
     settle(h);
 }
 
-/// Scrolls the control into view (as a user would) and clicks it. The scroll request is taken
-/// in one pass, becomes the area's offset at the end of the next and is laid out in the third,
-/// so the control is clicked where that third pass drew it.
+/// Scrolls the control into view (as a user would) and clicks it after layout converges.
+/// A fixed frame count can leave deferred scroll/layout changes beneath the click.
 pub fn click(h: &mut Harness<'_, Shell>, role: egui::accesskit::Role, label: &str) {
+    // Direct state injection must be rendered before querying the target's geometry.
+    settle(h);
     h.get_by_role_and_label(role, label).scroll_to_me();
-    for _ in 0..3 {
-        h.step();
-    }
+    settle(h);
     h.get_by_role_and_label(role, label).click();
     settle(h);
 }

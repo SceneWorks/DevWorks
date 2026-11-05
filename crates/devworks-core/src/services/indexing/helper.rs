@@ -7,6 +7,7 @@ use crate::authority::redact::Redactor;
 use crate::context::InvocationContext;
 use crate::ports::process::ProcessSpec;
 use crate::ports::storage::{ApplicationStore, StorageError};
+use crate::protocol::OperationId;
 use crate::services::process::{
     LaunchPolicy, LaunchRefusal, LaunchRequest, ProcessSupervisor, StopOutcome,
 };
@@ -64,6 +65,31 @@ impl std::fmt::Display for HelperFault {
 
 /// Runs bounded helper processes.
 pub trait HelperRunner: Send + Sync {
+    fn filesystem(&self) -> Option<&dyn FilesystemResolver> {
+        None
+    }
+
+    /// Host environment for helpers requiring a filtered inheritance boundary.
+    fn environment(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Runs a journaled mutation. Implementations must retain the operation identity through
+    /// launch and must refuse rather than silently downgrade to an unrecorded process.
+    fn run_recorded(
+        &self,
+        _ctx: &InvocationContext,
+        _spec: ProcessSpec,
+        _limits: HelperLimits,
+        _stop: &(dyn Fn() -> bool + Sync),
+        _operation: &OperationId,
+        _approved_hold: bool,
+    ) -> Result<Vec<u8>, HelperFault> {
+        Err(HelperFault::Refused(
+            "journaled helpers are unsupported".into(),
+        ))
+    }
+
     /// Runs `spec` (its output is captured) for `ctx`, returning stdout once it exits 0.
     fn run(
         &self,
@@ -114,12 +140,52 @@ fn reader(
 }
 
 impl HelperRunner for SupervisedHelpers {
+    fn filesystem(&self) -> Option<&dyn FilesystemResolver> {
+        Some(&*self.fs)
+    }
+
+    fn environment(&self) -> Vec<(String, String)> {
+        self.supervisor.environment()
+    }
+
     fn run(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, HelperFault> {
+        self.run_owned(ctx, spec, limits, stop, None, false)
+    }
+
+    fn run_recorded(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &OperationId,
+        approved_hold: bool,
+    ) -> Result<Vec<u8>, HelperFault> {
+        self.run_owned(
+            ctx,
+            spec,
+            limits,
+            stop,
+            Some(operation.clone()),
+            approved_hold,
+        )
+    }
+}
+impl SupervisedHelpers {
+    fn run_owned(
         &self,
         ctx: &InvocationContext,
         mut spec: ProcessSpec,
         limits: HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
+        operation: Option<OperationId>,
+        approved_hold: bool,
     ) -> Result<Vec<u8>, HelperFault> {
         if stop() {
             return Err(HelperFault::Cancelled);
@@ -138,9 +204,9 @@ impl HelperRunner for SupervisedHelpers {
                 ctx,
                 LaunchRequest {
                     spec,
-                    operation_id: None,
+                    operation_id: operation,
                     lease: None,
-                    approved_hold: false,
+                    approved_hold,
                 },
                 &policy,
             )
@@ -207,5 +273,45 @@ impl HelperRunner for SupervisedHelpers {
             });
         }
         Ok(stdout)
+    }
+}
+
+/// Every helper belonging to an already committed Git effect retains that operation, including
+/// readback and remote observations whose Git transport may invoke configured credentials.
+pub struct RecordedHelpers<'a> {
+    pub inner: &'a dyn HelperRunner,
+    pub operation: &'a OperationId,
+}
+impl HelperRunner for RecordedHelpers<'_> {
+    fn filesystem(&self) -> Option<&dyn FilesystemResolver> {
+        self.inner.filesystem()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        self.inner.environment()
+    }
+    fn run(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, HelperFault> {
+        self.inner
+            .run_recorded(ctx, spec, limits, stop, self.operation, false)
+    }
+    fn run_recorded(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &OperationId,
+        approved_hold: bool,
+    ) -> Result<Vec<u8>, HelperFault> {
+        if operation != self.operation {
+            return Err(HelperFault::Refused("Git helper operation changed".into()));
+        }
+        self.inner
+            .run_recorded(ctx, spec, limits, stop, operation, approved_hold)
     }
 }

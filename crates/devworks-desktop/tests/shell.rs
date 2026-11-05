@@ -292,6 +292,14 @@ fn every_route_has_its_integrated_header_subviews_inner_sidebar_and_honest_state
         has_text(&h, "desktop"),
         "the boot-registered desktop resource is listed"
     );
+    // Owned browser sessions are reached from Resources and listed through browser.sessions.
+    click(&mut h, Role::Button, "Browser sessions");
+    assert_eq!(h.state().route(), Route::Browser);
+    settle(&mut h);
+    assert!(
+        has_text(&h, "No browser sessions"),
+        "the workspace has no browser sessions yet"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

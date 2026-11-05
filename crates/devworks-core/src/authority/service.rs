@@ -242,9 +242,32 @@ fn decide_in(
     }
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
-    let verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    let mut ownership = None;
+    if matches!(
+        verdict,
+        Verdict::NeedsGrant {
+            reason: DenialReason::ApprovalRequired,
+            ..
+        }
+    ) {
+        ownership = super::git::owned_force(s, ctx, request.input).map_err(unavailable)?;
+        if ownership.is_some() {
+            verdict = policy::evaluate_with_owned_task(
+                ctx,
+                binding.as_ref(),
+                &policy,
+                request,
+                protected_branches,
+                true,
+            );
+        }
+    }
     let digest = policy.digest();
-    let fences = fences_for(ctx, binding.as_ref(), &policy);
+    let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    if let Some((id, digest)) = ownership {
+        fences.push(AuthorityFence::GitWorktree { id, digest });
+    }
     // CONTROL-12: an agent, schedule, package or MCP client clears a human or restart hold only
     // with a user-minted resume grant linked to this invocation; the run control use case checks
     // which holds it covers, and the unit of work spends it with the receipt.
@@ -421,6 +444,9 @@ pub fn fences_hold(
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::GitWorktree { id, digest } => {
+                super::git::witness_in(tx, id)?.as_ref() == Some(digest)
+            }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(tx.authority(), actor, *revision)?
             }
@@ -470,6 +496,9 @@ pub fn authorization_holds(
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::GitWorktree { id, digest } => {
+                super::git::witness(s, id)?.as_ref() == Some(digest)
+            }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(s.authority(), actor, *revision)?
             }

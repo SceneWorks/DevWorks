@@ -302,6 +302,36 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0020_packages.sql"),
         rebuilds_tables: false,
     },
+    // Additive: owned browser sessions and their observation index (two tables and their
+    // indexes; versions 1-20 are retained). The writer floor
+    // stays at 19 (the highest so far): applying a migration overwrites the store's floors, so
+    // a lower value would re-admit the writers migration 14 refuses. It need not rise: an
+    // earlier writer never writes these tables, and every record it writes is unchanged here
+    // (artifact, operation, process and actor rows are never deleted, so the references cannot
+    // break). The reader floor stays at 8: no earlier build reads them.
+    Migration {
+        version: 21,
+        minimum_reader: 8,
+        minimum_writer: 19,
+        sql: include_str!("migrations/0021_browser_sessions.sql"),
+        rebuilds_tables: false,
+    },
+    // Additive owned Git identities; preserves all earlier reader/writer floors.
+    Migration {
+        version: 22,
+        minimum_reader: 8,
+        minimum_writer: 19,
+        sql: include_str!("migrations/0022_git_worktrees.sql"),
+        rebuilds_tables: false,
+    },
+    // Old writers cannot preserve invocation-bound provenance on new browser evidence.
+    Migration {
+        version: 23,
+        minimum_reader: 8,
+        minimum_writer: 23,
+        sql: include_str!("migrations/0023_browser_source.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -591,3 +621,15 @@ pub(crate) fn prepare(
 /// Recorded checksum of migration 20; shipped SQL is immutable.
 pub const MIGRATION_0020_SHA256: &str =
     "7cabf466f43dcc1677f62ad14ebb1e96ed9239f2cf505e9646c0a4e38287876a";
+
+/// Recorded checksum of migration 21; shipped SQL is immutable.
+pub const MIGRATION_0021_SHA256: &str =
+    "27be7d33bb8b6ff768c4de0c2f688ba5442ef699a06130349a054913dcd5bc77";
+
+/// Recorded checksum of migration 22.
+pub const MIGRATION_0022_SHA256: &str =
+    "2d0815af52a522e23870f9a2af56dc2a6f2f5227fbb842d1377cd49f84e02524";
+
+/// Recorded checksum of migration 23.
+pub const MIGRATION_0023_SHA256: &str =
+    "bd92e57bf3aa579397301ccbb06deb45570712db11fa2ff229045e0c92c59c93";

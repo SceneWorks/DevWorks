@@ -1,8 +1,10 @@
 //! Owned process groups on macOS and Linux.
+use devworks_core::ports::process::ControlChannel;
 use devworks_core::ports::process::{
     NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -40,9 +42,38 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     cmd.stdout(out()).stderr(out());
     // The child leads a new process group, so the whole tree is addressable as one.
     cmd.process_group(0);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    // A private control channel: the child's ends become its fds 3 (read) and 4 (write); the
+    // host keeps the other ends, close-on-exec, so no other child inherits them.
+    let mut control = None;
+    if spec.control_pipe.is_some() {
+        let (child_read, host_write) = pipe().map_err(ProcessError::Spawn)?;
+        let (host_read, child_write) = pipe().map_err(ProcessError::Spawn)?;
+        // Above 4, so placing them on 3 and 4 never overwrites the other.
+        let child_read = above(child_read).map_err(ProcessError::Spawn)?;
+        let child_write = above(child_write).map_err(ProcessError::Spawn)?;
+        let (r, w) = (child_read.as_raw_fd(), child_write.as_raw_fd());
+        // SAFETY: dup2 is async-signal-safe; it runs in the forked child before exec and
+        // clears close-on-exec on the duplicates only.
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::dup2(r, 3) < 0 || libc::dup2(w, 4) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        control = Some((child_read, child_write, host_write, host_read));
+    }
+    let spawned = cmd.spawn();
+    let control: Option<ControlChannel> = control.map(|(cr, cw, hw, hr)| {
+        // The child's ends close here: end of file reaches the host when the child exits.
+        drop((cr, cw));
+        (
+            Box::new(std::fs::File::from(hw)) as Box<dyn std::io::Write + Send>,
+            Box::new(std::fs::File::from(hr)) as Box<dyn Read + Send>,
+        )
+    });
+    let mut child = spawned.map_err(|e| ProcessError::Spawn(e.to_string()))?;
     super::feed_stdin(&mut child, spec);
     let pid = child.id();
     let birth = start_time(pid as i32, true).unwrap_or_else(|| UNAVAILABLE.into());
@@ -67,8 +98,43 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         empty: false,
         exit_code: None,
         output,
+        control,
         input,
     }))
+}
+
+/// A close-on-exec pipe: (read end, write end).
+fn pipe() -> Result<(OwnedFd, OwnedFd), String> {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: a two-element array for the pipe's descriptors.
+    #[cfg(target_os = "linux")]
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    #[cfg(not(target_os = "linux"))]
+    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(format!("control pipe: {}", std::io::Error::last_os_error()));
+    }
+    // SAFETY: both descriptors were just created and are owned here.
+    let (r, w) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    #[cfg(not(target_os = "linux"))]
+    for fd in [&r, &w] {
+        // SAFETY: setting close-on-exec on a descriptor this function owns.
+        if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            return Err(format!("control pipe: {}", std::io::Error::last_os_error()));
+        }
+    }
+    Ok((r, w))
+}
+
+/// A close-on-exec duplicate of `fd` numbered above 4.
+fn above(fd: OwnedFd) -> Result<OwnedFd, String> {
+    // SAFETY: duplicating a descriptor this function owns.
+    let n = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 5) };
+    if n < 0 {
+        return Err(format!("control pipe: {}", std::io::Error::last_os_error()));
+    }
+    // SAFETY: `n` was just created and is owned by the result.
+    Ok(unsafe { OwnedFd::from_raw_fd(n) })
 }
 
 struct UnixTree {
@@ -78,6 +144,7 @@ struct UnixTree {
     empty: bool,
     exit_code: Option<i32>,
     output: Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>,
+    control: Option<ControlChannel>,
     input: Option<Box<dyn Write + Send>>,
 }
 
@@ -153,6 +220,24 @@ impl ProcessTree for UnixTree {
     }
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
         self.output.take()
+    }
+    fn root_exited(&mut self) -> Result<bool, ProcessError> {
+        if self.empty {
+            return Ok(true);
+        }
+        // The root is not collected while the tree lives, so its pid is still ours: it has
+        // exited once it is a zombie (or gone).
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            Ok(start_time(self.identity.pid as libc::pid_t, false).is_none())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            self.poll().map(|s| s.empty)
+        }
+    }
+    fn take_control(&mut self) -> Option<ControlChannel> {
+        self.control.take()
     }
     fn take_input(&mut self) -> Option<Box<dyn Write + Send>> {
         self.input.take()

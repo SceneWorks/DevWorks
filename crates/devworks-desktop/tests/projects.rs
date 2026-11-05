@@ -463,6 +463,110 @@ fn an_unavailable_repository_text_can_be_retried_and_refresh_reads_it_again() {
     assert_eq!(shown(&h), 2);
 }
 
+/// A project's browser session that has not launched yet (Starting, no process), as the
+/// browser service records one at admission.
+fn seed_browser(engine: &devworks_desktop::host::Engine, session: &str, project: &Id) {
+    use devworks_core::ports::storage::{BrowserPhase, NewOperation, StoredBrowserSession};
+    use devworks_core::protocol::{ActorId, OperationId, ProjectId};
+    let store = engine.host().runtime().store().clone();
+    let boot = store.info().boot_id.unwrap();
+    let (session, project) = (session.to_owned(), project.clone());
+    run_write(&*store, WriteOptions::default(), move |tx| {
+        let op = OperationId(Id::new(format!("op-{session}")).unwrap());
+        tx.operations().record_intent(NewOperation {
+            id: op.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "browser.create".into(),
+            schema_version: 1,
+            args_digest: "0".repeat(64),
+            payload: serde_json::json!({}),
+        })?;
+        tx.browser().insert_browser_session(&StoredBrowserSession {
+            tested_repository: None,
+            source_binding: None,
+            id: Id::new(session.clone()).unwrap(),
+            revision: 1,
+            phase: BrowserPhase::Starting,
+            boot_id: boot,
+            owner: ActorId(Id::new(devworks_desktop::host::USER_ACTOR).unwrap()),
+            owner_kind: "Human".into(),
+            agent_session_id: None,
+            project_id: Some(ProjectId(project)),
+            root_id: None,
+            assignment_id: None,
+            asset_id: "chrome".into(),
+            process_id: None,
+            create_operation_id: op,
+            uncertain_operation_id: None,
+            last_action_operation_id: None,
+            close_operation_id: None,
+            targets: vec![],
+            observation_sequence: 0,
+            detail: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        })
+    })
+    .unwrap();
+}
+
+fn browser_phase(
+    engine: &devworks_desktop::host::Engine,
+    session: &str,
+) -> devworks_core::ports::storage::BrowserPhase {
+    let id = Id::new(session).unwrap();
+    devworks_core::ports::storage::read_snapshot(
+        &**engine.host().runtime().store(),
+        &Default::default(),
+        move |s| s.browser().browser_session(&id),
+    )
+    .unwrap()
+    .unwrap()
+    .phase
+}
+
+#[test]
+fn project_browser_sessions_are_listed_and_closed_from_the_browser_view() {
+    let root = Root::new("projects-browser");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let create = |name: &str| {
+        ops::project_changed(backend.command(
+            "projects.create",
+            &ops::project_create(&*backend, name, "", &[]),
+        ))
+        .unwrap()
+        .id
+        .0
+    };
+    let (engine_project, tools) = (create("Engine"), create("Tools"));
+    seed_browser(&engine, "bs-engine", &engine_project);
+    seed_browser(&engine, "bs-tools", &tools);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    // Without a selection every project's sessions are listed, each with its project.
+    h.state_mut().navigate(Route::Browser);
+    settle(&mut h);
+    assert!(has_text(&h, "bs-engine  ·  Engine  ·  starting"));
+    assert!(has_text(&h, "bs-tools  ·  Tools  ·  starting"));
+    // The selected project narrows the view to its own sessions.
+    h.state_mut()
+        .select_project(Some(engine_project.as_str().to_owned()));
+    settle(&mut h);
+    assert!(has_text(&h, "bs-engine  ·  Engine"));
+    assert!(!has_text(&h, "bs-tools"));
+    // A person interrupts the project's session from the view.
+    click_row(&mut h, "bs-engine  ·  Engine");
+    click(&mut h, Role::Button, "Close session");
+    step_until(&mut h, "the project's session closed", |_| {
+        browser_phase(&engine, "bs-engine") == devworks_core::ports::storage::BrowserPhase::Closed
+    });
+    assert_eq!(
+        browser_phase(&engine, "bs-tools"),
+        devworks_core::ports::storage::BrowserPhase::Starting
+    );
+}
 /// A shell over `gate` with the Engine project (member repo-a) selected in All projects.
 fn gated_engine(
     name: &str,

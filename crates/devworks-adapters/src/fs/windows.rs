@@ -1,6 +1,5 @@
 //! Windows verified reads with held, no-delete-share handles and reparse-point refusal.
-//! Destructive steps are refused: without a stable file identity from std this adapter cannot
-//! preserve its identity rule.
+//! Read-only identities use native handles. Destructive steps remain unqualified and refused.
 use super::{NativeFilesystem, normal_components};
 use devworks_core::authority::destructive::{
     CheckedTarget, DestructiveExecutor, DestructiveKind, FileIdentity, RemovalOutcome, ResolveError,
@@ -27,6 +26,14 @@ struct HandleInformation {
     index_high: u32,
     index_low: u32,
 }
+impl HandleInformation {
+    fn identity(&self) -> FileIdentity {
+        FileIdentity {
+            volume: u64::from(self.volume_serial),
+            file: (u64::from(self.index_high) << 32) | u64::from(self.index_low),
+        }
+    }
+}
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetFileInformationByHandle(
@@ -46,10 +53,23 @@ fn handle_information(file: &File) -> io::Result<HandleInformation> {
 
 const FILE_SHARE_READ: u32 = 0x1;
 const FILE_SHARE_WRITE: u32 = 0x2;
+const FILE_SHARE_DELETE: u32 = 0x4;
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const ERROR_SHARING_VIOLATION: i32 = 32;
+
+/// Snapshot identity without retaining a lock or requiring file-content read access.
+pub(super) fn path_identity(path: &Path) -> Option<FileIdentity> {
+    let file = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    Some(handle_information(&file).ok()?.identity())
+}
 
 /// Opens the object itself (never a reparse target) and holds it without delete sharing, so it
 /// cannot be renamed or replaced while held.
@@ -119,16 +139,19 @@ impl NativeFilesystem {
         {
             return Err(ReadRefusal::Escape);
         }
-        if req.root.identity.is_some() {
-            return Err(ReadRefusal::Unsupported(
-                "file identities are not available on this platform".into(),
-            ));
-        }
         let mut held = Vec::with_capacity(parts.len() + 1);
         let root = open_held(&req.root.location).map_err(|e| refusal(&e))?;
         let meta = root.metadata().map_err(|e| refusal(&e))?;
         if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !meta.is_dir() {
             return Err(ReadRefusal::RootChanged);
+        }
+        if let Some(expected) = req.root.identity {
+            let actual = handle_information(&root)
+                .map_err(|e| refusal(&e))?
+                .identity();
+            if actual != expected {
+                return Err(ReadRefusal::RootChanged);
+            }
         }
         held.push(root);
         let mut path = req.root.location.clone();
@@ -154,10 +177,7 @@ impl NativeFilesystem {
             if info.links > 1 && !req.allow_hard_links {
                 return Err(ReadRefusal::HardLinked);
             }
-            let identity = FileIdentity {
-                volume: u64::from(info.volume_serial),
-                file: (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-            };
+            let identity = info.identity();
             #[cfg(test)]
             self.hook();
             let file = handle.take(req.max_bytes.saturating_add(1));

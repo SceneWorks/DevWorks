@@ -59,6 +59,10 @@
 //!   immediate stop of an archived project, and the run-control steps of shutdown. Every
 //!   consumer's root-scoped deliveries pass the run-control gate ([`runs::RunGate`]), so queued
 //!   work of a paused, held or stopped root waits until the root is continued.
+//! * **Owned browsers.** [`browser`] composes the one `BrowserService` (`browser.*`) over the
+//!   process owner: its `browser_effects` consumer executes journaled browser effects under the
+//!   operation journal, its supervision loop detects exits, crashes and popups, and shutdown
+//!   closes every session through the process owner before the remaining trees are stopped.
 //! * **Diagnostics.** [`diagnostics`] records boot recovery (and a boot that stopped) in the core
 //!   diagnostic log, registers the boot report, artifact collection and dispatcher as health
 //!   sources of `workspace.diagnostics`, and runs the retention and monitor passes
@@ -92,7 +96,11 @@
 //!    is `Reaped`, an unverifiable one stays `Uncertain`, a launch without an identity is `Lost`;
 //!    then the resource boot reconciliation runs (earlier boots' waiters cancelled, logical grants
 //!    marked owner-unreachable, physical grants uncertain until their trees are settled, then
-//!    transferred).
+//!    transferred). When a browser is composed, owned browser sessions of earlier boots then
+//!    settle from what this step verified (`BrowserService::recover`): a session whose tree is
+//!    gone is `Failed` (or `Closed` when it was stopping) with its profile removed, one whose tree
+//!    could not be verified stays `Uncertain`, and profile roots no unsettled session owns are
+//!    removed.
 //! 5. **Recovers run roots** ([`runs::RunSupervisor::boot`], core
 //!    `ControlService::recover_boot`): every activation an earlier boot left live — running,
 //!    stopping, claimed, or accepted but never launched — is recorded `Interrupted` and its
@@ -187,8 +195,10 @@
 //!
 //! Nothing here establishes product acceptance: tests run the real SQLite adapter with injected
 //! clocks and scripted handlers, without inference, network or containers.
+pub mod browser;
 pub mod diagnostics;
 pub mod dispatch;
+pub mod git;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;

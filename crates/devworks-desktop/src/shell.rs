@@ -16,7 +16,9 @@ use crate::web_panel::WebAction;
 use crate::widgets::{self, Header, Tone, ViewState, chip};
 use devworks_core::protocol::DomainErrorCode;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ArtifactRecord, ConnectionLifecycle, ResourceRecord};
+use devworks_core::protocol::records::{
+    ArtifactRecord, BrowserSession, ConnectionLifecycle, ItemState, ResourceRecord,
+};
 use devworks_core::settings::validate::codes;
 use devworks_core::settings::view::Health;
 use eframe::egui::{
@@ -158,6 +160,10 @@ pub struct Shell {
     pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    /// Every listed browser session: the workspace's, then each listed project's.
+    pub browser: ListState<BrowserSession>,
+    /// The browser sessions per scope (`None`: the workspace), combined into `browser`.
+    browser_parts: BTreeMap<Option<String>, ListState<BrowserSession>>,
     pub addons: crate::addons::AddonsScreen,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
@@ -301,6 +307,8 @@ impl Shell {
             knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
+            browser: ListState::default(),
+            browser_parts: BTreeMap::new(),
             addons: Default::default(),
             projects: projects::ProjectsUi::default(),
             jobs: jobs::JobsUi::default(),
@@ -423,6 +431,7 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::Browser => self.load_browser(),
             Route::AddOns => {
                 self.load_addons();
                 if let Some(c) = &mut self.client {
@@ -610,6 +619,109 @@ impl Shell {
             ops::workspace_artifacts,
         );
     }
+    /// The workspace's browser sessions and the selected project's, or every listed project's
+    /// when none is selected: a person may see and interrupt each of them.
+    pub(crate) fn load_browser(&mut self) {
+        let projects: Vec<String> = match &self.selected_project {
+            Some(p) => vec![p.clone()],
+            None => {
+                if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
+                    self.load_projects();
+                }
+                self.projects
+                    .list
+                    .items
+                    .iter()
+                    .map(|p| p.id.0.as_str().to_owned())
+                    .collect()
+            }
+        };
+        self.browser_parts
+            .retain(|scope, _| scope.as_ref().is_none_or(|p| projects.contains(p)));
+        self.combine_browser();
+        self.query(
+            Slot::BrowserSessions,
+            "Loading browser sessions",
+            "browser.sessions",
+            |b| ops::browser_sessions_list(b, None),
+        );
+        for p in projects {
+            let q = p.clone();
+            self.query(
+                Slot::ProjectBrowserSessions(p),
+                "Loading a project's browser sessions",
+                "browser.sessions",
+                move |b| ops::browser_sessions_list(b, Some(&q)),
+            );
+        }
+    }
+
+    /// Records one scope's page and rebuilds the combined list.
+    fn browser_part(
+        &mut self,
+        scope: Option<String>,
+        page: Result<(Vec<BrowserSession>, bool), Failure>,
+    ) {
+        let part = match page {
+            Ok((items, more)) => ListState {
+                items,
+                loaded: true,
+                error: None,
+                more,
+            },
+            Err(e) => ListState {
+                error: Some(e.describe()),
+                ..ListState::default()
+            },
+        };
+        self.browser_parts.insert(scope, part);
+        self.combine_browser();
+    }
+    fn combine_browser(&mut self) {
+        let parts = &self.browser_parts;
+        self.browser = ListState {
+            items: parts.values().flat_map(|p| p.items.clone()).collect(),
+            loaded: !parts.is_empty() && parts.values().all(|p| p.loaded),
+            error: parts.values().find_map(|p| p.error.clone()),
+            more: parts.values().any(|p| p.more),
+        };
+    }
+    /// The scope a listed browser session belongs to, for its row.
+    fn browser_scope_labels(&self) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        for (scope, part) in &self.browser_parts {
+            let label = match scope {
+                None => "Workspace".to_owned(),
+                Some(p) => self
+                    .projects
+                    .list
+                    .items
+                    .iter()
+                    .find(|r| r.id.0.as_str() == p)
+                    .map_or_else(|| p.clone(), |r| r.name.0.clone()),
+            };
+            for s in &part.items {
+                out.insert(s.id.as_str().to_owned(), label.clone());
+            }
+        }
+        out
+    }
+
+    /// Interrupts a browser session: Close stops its browser through the process owner.
+    fn close_browser(&mut self, session: &BrowserSession) {
+        let (id, revision) = (
+            session.id.as_str().to_owned(),
+            session.revision.as_str().to_owned(),
+        );
+        let sid = id.clone();
+        self.command(
+            Slot::BrowserClose(id),
+            "Closing the browser session",
+            "browser.sessions",
+            move |b| ops::browser_close(b, &sid, &revision),
+        );
+    }
+
     /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
     fn load_addons(&mut self) {
         self.addons.catalog_pending = None;
@@ -2112,6 +2224,28 @@ impl Shell {
                 }
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
+            (Slot::BrowserSessions, Reply::Query(q)) => {
+                self.browser_part(None, ops::browser_sessions(q));
+            }
+            (Slot::ProjectBrowserSessions(p), Reply::Query(q)) => {
+                self.browser_part(Some(p), ops::browser_sessions(q));
+            }
+            (Slot::BrowserClose(_), Reply::Command(c)) => {
+                match ops::browser_closed(c) {
+                    Ok(true) => self.announce("The browser session is being closed."),
+                    Ok(false) => self.announce(
+                        "Close is already requested, or the browser session has stopped.",
+                    ),
+                    Err(Failure::Unknown) => {
+                        self.announce("Closing the browser session: outcome not confirmed.")
+                    }
+                    Err(e) => self.announce(format!(
+                        "The browser session could not be closed: {}",
+                        e.describe()
+                    )),
+                }
+                self.load_browser();
+            }
             (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
                 Ok((items, registry, next)) => {
                     let (mut all, first) = self
@@ -2570,6 +2704,7 @@ impl Shell {
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
+            Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
             Route::Portfolio | Route::Repositories
                 if !self.pending(&Slot::ProjectsList) && !self.pending(&Slot::RepositoriesList) =>
             {
@@ -3628,7 +3763,8 @@ impl Shell {
                 ui.add_space(10.0);
                 let item = |ui: &mut Ui, r: Route, current: Route, go: &mut Option<Route>| {
                     let active = current == r
-                        || (r == Route::Agents && current == Route::Resources)
+                        || (r == Route::Agents
+                            && matches!(current, Route::Resources | Route::Browser))
                         || (r == Route::Repositories && current == Route::Indexing)
                         || (r == Route::Settings && current == Route::AddOns);
                     let resp = ui.add(
@@ -3843,6 +3979,7 @@ impl Shell {
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::Browser => self.browser_screen(ui),
             Route::AddOns => {
                 let online = self.online();
                 let mut actions = Vec::new();
@@ -4113,6 +4250,28 @@ impl Shell {
                     filter,
                     selection,
                     |ui, a: &ArtifactRecord, selected| {
+                        if let Some(source) = &a.tested_repository {
+                            if let Some(url) = &source.repository_url {
+                                ui.hyperlink_to(
+                                    &source.head.hex,
+                                    format!("{}/commit/{}", url.0, source.head.hex),
+                                );
+                            } else {
+                                ui.monospace(&source.head.hex);
+                            }
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "{} · {}",
+                                    source.repository_id.as_str(),
+                                    if source.dirty {
+                                        "dirty at observation"
+                                    } else {
+                                        "clean at observation"
+                                    }
+                                ),
+                            );
+                        }
                         let r = ui.selectable_label(
                             selected,
                             format!(
@@ -4138,14 +4297,16 @@ impl Shell {
         }
     }
 
-    fn resources_screen(&mut self, ui: &mut Ui) {
-        let screen = Route::Resources.screen();
+    fn browser_screen(&mut self, ui: &mut Ui) {
+        let screen = Route::Browser.screen();
         let online = self.online();
         let mut reload = false;
-        let mut mem = self.routes.remove(&Route::Resources).unwrap_or_default();
-        let list = &self.resources;
+        let mut close: Option<BrowserSession> = None;
+        let mut mem = self.routes.remove(&Route::Browser).unwrap_or_default();
+        let scopes = self.browser_scope_labels();
+        let list = &self.browser;
         let scrolls = &mut self.scrolls;
-        let mut st = (&mut reload, &mut mem);
+        let mut st = (&mut reload, &mut mem, &mut close);
         widgets::pane(
             ui,
             Header {
@@ -4158,6 +4319,122 @@ impl Shell {
             |ui, st| {
                 if widgets::secondary_button(ui, "Refresh").clicked() {
                     *st.0 = true;
+                }
+                let selected =
+                    st.1.selection
+                        .as_ref()
+                        .and_then(|id| list.items.iter().find(|s| s.id.as_str() == id));
+                if let Some(s) = selected.filter(|s| {
+                    matches!(
+                        s.state,
+                        ItemState::Healthy | ItemState::Partial | ItemState::Unavailable
+                    )
+                }) && widgets::secondary_button(ui, "Close session").clicked()
+                {
+                    *st.2 = Some(s.clone());
+                }
+            },
+            |ui, st, _| {
+                let mem = &mut *st.1;
+                let RouteMemory {
+                    filter, selection, ..
+                } = mem;
+                list_body(
+                    ui,
+                    &online,
+                    list,
+                    ListText {
+                        what: "browser sessions",
+                        empty_title: "No browser sessions",
+                        empty_body: "Agents' owned browser sessions appear here; evidence they record is kept in Artifacts.",
+                        id_salt: "browser-list",
+                    },
+                    st.0,
+                    scrolls,
+                    |s: &BrowserSession| s.id.as_str().to_owned(),
+                    |s: &BrowserSession| s.id.as_str().to_owned(),
+                    filter,
+                    selection,
+                    |ui, s: &BrowserSession, selected| {
+                        let state = match s.state {
+                            ItemState::Partial => "starting",
+                            ItemState::Healthy => "running",
+                            ItemState::Disabled => "closed",
+                            ItemState::Failed => "failed",
+                            ItemState::Unavailable => "stop not verified",
+                            ItemState::Enabled => "enabled",
+                        };
+                        let scope = scopes.get(s.id.as_str()).map_or("", String::as_str);
+                        if let Some(source) = &s.tested_repository {
+                            if let Some(url) = &source.repository_url {
+                                ui.hyperlink_to(
+                                    &source.head.hex,
+                                    format!("{}/commit/{}", url.0, source.head.hex),
+                                );
+                            }
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "{} · worktree {} · {} · {} · observed {}",
+                                    source.repository_id.as_str(),
+                                    source.worktree_id.as_str(),
+                                    source.head.hex,
+                                    if source.dirty { "dirty" } else { "clean" },
+                                    source.observed_at_ms.as_str()
+                                ),
+                            );
+                        } else {
+                            widgets::caption(ui, "No tested repository revision recorded");
+                        }
+                        ui.selectable_label(
+                            selected,
+                            format!(
+                                "{}  ·  {scope}  ·  {state}  ·  {} target(s)  ·  revision {}",
+                                s.id.as_str(),
+                                s.target_ids.0.len(),
+                                s.revision.as_str()
+                            ),
+                        )
+                        .clicked()
+                    },
+                );
+            },
+        );
+        self.routes.insert(Route::Browser, mem);
+        if let Some(s) = close {
+            self.close_browser(&s);
+        }
+        if reload {
+            self.load_browser();
+        }
+    }
+
+    fn resources_screen(&mut self, ui: &mut Ui) {
+        let screen = Route::Resources.screen();
+        let online = self.online();
+        let mut reload = false;
+        let mut link = false;
+        let mut mem = self.routes.remove(&Route::Resources).unwrap_or_default();
+        let list = &self.resources;
+        let scrolls = &mut self.scrolls;
+        let mut st = (&mut reload, &mut mem, &mut link);
+        widgets::pane(
+            ui,
+            Header {
+                title: screen.title,
+                summary: screen.summary,
+                tabs: &[],
+                tab: 0,
+            },
+            &mut st,
+            |ui, st| {
+                if widgets::secondary_button(ui, "Refresh").clicked() {
+                    *st.0 = true;
+                }
+                if let Some((label, _)) = screen.link
+                    && widgets::secondary_button(ui, label).clicked()
+                {
+                    *st.2 = true;
                 }
             },
             |ui, st, _| {
@@ -4206,6 +4483,9 @@ impl Shell {
             },
         );
         self.routes.insert(Route::Resources, mem);
+        if link && let Some((_, target)) = screen.link {
+            self.navigate(target);
+        }
         if reload {
             self.load_resources();
         }

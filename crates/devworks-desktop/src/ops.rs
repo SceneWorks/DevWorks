@@ -5,10 +5,10 @@ use crate::backend::Backend;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, ConnectionRecord, DiagnosticEntry, EffortName, JobInspection,
-    JobRecord, JobRun, MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText,
-    ResourceRecord, RouteAvailability, RouteChoice, RouteIntent, RouteModel, SessionRecord,
-    SettingEntry, ValidationReport, WebDocument, WebResult,
+    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, DiagnosticEntry, EffortName,
+    JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord, RepositoryRecord,
+    RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent, RouteModel,
+    SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
 use devworks_core::protocol::{CommandReply, DomainFault};
@@ -361,7 +361,7 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
 }
 pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
     json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "schemaRevision": 4,
         "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
     .to_string()
     .into_bytes()
@@ -369,7 +369,7 @@ pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
 /// `artifacts.list` of one project's artifacts.
 pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
     json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "schemaRevision": 4,
         "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
     .to_string()
     .into_bytes()
@@ -386,6 +386,48 @@ pub fn resources_list(backend: &dyn Backend) -> Vec<u8> {
         "resources.list",
         json!({"scope": {"kind": "Workspace"}, "page": {"limit": PAGE_LIMIT}}),
     )
+}
+/// The owned browser sessions (`browser.sessions`) of `project`, or of the workspace.
+pub fn browser_sessions_list(backend: &dyn Backend, project: Option<&str>) -> Vec<u8> {
+    let scope = match project {
+        Some(p) => json!({"kind": "Project", "projectId": p}),
+        None => json!({"kind": "Workspace"}),
+    };
+    at_revision(
+        query_frame(
+            backend,
+            "browser.sessions",
+            json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
+        ),
+        3,
+    )
+}
+pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::BrowserSessions { value }, _) => Ok((value.items.0, value.has_more)),
+        (other, _) => Err(unexpected("browser.sessions", &other)),
+    }
+}
+/// Closes (interrupts) a browser session at its current revision.
+pub fn browser_close(backend: &dyn Backend, session: &str, revision: &str) -> Vec<u8> {
+    command_frame(
+        backend,
+        "browser.sessions",
+        json!({"action": {"kind": "Close", "sessionId": session, "expectedRevision": revision}}),
+    )
+}
+/// `true` when the close was accepted (the browser is being stopped through the process
+/// owner), `false` when the session had already stopped.
+pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { .. } => Ok(true),
+            DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => Ok(false),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
 }
 pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), Failure> {
     match query_result(outcome)? {
@@ -1131,5 +1173,38 @@ pub fn configured(outcome: CommandOutcome) -> Result<bool, Failure> {
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+
+pub fn git_inspect(backend: &dyn Backend, repository: &str) -> Vec<u8> {
+    git_inspect_worktree(backend, repository, None)
+}
+pub fn git_inspect_worktree(
+    backend: &dyn Backend,
+    repository: &str,
+    worktree: Option<&str>,
+) -> Vec<u8> {
+    let mut frame = json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.inspect","repositoryId":repository}});
+    if let Some(worktree) = worktree {
+        frame["body"]["worktreeId"] = json!(worktree);
+    }
+    frame.to_string().into_bytes()
+}
+pub fn git_inspected(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::GitInspection, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::GitInspect { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("git.inspect", &other)),
+    }
+}
+pub fn git_diff(backend: &dyn Backend, repository: &str, base: &str, head: &str) -> Vec<u8> {
+    let oid = |hex: &str| json!({"format":if hex.len()==64 {"Sha256"} else {"Sha1"},"hex":hex});
+    json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.diff","repositoryId":repository,"base":oid(base),"head":oid(head),"paths":[],"page":{"limit":1}}}).to_string().into_bytes()
+}
+pub fn git_patch(outcome: QueryOutcome) -> Result<Option<ArtifactRef>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::GitDiff { value }, _) => Ok(value.items.0.into_iter().next()),
+        (other, _) => Err(unexpected("git.diff", &other)),
     }
 }

@@ -78,6 +78,14 @@ impl HttpTransport for NativeHttp {
                 let body: &[u8] = r.body.as_deref().unwrap_or_default();
                 b.config().timeout_global(timeout).build().send(body)
             }
+            Method::Patch => {
+                let mut b = self.agent.patch(&r.url);
+                for (name, value) in &r.headers {
+                    b = b.header(name.as_str(), value.as_str());
+                }
+                let body: &[u8] = r.body.as_deref().unwrap_or_default();
+                b.config().timeout_global(timeout).build().send(body)
+            }
         };
         let mut response = result.map_err(|e| classify(&e))?;
         let status = response.status().as_u16();
@@ -189,6 +197,31 @@ mod tests {
         let s = seen.recv().unwrap();
         assert_eq!(s.line, "POST /oauth/token HTTP/1.1");
         assert_eq!(s.body, b"grant_type=refresh_token");
+    }
+
+    #[test]
+    fn patch_preserves_method_body_and_secret_header() {
+        let (base, seen) = serve(vec![(Duration::ZERO, ok("{}"))]);
+        let mut request = HttpRequest::post(
+            format!("{base}/repos/o/r/pulls/1"),
+            "application/json",
+            br#"{"base":"feature"}"#.to_vec(),
+        )
+        .secret_header(
+            "Authorization",
+            devworks_core::ports::secrets::Secret::new("Bearer private"),
+        );
+        request.method = Method::Patch;
+        NativeHttp::direct().send(&request).unwrap();
+        let sent = seen.recv().unwrap();
+        assert_eq!(sent.line, "PATCH /repos/o/r/pulls/1 HTTP/1.1");
+        assert_eq!(sent.body, br#"{"base":"feature"}"#);
+        assert!(
+            sent.headers
+                .iter()
+                .any(|(key, value)| key == "authorization" && value == "Bearer private")
+        );
+        assert!(!format!("{request:?}").contains("Bearer private"));
     }
 
     #[test]

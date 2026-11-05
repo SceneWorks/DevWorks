@@ -523,7 +523,6 @@ macro_rules! specialized {
 specialized!(
     data::GraphReadRequest => |v| v.validate(),
     data::ArtifactDeletionRequest => |_| Ok(()),
-    data::GitCommandRequest => |v| v.validate(),
     data::ReleaseCommandRequest => |v| v.validate(),
     data::RetrievalRequest => |v| v.validate(),
     provider::SessionCommandRequest => |v| v.validate(),
@@ -547,6 +546,18 @@ macro_rules! revisioned_artifact {
     )*};
 }
 revisioned_artifact!(data::ArtifactCommandRequest, data::ArtifactQueryRequest);
+/// Revision 2 adds explicit grouped-task PR coverage (a set).
+impl SpecializedEnvelope for data::GitCommandRequest {
+    fn validate_envelope(&self) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
+    }
+    fn normalize(&mut self) {
+        data::GitCommandRequest::normalize(self);
+    }
+    fn retain_revision(&mut self, revision: u32) {
+        Revisioned::retain_revision(self, revision);
+    }
+}
 /// Revision 2 adds the ref-only overlay (`ref` instead of `worktreeId`).
 impl SpecializedEnvelope for data::IndexCommandRequest {
     fn validate_envelope(&self) -> Result<(), String> {

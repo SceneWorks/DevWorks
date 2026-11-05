@@ -114,7 +114,7 @@ impl SourceTree for NativeSourceTree {
         }
         let root = ReadRoot {
             location: root.to_path_buf(),
-            identity: crate::fs::identity_of(&meta),
+            identity: crate::fs::identity_at(root, &meta),
         };
         let request = ReadRequest {
             root: &root,

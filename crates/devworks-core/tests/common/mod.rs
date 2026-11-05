@@ -375,6 +375,12 @@ impl ReadSnapshot for MemSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead {
         &self.unsupported
     }
+    fn git(&self) -> &dyn GitRead {
+        &self.unsupported
+    }
+    fn browser(&self) -> &dyn BrowserRead {
+        &self.unsupported
+    }
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
@@ -464,6 +470,12 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        &mut self.unsupported
+    }
+    fn git(&mut self) -> &mut dyn GitRepository {
+        &mut self.unsupported
+    }
+    fn browser(&mut self) -> &mut dyn BrowserRepository {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
@@ -2103,6 +2115,52 @@ impl DiagnosticRepository for Unsupported {
         nope()
     }
 }
+impl BrowserRead for Unsupported {
+    fn browser_session(&self, _: &Id) -> Result<Option<StoredBrowserSession>, StorageError> {
+        nope()
+    }
+    fn browser_sessions(
+        &self,
+        _: &BrowserFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredBrowserSession>, StorageError> {
+        nope()
+    }
+    fn browser_observations(
+        &self,
+        _: &Id,
+        _: BrowserChannel,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredBrowserObservation>, StorageError> {
+        nope()
+    }
+}
+impl BrowserRepository for Unsupported {
+    fn insert_browser_session(&mut self, _: &StoredBrowserSession) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_browser_session(
+        &mut self,
+        _: &StoredBrowserSession,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn next_observation_sequence(&mut self, _: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn set_last_action(&mut self, _: &Id, _: &OperationId) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_browser_observation(
+        &mut self,
+        _: &StoredBrowserObservation,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+}
 impl ResourceRepository for Unsupported {
     fn insert_resource(&mut self, _: NewResource) -> Result<StoredResource, StorageError> {
         nope()
@@ -2585,5 +2643,45 @@ impl KnowledgeRepository for Unsupported {
     }
     fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {
         nope()
+    }
+}
+
+impl GitRead for Unsupported {
+    fn git_worktree_for_branch(
+        &self,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<StoredGitWorktree>, StorageError> {
+        Ok(None)
+    }
+    fn git_pending_worktrees(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
+    fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
+        Ok(None)
+    }
+    fn git_worktrees(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
+}
+impl GitRepository for Unsupported {
+    fn insert_git_worktree(&mut self, _: &StoredGitWorktree) -> Result<(), StorageError> {
+        Err(StorageError::InvalidRecord(
+            "Git test store not configured".into(),
+        ))
+    }
+    fn update_git_worktree(&mut self, _: &StoredGitWorktree, _: i64) -> Result<(), StorageError> {
+        Err(StorageError::InvalidRecord(
+            "Git test store not configured".into(),
+        ))
     }
 }

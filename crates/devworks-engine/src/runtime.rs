@@ -4,6 +4,7 @@
 //! resource housekeeping, run supervision and the diagnostics monitor, and only then returns the
 //! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
+use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::indexing::{IndexSupervisor, IndexingConfig};
@@ -26,6 +27,7 @@ use devworks_core::services::artifacts::lifecycle::{
     CollectReport, RecoveryReport as ArtifactRecoveryReport,
 };
 use devworks_core::services::artifacts::replies::ReceiptReplies;
+use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
 use devworks_core::services::jobs::runner::{
     InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
@@ -157,6 +159,14 @@ pub struct Composition {
     /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
     /// runs its retention and monitor passes.
     pub diagnostics: Arc<DiagnosticService>,
+    /// Owned browser sessions (`browser.*`): when present, [`boot`] builds the one
+    /// [`BrowserService`] over the composition's store, artifact service and process owner,
+    /// registers its use cases and effect consumer, recovers earlier boots' sessions after the
+    /// owned processes, supervises it and closes its sessions at shutdown. When absent, no
+    /// browser operation is registered (nothing unqualified is advertised).
+    pub browser: Option<BrowserComposition>,
+    /// Native Git owner; missing executable/filesystem is not advertised.
+    pub git: Option<crate::git::GitComposition>,
     /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service
     /// (replacing any the caller registered), starts the package host after process recovery and
     /// stops its helpers cooperatively at shutdown. `None`: no package host (packages are not
@@ -193,6 +203,8 @@ pub struct RuntimeConfig {
     /// runs at boot regardless. Hourly by default: retention is counted in days, and a full
     /// integrity check reads the whole store.
     pub diagnostics_interval: Duration,
+    /// Time between browser supervision passes (notifications, popups, crash detection).
+    pub browser_interval: Duration,
     /// Scheduler policy (due grace, claim batch).
     pub jobs: JobConfig,
     /// Time between scheduler ticks (commands that change jobs request one at once).
@@ -209,6 +221,7 @@ impl RuntimeConfig {
             shutdown_grace: Duration::from_secs(5),
             shutdown_bound: Duration::from_secs(30),
             diagnostics_interval: Duration::from_secs(60 * 60),
+            browser_interval: Duration::from_secs(1),
             jobs: JobConfig::default(),
             scheduler_interval: Duration::from_secs(5),
         }
@@ -229,6 +242,9 @@ pub struct BootReport {
     pub runs: BootRecovery,
     /// The keep-awake setting as applied at boot.
     pub keep_awake: KeepAwakeStatus,
+    /// Browser sessions of earlier boots settled from what process recovery verified, and the
+    /// orphaned profile roots removed (`None` when no browser is composed).
+    pub browser: Option<BrowserRecovery>,
     /// Index runs of earlier boots made claimable to resume from their checkpoints.
     pub index_runs_resumed: usize,
 }
@@ -250,6 +266,8 @@ pub enum BootError {
     Packages(StorageError),
     /// The keep-awake setting could not be read.
     Settings(StorageError),
+    /// Browser session recovery failed.
+    Browser(StorageError),
 }
 
 /// One artifact collection pass.
@@ -303,6 +321,9 @@ pub struct Runtime {
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
+    browser: Option<Arc<BrowserService>>,
+    git: Option<Arc<devworks_core::services::git::GitService>>,
+    browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
@@ -358,12 +379,79 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs,
         power,
         diagnostics,
+        browser,
+        git,
         packages,
         use_cases,
         mut consumers,
         indexing,
         config,
     } = composition;
+    // The one process owner: every owned tree (browsers included) is launched through it. It is
+    // built first so the browser service can be composed with it; its recovery still runs at
+    // step 4.
+    let supervisor = Arc::new(ProcessSupervisor::new(
+        store.clone(),
+        process_host,
+        resources.clone(),
+    ));
+    let git = git.and_then(|composition| {
+        let fs = composition.config.filesystem.clone()?;
+        let helpers = Arc::new(
+            devworks_core::services::indexing::helper::SupervisedHelpers {
+                supervisor: supervisor.clone(),
+                store: store.clone(),
+                fs,
+            },
+        );
+        Some(Arc::new(devworks_core::services::git::GitService::new(
+            store.clone(),
+            helpers,
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+            composition.config,
+        )))
+    });
+    let git = match git {
+        Some(service) => {
+            let probe = service.clone();
+            if tokio::task::spawn_blocking(move || probe.qualify())
+                .await
+                .unwrap_or(false)
+            {
+                Some(service)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let browser = browser.map(|b| {
+        Arc::new(
+            BrowserService::new(
+                store.clone(),
+                b.platform,
+                artifacts.clone(),
+                supervisor.clone(),
+                b.fs,
+                b.app_data_root,
+                ids.clone(),
+                clock.clone(),
+                b.config,
+            )
+            .with_git_source(git.clone()),
+        )
+    });
+    let mut use_cases = use_cases;
+    if let Some(service) = &git {
+        use_cases = use_cases.with_git(service.clone());
+        consumers.push(crate::git::consumer(service.clone()));
+    }
+    if let Some(b) = &browser {
+        use_cases = use_cases.with_browser(b.clone());
+        consumers.push(crate::browser::consumer(b.clone()));
+    }
     let use_cases = match &packages {
         Some(p) => use_cases.with_packages(p.service.clone()),
         None => use_cases,
@@ -416,11 +504,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .unwrap_or_else(|_| Err(panicked("artifact recovery")))
         .map_err(BootError::Artifacts)
         .map_err(failed)?;
-    let supervisor = Arc::new(ProcessSupervisor::new(
-        store.clone(),
-        process_host,
-        resources.clone(),
-    ));
     // Indexing runs its Git helpers through this same process owner.
     let index_supervisor = indexing.map(|ix| {
         let env = Arc::new(devworks_core::services::indexing::IndexEnv {
@@ -483,6 +566,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .await
         .map_err(BootError::Resources)
         .map_err(failed)?;
+    // Browser sessions of earlier boots settle from what process recovery just verified.
+    let recovered_browser = match &browser {
+        Some(b) => {
+            let svc = b.clone();
+            Some(
+                tokio::task::spawn_blocking(move || svc.recover())
+                    .await
+                    .unwrap_or_else(|_| Err(panicked("browser recovery")))
+                    .map_err(BootError::Browser)
+                    .map_err(failed)?,
+            )
+        }
+        None => None,
+    };
     let mut run_supervisor = RunSupervisor::new(
         store.clone(),
         clock,
@@ -555,6 +652,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources: recovered_resources,
         runs: recovered_runs,
         keep_awake: applied,
+        browser: recovered_browser,
         index_runs_resumed,
     };
     let (svc, recovered) = (diagnostics.clone(), report.clone());
@@ -588,6 +686,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         collector.status.subscribe(),
         dispatcher.clone(),
     );
+    let browser_supervision = Arc::new(BrowserSupervision::default());
+    let mut tasks = vec![delivery, collection, housekeeping];
+    if let Some(service) = &git {
+        tasks.push(tokio::spawn(crate::git::run(service.clone())));
+    }
+    if let Some(b) = &browser {
+        let svc = b.clone();
+        diagnostics.register_source(Arc::new(move |now| svc.health(now)));
+        tasks.push(tokio::spawn(crate::browser::run(
+            b.clone(),
+            browser_supervision.clone(),
+            config.browser_interval,
+        )));
+    }
     let monitor = Arc::new(Monitor::default());
     let (watcher, svc, every) = (
         monitor.clone(),
@@ -648,11 +760,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         keep_awake,
         diagnostics,
         monitor,
-        packages: package_host,
+        browser,
+        git,
+        browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
         report,
-        tasks: Mutex::new(vec![delivery, collection, housekeeping]),
+        tasks: Mutex::new(tasks),
+        packages: package_host,
         scheduling: Mutex::new(Some(scheduling)),
         supervision: Mutex::new(Some(supervision)),
         monitoring: Mutex::new(Some(monitoring)),
@@ -741,6 +856,17 @@ impl Runtime {
             self.command(ctx, "artifacts.save", raw)
         })
     }
+    pub fn git(&self) -> Option<&Arc<devworks_core::services::git::GitService>> {
+        self.git.as_ref()
+    }
+
+    /// The browser service the `browser.*` use cases, its effect consumer and supervision
+    /// share (`None` when no browser is composed). Typed completions of accepted browser
+    /// commands are read through [`BrowserService::completion`].
+    pub fn browser(&self) -> Option<&Arc<BrowserService>> {
+        self.browser.as_ref()
+    }
+
     /// The package host (helper processes, invocations and the quiescence barrier), when packages
     /// were composed.
     pub fn packages(&self) -> Option<&Arc<PackageHost>> {
@@ -929,6 +1055,17 @@ impl Runtime {
             }
         }
         let _ = dispatch::first(tokio::time::sleep_until(deadline), self.dispatcher.idle()).await;
+        // Browser sessions close through the process owner (their records settle and profiles
+        // are removed) before the remaining owned trees are stopped. Like every wait above, it
+        // starts only after the run-control hold committed and is abandoned at the one deadline:
+        if let Some(git) = &self.git {
+            git.stop();
+        }
+        // a close that does not return in time leaves its trees to the owned-tree stop below.
+        if let Some(b) = self.browser.clone() {
+            let closing = tokio::task::spawn_blocking(move || b.shutdown());
+            let _ = dispatch::first(tokio::time::sleep_until(deadline), closing).await;
+        }
         // Package helpers get their cooperative shutdown (cancel in-flight invocations,
         // host.shutdown) after the hold above and within what is left of the same bound: the
         // host stops every helper by that deadline, and its thread is not awaited past it; the
@@ -968,6 +1105,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.browser_supervision.stop();
         if let Some(ix) = &self.indexing {
             ix.worker().stop_all();
         }

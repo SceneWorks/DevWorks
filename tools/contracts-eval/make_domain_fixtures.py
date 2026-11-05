@@ -760,5 +760,54 @@ for name in ['knowledge.search','knowledge.read','knowledge.diagnostics','knowle
 # The shared r3 result document also binds the existing artifact r3 operations.
 for name in ['artifacts.save','artifacts.list']:
  case('r3-result-'+name,'operation-result.r3',result(name,LEGACY_RESULTS[name]))
+# Native Git associations and browser repository provenance (additive revisions).
+case('r3-input-history.git_links','domain-request.r3',domain('history.git_links',revision=3))
+association={**sample('AttributedGitLink'),'worktreePath':'/owned/task-a','worktreeRemoved':True,'agentSessionId':'session-a','repositoryUrl':'https://github.com/owner/repo'}
+case('r3-result-history.git_links','operation-result.r3',{'kind':'history.git_links','value':{'items':[association],'hasMore':False,'checkpoint':'checkpoint-a'}})
+case('reject-r2-git-path','operation-result.r2',{'kind':'history.git_links','value':{'items':[association],'hasMore':False,'checkpoint':'checkpoint-a'}},False,False)
+source={**sample('TestedRepositoryRevision'),'dirty':True,'repositoryUrl':'https://github.com/owner/repo'}
+for revision in [2,3]:
+ for name in ['browser.sessions','browser.inspect','browser.navigate','browser.input','browser.upload','browser.screenshot','browser.console','browser.network']:
+  definition=OPS[name]
+  modes=[definition['mode']] if definition['mode']!='Hybrid' else ['Query','Command']
+  for mode in modes:
+   frame=request(name,mode);frame['schemaRevision']=revision
+   case(f'r{revision}-input-{name}-{mode}',f'domain-request.r{revision}',frame)
+  output=result(name,definition['result'])
+  if revision==3:
+   if name=='browser.sessions':output['value']['items']=[{**sample('BrowserSession'),'testedRepository':source}]
+   elif name in ['browser.input','browser.upload']:output['value']['testedRepository']=source
+   elif name in ['browser.console','browser.network']:output['value']['items']=[{**sample('BrowserObservation'),'testedRepository':source}]
+  case(f'r{revision}-result-{name}',f'operation-result.r{revision}',output)
+old_source={'kind':'browser.sessions','value':{'items':[{**sample('BrowserSession'),'testedRepository':source}],'hasMore':False}}
+case('reject-r2-browser-source','operation-result.r2',old_source,False,False)
+case('reject-null-browser-source','operation-result.r3',{'kind':'browser.sessions','value':{'items':[{**sample('BrowserSession'),'testedRepository':None}],'hasMore':False}},False,False)
+forged=request('browser.sessions','Command');forged['schemaRevision']=3;forged['body']['testedRepository']=source
+case('reject-model-supplied-browser-source','domain-request.r3',forged,False,False)
+pr={'protocol':'1.0-draft.1','schemaRevision':2,'requestKey':'group-pr','command':{'kind':'OpenPullRequest','repositoryId':'repo-a','headRef':'refs/heads/task-a','baseRef':'refs/heads/feature-a','expectedHead':BASE['GitOid'],'description':ART,'coveredWorkIds':['task-a','task-b']}}
+case('r2-input-git.pull_request','git-command-request.r2',pr)
+case('r2-result-git.pull_request','operation-result.r2',result('git.pull_request',LEGACY_RESULTS['git.pull_request']))
+bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=None
+case('reject-null-group-pr','git-command-request.r2',bad,False,False)
+bad=copy.deepcopy(pr);bad['schemaRevision']=1
+case('reject-r1-group-pr','git-command-request',bad,False,False)
+for label,ids,schema in [('duplicate',['task-a','task-a'],True),('empty',[],False),('too-many',['task-'+str(i) for i in range(257)],False)]:
+ bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=ids
+ case('reject-group-pr-'+label,'git-command-request.r2',bad,False,schema)
+saved=copy.deepcopy(POS['r3-save-workspace']);saved['schemaRevision']=4
+case('r4-input-artifacts.save','artifact-command-request.r3',saved)
+case('r4-result-artifacts.save','operation-result.r4',result('artifacts.save',LEGACY_RESULTS['artifacts.save']))
+# Artifact provenance uses revision 4; existing workspace-list revision 3 stays unchanged.
+for kind in ['Read','List']:
+ query={'kind':kind,'artifactId':'artifact-a','versionId':'version-a'} if kind=='Read' else {'kind':'List','workspace':True}
+ case('r4-input-artifacts.'+kind.lower(),'artifact-query-request.r3',{'protocol':'1.0-draft.1','schemaRevision':4,'queryId':'query-a','query':query,'limit':20})
+record={**sample('ArtifactRecord'),'testedRepository':source}
+case('r4-result-artifacts.list','operation-result.r4',{'kind':'artifacts.list','value':{'items':[record],'hasMore':False}})
+case('reject-r3-artifact-source','operation-result.r3',{'kind':'artifacts.list','value':{'items':[record],'hasMore':False}},False,False)
+for kind in ['Text','Binary']:
+ value={'kind':'Text','artifact':ART,'firstByte':'0','nextByte':'7','content':'fixture','truncated':True} if kind=='Text' else {'kind':'Binary','artifact':ART,'streamId':'stream-a','firstByte':'0','byteLength':'8','expiresAtMs':'1000'}
+ value['testedRepository']=source
+ case('r4-result-artifacts.read-'+kind,'operation-result.r4',{'kind':'artifacts.read','value':value})
+ case('reject-r3-artifact-read-source-'+kind,'operation-result.r3',{'kind':'artifacts.read','value':value},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

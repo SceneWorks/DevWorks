@@ -2243,6 +2243,12 @@ impl WriteTransaction for Lying<'_> {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
         self.inner.diagnostics()
     }
+    fn git(&mut self) -> &mut dyn GitRepository {
+        self.inner.git()
+    }
+    fn browser(&mut self) -> &mut dyn BrowserRepository {
+        self.inner.browser()
+    }
     fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
         self.inner.router()
     }
@@ -2971,7 +2977,7 @@ fn a_blocked_command_records_every_refused_step_with_its_rationale() {
     );
     assert_eq!(
         event.payload["held"],
-        json!(["UnmodeledConsequentialCommand"])
+        json!(["GitPushOwnerRequired", "UnmodeledConsequentialCommand"])
     );
     assert_eq!(event.payload["authoritySources"], json!(["approval-3"]));
 }
@@ -3037,4 +3043,167 @@ fn package_activation_requires_an_exact_native_grant_in_project_scope() {
         let allowed = decide(&fx, &granted, op, Mode::Command, &frame);
         assert!(allowed.is_ok(), "{op}: {allowed:?}");
     }
+}
+
+#[test]
+fn automatic_task_force_push_is_owned_current_and_fenced() {
+    use devworks_core::ports::AuthorityFence;
+    use devworks_core::protocol::data::{GitOid, ObjectFormat};
+    let fx = Fx::new();
+    let tree = StoredGitWorktree {
+        id: id("work-a"),
+        repository_id: id("repo-git"),
+        work_id: id("task-git"),
+        owner: actor("agent-p"),
+        ownership_revision: 1,
+        owner_root_id: None,
+        owner_assignment_id: None,
+        registered_root_id: id("owned-root"),
+        path: "/owned/task-git".into(),
+        branch: "refs/heads/codex/task-a".into(),
+        head: GitOid {
+            format: ObjectFormat::Sha1,
+            hex: "a".repeat(40),
+        },
+        revision: 1,
+        removed: false,
+        location: None,
+        pending_operation_id: None,
+        last_operation_id: None,
+        last_result: None,
+    };
+    let first = tree.clone();
+    fx.write(move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("repo-git"),
+            location: "/repo-git".into(),
+            name: "Git".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        tx.projects()
+            .set_members(&ProjectId(id("project-a")), &[id("repo-git")])?;
+        tx.work().insert_work(&StoredWork {
+            id: id("task-git"),
+            project_id: ProjectId(id("project-a")),
+            kind: "task".into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Git".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            created_by: None,
+            updated_by: None,
+            search_key: "git".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        })?;
+        tx.work()
+            .set_work_repositories(&id("task-git"), &[id("repo-git")])?;
+        tx.git().insert_git_worktree(&first)
+    });
+    let owned = fx.agent("agent-p").with_lineage(
+        Some(ProjectId(id("project-a"))),
+        Some(RootId(id("task-git"))),
+        None,
+    );
+    let frame = push("refs/heads/codex/task-a", 'b');
+    let authorization = decide(&fx, &owned, "git.push", Mode::Command, &frame).unwrap();
+    assert!(authorization.authority_grants().is_empty());
+    assert!(
+        authorization
+            .fences()
+            .iter()
+            .any(|f| matches!(f, AuthorityFence::GitWorktree { .. }))
+    );
+    assert_eq!(
+        reason(decide(
+            &fx,
+            &fx.agent("agent-a").with_lineage(
+                Some(ProjectId(id("project-a"))),
+                Some(RootId(id("task-git"))),
+                None
+            ),
+            "git.push",
+            Mode::Command,
+            &frame
+        )),
+        Some(DenialReason::ApprovalRequired)
+    );
+    assert_eq!(
+        reason(decide(
+            &fx,
+            &owned,
+            "git.push",
+            Mode::Command,
+            &push("refs/heads/codex/feature-a", 'b')
+        )),
+        Some(DenialReason::ApprovalRequired)
+    );
+    assert_eq!(
+        reason(decide(
+            &fx,
+            &owned,
+            "git.push",
+            Mode::Command,
+            &push("refs/heads/MAIN", 'b')
+        )),
+        Some(DenialReason::ProtectedBranch)
+    );
+    let host_id = fx.store.info().host_actor.0.as_str().to_owned();
+    assert_eq!(
+        reason(decide(
+            &fx,
+            &fx.ctx(&host_id, PrincipalKind::Host),
+            "git.push",
+            Mode::Command,
+            &frame
+        )),
+        Some(DenialReason::ApprovalRequired)
+    );
+    let mut advanced = tree;
+    advanced.revision = 2;
+    advanced.head.hex = "b".repeat(40);
+    fx.write(move |tx| tx.git().update_git_worktree(&advanced, 1));
+    assert!(!fx.write(move |tx| auth::fences_hold(tx, authorization.fences())));
+    let current = decide(&fx, &owned, "git.push", Mode::Command, &frame).unwrap();
+    fx.write(|tx| tx.work().set_work_repositories(&id("task-git"), &[]));
+    assert!(!fx.write(move |tx| auth::fences_hold(tx, current.fences())));
+    assert_eq!(
+        reason(decide(&fx, &owned, "git.push", Mode::Command, &frame)),
+        Some(DenialReason::ApprovalRequired)
+    );
+    fx.write(|tx| {
+        tx.work()
+            .set_work_repositories(&id("task-git"), &[id("repo-git")])
+    });
+    let prior = decide(&fx, &owned, "git.push", Mode::Command, &frame).unwrap();
+    fx.write(|tx| {
+        let mut work = tx.work().work(&id("task-git"))?.unwrap();
+        let expected = work.revision;
+        work.revision += 1;
+        work.scope_revision += 1;
+        let mut brief = devworks_core::services::work::model::WorkBrief::of(&work)?;
+        brief.assigned_agent_id = Some(id("agent-a"));
+        work.brief = brief.value();
+        tx.work().update_work(&work, expected)
+    });
+    assert!(!fx.write(move |tx| auth::fences_hold(tx, prior.fences())));
+    assert_eq!(
+        reason(decide(&fx, &owned, "git.push", Mode::Command, &frame)),
+        Some(DenialReason::ApprovalRequired)
+    );
+    assert!(
+        devworks_core::services::git::context::bind_worktree(&*fx.store, owned, &id("work-a"))
+            .is_err()
+    );
 }

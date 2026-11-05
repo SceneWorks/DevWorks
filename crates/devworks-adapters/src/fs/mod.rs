@@ -69,9 +69,22 @@ pub(crate) fn identity_of(m: &Metadata) -> Option<FileIdentity> {
         file: m.ino(),
     })
 }
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn identity_of(_: &Metadata) -> Option<FileIdentity> {
     None
+}
+
+pub(crate) fn identity_at(path: &Path, meta: &Metadata) -> Option<FileIdentity> {
+    #[cfg(windows)]
+    {
+        let _ = meta;
+        windows::path_identity(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        identity_of(meta)
+    }
 }
 
 #[cfg(windows)]
@@ -163,11 +176,11 @@ fn volume_root(path: &Path, meta: Option<&Metadata>) -> bool {
         return true;
     };
     match (
-        meta.and_then(identity_of),
+        meta.and_then(|m| identity_at(path, m)),
         std::fs::metadata(parent)
             .ok()
             .as_ref()
-            .and_then(identity_of),
+            .and_then(|m| identity_at(parent, m)),
     ) {
         (Some(a), Some(b)) => a.volume != b.volume,
         _ => false,
@@ -178,7 +191,12 @@ fn locate(path: PathBuf, meta: Option<&Metadata>, follow_meta: bool) -> Located 
     let ancestors = path
         .ancestors()
         .skip(1)
-        .filter_map(|a| std::fs::metadata(a).ok().as_ref().and_then(identity_of))
+        .filter_map(|a| {
+            std::fs::metadata(a)
+                .ok()
+                .as_ref()
+                .and_then(|m| identity_at(a, m))
+        })
         .collect();
     let is_directory = meta.is_some_and(|m| {
         if follow_meta {
@@ -189,7 +207,7 @@ fn locate(path: PathBuf, meta: Option<&Metadata>, follow_meta: bool) -> Located 
     });
     Located {
         volume_root: is_directory && volume_root(&path, meta),
-        identity: meta.and_then(identity_of),
+        identity: meta.and_then(|m| identity_at(&path, m)),
         ancestors,
         is_directory,
         path,

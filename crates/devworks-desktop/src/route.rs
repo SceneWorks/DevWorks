@@ -28,6 +28,8 @@ pub enum Route {
     Indexing,
     /// Installed and available add-ons (reached from Settings).
     AddOns,
+    /// Owned browser sessions agents test with (reached from Resources).
+    Browser,
 }
 
 /// Where a route sits in the left navigation.
@@ -81,7 +83,7 @@ const fn pending(what: &'static str, owner: &'static str) -> Option<Pending> {
     Some(Pending { what, owner })
 }
 
-pub static SCREENS: [Screen; 19] = [
+pub static SCREENS: [Screen; 20] = [
     Screen {
         route: Route::Chat,
         id: "chat",
@@ -302,6 +304,19 @@ pub static SCREENS: [Screen; 19] = [
         summary: "Shared machine resources, holders and waiters.",
         group: NavGroup::Secondary,
         help_topic: "resources",
+        subviews: &[],
+        inner_sidebar: None,
+        summary_strip: &[],
+        pending: None,
+        link: Some(("Browser sessions", Route::Browser)),
+    },
+    Screen {
+        route: Route::Browser,
+        id: "browser",
+        title: "Browser sessions",
+        summary: "Owned browsers agents test with; close one to interrupt it.",
+        group: NavGroup::Secondary,
+        help_topic: "browser",
         subviews: &[],
         inner_sidebar: None,
         summary_strip: &[],
