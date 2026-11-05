@@ -339,6 +339,20 @@ fn column<'v>(table: &'v ExtractedNode, name: &str) -> &'v Value {
 }
 
 #[test]
+fn sql_unicode_block_comments_preserve_tables_and_lines() {
+    for comment in ["/* café 東京 🦀 */", "/* 外側\n /* 内側 🦀 */\n finé */"] {
+        let source = format!(
+            "{comment}\nCREATE TABLE dbo.Visible (Id INT);\n/* 未完 🦀 CREATE TABLE dbo.Hidden (Id INT);"
+        );
+        let x = extract("db/unicode.sql", &source);
+        let (_, table) = node(&x, "Table", "dbo.Visible");
+        assert_eq!(table.span.start_line as usize, comment.lines().count() + 1);
+        assert_eq!(prop(table, "column_count"), 1);
+        no_node(&x, "dbo.Hidden");
+    }
+}
+
+#[test]
 fn sql_tables_columns_keys_and_indexes() {
     let x = extract("db/schema.sql", SCHEMA_SQL);
     assert_eq!(
