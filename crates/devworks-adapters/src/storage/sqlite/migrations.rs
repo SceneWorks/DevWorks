@@ -349,6 +349,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0025_router_pin_identity.sql"),
         rebuilds_tables: false,
     },
+    // Earlier writers do not know allocation ownership or its membership fences.
+    Migration {
+        version: 26,
+        minimum_reader: 8,
+        minimum_writer: 26,
+        sql: include_str!("migrations/0026_allocations.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -658,3 +666,7 @@ pub const MIGRATION_0024_SHA256: &str =
 /// Recorded checksum of migration 25.
 pub const MIGRATION_0025_SHA256: &str =
     "36b3e80b714419a911ac7e7dd74108b6bb17e4e5efedc3c24b8faf76b349d28f";
+
+/// Recorded checksum of migration 26.
+pub const MIGRATION_0026_SHA256: &str =
+    "ad58ee70a2542340a0bd3936900baf085eada6935d496929ba0123aa53aff385";

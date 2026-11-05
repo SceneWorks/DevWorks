@@ -376,6 +376,9 @@ fn proposal_of(raw: ProposalRaw) -> Result<StoredProposal, StorageError> {
 macro_rules! work_reads {
     ($t:ty) => {
         impl WorkRead for $t {
+            fn allocation_claim(&self,id:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::one(self.conn,id)}
+            fn allocation_claims(&self,project:&ProjectId,after:Option<&Id>,limit:u16)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::page(self.conn,project,after,limit)}
+            fn allocation_by_invocation(&self,namespace:&Id,invocation:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::invocation(self.conn,namespace,invocation)}
             fn work(&self, id: &Id) -> Result<Option<StoredWork>, StorageError> {
                 one_work(self.conn, id)
             }
@@ -565,6 +568,91 @@ fn plan_conflict(id: &Id, expected: i64, current: i64) -> Result<StorageError, S
 }
 
 impl WorkRepository for Unit<'_> {
+    fn insert_allocation_claim(
+        &mut self,
+        claim: &StoredAllocationClaim,
+    ) -> Result<(), StorageError> {
+        super::allocations::insert(self, claim)
+    }
+    fn update_allocation_claim(
+        &mut self,
+        claim: &StoredAllocationClaim,
+        expected: i64,
+    ) -> Result<(), StorageError> {
+        super::allocations::update(self, claim, expected)
+    }
+    fn update_status(&mut self, s: &StoredStatus, expected: i64) -> Result<(), StorageError> {
+        let current = self
+            .statuses(&s.project_id)?
+            .into_iter()
+            .find(|v| v.id == s.id)
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "workflow_status",
+                id: s.id.as_str().into(),
+            })?;
+        if current.revision != expected {
+            return Err(StorageError::conflict(
+                RevisionDimension::Workflow,
+                "workflow_status",
+                s.id.clone(),
+                expected_rev(expected)?,
+                revision(current.revision)?,
+            ));
+        }
+        if s.revision
+            != expected
+                .checked_add(1)
+                .ok_or_else(|| invalid("status revision overflow"))?
+            || s.semantic != current.semantic
+            || s.name.is_empty()
+            || s.name.chars().count() > 256
+        {
+            return Err(invalid(
+                "status update preserves semantic and advances revision once",
+            ));
+        }
+        db(self.conn.execute("UPDATE workflow_statuses SET name=?2,sort_order=?3,revision=?4 WHERE id=?1 AND project_id=?5 AND revision=?6",params![s.id.as_str(),s.name,s.sort_order,s.revision,s.project_id.0.as_str(),expected]))?;
+        Ok(())
+    }
+    fn delete_status(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+        expected: i64,
+    ) -> Result<(), StorageError> {
+        let current = self
+            .statuses(project)?
+            .into_iter()
+            .find(|v| &v.id == id)
+            .ok_or_else(|| StorageError::NotFound {
+                kind: "workflow_status",
+                id: id.as_str().into(),
+            })?;
+        if current.revision != expected {
+            return Err(StorageError::conflict(
+                RevisionDimension::Workflow,
+                "workflow_status",
+                id.clone(),
+                expected_rev(expected)?,
+                revision(current.revision)?,
+            ));
+        }
+        let occupied: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM work_items WHERE status_id=?1)",
+            [id.as_str()],
+            |row| row.get(0),
+        ))?;
+        if occupied {
+            return Err(invalid(
+                "occupied status must be reassigned atomically before removal",
+            ));
+        }
+        db(self.conn.execute(
+            "DELETE FROM workflow_statuses WHERE id=?1 AND project_id=?2 AND revision=?3",
+            params![id.as_str(), project.0.as_str(), expected],
+        ))?;
+        Ok(())
+    }
     fn insert_work(&mut self, w: &StoredWork) -> Result<(), StorageError> {
         check_work(w)?;
         if w.revision != 1 {

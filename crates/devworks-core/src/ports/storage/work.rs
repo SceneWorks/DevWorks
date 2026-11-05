@@ -12,7 +12,7 @@
 //! Work items are never deleted as rows. Removing work from a view (a re-plan closing a task)
 //! changes its workflow status; history and links stay.
 use super::StorageError;
-use crate::protocol::{ActorId, Id, ProjectId};
+use crate::protocol::{ActorId, Id, ProjectId, RootId};
 use serde_json::Value;
 
 /// The stored kind of a feature.
@@ -174,7 +174,49 @@ pub struct StoredReadiness {
     pub body: Value,
 }
 
+/// Durable allocation ownership, distinct from an execution or coordinator assignment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredAllocationClaim {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub root_id: RootId,
+    pub work_id: Id,
+    pub kind: String,
+    pub queue_key: String,
+    pub owner_id: ActorId,
+    pub session_id: Option<Id>,
+    pub ingress_namespace: Id,
+    pub invocation_id: Id,
+    /// Positive ownership generation; advancing ownership fences every prior holder.
+    pub fence: i64,
+    pub expires_at_ms: i64,
+    /// Active, Transferred, Yielding, Released, Expired, Yielded or Invalidated.
+    pub state: String,
+    pub revision: i64,
+    pub work_revision: i64,
+    pub parent_feature_id: Option<Id>,
+    pub root_control_revision: i64,
+    /// Queue revision observed before allocation, not a continuing ownership condition.
+    pub queue_revision: i64,
+    pub feature_task_set_revision: Option<i64>,
+    pub created_at_ms: i64,
+    pub execution_id: Option<Id>,
+}
+
 pub trait WorkRead {
+    fn allocation_claim(&self, id: &Id) -> Result<Option<StoredAllocationClaim>, StorageError>;
+    /// ID-ordered, exclusive cursor, limit 1..=MAX_PAGE. Includes historical rows.
+    fn allocation_claims(
+        &self,
+        project: &ProjectId,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredAllocationClaim>, StorageError>;
+    fn allocation_by_invocation(
+        &self,
+        namespace: &Id,
+        invocation: &Id,
+    ) -> Result<Option<StoredAllocationClaim>, StorageError>;
     fn work(&self, id: &Id) -> Result<Option<StoredWork>, StorageError>;
     /// Items matching `filter` in queue order after `after`, at most `limit` (1..=500).
     fn works(
@@ -212,6 +254,15 @@ pub trait WorkRead {
 }
 
 pub trait WorkRepository: WorkRead {
+    fn insert_allocation_claim(
+        &mut self,
+        claim: &StoredAllocationClaim,
+    ) -> Result<(), StorageError>;
+    fn update_allocation_claim(
+        &mut self,
+        claim: &StoredAllocationClaim,
+        expected: i64,
+    ) -> Result<(), StorageError>;
     /// Inserts an item with its detail row. An existing ID, a second item with the same caller
     /// reference in the project, or a parent that is not a feature of the same project is
     /// refused.
@@ -229,6 +280,15 @@ pub trait WorkRepository: WorkRead {
     /// Advances a queue revision of the project; returns the new revision.
     fn bump_queue(&mut self, project: &ProjectId, queue: &str) -> Result<i64, StorageError>;
     fn insert_status(&mut self, status: &StoredStatus) -> Result<(), StorageError>;
+    /// Rename/reorder; stable semantic and project, revision advances exactly once.
+    fn update_status(&mut self, status: &StoredStatus, expected: i64) -> Result<(), StorageError>;
+    /// Refuses occupied statuses. Reassign work and append history in the same transaction.
+    fn delete_status(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+        expected: i64,
+    ) -> Result<(), StorageError>;
     /// Writes the plan slot: an insert when `expected` is `None`, otherwise a compare-and-set
     /// on its revision (a `Plan` conflict when it changed).
     fn put_feature_plan(
