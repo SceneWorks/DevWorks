@@ -157,6 +157,8 @@ pub enum Slot {
     AddonsSave {
         update: Option<String>,
         registry: i64,
+        #[serde(default)]
+        download: Option<PathBuf>,
     },
     /// The runtime probe and index refresh behind the Add-ons screen.
     AddonsDiscovery,
@@ -292,6 +294,11 @@ pub enum Reply {
 pub enum TaskOutput {
     /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared { frame: Vec<u8> },
+    /// A downloaded bundle stays owned until its artifact-save command is confirmed.
+    PackagePrepared {
+        frame: Vec<u8>,
+        download: crate::addons::PreparedDownload,
+    },
     /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
     /// outcome is confirmed by resubmitting that frame, never a new one).
     Stored {

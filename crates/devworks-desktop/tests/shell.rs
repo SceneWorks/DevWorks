@@ -1398,15 +1398,11 @@ fn the_add_ons_catalog_follows_every_page() {
     });
 }
 
-#[test]
-fn installing_an_offered_pack_leaves_no_download_behind() {
+fn prepare_offered_pack(root: &Root, backend: &dyn Backend) -> String {
     use devworks_core::ports::packages::PackageInspector;
     use ed25519_dalek::SigningKey;
-    let root = Root::new("addons-offer-download");
-    let engine = start(&root);
-    let backend = engine.backend();
     // A local signed index offering one real bundle.
-    let dir = root.0.with_extension("offer-index");
+    let dir = root.0.join("offer-index");
     // Declared for this platform, so the screen offers it (its helper never starts).
     let host = devworks_adapters::packages::host_target_triple();
     let bundle = foreign_bundle_for(&dir, None, &host);
@@ -1438,10 +1434,21 @@ fn installing_an_offered_pack_leaves_no_download_behind() {
         {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
     ops::settings_saved(backend.command(
         "settings.save_revision",
-        &ops::command_frame(&*backend, "settings.save_revision", body),
+        &ops::command_frame(backend, "settings.save_revision", body),
     ))
     .expect("an index source");
-    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    inspected.version.to_string()
+}
+
+fn open_offered_pack(
+    root: &Root,
+    backend: Arc<dyn Backend>,
+) -> egui_kittest::Harness<'static, devworks_desktop::shell::Shell> {
+    let mut h = harness(
+        shell_with(Ok(backend), root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
     settle(&mut h);
     h.state_mut().navigate(Route::AddOns);
     settle(&mut h);
@@ -1454,28 +1461,119 @@ fn installing_an_offered_pack_leaves_no_download_behind() {
     });
     h.state_mut().addons.selected = Some("foreign-pack".into());
     settle(&mut h);
-    click(
-        &mut h,
-        Role::Button,
-        &format!("Install {}", inspected.version),
-    );
-    step_until(&mut h, "the offered pack is installed", |s| {
+    h
+}
+
+fn assert_offered_pack_installed(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    root: &Root,
+) {
+    step_until(h, "the offered pack is installed", |s| {
         s.addons
             .items
             .iter()
             .any(|r| r.id.as_str() == "foreign-pack" && r.trust_state.0 != "Available")
     });
-    settle(&mut h);
-    // The verified download was saved as an artifact; the scratch copy is gone.
+    settle(h);
     let downloads = root.0.join("staging-ui").join("packages");
     assert!(
         downloads.is_dir(),
         "the bundle was downloaded through the scratch directory"
     );
     let left: Vec<_> = std::fs::read_dir(&downloads)
-        .map(|d| d.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn installing_an_offered_pack_leaves_no_download_behind() {
+    let root = Root::new("addons-offer-download");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let version = prepare_offered_pack(&root, &*backend);
+    let mut h = open_offered_pack(&root, backend);
+    click(&mut h, Role::Button, &format!("Install {version}"));
+    assert_offered_pack_installed(&mut h, &root);
+}
+
+#[test]
+fn offered_download_survives_lost_save_requests_and_relaunch() {
+    let root = Root::new("addons-offer-unknown");
+    let engine = start(&root);
+    let real = engine.backend();
+    let version = prepare_offered_pack(&root, &*real);
+    let lossy = LoseAcks::losing_requests(real.clone(), "artifacts.save", 4);
+    let mut h = open_offered_pack(&root, lossy.clone());
+    click(&mut h, Role::Button, &format!("Install {version}"));
+    assert_eq!(h.state().unconfirmed_count(), 1);
+    assert!(h.state().addons.busy);
+    let frames = lossy.frames.lock().unwrap().clone();
+    assert_eq!(frames.len(), 4);
+    assert!(frames.iter().all(|f| f == &frames[0]));
+    h.state_mut().on_exit();
+    let saved = devworks_desktop::memory::Memory::load(&root.memory());
+    let devworks_desktop::backend::Slot::AddonsSave {
+        download: Some(path),
+        ..
+    } = &saved.pending.commands[0].slot
+    else {
+        panic!("download ownership persisted")
+    };
+    assert!(path.is_file(), "uncommitted save still needs the bundle");
+    drop(h);
+    let seen = LoseAcks::over(real, "artifacts.save", 0);
+    let mut h = harness(
+        shell_with(Ok(seen.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    assert_offered_pack_installed(&mut h, &root);
+    assert_eq!(seen.frames.lock().unwrap().as_slice(), &[frames[0].clone()]);
+}
+
+#[test]
+fn offered_download_held_past_close_is_cleaned_after_confirmation() {
+    let root = Root::new("addons-offer-close");
+    let engine = start(&root);
+    let real = engine.backend();
+    let version = prepare_offered_pack(&root, &*real);
+    let seen = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    let gate = Gate::holding_replies("artifacts.save");
+    let mut h = open_offered_pack(&root, gate.over(seen.clone()));
+    gate.close();
+    h.get_by_role_and_label(Role::Button, &format!("Install {version}"))
+        .click();
+    step_until(&mut h, "bundle save admitted", |_| {
+        !seen.frames.lock().unwrap().is_empty()
+    });
+    h.state_mut().request_close();
+    step_until(&mut h, "closed with bundle save pending", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    let saved = devworks_desktop::memory::Memory::load(&root.memory());
+    let devworks_desktop::backend::Slot::AddonsSave {
+        download: Some(path),
+        ..
+    } = &saved.pending.commands[0].slot
+    else {
+        panic!("download ownership persisted")
+    };
+    assert!(path.is_file(), "unknown save retains its source");
+    gate.open();
+    drop(h);
+    let again = LoseAcks::over(real, "artifacts.save", 0);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    assert_offered_pack_installed(&mut h, &root);
+    assert_eq!(
+        again.frames.lock().unwrap()[0],
+        saved.pending.commands[0].frame
+    );
 }
 
 #[test]

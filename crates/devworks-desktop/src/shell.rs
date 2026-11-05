@@ -772,15 +772,12 @@ impl Shell {
                             Slot::AddonsSave {
                                 update: update.then_some(package.clone()),
                                 registry,
+                                download: None,
                             },
                             "Downloading the add-on",
                             move |b| {
                                 let path = b.fetch_index_bundle(&package, &digest)?;
-                                let installed = a::prepare_install_from_file(b, &path);
-                                // The download was saved as an artifact (or refused): it
-                                // never accumulates in the scratch directory.
-                                let _ = std::fs::remove_file(&path);
-                                installed
+                                a::prepare_downloaded_install(b, path)
                             },
                         );
                     }
@@ -803,7 +800,11 @@ impl Shell {
                         && let Some(c) = &mut self.client
                     {
                         self.addons.busy = c.task(
-                            Slot::AddonsSave { update, registry },
+                            Slot::AddonsSave {
+                                update,
+                                registry,
+                                download: None,
+                            },
                             "Preparing the add-on",
                             move |b| a::prepare_install_from_file(b, &path),
                         );
@@ -1980,6 +1981,7 @@ impl Shell {
                     Ok(
                         TaskOutput::Preview { .. }
                         | TaskOutput::Prepared { .. }
+                        | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed,
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
@@ -2040,6 +2042,7 @@ impl Shell {
                         Ok(
                             TaskOutput::Stored { .. }
                             | TaskOutput::Prepared { .. }
+                            | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed,
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
@@ -2333,20 +2336,57 @@ impl Shell {
                 self.load_addons();
             }
             (
-                Slot::AddonsSave { update, registry },
-                Reply::Task(Ok(TaskOutput::Prepared { frame })),
+                Slot::AddonsSave {
+                    update, registry, ..
+                },
+                Reply::Task(Ok(TaskOutput::PackagePrepared { frame, download })),
             ) => {
                 if let Some(client) = &mut self.client {
                     client.command(
-                        Slot::AddonsSave { update, registry },
+                        Slot::AddonsSave {
+                            update,
+                            registry,
+                            download: Some(download.into_path()),
+                        },
                         "Saving the add-on bundle",
                         "artifacts.save",
                         frame,
                     );
                 }
             }
-            (Slot::AddonsSave { update, registry }, Reply::Command(outcome)) => {
+            (
+                Slot::AddonsSave {
+                    update,
+                    registry,
+                    download,
+                },
+                Reply::Task(Ok(TaskOutput::Prepared { frame })),
+            ) => {
+                if let Some(client) = &mut self.client {
+                    client.command(
+                        Slot::AddonsSave {
+                            update,
+                            registry,
+                            download,
+                        },
+                        "Saving the add-on bundle",
+                        "artifacts.save",
+                        frame,
+                    );
+                }
+            }
+            (
+                Slot::AddonsSave {
+                    update,
+                    registry,
+                    download,
+                },
+                Reply::Command(outcome),
+            ) => {
                 let unknown = is_unknown(&outcome);
+                if !unknown && let (Some(path), Some(backend)) = (&download, self.backend()) {
+                    attachments::remove_owned(path, &backend.scratch_dir().join("packages"));
+                }
                 match ops::saved_artifact(outcome) {
                     Ok(saved) => {
                         if let Some(backend) = self.backend() {
