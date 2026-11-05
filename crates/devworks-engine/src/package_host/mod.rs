@@ -607,24 +607,27 @@ impl PackageHost {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.start_discovery(
+            "package-indexes",
+            self.config.index_interval,
+            true,
+            |host| {
+                host.refresh_indexes();
+            },
+        );
+        self.start_discovery(
+            "package-runtimes",
+            self.config.runtime_interval,
+            false,
+            |host| {
+                host.refresh_runtimes();
+            },
+        );
         let host = self.clone();
         std::thread::Builder::new()
             .name("package-host".into())
             .spawn(move || {
-                let mut runtimes_at = Instant::now();
-                // Index sources are fetched when the loop starts (never during boot: network).
-                let mut index_at: Option<Instant> = None;
                 while host.running.load(Ordering::SeqCst) {
-                    if index_at.is_none_or(|t| t.elapsed() >= host.config.index_interval) {
-                        index_at = Some(Instant::now());
-                        if host.refresh_indexes() > 0 {
-                            host.reconcile();
-                        }
-                    }
-                    if runtimes_at.elapsed() >= host.config.runtime_interval {
-                        runtimes_at = Instant::now();
-                        host.refresh_runtimes();
-                    }
                     {
                         let (m, cv) = &host.wake;
                         let mut woken = m.lock().unwrap_or_else(|p| p.into_inner());
@@ -646,6 +649,45 @@ impl PackageHost {
                 }
             })
             .expect("spawn package host");
+    }
+
+    /// Discovery may block on external IO; neither worker owns reconciliation's wake flag.
+    fn start_discovery(
+        self: &Arc<Self>,
+        name: &str,
+        interval: Duration,
+        immediate: bool,
+        refresh: fn(&Self),
+    ) {
+        let host = self.clone();
+        let interval = interval.max(self.config.tick);
+        std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                if !immediate && !host.wait_discovery(interval) {
+                    return;
+                }
+                while host.running.load(Ordering::SeqCst) && !host.is_stopping() {
+                    refresh(&host);
+                    host.poke();
+                    if !host.wait_discovery(interval) {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn package discovery");
+    }
+
+    /// A periodic wait that shutdown interrupts; ordinary admission notifications do not reset it.
+    fn wait_discovery(&self, interval: Duration) -> bool {
+        let gate = self.barriers.lock().unwrap_or_else(|p| p.into_inner());
+        let (gate, _) = self
+            .changed
+            .wait_timeout_while(gate, interval, |gate| {
+                self.running.load(Ordering::SeqCst) && !gate.stopping
+            })
+            .unwrap_or_else(|p| p.into_inner());
+        self.running.load(Ordering::SeqCst) && !gate.stopping
     }
 
     fn poke(&self) {
