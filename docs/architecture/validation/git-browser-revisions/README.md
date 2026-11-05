@@ -38,8 +38,8 @@ CDP/input behavior; this run specifically qualifies the new source binding and p
 evidence reads. Native admission covers 496 operation/mode/revision bindings; the
 candidate report separately records 489 catalog revision bindings.
 
-Local native coverage passes 1,275 distinct test cases with three existing ignored
-adapter cases: 553 adapter unit cases, 95 adapter integration cases, and 627 cases
+Local native coverage passes 1,276 distinct test cases with three existing ignored
+adapter cases: 554 adapter unit cases, 95 adapter integration cases, and 627 cases
 in the remaining workspace. Coverage combines the assembled suites with focused
 rechecks of the updated compatibility expectations and deterministic filter control;
 the final Git suite passes all three cases. Default workspace runs do not exercise
@@ -52,6 +52,11 @@ Platform qualification additionally covers canonical Windows drive/UNC paths at 
 filesystem argument boundary. Stored paths and physical identity witnesses stay intact;
 NT-only names that would change meaning are refused, and remote URL inputs are untouched.
 Worktree registration/recovery compares directory identities across Windows path spellings.
+Windows read-only identities come from native handles for both targets and ancestors;
+registered artifact roots retain their identities, and verified reads refuse a replaced root.
+The portable regression checks canonical aliases, rename stability and replacement refusal.
+Destructive Windows execution remains unqualified and refused. The existing Windows test
+lane checks these filesystem and Git/browser boundaries before the full workspace suite.
 Headless UI actions render injected forms and settle scrolling before resolving clicks;
 concurrency fixtures use the actual Save control's accessibility action to retain in-flight
 requests without depending on its viewport position. The complete work/plan assertions

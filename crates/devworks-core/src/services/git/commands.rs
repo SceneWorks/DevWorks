@@ -160,10 +160,9 @@ impl GitService {
             || resolved.parent_traversal
             || !resolved.linked_ancestors.is_empty()
             || resolved.entry_kind != EntryKind::Directory
-            || resolved
-                .target
-                .as_ref()
-                .is_none_or(|t| t.path != root.path || !t.is_directory || t.volume_root)
+            || resolved.target.as_ref().is_none_or(|t| {
+                t.path != root.path || !t.is_directory || t.volume_root || t.identity.is_none()
+            })
         {
             return Err(refuse(DomainErrorCode::PermissionDenied, "git_root", id));
         }
