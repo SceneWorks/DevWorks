@@ -684,7 +684,9 @@ fn the_selectors_gather_every_catalog_page() {
     assert!(h.state().chat.routing.catalog_load.is_none());
     let routes = options(&mut h, ROUTE_LABEL);
     assert!(
-        routes.iter().any(|r| r == "Custom 249"),
+        routes
+            .iter()
+            .any(|r| r == "Custom 249 (availability unknown)"),
         "the last page reaches the selector"
     );
 }
