@@ -310,10 +310,7 @@ impl WorkService {
         let repos = member_repositories(tx, project, repos)?;
         let status = match status {
             Some(s) => status_of(tx, project, s)?.0,
-            None => {
-                let id = workflow::default_status_id(project, workflow::DEFAULT_KEY);
-                status_of(tx, project, &id)?.0
-            }
+            None => workflow::default_status(tx, project)?,
         };
         if let Some(d) = plan {
             check_draft(tx, ctx, project, None, d)?;

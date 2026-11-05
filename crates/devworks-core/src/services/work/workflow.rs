@@ -85,3 +85,14 @@ pub fn semantic_of<'a>(statuses: &'a [StoredStatus], status: &Id) -> Option<&'a 
 pub fn finished(semantic: &str) -> bool {
     semantic == DONE || semantic == CLOSED
 }
+
+/// The current Backlog column for new work, retaining custom identity after default removal.
+pub fn default_status(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+) -> Result<StoredStatus, StorageError> {
+    ensure_workflow(tx, project)?
+        .into_iter()
+        .find(|s| s.semantic == BACKLOG)
+        .ok_or_else(|| StorageError::InvalidRecord("workflow has no Backlog status".into()))
+}

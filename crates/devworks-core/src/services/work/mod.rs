@@ -98,6 +98,7 @@ pub mod plans;
 pub mod queue;
 pub mod readiness;
 pub mod workflow;
+pub mod workflow_ops;
 
 pub use model::{fold, link_id, plan_digest, plan_units, search_key};
 
