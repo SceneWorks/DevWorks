@@ -137,7 +137,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "ProjectRecord",
         result_schema: schema_of::<ProjectRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "projects.edit",
@@ -269,7 +269,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "features.get",
@@ -291,7 +291,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "features.create",
@@ -313,7 +313,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "features.edit_plan",
@@ -335,7 +335,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "features.prioritize",
@@ -379,7 +379,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "features.request_plan_approval",
@@ -423,7 +423,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "issues.list",
@@ -445,7 +445,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "issues.get",
@@ -467,7 +467,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "issues.create",
@@ -489,7 +489,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "issues.edit",
@@ -511,7 +511,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "issues.prioritize",
@@ -599,7 +599,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.get",
@@ -621,7 +621,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.create",
@@ -643,7 +643,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.edit",
@@ -665,7 +665,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.prioritize",
@@ -709,7 +709,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.assign",
@@ -731,7 +731,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.dependency_links",
@@ -753,7 +753,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.acceptance_evidence",
@@ -775,7 +775,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.sync_plan",
@@ -797,7 +797,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "Page<WorkRecord>",
         result_schema: schema_of::<Page<WorkRecord>>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "tasks.set_feature",
@@ -819,7 +819,7 @@ pub(super) static CATALOG: [OperationDescriptor; 357] = [
         result_type: "WorkRecord",
         result_schema: schema_of::<WorkRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "workflows.list",

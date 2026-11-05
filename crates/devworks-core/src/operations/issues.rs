@@ -77,6 +77,20 @@ pub struct CreateInput {
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_id: Option<RootId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for CreateInput {
     fn check(&self) -> Result<(), String> {
@@ -87,11 +101,20 @@ impl Check for CreateInput {
         self.status_id.check()?;
         self.priority.check()?;
         self.feature_id.check()?;
+        self.task_type.check()?;
+        self.labels.check()?;
         Ok(())
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.labels = None;
+        }
+    }
 }
 
 /// `issues.edit` Command input.
@@ -111,7 +134,9 @@ impl Check for EditInput {
     }
 }
 impl Revisioned for EditInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.changes.retain_revision(revision);
+    }
 }
 
 /// `issues.prioritize` Command input.

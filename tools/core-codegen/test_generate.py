@@ -109,6 +109,14 @@ class SchemaRevisionRules(unittest.TestCase):
         results = generate.gen_results(generate.operations())
         self.assertIn('#[schemars(extend("x-since" = 3))]\n    #[serde(rename = "next_work.inspect_queue")]', results)
 
+    def test_card_metadata_does_not_replace_execution_kind_or_legacy_claims(self):
+        self.assertEqual(generate.TYPES['WorkRecord']['fields']['claim'], '?ClaimRecord')
+        self.assertNotIn('work_kind', generate.TYPES['ClaimRecord']['fields'])
+        self.assertEqual(generate.TYPES['WorkRecord']['since']['task_type'], 3)
+        self.assertNotIn('task_type', generate.TYPES['FeaturePatch']['fields'])
+        feature = next(o for _, o in generate.operations() if o['operation'] == 'features.edit')
+        self.assertEqual(generate.introduced_in(feature), {2, 3})
+
     def test_a_history_page_result_is_projected(self):
         # HistoryPage gates its own checkpoint, so every result carrying it is projected.
         results = generate.gen_results(generate.operations())

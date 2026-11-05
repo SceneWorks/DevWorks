@@ -471,14 +471,18 @@
         "queue_revision": "?Revision",
         "workflow_revision": "?Revision",
         "acceptance_tests": "?Items<AcceptanceCriterion>",
-        "pending_readiness": "?ReadinessAssessment"
+        "pending_readiness": "?ReadinessAssessment",
+        "task_type": "?WorkItemType",
+        "labels": "?Items<Label>"
       },
       "since": {
         "readiness": 2,
         "queue_revision": 2,
         "workflow_revision": 2,
         "acceptance_tests": 2,
-        "pending_readiness": 2
+        "pending_readiness": 2,
+        "task_type": 3,
+        "labels": 3
       }
     },
     "PlanDraft": {
@@ -2332,7 +2336,15 @@
         "repository_ids": "Items<Id>",
         "dependency_keys": "Items<Id>",
         "acceptance": "Items<AcceptanceCriterion>",
-        "priority": "?i32"
+        "priority": "?i32",
+        "task_type": "?WorkItemType",
+        "clear_task_type": "?bool",
+        "labels": "?Items<Label>"
+      },
+      "since": {
+        "task_type": 3,
+        "clear_task_type": 3,
+        "labels": 3
       }
     },
     "RouterConfigAction": {
@@ -2618,7 +2630,11 @@
         "description": "Content",
         "repository_ids": "Items<Id>",
         "plan": "PlanDraft",
-        "tasks": "PlanItems<TaskPlanEntry>"
+        "tasks": "PlanItems<TaskPlanEntry>",
+        "labels": "?Items<Label>"
+      },
+      "since": {
+        "labels": 3
       }
     },
     "AtomicWorkPlan": {
@@ -2638,13 +2654,19 @@
           "repository_ids": "Items<Id>",
           "status_id": "Id",
           "priority": "i32",
-          "plan": "?PlanDraft"
+          "plan": "?PlanDraft",
+          "labels": "?Items<Label>"
         },
         "AtomicPlan": {
           "plan": "AtomicWorkPlan"
         },
         "StagedPlan": {
           "artifact": "ArtifactRef"
+        }
+      },
+      "variantSince": {
+        "Single": {
+          "labels": 3
         }
       }
     },
@@ -2798,11 +2820,13 @@
         "remove_link_ids": "?Items<Id>",
         "add_comment": "?WorkComment",
         "readiness": "?ReadinessChange",
-        "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>"
+        "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>",
+        "labels": "?Items<Label>"
       },
       "since": {
         "readiness": 2,
-        "acceptance_evidence": 2
+        "acceptance_evidence": 2,
+        "labels": 3
       }
     },
     "IssuePatch": {
@@ -2820,7 +2844,15 @@
         "add_comment": "?WorkComment",
         "handoff": "?HandoffRecord",
         "acceptance_report": "?ArtifactRef",
-        "priority": "?i32"
+        "priority": "?i32",
+        "task_type": "?WorkItemType",
+        "clear_task_type": "?bool",
+        "labels": "?Items<Label>"
+      },
+      "since": {
+        "task_type": 3,
+        "clear_task_type": 3,
+        "labels": 3
       }
     },
     "TaskPatch": {
@@ -2839,7 +2871,15 @@
         "add_comment": "?WorkComment",
         "handoff": "?HandoffRecord",
         "acceptance_report": "?ArtifactRef",
-        "priority": "?i32"
+        "priority": "?i32",
+        "task_type": "?WorkItemType",
+        "clear_task_type": "?bool",
+        "labels": "?Items<Label>"
+      },
+      "since": {
+        "task_type": 3,
+        "clear_task_type": 3,
+        "labels": 3
       }
     },
     "McpServerBinding": {
@@ -3858,6 +3898,14 @@
         "queue_revision": "Revision",
         "workflow_revision": "Revision"
       }
+    },
+    "WorkItemType": {
+      "kind": "enum",
+      "values": [
+        "Story",
+        "Task",
+        "Bug"
+      ]
     }
   },
   "operations": {
@@ -4003,7 +4051,7 @@
       "result": "Page<WorkRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship."
+      "rules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
     },
     "features.edit": {
       "operation": "features.edit",
@@ -4016,7 +4064,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
     },
     "issues.list": {
       "operation": "issues.list",
@@ -4057,12 +4105,18 @@
         "repository_ids": "Items<Id>",
         "status_id": "Id",
         "priority": "i32",
-        "feature_id": "?RootId"
+        "feature_id": "?RootId",
+        "task_type": "?WorkItemType",
+        "labels": "?Items<Label>"
       },
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Create one project-owned task identity. Optional featureId uses the same membership transition/coordination rules as tasks.set_feature; no feature is required. A linked issue is a delivery obligation without revised-plan approval. Preserve issue/task identity and execution controls."
+      "rules": "Create one project-owned task identity. Optional featureId uses the same membership transition/coordination rules as tasks.set_feature; no feature is required. A linked issue is a delivery obligation without revised-plan approval. Preserve issue/task identity and execution controls. Schema revision 3 may author Story/Task/Bug taskType and bounded unique labels; metadata has no effect on execution kind, authority or blockers.",
+      "since": {
+        "task_type": 3,
+        "labels": 3
+      }
     },
     "issues.edit": {
       "operation": "issues.edit",
@@ -4075,7 +4129,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Standalone issue priority uses the same task priority use case and project root queue; preserve stable work identity and all execution controls."
+      "rules": "Standalone issue priority uses the same task priority use case and project root queue; preserve stable work identity and all execution controls. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
     },
     "tasks.list": {
       "operation": "tasks.list",
@@ -4116,12 +4170,18 @@
         "repository_ids": "Items<Id>",
         "parent_id": "?RootId",
         "status_id": "Id",
-        "priority": "i32"
+        "priority": "i32",
+        "task_type": "?WorkItemType",
+        "labels": "?Items<Label>"
       },
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Project is required; parentId is an optional feature relationship, not an assignment parent. Validate any feature belongs to the same project. Without a feature, create a standalone project task shown as an issue; do not manufacture a feature or duplicate its identity. Standalone tasks use issue execution/accounting/delivery policy. Task operations accept Task/Issue representations of the same project-task model."
+      "rules": "Project is required; parentId is an optional feature relationship, not an assignment parent. Validate any feature belongs to the same project. Without a feature, create a standalone project task shown as an issue; do not manufacture a feature or duplicate its identity. Standalone tasks use issue execution/accounting/delivery policy. Task operations accept Task/Issue representations of the same project-task model. Schema revision 3 may author Story/Task/Bug taskType and bounded unique labels; metadata has no effect on execution kind, authority or blockers.",
+      "since": {
+        "task_type": 3,
+        "labels": 3
+      }
     },
     "tasks.edit": {
       "operation": "tasks.edit",
@@ -4134,7 +4194,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Task/issue priority edits use current work revision and the same priority use case as tasks.prioritize; update the owning queue revision and history atomically. A priority edit alone does not stop active work, clear blockers or invalidate the approved feature plan."
+      "rules": "Task/issue priority edits use current work revision and the same priority use case as tasks.prioritize; update the owning queue revision and history atomically. A priority edit alone does not stop active work, clear blockers or invalidate the approved feature plan. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
     },
     "features.prioritize": {
       "operation": "features.prioritize",
@@ -4314,7 +4374,7 @@
       "result": "Page<WorkRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature."
+      "rules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
     },
     "workflows.list": {
       "operation": "workflows.list",
@@ -8336,83 +8396,103 @@
     ],
     "features.get": [
       1,
-      2
+      2,
+      3
     ],
     "features.edit": [
       1,
-      2
+      2,
+      3
     ],
     "features.list": [
       1,
-      2
+      2,
+      3
     ],
     "features.create": [
       1,
-      2
+      2,
+      3
     ],
     "issues.list": [
       1,
-      2
+      2,
+      3
     ],
     "issues.get": [
       1,
-      2
+      2,
+      3
     ],
     "issues.create": [
       1,
-      2
+      2,
+      3
     ],
     "issues.edit": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.list": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.get": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.create": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.edit": [
       1,
-      2
+      2,
+      3
     ],
     "features.edit_plan": [
       1,
-      2
+      2,
+      3
     ],
     "features.dependencies": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.move": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.assign": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.dependency_links": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.acceptance_evidence": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.sync_plan": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.set_feature": [
       1,
-      2
+      2,
+      3
     ],
     "tasks.prioritize": [
       1,
@@ -8555,6 +8635,10 @@
       3
     ],
     "next_work.inspect_queue": [
+      3
+    ],
+    "projects.create": [
+      1,
       3
     ]
   },

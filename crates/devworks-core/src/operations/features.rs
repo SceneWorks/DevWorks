@@ -81,7 +81,9 @@ impl Check for CreateInput {
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.creation.retain_revision(revision);
+    }
 }
 
 /// `features.edit_plan` Command input.

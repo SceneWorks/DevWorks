@@ -783,6 +783,20 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "ReadinessAssessment", extend("x-since" = 2))]
     pub pending_readiness: Option<ReadinessAssessment>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -827,6 +841,8 @@ impl Check for WorkRecord {
         self.workflow_revision.check()?;
         self.acceptance_tests.check()?;
         self.pending_readiness.check()?;
+        self.task_type.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -851,6 +867,12 @@ impl Revisioned for WorkRecord {
         }
         if revision < 2 {
             self.pending_readiness = None;
+        }
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.labels = None;
         }
     }
 }
@@ -6427,6 +6449,27 @@ pub struct TaskPlanEntry {
     pub acceptance: Items<AcceptanceCriterion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub clear_task_type: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for TaskPlanEntry {
     fn check(&self) -> Result<(), String> {
@@ -6439,11 +6482,28 @@ impl Check for TaskPlanEntry {
         self.dependency_keys.check()?;
         self.acceptance.check()?;
         self.priority.check()?;
+        self.task_type.check()?;
+        self.clear_task_type.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "TaskPlanEntry",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for TaskPlanEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.clear_task_type = None;
+        }
+        if revision < 3 {
+            self.labels = None;
+        }
     }
 }
 
@@ -7195,6 +7255,13 @@ pub struct FeaturePlanDraft {
     pub repository_ids: Items<Id>,
     pub plan: PlanDraft,
     pub tasks: PlanItems<TaskPlanEntry>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for FeaturePlanDraft {
     fn check(&self) -> Result<(), String> {
@@ -7206,11 +7273,21 @@ impl Check for FeaturePlanDraft {
         self.repository_ids.check()?;
         self.plan.check()?;
         self.tasks.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "FeaturePlanDraft",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for FeaturePlanDraft {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.labels = None;
+        }
+        self.tasks.retain_revision(revision);
     }
 }
 
@@ -7234,6 +7311,12 @@ impl Check for AtomicWorkPlan {
     }
 }
 
+impl Revisioned for AtomicWorkPlan {
+    fn retain_revision(&mut self, revision: u32) {
+        self.features.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum FeatureCreation {
@@ -7245,6 +7328,13 @@ pub enum FeatureCreation {
         priority: i32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         plan: Option<PlanDraft>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+        labels: Option<Items<Label>>,
     },
     AtomicPlan {
         plan: AtomicWorkPlan,
@@ -7263,6 +7353,7 @@ impl Check for FeatureCreation {
                 status_id,
                 priority,
                 plan,
+                labels,
             } => {
                 title.check()?;
                 description.check()?;
@@ -7270,6 +7361,7 @@ impl Check for FeatureCreation {
                 status_id.check()?;
                 priority.check()?;
                 plan.check()?;
+                labels.check()?;
             }
             Self::AtomicPlan { plan } => {
                 plan.check()?;
@@ -7279,6 +7371,22 @@ impl Check for FeatureCreation {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for FeatureCreation {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Single { labels, .. } => {
+                if revision < 3 {
+                    *labels = None;
+                }
+            }
+            Self::AtomicPlan { plan, .. } => {
+                plan.retain_revision(revision);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -7667,6 +7775,13 @@ pub struct FeaturePatch {
     )]
     #[schemars(with = "NonEmpty<AcceptanceCriterion>", extend("x-since" = 2))]
     pub acceptance_evidence: Option<NonEmpty<AcceptanceCriterion>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for FeaturePatch {
     fn check(&self) -> Result<(), String> {
@@ -7680,6 +7795,7 @@ impl Check for FeaturePatch {
         self.add_comment.check()?;
         self.readiness.check()?;
         self.acceptance_evidence.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "FeaturePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -7695,6 +7811,9 @@ impl Revisioned for FeaturePatch {
         }
         if revision < 2 {
             self.acceptance_evidence = None;
+        }
+        if revision < 3 {
+            self.labels = None;
         }
     }
 }
@@ -7728,6 +7847,27 @@ pub struct IssuePatch {
     pub acceptance_report: Option<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub clear_task_type: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for IssuePatch {
     fn check(&self) -> Result<(), String> {
@@ -7744,11 +7884,28 @@ impl Check for IssuePatch {
         self.handoff.check()?;
         self.acceptance_report.check()?;
         self.priority.check()?;
+        self.task_type.check()?;
+        self.clear_task_type.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "IssuePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for IssuePatch {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.clear_task_type = None;
+        }
+        if revision < 3 {
+            self.labels = None;
+        }
     }
 }
 
@@ -7783,6 +7940,27 @@ pub struct TaskPatch {
     pub acceptance_report: Option<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkItemType", extend("x-since" = 3))]
+    pub task_type: Option<WorkItemType>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub clear_task_type: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub labels: Option<Items<Label>>,
 }
 impl Check for TaskPatch {
     fn check(&self) -> Result<(), String> {
@@ -7800,11 +7978,28 @@ impl Check for TaskPatch {
         self.handoff.check()?;
         self.acceptance_report.check()?;
         self.priority.check()?;
+        self.task_type.check()?;
+        self.clear_task_type.check()?;
+        self.labels.check()?;
         crate::protocol::rules::record(
             "TaskPatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for TaskPatch {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.task_type = None;
+        }
+        if revision < 3 {
+            self.clear_task_type = None;
+        }
+        if revision < 3 {
+            self.labels = None;
+        }
     }
 }
 
@@ -10040,6 +10235,18 @@ impl Check for AllocationQueueSnapshot {
             "AllocationQueueSnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WorkItemType {
+    Story,
+    Task,
+    Bug,
+}
+impl Check for WorkItemType {
+    fn check(&self) -> Result<(), String> {
         Ok(())
     }
 }
