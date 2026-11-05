@@ -1,0 +1,109 @@
+{
+  "feature": "DW-F6",
+  "feature_version": 2,
+  "kind": "plan_preview",
+  "expires_at": "2026-11-05T17:24:15.154341Z",
+  "requirements_added": [
+    "E42",
+    "E43",
+    "E44",
+    "E45"
+  ],
+  "requirements_changed": [
+    "E25"
+  ],
+  "items_added": [
+    {
+      "ref": "session-auto-routing",
+      "title": "Choose and pin DevWorks Auto once per new session"
+    }
+  ],
+  "items_edited": [
+    {
+      "ref": "DW-17",
+      "key": "DW-17",
+      "title": "Resolve direct tiers, named models and availability",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-18",
+      "key": "DW-18",
+      "title": "Integrate provider authentication and native secret storage",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-19",
+      "key": "DW-19",
+      "title": "Implement native provider transports and streaming codecs",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-20",
+      "key": "DW-20",
+      "title": "Bridge provider tool turns and context epochs",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-21",
+      "key": "DW-21",
+      "title": "Attribute prices, budget reservations and cache metrics",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-22",
+      "key": "DW-22",
+      "title": "Retain native SystemOne model discovery and decisions",
+      "fields": [
+        "description",
+        "goal",
+        "acceptance_criteria",
+        "inherits",
+        "touches",
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-87",
+      "key": "DW-87",
+      "title": "Fix the intermittent first-message hang that turns main red on macOS",
+      "fields": [
+        "ref"
+      ]
+    },
+    {
+      "ref": "DW-88",
+      "key": "DW-88",
+      "title": "Remove settings secret handles that no retained settings revision references",
+      "fields": [
+        "ref"
+      ]
+    }
+  ],
+  "dependencies_added": [
+    {
+      "item": "'session-auto-routing' (new)",
+      "blocked_by": "DW-16"
+    },
+    {
+      "item": "'session-auto-routing' (new)",
+      "blocked_by": "DW-20"
+    },
+    {
+      "item": "'session-auto-routing' (new)",
+      "blocked_by": "DW-22"
+    }
+  ],
+  "items_closed": [],
+  "pivots": [],
+  "warnings": []
+}

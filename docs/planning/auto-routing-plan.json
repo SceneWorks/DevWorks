@@ -1,0 +1,604 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "status": "Approved and applied to CodeGraph on 2026-11-05; native Auto implementation pending",
+  "project": "DW",
+  "feature": "DW-F6",
+  "source_commit": "9d1172e4460660641bfe1f21b5fb9f463a96992a",
+  "objective": "Assign DevWorks Auto once per new session using a pooled SystemOne decision or bounded Low-tier fallback, then preserve its tier and eligible generation model affinity.",
+  "confidence": "High in the agreed behavior and inspected gaps; native implementation and provider compatibility remain unvalidated.",
+  "confirmed_decisions": [
+    "SystemOne support already exists in ROUTE-18 and remains owned by DW-22; preserve its entire retained decision/media capability surface.",
+    "Add independent SystemOne round robin per new logical decision request, not a session pin; deliberate explicit-ID calls remain exact.",
+    "DevWorks Auto is separate from direct named/tier selection and upstream Auto/Auto Beta.",
+    "Classify only immediately before a new session's first generation request using initial prompt and role/task context; Low fallback is direct and nonrecursive.",
+    "Persist the automatic tier and selected generation pin; no automatic reclassification on later turns, compaction, restart or complexity changes.",
+    "Use existing per-root/feature holds and cost/authority controls; no fallback may escape the configured tier or spend/permission boundary."
+  ],
+  "edge_policy_proposals": [
+    "Keep existing defaults and sessions intact. DevWorks Auto is a new explicit selection, not an automatic migration to Auto.",
+    "After an explicit override, an existing automatic assignment can be restored without reclassification. A manually started session with no automatic assignment needs a new session for first-prompt Auto; do not retroactively classify its conversation.",
+    "A successful tier decision survives a generation-availability wait. Availability recovery does not invoke the classifier again.",
+    "SystemOne and Low fallback use separate decision-purpose allocation from the conversation pin; healthy discovery does not prove working credentials or credits.",
+    "On an empty chosen generation tier or a new unsupported capability, wait/refuse with a concrete reason; no hidden cross-tier fallback.",
+    "Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational Auto assignment."
+  ],
+  "requirements_delta": [
+    {
+      "feature_requirement": "E25",
+      "source_requirement": "ROUTE-19",
+      "before": "ROUTE-19 [Confirmed]: Offer explicit Tier Max, Tier High, Tier Mid and Tier Low selections before named models in every chat model selector. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto as a distinct explicit OpenRouter upstream route, not a synonym for DevWorks tier selection. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty.",
+      "after": "ROUTE-19 [Confirmed]: Every chat model selector offers DevWorks Auto under ROUTE-22\u201324, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty."
+    },
+    {
+      "feature_requirement": "E42",
+      "source_requirement": "ROUTE-21",
+      "after": "ROUTE-21 [Confirmed]: Support a configurable pool of multiple SystemOne decision models, separate from conversational tiers. Each new automatically selected logical decision request takes the next eligible pool member in durable round-robin order and never creates or reuses a session pin. Filter by declared question/media/input capabilities, enabled state, usable connection, authorization, availability and current policy. Preserve direct model-ID invocation for callers deliberately selecting a decision model. Concurrent allocation and restart retain the cursor and request identity; receipt replay reuses a known decision rather than dispatching another inference."
+    },
+    {
+      "feature_requirement": "E43",
+      "source_requirement": "ROUTE-22",
+      "after": "ROUTE-22 [Confirmed]: Offer DevWorks Auto as a distinct route selection. Immediately before a new session's first generation request, classify the required tier from its initial prompt, role, task/assignment and authorized project context using a versioned, inspectable rubric. The only valid tier answers are Low, Mid, High and Max. Prefer an eligible SystemOne decision model under ROUTE-21. Explicit named-model and tier selections bypass classification. Explicit upstream auto routes, including OpenRouter Auto and Auto Beta, bypass DevWorks tier classification and retain their configured upstream identity. Preserve existing saved selections and defaults unless explicitly changed; new worker sessions receive their own initial assignment."
+    },
+    {
+      "feature_requirement": "E44",
+      "source_requirement": "ROUTE-23",
+      "after": "ROUTE-23 [Confirmed]: If no SystemOne model is usable for the initial tier decision, use the next eligible Low-tier generation model as an auxiliary classifier through the shared router. This classifier request targets Low directly, has no conversational pin, and cannot recursively invoke tier selection. Treat malformed/non-tier answers, missing capabilities, authentication, exhausted credits, cooldowns, capacity and transport failures honestly. Attempts are bounded per model; other model successes cannot reset a failing model's retry limit. Try eligible decision candidates before falling back, and eligible Low candidates within a bounded pass; if neither path yields a valid decision, wait or refuse with a concrete reason rather than inventing a tier. Attribute classifier and generation attempts separately under existing authority, cost and feature-budget controls."
+    },
+    {
+      "feature_requirement": "E45",
+      "source_requirement": "ROUTE-24",
+      "after": "ROUTE-24 [Confirmed]: Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment."
+    }
+  ],
+  "implementation": {
+    "existing_item_change": {
+      "ref": "DW-22",
+      "goal": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility. Add an independent configurable SystemOne pool with durable request-level round robin, capability-aware admission and bounded per-model recovery; retain explicit-ID calls and all previously retained decision types/media.",
+      "acceptance_criteria": [
+        {
+          "id": "A1",
+          "text": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.",
+          "state": "unmet"
+        },
+        {
+          "id": "A2",
+          "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+          "state": "unmet"
+        },
+        {
+          "id": "A3",
+          "state": "unmet",
+          "text": "Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported."
+        }
+      ],
+      "inherits": [
+        "E24",
+        "E1",
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11",
+        "E12",
+        "E13",
+        "E14",
+        "E15",
+        "E42"
+      ],
+      "touches": [
+        "crates/devworks-core/src/services/router",
+        "crates/devworks-core/src/operations/router.rs",
+        "crates/devworks-core/src/ports/router.rs",
+        "crates/devworks-core/src/protocol/records.rs",
+        "crates/devworks-core/src/settings/catalog.rs",
+        "crates/devworks-adapters/src/storage/sqlite",
+        "crates/devworks-desktop/src/connections_screen.rs"
+      ],
+      "description": "Local slice: DW-022 (systemone). Native implementation has not started; revalidate before ready/claim.\n\nOwned operations: router.decision_models, router.decide\nRetained source entries: None directly owned.\nCapability acceptance: CAP-DECISIONS, CAP-ROUTER\nWorkloads: Proportionate item validation; no extra campaign implied.\nGates: G03.\n\nShared acceptance: Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.\n\nValidation: use meaningful native evidence for the stated behavior and reuse evidence at integrated acceptance. Normal tests must not run model inference. Full retained-source argument/result obligations are in docs/architecture/implementation-plan.json and its frozen inventory; do not narrow them to the candidate fixtures.\n\nPrimary source requirements: ROUTE-18\nSupporting source requirements: ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, UI-10\n\nAuto-routing amendment: implement ROUTE-21's independent SystemOne decision pool. Reuse existing connection/catalog configuration, typed gateway, operational receipts, SQLite transaction owner and usage admission; do not create a parallel router. Deterministic native HTTP fixtures cover the pool and bounded faults; normal CI performs no model inference. Separately dispatched endpoint qualification reuses relevant existing evidence."
+    },
+    "new_item": {
+      "ref": "session-auto-routing",
+      "type": "story",
+      "title": "Choose and pin DevWorks Auto once per new session",
+      "repository": "DevWorks",
+      "status": "ready",
+      "priority": "high",
+      "goal": "Deliver DevWorks Auto end to end through the shared first-generation admission path: SystemOne-first tier classification with a nonrecursive Low fallback, strict tier validation, durable one-time tier assignment, eligible generation pinning and truthful waits. Expose it consistently to native composers, host/agent requests and job route inputs; retain direct tier/model and upstream Auto/Auto Beta choices.",
+      "acceptance_criteria": [
+        {
+          "id": "A1",
+          "state": "unmet",
+          "text": "New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated."
+        },
+        {
+          "id": "A2",
+          "state": "unmet",
+          "text": "The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing."
+        },
+        {
+          "id": "A3",
+          "state": "unmet",
+          "text": "SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance."
+        }
+      ],
+      "inherits": [
+        "E1",
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E11",
+        "E12",
+        "E13",
+        "E16",
+        "E17",
+        "E18",
+        "E19",
+        "E20",
+        "E21",
+        "E25",
+        "E26",
+        "E42",
+        "E43",
+        "E44",
+        "E45"
+      ],
+      "blocked_by": [
+        "DW-16",
+        "DW-20",
+        "DW-22"
+      ],
+      "touches": [
+        "crates/devworks-core/src/services/router",
+        "crates/devworks-core/src/operations/router.rs",
+        "crates/devworks-core/src/protocol/records.rs",
+        "crates/devworks-core/src/ports/storage/router.rs",
+        "crates/devworks-core/src/settings/catalog.rs",
+        "crates/devworks-adapters/src/storage/sqlite/router.rs",
+        "crates/devworks-desktop/src/routing.rs",
+        "crates/devworks-desktop/src/chat.rs",
+        "crates/devworks-desktop/src/connections_screen.rs",
+        "crates/devworks-desktop/src/shell/jobs.rs",
+        "crates/devworks-desktop/tests/routing.rs"
+      ],
+      "description": "Use existing router, catalog/configuration, operational receipt, session, transport, usage/budget and UI boundaries. Extend the shared first-generation admission path so every current generative session entry point gets the same one-time assignment; inspect affected callers within this item and wire them rather than creating a second business implementation. DW-16 supplies native chat/delegation entry points; DW-20 supplies provider tool continuation (and transitively DW-19 transport); DW-22 supplies native decision invocation/pooling and transitively DW-21 usage. Existing completed DW-17 behavior is reused, not reopened.\n\nThe current route_auxiliary helper may reuse a conversation pin and otherwise takes the first eligible member without advancing a cursor. It cannot be used unchanged for the Low classifier: add a purpose-scoped, direct-Low, pinless round-robin admission path that still uses shared authority/accounting. Tier classification is about the assignment's difficulty, not permission to violate configured capabilities, spending limits or scope. Its result does not authorize tools. Preserve task-relevant media/context or report unsupported input; honor SystemOne full-input/physical-batch limits as well as advertised context size.\n\nInitial rubric: Low = simple utilities, extraction and straightforward lookups; Mid = specified localized edits with clear verification; High = general implementation, debugging, review and routine coordination; Max = requirements/architecture, difficult investigations and complex coordination. Keep this inspectable/versioned in Settings; benchmark agreement is pilot evidence, not proven task success or a promise of cache hits.\n\nValidation is limited to distinct deterministic native paths, initial-assignment races/recovery, typed contract/UI/host/job integration, and relevant provider fixtures. Normal CI runs no model inference. No new benchmark, performance matrix, GPU campaign or terminal readiness item is required. Reuse valid evidence in the existing final acceptance item."
+    },
+    "preserved_items": [
+      {
+        "key": "DW-17",
+        "title": "Resolve direct tiers, named models and availability",
+        "status": "complete"
+      },
+      {
+        "key": "DW-18",
+        "title": "Integrate provider authentication and native secret storage",
+        "status": "complete"
+      },
+      {
+        "key": "DW-19",
+        "title": "Implement native provider transports and streaming codecs",
+        "status": "ready"
+      },
+      {
+        "key": "DW-20",
+        "title": "Bridge provider tool turns and context epochs",
+        "status": "ready"
+      },
+      {
+        "key": "DW-21",
+        "title": "Attribute prices, budget reservations and cache metrics",
+        "status": "ready"
+      },
+      {
+        "key": "DW-87",
+        "title": "Fix the intermittent first-message hang that turns main red on macOS",
+        "status": "complete"
+      },
+      {
+        "key": "DW-88",
+        "title": "Remove settings secret handles that no retained settings revision references",
+        "status": "ready"
+      }
+    ],
+    "dependency_rationale": "DW-22 keeps its existing prerequisites. New Auto story depends on DW-16 chat/delegation, DW-20 continuation/transport, and expanded DW-22; their transitive dependencies already include DW-19, DW-15 and DW-21.",
+    "integration_acceptance": "Add the new Auto story as a blocker of the existing final acceptance item DW-61, reusing these item results. Do not add a new readiness campaign."
+  },
+  "publication_after_approval": {
+    "canonical_sources": [
+      "tools/planning/requirements_content.py",
+      "tools/planning/requirements_expansion.py",
+      "docs/planning/requirements-interview.json",
+      "docs/architecture/devworks-architecture.md",
+      "docs/architecture/implementation-slices.json",
+      "tools/planning/build_implementation_plan.py",
+      "docs/architecture/codegraph-work-map.json",
+      "docs/architecture/codegraph-feature-split-proposal.json"
+    ],
+    "readers_and_traceability": "Regenerate affected requirements, architecture, implementation-plan readers and traceability from their owning sources; verify Word layout if the generated Word edition changes. ROUTE-19 expands UI-10's referenced selector contract. Preserve all unrelated requirements and existing acceptance/dependencies.",
+    "codegraph": "Apply the stored DW-F6 sync_plan preview, add the new item to DW-61's real blockers with expected-version checks, and retain exact requirements/plan prose on DW-F6."
+  },
+  "validation_policy": {
+    "planning": [
+      "Verify exact source-to-feature requirement IDs, preserved existing items, dependency DAG, coverage of every new requirement, and sync_plan preview with no unrequested changes.",
+      "Validate offline reader links and inspect the proposed plan; these checks do not establish native runtime acceptance."
+    ],
+    "implementation": "Deterministic native router/storage/provider-fixture/first-session/UI/host integration checks for changed behavior only; normal CI performs no model inference. Reuse the existing Jev/D3/Luna pilot as context, not as acceptance of a built DevWorks router. No automatic repeat benchmark or GPU campaign."
+  },
+  "sync_plan_request": {
+    "feature": "DW-F6",
+    "plan": {
+      "title": "Models, routing and usage",
+      "description": "Approved related-feature split of DW-F1. Existing native item IDs, acceptance criteria and dependencies are retained. Owns 41 individually numbered source requirements and 6 existing items. Supporting cross-feature source requirements remain in item descriptions and the repository mapping. Confirmed/Proposed labels retain their meaning. Native delivery items are Ready for continuous work, with dependencies controlling eligibility. See DW-F1 for architecture/publication evidence.\n\nAuto-routing amendment: keep explicit choices direct, pool SystemOne decisions without pins, classify DevWorks Auto only for a new session's first generation request, and retain the chosen tier/model affinity. This planning update does not launch implementation.",
+      "goals": [
+        "Use the agreed model/providers, routing, context, tools, decisions and cost controls through one native execution path.",
+        "Assign DevWorks Auto once per new session using a pooled SystemOne decision or bounded Low-tier fallback, then preserve its tier and eligible generation model affinity."
+      ],
+      "requirements": [
+        {
+          "id": "E1",
+          "text": "ROUTE-01 [Confirmed]: Every application inference request must go through one internal router path, including workspace and feature conversations, worker and review requests, scheduled inference tasks, planning, dreaming, context summarization/compaction, generated titles, semantic enrichment, embeddings, and accepted MCP-initiated inference requests. Agents and application subsystems must not bypass the router to call providers directly."
+        },
+        {
+          "id": "E2",
+          "text": "ROUTE-02 [Confirmed]: The router must choose suitable agents or models for the job through configurable policies. Its detailed configuration belongs in Settings and may remain hidden during ordinary work. Usage and cost reporting must be a dedicated screen."
+        },
+        {
+          "id": "E3",
+          "text": "ROUTE-03 [Proposed]: Selection must consider task or role policy, tool and modality support, context size, reasoning effort, availability, provider limits, cost preferences, and session affinity. A user must be able to inspect the selected route and material fallback reason for a request."
+        },
+        {
+          "id": "E4",
+          "text": "ROUTE-04 [Proposed]: Provider adapters must preserve streaming, tool-call identity and ordering, cancellation, errors, supported content types, and resumable conversation semantics. Retries must not duplicate exposed partial responses or repeat externally effective tool calls without reconciliation."
+        },
+        {
+          "id": "E5",
+          "text": "ROUTE-05 [Proposed]: Show provider waiting/failure reasons and the next retry time when known. Honor router-reported cooldowns under ROUTE-15 instead of repeatedly retrying cooling models. Missing authentication and indefinite unavailability need explicit recovery policy. Do not erase the run or route outside configured constraints."
+        },
+        {
+          "id": "E6",
+          "text": "ROUTE-06 [Proposed]: Usage must be attributable to project, feature, card or assignment where applicable, coordinator or worker, session, request, provider, model, and role. Router-selected catalog identity and any provider-resolved model identity must remain distinguishable."
+        },
+        {
+          "id": "E7",
+          "text": "ROUTE-07 [Proposed]: Reporting must distinguish provider-reported charges, estimated cost, unknown cost, token usage, and subscription capacity. Unknown price must not be represented as zero. A cost preference or routing tier must not be described as an enforced spending cap unless enforcement exists."
+        },
+        {
+          "id": "E8",
+          "text": "ROUTE-08 [Confirmed]: Each feature supports a spending limit or Off. A reached limit pauses further feature inference; Off tracks spending without a cap. Raising the limit or switching it Off must leave budget-paused work paused until the user manually selects Continue. Continue must still honor other pauses, blockers and current limits. Show attributed spend and effective budget state, preserving incurred usage and visible changes. Exact accounting and in-flight request handling remain open."
+        },
+        {
+          "id": "E9",
+          "text": "ROUTE-11 [Confirmed]: When a feature spending limit is configured, begin warning its coordinator at 75% of the budget so it can try to wrap up within the remaining allowance. Keep the warning and remaining-budget information available to the coordinator. Off has no budget-threshold warning. Budget pressure does not waive approved acceptance criteria, required verification or review, or permit incomplete work to be reported as complete."
+        },
+        {
+          "id": "E10",
+          "text": "ROUTE-12 [Confirmed]: Standalone issues do not support spending limits. Track and display their attributed inference usage and costs, without a per-issue cap, budget-threshold warning or budget-triggered pause. Feature budgets remain feature-scoped. Existing user pauses, approval waits, provider availability and selective manual resume after app closure still apply to issues."
+        },
+        {
+          "id": "E11",
+          "text": "ROUTE-13 [Confirmed]: Agents must be able to inspect screenshots and other images directly, including chat attachments and stored artifacts. Route image-dependent inference to a model and endpoint that support vision, through the same internal router. Do not silently omit images or claim visual inspection when no capable route is available."
+        },
+        {
+          "id": "E12",
+          "text": "ROUTE-14 [Confirmed]: Pin each session to its initially routed model. Reuse that pin across turns, tool continuations, compaction and app restarts. If rate-limited or unavailable, automatically switch the same session to an available eligible replacement and persist its pin, as in simple-router; retain it after the original recovers. Manual selection persists until changed or failover; Auto restores router selection with pinning. Replacements must meet required capabilities and configured routing constraints. Restoring a pin does not resume feature/issue execution: CONTROL-10 still requires manual Continue. Capability-change and other recovery mechanics remain open; cooldown waits follow ROUTE-15."
+        },
+        {
+          "id": "E13",
+          "text": "ROUTE-15 [Confirmed]: When no eligible model is available and the router reports cooldown expiry times, wait until the earliest eligible model cooldown ends, then automatically recheck availability and reconnect through the router. This temporary wait alone must not require manual Continue. If cooldowns change, honor the updated availability rather than repeatedly retrying early. Pin any replacement under ROUTE-14. Existing user pauses, approval waits, budget holds and app-restart manual-resume rules still apply. Recovery without a reported availability time remains open."
+        },
+        {
+          "id": "E14",
+          "text": "ROUTE-09 [Confirmed]: Support Codex, Claude subscription, Anthropic API-key, OpenRouter, and generic OpenAI-compatible connections, using simple-router as the subscription integration reference. OpenAI-compatible connections must accept configurable base URLs and model identities, including Ollama and LM Studio, rather than being limited to named products. Local and remote compatible endpoints must use the same internal router path as the subscription and API-key providers."
+        },
+        {
+          "id": "E15",
+          "text": "ROUTE-10 [Confirmed]: Use simple-router as the reference for provider connection and authentication behavior: Codex subscription device-code sign-in; optional direct Claude subscription browser/authorization-code sign-in at the user's risk, preserving simple-router behavior; a separate Anthropic API-key connection; OpenRouter provider-level API-key management; and optional API keys for configured OpenAI-compatible endpoints. Preserve connection status, token refresh and reauthentication, credential replacement/removal, model discovery/refresh, and connection testing where supported. Expose these controls in native Settings. Claude subscription is unsupported by Anthropic for third-party apps, disabled until explicit user risk acceptance, and distinct from API billing. Never silently exchange subscription and API credentials or billing. The Rust implementation must not require the old router server or external agent CLIs."
+        },
+        {
+          "id": "E16",
+          "text": "CACHE-01 [Confirmed]: Provider prompt-cache efficiency is a critical harness requirement. Request construction, transcript handling, tool definitions and router behavior must avoid unnecessary harness-induced cache misses. Provider cache availability is not guaranteed; the requirement is to preserve eligible reuse and make its effectiveness observable."
+        },
+        {
+          "id": "E17",
+          "text": "CACHE-02 [Proposed]: Use a stable, versioned instruction and tool-definition prefix, with deterministic tool/schema ordering across built-in and MCP tools. Keep changing timestamps, progress, retrieved context and other live state out of the reusable prefix where protocol and instruction authority permit. Persist previously dispatched message/content boundaries and append new turns rather than rebuilding or extending old messages on each request. Meaningful instruction, skill and permission changes still take effect at their required safe step."
+        },
+        {
+          "id": "E18",
+          "text": "CACHE-03 [Proposed]: Preserve native assistant/tool-call/tool-result structure, stable call identities, content-block order and provider-required opaque continuation or reasoning blocks for same-provider continuation. Persist the ordering chosen for concurrent results. Do not flatten tool exchanges into prose, reformat prior results, or discard required continuation data during storage and replay. Cross-provider conversion must be explicit and protocol-correct; do not assume caches or opaque state transfer between providers."
+        },
+        {
+          "id": "E19",
+          "text": "CACHE-04 [Proposed]: Provider adapters must declare cache capabilities by actual model, endpoint and access mode, including supported enablement, breakpoint boundaries, keys, minimum lengths, retention and usage fields. Apply supported controls without silently sending incompatible options. OpenAI-compatible syntax or a subscription connection does not imply identical cache support. Preserve eligible session/model/upstream affinity within router policy, while allowing justified quality, capability, availability and policy-driven route changes. Record intentional changes that reduce reuse."
+        },
+        {
+          "id": "E20",
+          "text": "CACHE-05 [Proposed]: Compaction at the confirmed 80% threshold remains mandatory. Preserve stable instructions and reference blocks where possible, record the new compacted context revision, and build subsequent turns append-only from it. Cache optimization must not delay user redirection, retain unauthorized tools, bypass permission enforcement, suppress required fresh context or weaken task correctness. Evaluate total input cost and latency, including cache writes, rather than optimizing hit rate alone."
+        },
+        {
+          "id": "E21",
+          "text": "CACHE-06 [Proposed]: Usage and Costs must show provider-reported cached input, uncached input and cache-write tokens/costs where available, with attribution to requests and work. Distinguish unavailable metrics from zero and estimates from reported values. Provide bounded diagnostics for reusable-prefix changes, tool/instruction revisions, model/upstream changes, compaction and expiry where observable; inferred reasons must be labeled. Avoid duplicate sensitive prompt logging solely for diagnostics. Verify prefix stability and protocol replay across ordinary turns, tool calls, restart, retries, instruction/tool changes and compaction; use live cache metrics where the endpoint exposes them."
+        },
+        {
+          "id": "E22",
+          "text": "ROUTE-16 [Confirmed]: Regularly check official OpenAI and Anthropic prices and keep the configured pricing catalog current, with visible refresh status and freshness. Provide manual refresh. Preserve the source and price revision used for historical estimates rather than silently repricing old usage when the catalog changes. Exact refresh scheduling and parsing are architecture decisions."
+        },
+        {
+          "id": "E23",
+          "text": "ROUTE-17 [Confirmed]: Use OpenRouter-reported request costs when available. Treat local-provider usage as free for monetary tracking. For a custom provider, use reported costs or user-configured prices; when neither is available, allow requests and clearly show that price is not tracked, without treating unknown cost as zero or including it in priced totals. Count OpenAI and Anthropic subscription usage toward feature budgets at published API-equivalent estimates, clearly labeled as estimates rather than actual subscription charges. Show the monetary budget coverage and unpriced usage honestly; other budget, pause and permission rules remain effective."
+        },
+        {
+          "id": "E24",
+          "text": "ROUTE-18 [Confirmed]: Retain native SystemOne decision-model support from simple-router, including models such as Jev: configurable endpoint/upstream identity and credentials, enabled/healthy model discovery, declared question-type and image/video capabilities, structured decision requests/results, bounded errors/cancellation and attributed usage through the shared router. Preserve choice, noul, score and box capability distinctions. Decision models are selected by their own model ID, not offered as chat-generation models or assigned conversational tiers. No old router server is required; native tool access uses the same host authority and accounting as other inference."
+        },
+        {
+          "id": "E25",
+          "text": "ROUTE-19 [Confirmed]: Every chat model selector offers DevWorks Auto under ROUTE-22\u201324, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty."
+        },
+        {
+          "id": "E26",
+          "text": "ROUTE-20 [Confirmed]: Provide reasoning effort as a separate selector alongside the route/model selector in every chat composer, including the shared Home/sidebar session. Persist the selected effort independently of tier or model. Advertise and send only the effort values supported by the configured model, endpoint and access mode; preserve requested and effective effort in route/usage diagnostics. A nondefault explicit effort is an eligibility constraint and cannot silently disappear on failover. Provider Default is a separate choice. Model labels must not encode effort, and changing effort must not itself change tier membership or derive another tier from a model name."
+        },
+        {
+          "id": "E27",
+          "text": "CONTEXT-01 [Proposed]: Context assembly must combine the work brief, current plan, instructions, relevant code and graph results, scoped knowledge, applicable lessons, prior evidence, and handover state within a deliberate token budget. It must preserve provenance instead of indiscriminately replaying all repository content and chat history."
+        },
+        {
+          "id": "E28",
+          "text": "CONTEXT-02 [Proposed]: A session must record its instruction revisions, retrieved context sources, important omissions or truncation, and routing metadata sufficiently to explain what information the agent acted on. Context updates and summaries must preserve unresolved constraints and decisions."
+        },
+        {
+          "id": "E29",
+          "text": "CONTEXT-03 [Proposed]: Resolve enforced permissions and explicit user directions before repository guidance. Applicable repository instructions override default role instructions. Resolve repository conflicts by nearest directory first, only within its subtree; at one directory AGENTS.md overrides CLAUDE.md, whose nonconflicting instructions still apply. Preserve nonconflicting ancestor rules. Discover only authorized instruction roots, retain exact source digests/applicability in each effective context and reconcile material unresolved conflicts visibly. Same-level ambiguity cannot grant authority or silently affect another repository."
+        },
+        {
+          "id": "E30",
+          "text": "CONTEXT-04 [Confirmed]: When an agent reaches 80% of the active model\u2019s maximum context, the harness must automatically compact its working context and continue without user intervention. Preserve the complete original transcript and the same logical agent identity and work relationships. Compaction must not replace or truncate the stored transcript; record the compaction and resulting continuation in the agent\u2019s session history. Any compaction inference must use the router."
+        },
+        {
+          "id": "E31",
+          "text": "CONTEXT-05 [Proposed]: Measure context against the actual routed model/endpoint limit, including instructions, tool schemas, messages and tool results with appropriate modality accounting. Reserve response/tool headroom and check request size before dispatch, including after model changes. Compaction must preserve current requirements, plan state, user directions, unresolved decisions and relevant evidence/artifact references. Unknown limits, oversized single inputs and failed compaction need visible bounded recovery rather than silent truncation or loss of work."
+        },
+        {
+          "id": "E32",
+          "text": "CONTEXT-06 [Confirmed]: Automatically load applicable repository and subdirectory AGENTS.md and CLAUDE.md instructions. Instructions closest to the target files override conflicting ancestor instructions within that subtree. At the same directory level AGENTS.md wins conflicts; CLAUDE.md adds nonconflicting guidance. Repository instructions override default role instructions. User directions and enforced permissions remain above all file instructions. Preserve path applicability across multiple directories/repositories; files cannot grant tool authority."
+        },
+        {
+          "id": "E33",
+          "text": "TOOL-01 [Confirmed]: Users must be able to manage which tools agents can access, primarily through Settings. Management must cover built-in application tools, tools supplied by MCP servers and package-provided tools."
+        },
+        {
+          "id": "E34",
+          "text": "TOOL-02 [Proposed]: The effective tool set must be inspectable for an agent/session, derived from the shared selection under TOOL-04 and the mandatory reviewer restriction under TOOL-05. MCP defaults follow MCP-06. Shell/process and web defaults follow TOOL-06 and TOOL-08. Define remaining built-in defaults, denial precedence, and effects on queued and active runs. Disabled tools must be enforced at invocation time rather than merely omitted from prompts."
+        },
+        {
+          "id": "E35",
+          "text": "TOOL-03 [Proposed]: Record tool policy revisions and changes with actor attribution. Tool descriptions and schemas are not authority to exceed user policy. Preserve explicit user selections during tool discovery. Define how read-only classification is established, how missing or conflicting metadata is handled, and how later tool additions or capability changes affect saved selections. Initial MCP defaults and selection controls follow MCP-06."
+        },
+        {
+          "id": "E36",
+          "text": "TOOL-04 [Confirmed]: The configured tool selection applies to every agent, rather than requiring separate selections for coordinators, coding agents, and reviewers. Code-review agents must have access to the same selected read tools as the other agents."
+        },
+        {
+          "id": "E37",
+          "text": "TOOL-05 [Confirmed]: Code-review agents must always be read-only. The harness must deny write/edit and other mutating operations, including indirect writes through shell/process tools, while preserving the shared selected read tools. Enforce this for built-in, MCP and package-provided invocations, not only in reviewer instructions; Settings and Select all must not override it. The harness retains review findings and history without granting the reviewer general write access. Fixes belong to separately authorized implementation agents."
+        },
+        {
+          "id": "E38",
+          "text": "TOOL-06 [Confirmed]: Enable built-in shell/process tools by default for implementation agents, subject to configured tool permissions and project scope. Users may disable them in Settings. Default enablement must not grant review agents write access or bypass TOOL-05."
+        },
+        {
+          "id": "E39",
+          "text": "TOOL-07 [Confirmed]: Implementation agents may install project dependencies automatically within authorized project/worktree scope. System-wide tool or package installations require user approval before execution. Configured permissions and read-only reviewer restrictions still apply. Record installation actions and approval outcomes in the associated work history."
+        },
+        {
+          "id": "E40",
+          "text": "TOOL-08 [Confirmed]: Provide built-in web search and page-fetching tools, including documentation retrieval, enabled by default. Apply shared tool selection and invocation permissions, including access for read-only review agents. Retain tool activity, source URLs and results in the responsible agent/work history."
+        },
+        {
+          "id": "E41",
+          "text": "TOOL-09 [Confirmed]: Independent tool calls must keep running when another call fails or requires approval, unless that failure makes their execution unsafe or invalid. Hold or cancel only affected calls and their actual dependents. Preserve completed results and reconcile uncertain effects before retry. Existing parent pauses and tool permissions remain effective."
+        },
+        {
+          "id": "E42",
+          "text": "ROUTE-21 [Confirmed]: Support a configurable pool of multiple SystemOne decision models, separate from conversational tiers. Each new automatically selected logical decision request takes the next eligible pool member in durable round-robin order and never creates or reuses a session pin. Filter by declared question/media/input capabilities, enabled state, usable connection, authorization, availability and current policy. Preserve direct model-ID invocation for callers deliberately selecting a decision model. Concurrent allocation and restart retain the cursor and request identity; receipt replay reuses a known decision rather than dispatching another inference."
+        },
+        {
+          "id": "E43",
+          "text": "ROUTE-22 [Confirmed]: Offer DevWorks Auto as a distinct route selection. Immediately before a new session's first generation request, classify the required tier from its initial prompt, role, task/assignment and authorized project context using a versioned, inspectable rubric. The only valid tier answers are Low, Mid, High and Max. Prefer an eligible SystemOne decision model under ROUTE-21. Explicit named-model and tier selections bypass classification. Explicit upstream auto routes, including OpenRouter Auto and Auto Beta, bypass DevWorks tier classification and retain their configured upstream identity. Preserve existing saved selections and defaults unless explicitly changed; new worker sessions receive their own initial assignment."
+        },
+        {
+          "id": "E44",
+          "text": "ROUTE-23 [Confirmed]: If no SystemOne model is usable for the initial tier decision, use the next eligible Low-tier generation model as an auxiliary classifier through the shared router. This classifier request targets Low directly, has no conversational pin, and cannot recursively invoke tier selection. Treat malformed/non-tier answers, missing capabilities, authentication, exhausted credits, cooldowns, capacity and transport failures honestly. Attempts are bounded per model; other model successes cannot reset a failing model's retry limit. Try eligible decision candidates before falling back, and eligible Low candidates within a bounded pass; if neither path yields a valid decision, wait or refuse with a concrete reason rather than inventing a tier. Attribute classifier and generation attempts separately under existing authority, cost and feature-budget controls."
+        },
+        {
+          "id": "E45",
+          "text": "ROUTE-24 [Confirmed]: Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment."
+        }
+      ],
+      "acceptance_tests": [
+        "All mapped source requirements and existing item acceptance are fulfilled with native evidence; source statuses remain explicit.",
+        "Reuse item evidence for integrated behavior, including shared authority, recovery and UI/tool consistency; design fixtures do not constitute native completion.",
+        "Across native UI and scripted host/agent/job entry points, prove each new Auto session gets one durable tier assignment, independent workers classify separately, direct/upstream-auto choices bypass it, and ordinary continuations/restart/compaction do not trigger tier selection.",
+        "Reuse item evidence for multi-model decision round robin, nonrecursive Low fallback, strict outputs, bounded per-model failures, same-tier generation failover, budgets and diagnostics. Provider cache-hit or universal model-judgment quality claims require separate runtime evidence and are not inferred from planning fixtures."
+      ],
+      "items": [
+        {
+          "ref": "DW-17"
+        },
+        {
+          "ref": "DW-18"
+        },
+        {
+          "ref": "DW-19"
+        },
+        {
+          "ref": "DW-20"
+        },
+        {
+          "ref": "DW-21"
+        },
+        {
+          "ref": "DW-22",
+          "goal": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility. Add an independent configurable SystemOne pool with durable request-level round robin, capability-aware admission and bounded per-model recovery; retain explicit-ID calls and all previously retained decision types/media.",
+          "acceptance_criteria": [
+            {
+              "id": "A1",
+              "text": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.",
+              "state": "unmet"
+            },
+            {
+              "id": "A2",
+              "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+              "state": "unmet"
+            },
+            {
+              "id": "A3",
+              "state": "unmet",
+              "text": "Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported."
+            }
+          ],
+          "inherits": [
+            "E24",
+            "E1",
+            "E2",
+            "E3",
+            "E4",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "E9",
+            "E10",
+            "E11",
+            "E12",
+            "E13",
+            "E14",
+            "E15",
+            "E42"
+          ],
+          "touches": [
+            "crates/devworks-core/src/services/router",
+            "crates/devworks-core/src/operations/router.rs",
+            "crates/devworks-core/src/ports/router.rs",
+            "crates/devworks-core/src/protocol/records.rs",
+            "crates/devworks-core/src/settings/catalog.rs",
+            "crates/devworks-adapters/src/storage/sqlite",
+            "crates/devworks-desktop/src/connections_screen.rs"
+          ],
+          "description": "Local slice: DW-022 (systemone). Native implementation has not started; revalidate before ready/claim.\n\nOwned operations: router.decision_models, router.decide\nRetained source entries: None directly owned.\nCapability acceptance: CAP-DECISIONS, CAP-ROUTER\nWorkloads: Proportionate item validation; no extra campaign implied.\nGates: G03.\n\nShared acceptance: Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.\n\nValidation: use meaningful native evidence for the stated behavior and reuse evidence at integrated acceptance. Normal tests must not run model inference. Full retained-source argument/result obligations are in docs/architecture/implementation-plan.json and its frozen inventory; do not narrow them to the candidate fixtures.\n\nPrimary source requirements: ROUTE-18\nSupporting source requirements: ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, UI-10\n\nAuto-routing amendment: implement ROUTE-21's independent SystemOne decision pool. Reuse existing connection/catalog configuration, typed gateway, operational receipts, SQLite transaction owner and usage admission; do not create a parallel router. Deterministic native HTTP fixtures cover the pool and bounded faults; normal CI performs no model inference. Separately dispatched endpoint qualification reuses relevant existing evidence."
+        },
+        {
+          "ref": "DW-87"
+        },
+        {
+          "ref": "DW-88"
+        },
+        {
+          "ref": "session-auto-routing",
+          "type": "story",
+          "title": "Choose and pin DevWorks Auto once per new session",
+          "repository": "DevWorks",
+          "status": "backlog",
+          "priority": "high",
+          "goal": "Deliver DevWorks Auto end to end through the shared first-generation admission path: SystemOne-first tier classification with a nonrecursive Low fallback, strict tier validation, durable one-time tier assignment, eligible generation pinning and truthful waits. Expose it consistently to native composers, host/agent requests and job route inputs; retain direct tier/model and upstream Auto/Auto Beta choices.",
+          "acceptance_criteria": [
+            {
+              "id": "A1",
+              "state": "unmet",
+              "text": "New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated."
+            },
+            {
+              "id": "A2",
+              "state": "unmet",
+              "text": "The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing."
+            },
+            {
+              "id": "A3",
+              "state": "unmet",
+              "text": "SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance."
+            }
+          ],
+          "inherits": [
+            "E1",
+            "E2",
+            "E3",
+            "E5",
+            "E6",
+            "E7",
+            "E8",
+            "E11",
+            "E12",
+            "E13",
+            "E16",
+            "E17",
+            "E18",
+            "E19",
+            "E20",
+            "E21",
+            "E25",
+            "E26",
+            "E42",
+            "E43",
+            "E44",
+            "E45"
+          ],
+          "blocked_by": [
+            "DW-16",
+            "DW-20",
+            "DW-22"
+          ],
+          "touches": [
+            "crates/devworks-core/src/services/router",
+            "crates/devworks-core/src/operations/router.rs",
+            "crates/devworks-core/src/protocol/records.rs",
+            "crates/devworks-core/src/ports/storage/router.rs",
+            "crates/devworks-core/src/settings/catalog.rs",
+            "crates/devworks-adapters/src/storage/sqlite/router.rs",
+            "crates/devworks-desktop/src/routing.rs",
+            "crates/devworks-desktop/src/chat.rs",
+            "crates/devworks-desktop/src/connections_screen.rs",
+            "crates/devworks-desktop/src/shell/jobs.rs",
+            "crates/devworks-desktop/tests/routing.rs"
+          ],
+          "description": "Use existing router, catalog/configuration, operational receipt, session, transport, usage/budget and UI boundaries. Extend the shared first-generation admission path so every current generative session entry point gets the same one-time assignment; inspect affected callers within this item and wire them rather than creating a second business implementation. DW-16 supplies native chat/delegation entry points; DW-20 supplies provider tool continuation (and transitively DW-19 transport); DW-22 supplies native decision invocation/pooling and transitively DW-21 usage. Existing completed DW-17 behavior is reused, not reopened.\n\nThe current route_auxiliary helper may reuse a conversation pin and otherwise takes the first eligible member without advancing a cursor. It cannot be used unchanged for the Low classifier: add a purpose-scoped, direct-Low, pinless round-robin admission path that still uses shared authority/accounting. Tier classification is about the assignment's difficulty, not permission to violate configured capabilities, spending limits or scope. Its result does not authorize tools. Preserve task-relevant media/context or report unsupported input; honor SystemOne full-input/physical-batch limits as well as advertised context size.\n\nInitial rubric: Low = simple utilities, extraction and straightforward lookups; Mid = specified localized edits with clear verification; High = general implementation, debugging, review and routine coordination; Max = requirements/architecture, difficult investigations and complex coordination. Keep this inspectable/versioned in Settings; benchmark agreement is pilot evidence, not proven task success or a promise of cache hits.\n\nValidation is limited to distinct deterministic native paths, initial-assignment races/recovery, typed contract/UI/host/job integration, and relevant provider fixtures. Normal CI runs no model inference. No new benchmark, performance matrix, GPU campaign or terminal readiness item is required. Reuse valid evidence in the existing final acceptance item."
+        }
+      ]
+    }
+  },
+  "additional_tracker_changes": [
+    {
+      "id": "DW-61",
+      "expected_version_at_review": 6,
+      "add_blocked_by": [
+        "$created:session-auto-routing"
+      ],
+      "preserve_existing_blockers": true,
+      "reason": "Existing integrated release acceptance must wait for the newly requested capability; reuse item evidence."
+    }
+  ],
+  "approval_boundary": "User approved the exact proposal in chat. CodeGraph work is applied; native implementation remains unstarted.",
+  "applied": {
+    "feature": "DW-F6",
+    "feature_version": 4,
+    "new_item": {
+      "key": "DW-107",
+      "id": "96c720dd-7c41-4b19-87be-505c1b91f1a4",
+      "ref": "session-auto-routing",
+      "status": "ready"
+    },
+    "expanded_item": "DW-22",
+    "final_acceptance": "DW-61",
+    "final_acceptance_includes_auto": true,
+    "requirements_version": 3,
+    "plan_document_version": 4
+  },
+  "sync_plan_request_status": "Historical exact approved preview input; see applied for actual created item, version and ready state."
+}

@@ -12,18 +12,18 @@
   },
   "sourcePlan": "implementation-plan.json",
   "fullSourceRequirements": {
-    "count": 353,
+    "count": 374,
     "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
     "statusesPreserved": true,
     "individuallyStructuredAcrossDeliveryFeatures": true,
-    "latestAmendment": "AGENT-12/18\u201320 and AD79: materiality-based readiness; autonomous resolution before escalation."
+    "latestAmendment": "ROUTE-19/21\u201324 and AD80: first-session DevWorks Auto, independent SystemOne pool and fixed tier/model affinity."
   },
   "structuredSharedRequirements": 3,
-  "nativeImplementationItems": 63,
+  "nativeImplementationItems": 64,
   "publicationItem": "DW-64",
-  "dependencyEdges": 300,
+  "dependencyEdges": 304,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All370 source requirements are individually structured across related delivery features. Native implementation remains unstarted. The native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All374 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -339,7 +339,7 @@
         "DW-21",
         "DW-5"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F6"
     },
     {
@@ -984,7 +984,8 @@
         "DW-59",
         "DW-60",
         "DW-62",
-        "DW-63"
+        "DW-63",
+        "DW-107"
       ],
       "acceptanceCriteria": 2,
       "featureKey": "DW-F12"
@@ -1233,9 +1234,24 @@
       ],
       "acceptanceCriteria": 2,
       "featureKey": "DW-F13"
+    },
+    {
+      "ref": "session-auto-routing",
+      "key": "DW-107",
+      "id": "96c720dd-7c41-4b19-87be-505c1b91f1a4",
+      "title": "Choose and pin DevWorks Auto once per new session",
+      "type": "story",
+      "localSliceId": "DW-107",
+      "blockedBy": [
+        "DW-16",
+        "DW-20",
+        "DW-22"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F6"
     }
   ],
-  "structuredSourceRequirements": 370,
+  "structuredSourceRequirements": 374,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -3342,5 +3358,22 @@
     "scope": "Existing EVAL plan metadata only; runtime and operation contracts remain in their tracked items. Baseline and EVAL terminal acceptance dependencies remain distinct."
   },
   "nativeBaselineDependencyEdges": 250,
-  "evaluationDependencyEdges": 50
+  "evaluationDependencyEdges": 50,
+  "autoRoutingAmendment": {
+    "date": "2026-11-05",
+    "feature": "DW-F6",
+    "newItem": "DW-107",
+    "expandedItem": "DW-22",
+    "finalAcceptance": "DW-61",
+    "requirements": [
+      "ROUTE-19",
+      "ROUTE-21",
+      "ROUTE-22",
+      "ROUTE-23",
+      "ROUTE-24"
+    ],
+    "nativeAcceptance": "pending",
+    "newItemStatus": "ready",
+    "addedDependencyEdges": 4
+  }
 }
