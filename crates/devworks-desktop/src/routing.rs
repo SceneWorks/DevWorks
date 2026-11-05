@@ -256,7 +256,7 @@ pub fn options(catalog: &[RouteCatalogModel]) -> Vec<(String, RouteIntent)> {
             .iter()
             .filter(|m| !is_latest(m) && selectable(m))
             .map(|m| {
-                let label = if m.available.is_none() {
+                let label = if m.available.is_none() && !is_open_router_auto(m) {
                     format!("{} (availability unknown)", m.display_name.0)
                 } else {
                     m.display_name.0.clone()
@@ -273,6 +273,11 @@ pub fn same_intent(a: &RouteIntent, b: &RouteIntent) -> bool {
 
 /// The label of an intent.
 pub fn intent_label(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> String {
+    if let RouteIntent::Model { model_id } = intent
+        && let Some(model) = catalog.iter().find(|m| &m.id == model_id)
+    {
+        return model.display_name.0.clone();
+    }
     options(catalog)
         .into_iter()
         .find(|(_, i)| same_intent(i, intent))
@@ -389,8 +394,7 @@ pub fn reason(code: &str) -> &'static str {
         "ContextUnknown" => "context window not declared",
         "ContextTooSmall" => "context window too small",
         "EmptyPool" => "no members are configured",
-        "LatestUnavailable" => "no available version of this family",
-        "InventoryIncomplete" => "waiting for complete provider inventory",
+        "NoInventory" => "waiting for complete provider inventory",
         _ => "unavailable",
     }
 }

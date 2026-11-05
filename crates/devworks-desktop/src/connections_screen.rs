@@ -15,6 +15,7 @@ use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::Id;
 use devworks_core::protocol::records::{
     ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting, RouteCatalogModel,
+    RouteModel,
 };
 use devworks_core::services::router::connections::profiles::{
     Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
@@ -790,9 +791,9 @@ impl ConnectionsPanel {
                     ui.vertical(|ui| {
                         ui.label(&name);
                         let state = match m.available {
-                            Some(true) => "Available",
-                            Some(false) => "Unavailable",
-                            None => "Availability unknown",
+                            Some(true) => "In provider inventory",
+                            Some(false) => "Not in provider inventory",
+                            None => "Inventory not confirmed",
                         };
                         widgets::caption(ui, state);
                         if let Some(why) = &m.availability_reason {
@@ -1035,18 +1036,22 @@ fn sign_in(id: &str, action: &str, flow: Option<&Id>, label: &str) -> Connection
 
 /// The `Model` action saving a catalog row's edits (its tier memberships unchanged).
 fn model_action(m: &RouteCatalogModel, e: &ModelEdit) -> Result<Value, String> {
-    let mut model = serde_json::to_value(m).map_err(|e| e.to_string())?;
-    // The query-only availability and alias facts are never configure input.
-    if let Some(fields) = model.as_object_mut() {
-        for key in [
-            "latestFamily",
-            "resolvesToModelIds",
-            "available",
-            "availabilityReason",
-        ] {
-            fields.remove(key);
-        }
-    }
+    // Build the configure DTO explicitly: query facts never become writable input.
+    let configured = RouteModel {
+        id: m.id.clone(),
+        display_name: m.display_name.clone(),
+        endpoint_profile: m.endpoint_profile.clone(),
+        upstream_model_id: m.upstream_model_id.clone(),
+        enabled: m.enabled,
+        tier_memberships: m.tier_memberships.clone(),
+        efforts: m.efforts.clone(),
+        image_input: m.image_input,
+        tools: m.tools,
+        revision: m.revision.clone(),
+        context_tokens: m.context_tokens.clone(),
+        connection_id: m.connection_id.clone(),
+    };
+    let mut model = serde_json::to_value(configured).map_err(|e| e.to_string())?;
     model["enabled"] = json!(e.enabled);
     match e.context.trim() {
         "" => {

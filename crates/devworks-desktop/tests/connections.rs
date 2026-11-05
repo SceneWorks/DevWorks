@@ -615,7 +615,7 @@ fn settings_keeps_unavailable_versions_inspectable_and_aliases_read_only() {
          "available":false, "availabilityReason":"NotDiscovered", "contextTokens":"8192"},
         {"id":"astra-latest", "displayName":"Astra Latest", "endpointProfile":"CodexSubscriptionResponses", "upstreamModelId":"astra-latest",
          "enabled":false, "tierMemberships":[], "efforts":[], "imageInput":false, "tools":false, "revision":"1",
-         "latestFamily":"astra", "resolvesToModelIds":[], "available":false, "availabilityReason":"InventoryIncomplete"}
+         "latestFamily":"astra", "resolvesToModelIds":[], "available":false, "availabilityReason":"NoInventory"}
     ])).unwrap();
     h.state_mut().panel.catalog_loaded(rows);
     h.run();
@@ -703,16 +703,16 @@ fn a_completed_background_inventory_updates_settings_and_the_shared_selected_ali
     type_into(&mut h, NEW_KEY_LABEL, "sk-or-desktop");
     click(&mut h, Role::Button, ADD_LABEL);
     http.wait_started();
-    assert!(
-        !h.state()
+    assert_ne!(
+        h.state()
             .settings
             .connections
             .catalog
             .iter()
             .find(|m| m.id.as_str() == "sol-latest")
             .unwrap()
-            .available
-            .unwrap()
+            .available,
+        Some(true)
     );
     // This completes without another UI action or configure receipt.
     http.finish();
