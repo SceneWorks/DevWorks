@@ -1,6 +1,13 @@
 //! DW-109: authored metadata, independent of membership, across the real gateway and store.
 use super::*;
 
+fn refused_metadata(reply: DomainCommandReply) -> DomainFault {
+    match reply {
+        CommandReply::Rejected { fault, .. } => fault,
+        other => super::refused(other),
+    }
+}
+
 fn get3(fx: &Fx, work: &Id) -> WorkRecord {
     fx.get_at("tasks.get", work, Some(3)).unwrap()
 }
@@ -126,7 +133,7 @@ fn invalid_or_stale_metadata_edits_are_atomic_and_explicit_clears_are_idempotent
         &card,
         json!({"taskType": "Bug"}),
     )));
-    let stale = refused(edit3(&fx, &fx.user(), &card, json!({"labels": ["Stale"]})));
+    let stale = refused_metadata(edit3(&fx, &fx.user(), &card, json!({"labels": ["Stale"]})));
     assert_eq!(stale.code, DomainErrorCode::RevisionConflict);
     for patch in [
         json!({"taskType": "Task", "clearTaskType": true}),
@@ -134,7 +141,7 @@ fn invalid_or_stale_metadata_edits_are_atomic_and_explicit_clears_are_idempotent
         json!({"title": "Must roll back", "labels": [" "]}),
     ] {
         let queue = fx.queue(&p, PROJECT_QUEUE);
-        let _ = refused(edit3(&fx, &fx.user(), &edited, patch));
+        let _ = refused_metadata(edit3(&fx, &fx.user(), &edited, patch));
         let current = get3(&fx, &card.id);
         assert_eq!(current.revision.get(), edited.revision.get());
         assert_eq!(current.title.0, edited.title.0);
@@ -155,7 +162,7 @@ fn invalid_or_stale_metadata_edits_are_atomic_and_explicit_clears_are_idempotent
         json!({"clearTaskType": true, "labels": []}),
     )));
     assert_eq!(same.revision.get(), cleared.revision.get());
-    let _ = refused(fx.command_at(&fx.user(), "issues.edit", json!({"workId": cleared.id.as_str(), "expectedRevision": cleared.revision.as_str(), "changes": {"labels": ["dup", "DUP"]}}), Some(3)));
+    let _ = refused_metadata(fx.command_at(&fx.user(), "issues.edit", json!({"workId": cleared.id.as_str(), "expectedRevision": cleared.revision.as_str(), "changes": {"labels": ["dup", "DUP"]}}), Some(3)));
 }
 
 #[test]
@@ -168,7 +175,9 @@ fn legacy_metadata_stays_absent_and_older_wire_edits_preserve_authored_values() 
         let mut stored = tx.work().work(&legacy_id)?.unwrap();
         stored.brief.as_object_mut().unwrap().remove("taskType");
         stored.brief.as_object_mut().unwrap().remove("labels");
-        tx.work().update_work(&stored, stored.revision)
+        let expected = stored.revision;
+        stored.revision += 1;
+        tx.work().update_work(&stored, expected)
     });
     assert_eq!(
         metadata(&get3(&fx, &legacy.id)),
