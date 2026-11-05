@@ -993,7 +993,7 @@ impl GitService {
                 match git.mutation(path, &["add", "--all", "--"], None, &operation.id, false) {
                     Ok(_) => git.mutation(
                         path,
-                        &["commit", "--file=-"],
+                        &["commit", "--cleanup=verbatim", "--file=-"],
                         Some(message.as_bytes().to_vec()),
                         &operation.id,
                         false,

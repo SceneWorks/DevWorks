@@ -24,6 +24,10 @@ amend, remote-default protection, symbolic task refs targeting main, ownership
 transfer, grouped task PR links, and recovery without repeating an uncertain write.
 GitHub transport tests verify fixed-origin requests and response-loss reconciliation
 with one write; no live account or remote repository is mutated by those tests.
+Commit recovery additionally loses a successful supervised commit reply before the durable
+checkpoint, then verifies observation-only completion and an unchanged commit ID. Explicit
+verbatim cleanup preserves leading blank lines and interior trailing spaces in the message.
+The byte-sensitive disposable Git fixture pins its checkout line-ending configuration.
 
 Browser provenance regressions exercise clean/dirty/new-commit observations, public
 artifact revision-4 text and binary reads, old evidence preservation, unbound reads,

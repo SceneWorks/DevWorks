@@ -300,6 +300,8 @@ fn native_task_lifecycle(with_pr: bool) {
     git(&source, &["config", "user.name", "Test"]);
     git(&source, &["config", "user.email", "test@example.invalid"]);
     git(&source, &["config", "commit.gpgsign", "false"]);
+    // This fixture asserts exact LF bytes; do not inherit the host's checkout conversion.
+    git(&source, &["config", "core.autocrlf", "false"]);
     std::fs::write(source.join("a.txt"), "base\n").unwrap();
     git(&source, &["add", "a.txt"]);
     git(&source, &["commit", "-m", "base"]);
@@ -371,11 +373,11 @@ fn native_task_lifecycle(with_pr: bool) {
         Arc::new(NativeProcessHost),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
     ));
-    let helpers = Arc::new(SupervisedHelpers {
+    let helpers = Arc::new(CommitReplyLost(SupervisedHelpers {
         supervisor: processes.clone(),
         store: store.clone(),
         fs: filesystem.clone(),
-    });
+    }));
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
@@ -570,6 +572,7 @@ fn native_task_lifecycle(with_pr: bool) {
     );
     let tree_path = Path::new(&after.path);
     std::fs::write(tree_path.join("new.txt"), "new task work\n").unwrap();
+    let requested_message = "\nTask implementation   \n\nBody   \n";
     let message = artifacts
         .publish_evidence(
             &*store,
@@ -585,7 +588,7 @@ fn native_task_lifecycle(with_pr: bool) {
                 tags: vec![],
                 source: serde_json::json!({"kind":"TestMessage"}),
             },
-            b"Task implementation\n",
+            requested_message.as_bytes(),
             |_, _| Ok(()),
         )
         .unwrap()
@@ -607,8 +610,32 @@ fn native_task_lifecycle(with_pr: bool) {
         other => panic!("{other:?}"),
     };
     let record = read(&*store, |s| s.operations().operation(&commit)).unwrap();
-    let result = service.execute(&record);
+    let lost = service.execute(&record);
+    assert!(matches!(lost, EffectOutcome::Unknown(_)), "{lost:?}");
+    assert_eq!(
+        read(&*store, |s| s.git().git_worktree(&after.id))
+            .unwrap()
+            .pending_operation_id
+            .as_ref(),
+        Some(&commit),
+        "commit reply loss precedes the durable completion checkpoint"
+    );
+    let committed_head = git(tree_path, &["rev-parse", "HEAD"]);
+    let result = service.observe(&record);
     assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
+    assert_eq!(
+        git(tree_path, &["rev-parse", "HEAD"]),
+        committed_head,
+        "recovery must not create another commit"
+    );
+    let raw = Command::new("git")
+        .args(["cat-file", "commit", "HEAD"])
+        .current_dir(tree_path)
+        .output()
+        .unwrap();
+    assert!(raw.status.success());
+    let raw = String::from_utf8(raw.stdout).unwrap();
+    assert_eq!(raw.split_once("\n\n").unwrap().1, requested_message);
     let new_head = git(tree_path, &["rev-parse", "HEAD"]);
     assert_ne!(new_head, head);
     assert_eq!(
@@ -1087,5 +1114,49 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
             status: 200,
             body: serde_json::to_vec(&value).unwrap(),
         })
+    }
+}
+
+/// Lose the successful commit reply before the Git owner can checkpoint it. All native
+/// processes still run through the real supervisor; recovery must observe, never replay.
+struct CommitReplyLost(SupervisedHelpers);
+impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
+    fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
+        self.0.filesystem()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        self.0.environment()
+    }
+    fn run(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        self.0.run(ctx, spec, limits, stop)
+    }
+    fn run_recorded(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &devworks_core::protocol::OperationId,
+        approved_hold: bool,
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        let commit = spec.args.iter().any(|arg| arg == "commit");
+        let reply = self
+            .0
+            .run_recorded(ctx, spec, limits, stop, operation, approved_hold)?;
+        if commit {
+            Err(
+                devworks_core::services::indexing::helper::HelperFault::Uncertain(
+                    "successful commit reply lost".into(),
+                ),
+            )
+        } else {
+            Ok(reply)
+        }
     }
 }
