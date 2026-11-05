@@ -106,8 +106,6 @@ pub struct HostConfig {
     pub restart_limit: u32,
     /// Base restart backoff (doubled per attempt).
     pub restart_backoff: Duration,
-    /// One quiescence attempt of a staged update retry.
-    pub quiesce_attempt: Duration,
     /// Bytes of helper stderr kept for the log.
     pub stderr_tail: usize,
     /// Host cap on the invocations one helper multiplexes (its declared limit applies below).
@@ -132,7 +130,6 @@ impl Default for HostConfig {
             admission_wait: Duration::from_secs(30),
             restart_limit: 3,
             restart_backoff: Duration::from_millis(500),
-            quiesce_attempt: Duration::from_secs(30),
             stderr_tail: 16 * 1024,
             max_concurrency: 16,
             tick: Duration::from_secs(30),
@@ -657,6 +654,15 @@ impl PackageHost {
 
     fn reconciliation_wait(&self, reconciled_at: Option<Instant>) -> Duration {
         let now = Instant::now();
+        let staged = self
+            .retry_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .map(|(deadline, _)| *deadline)
+            .filter(|deadline| reconciled_at.is_none_or(|seen| *deadline > seen))
+            .map(|deadline| deadline.saturating_duration_since(now))
+            .min();
         self.attempts
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -665,6 +671,9 @@ impl PackageHost {
             .filter_map(|attempt| attempt.next_at)
             .filter(|deadline| reconciled_at.is_none_or(|seen| *deadline > seen))
             .map(|deadline| deadline.saturating_duration_since(now))
+            .min()
+            .into_iter()
+            .chain(staged)
             .min()
             .map_or(self.config.tick, |wait| self.config.tick.min(wait))
     }
@@ -1478,6 +1487,9 @@ impl PackageHost {
     /// Retries staged versions waiting only for quiescence or compatibility, with backoff per
     /// package.
     fn retry_staged(&self) {
+        if self.is_stopping() {
+            return;
+        }
         let svc = self.service.clone();
         let staged = read_snapshot(&*self.store, &ReadOptions::default(), move |s| {
             let read = s.packages();
@@ -1493,6 +1505,9 @@ impl PackageHost {
             Ok(out)
         });
         for pkg in staged.unwrap_or_default() {
+            if self.is_stopping() {
+                break;
+            }
             let now = Instant::now();
             let due = self
                 .retry_at
@@ -1503,7 +1518,9 @@ impl PackageHost {
             if !due {
                 continue;
             }
-            let activated = match self.quiesce(&pkg, self.config.quiesce_attempt) {
+            // Never wait for busy invocations on the sole lifecycle loop. A failed
+            // nonblocking attempt is retried at its scheduled deadline.
+            let activated = match self.quiesce(&pkg, Duration::ZERO) {
                 Some(guard) => {
                     let r = self.service.retry_pending(&pkg).unwrap_or(false);
                     if r {

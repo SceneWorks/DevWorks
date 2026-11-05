@@ -428,6 +428,8 @@ struct App {
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
     host_tick: Option<Duration>,
+    probe_timeout: Option<Duration>,
+    process_host: Option<Arc<dyn devworks_core::ports::process::ProcessHost>>,
     retry_backoff: Option<Duration>,
     /// The runtime's one shutdown bound (10 s otherwise).
     shutdown_bound: Option<Duration>,
@@ -443,7 +445,6 @@ fn config() -> HostConfig {
         admission_wait: Duration::from_secs(10),
         restart_limit: 2,
         restart_backoff: Duration::from_millis(20),
-        quiesce_attempt: Duration::from_millis(200),
         stderr_tail: 4096,
         max_concurrency: 16,
         tick: Duration::from_millis(50),
@@ -524,6 +525,8 @@ impl App {
             files,
             restart_limit: None,
             host_tick: None,
+            probe_timeout: None,
+            process_host: None,
             retry_backoff: None,
             shutdown_bound: None,
             host_ids: Arc::default(),
@@ -606,7 +609,10 @@ impl App {
             authority: Arc::new(Authority),
             artifacts,
             resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
-            process_host: Arc::new(NativeProcessHost),
+            process_host: self
+                .process_host
+                .clone()
+                .unwrap_or_else(|| Arc::new(NativeProcessHost)),
             runs: devworks_engine::RunComposition::new(Arc::new(
                 devworks_core::services::runs::ControlService::new(h.ids.clone()),
             )),
@@ -620,6 +626,7 @@ impl App {
                     protected_branches: vec![],
                 },
                 config: HostConfig {
+                    runtime_timeout: self.probe_timeout.unwrap_or(config().runtime_timeout),
                     restart_limit: self.restart_limit.unwrap_or(config().restart_limit),
                     tick: self.host_tick.unwrap_or(config().tick),
                     restart_backoff: self.retry_backoff.unwrap_or(config().restart_backoff),
@@ -4301,4 +4308,156 @@ fn queued_package_state_writes_are_refused_after_completion_or_cancellation() {
         .unwrap();
         assert_eq!(after.revision, before.revision);
     }
+}
+
+#[test]
+fn a_late_index_result_cannot_restore_removed_sources_or_delete_current_ones() {
+    use devworks_core::ports::packages::{IndexSource, IndexVerifier};
+    let _s = serial();
+    let a = App::new();
+    let service = a.app().packages().unwrap().service();
+    let source = |name: &str| IndexSource {
+        location: format!("https://packs.example/{name}.json"),
+        public_key: hex(key(7).verifying_key().as_bytes()),
+    };
+    let old = source("old");
+    let current = source("current");
+    let spec = Spec::new("source-pack", "1.0.0");
+    let (bytes, digest) = bundle(&spec);
+    let index = write_index(
+        &json!({"publisherId":"acme","generatedAtMs":1,"entries":[entry(&spec,&bytes,&digest,"https://packs.example/source-pack.dwpkg")]}),
+        &key(7),
+    );
+    let old_result = BundleIndexVerifier.verify(&old, &index).unwrap();
+    let current_result = BundleIndexVerifier.verify(&current, &index).unwrap();
+    set_index_sources(&*a.store, json!([old]));
+    // A's fetch started under this configuration; B replaces it before A completes.
+    set_index_sources(&*a.store, json!([current]));
+    service.record_index(&current, Ok(current_result)).unwrap();
+    service.record_index(&old, Ok(old_result)).unwrap();
+    let indexes = read(&*a.store, |s| s.packages().indexes());
+    assert_eq!(indexes.len(), 1);
+    assert_eq!(
+        indexes[0].location, current.location,
+        "late A must not restore the removed source"
+    );
+    assert_eq!(
+        a.record("source-pack").available.unwrap().0[0].source.0,
+        current.location
+    );
+}
+
+#[test]
+fn busy_staged_updates_do_not_delay_unrelated_helper_startup() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    a.host_tick = Some(Duration::from_secs(60));
+    a.boot();
+    let spec = Spec::new("staged-busy-pack", "1.0.0");
+    package(a.install(&a.user, &spec));
+    a.ready("staged-busy-pack");
+    let running = a
+        .invoke("staged-busy-pack", "wait", InvocationKind::Ordinary)
+        .unwrap();
+    let next = Spec {
+        version: "1.1.0".into(),
+        ..spec
+    };
+    let staged = package(a.update(&a.user, &next));
+    assert_eq!(waits(&staged), vec!["Quiescence"]);
+    // Give the due retry a chance to start waiting while this invocation remains live.
+    std::thread::sleep(Duration::from_millis(200));
+    package(a.install(&a.user, &Spec::new("unrelated-staged-pack", "1.0.0")));
+    let handle = a
+        .invoke("unrelated-staged-pack", "echo", InvocationKind::Ordinary)
+        .expect("a staged update must not stall unrelated helper admission");
+    assert!(matches!(
+        finished(handle.wait(Duration::from_secs(3))),
+        InvocationOutcome::Completed { .. }
+    ));
+    assert!(running.wait(Duration::from_millis(10)).is_none());
+    running.cancel();
+    a.until(
+        "staged-busy-pack",
+        "the scheduled retry activates without waiting for the long periodic tick",
+        |r| r.version.0 == "1.1.0",
+    );
+}
+
+struct HeldRuntimeLaunch(Arc<Gate>);
+impl devworks_core::ports::process::ProcessHost for HeldRuntimeLaunch {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn spawn(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        self.0.pass(IdKind::Operation);
+        NativeProcessHost.spawn(spec)
+    }
+    fn probe(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.terminate(identity)
+    }
+}
+#[test]
+fn a_runtime_probe_launched_after_shutdown_is_stopped_immediately() {
+    let _s = serial();
+    let h = Harness::new();
+    let dir = h.root.join("late-runtime");
+    std::fs::create_dir_all(&dir).unwrap();
+    fake(&dir, "dotnet", "echo 8.0.4", "echo 8.0.4");
+    let gate = Arc::new(Gate::default());
+    let _release = Release(gate.clone());
+    let mut a = App::unbooted(h, Some(dir.display().to_string()), None);
+    a.process_host = Some(Arc::new(HeldRuntimeLaunch(gate.clone())));
+    a.probe_timeout = Some(Duration::from_secs(8));
+    a.boot();
+    fake(
+        &dir,
+        "dotnet",
+        "/bin/sleep 10; echo 9.0.0",
+        "\"%SystemRoot%\\System32\\ping.exe\" -n 11 127.0.0.1 >nul\r\necho 9.0.0",
+    );
+    gate.arm(IdKind::Operation);
+    let host = a.app().packages().unwrap().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = std::thread::spawn(move || {
+        let _ = tx.send(host.refresh_runtimes());
+    });
+    assert!(gate.entered(Duration::from_secs(5)));
+    a.shutdown();
+    gate.release();
+    let outcome = rx.recv_timeout(Duration::from_secs(2));
+    // On failure, let the original bounded probe finish so no child/test thread leaks.
+    probe.join().unwrap();
+    assert!(
+        outcome.is_ok(),
+        "a late runtime launch must be cancelled without waiting its probe timeout"
+    );
+    let unsettled = read(&*a.store, |s| {
+        s.resources()
+            .processes(&ProcessFilter::Unsettled, None, 100)
+    });
+    assert!(unsettled.is_empty(), "{unsettled:?}");
+    assert_eq!(
+        devworks_core::ports::packages::RuntimeProbe::runtime(&*a.runtimes, "dotnet").as_deref(),
+        Some("8.0.4"),
+        "late outcomes must not replace the runtime cache"
+    );
 }
