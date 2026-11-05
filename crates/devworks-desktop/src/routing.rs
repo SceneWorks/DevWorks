@@ -561,6 +561,15 @@ mod tests {
                 "resolvedEndpointProfile":"CodexSubscriptionResponses", "resolvedIdentityOrigin":"AtResolution"}
         }))
         .unwrap();
+        let mut legacy_pin = availability.pin.clone().unwrap();
+        legacy_pin.resolved_identity_origin =
+            Some(serde_json::from_value(serde_json::json!("Migration25CurrentCatalog")).unwrap());
+        assert_eq!(
+            model_label(&legacy_pin),
+            "astra-v1 (version captured during upgrade)"
+        );
+        legacy_pin.resolved_upstream_model_id = None;
+        assert_eq!(model_label(&legacy_pin), "astra-v1 (version unknown)");
         let text = status_line(
             &catalog,
             &selection,
