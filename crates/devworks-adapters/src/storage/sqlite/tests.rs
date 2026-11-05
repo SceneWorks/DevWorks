@@ -110,6 +110,7 @@ mod authority;
 mod browser;
 mod connections;
 mod diagnostics;
+mod evals;
 mod git;
 mod indexing;
 mod jobs;
