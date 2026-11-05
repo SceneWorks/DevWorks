@@ -590,16 +590,16 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `addons.catalog` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<PackageRecord>` |
-| `addons.install` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Install'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
-| `addons.configure` | **Command**<br>`packageId`: `Id`<br>`expectedRevision`: `Revision`<br>`config`: `SchemaValue`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `PackageRecord` |
-| `addons.enable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Enable'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
-| `addons.disable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Disable'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
-| `addons.update` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Update'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.catalog` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<PackageRecord>` |
+| `addons.install` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Install'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.configure` | **Command**<br>`packageId`: `Id`<br>`expectedRevision`: `Revision`<br>`config`: `SchemaValue`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `PackageRecord` |
+| `addons.enable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Enable'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.disable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Disable'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.update` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Update'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.propose` | **Command**<br>`source`: `ArtifactRef`<br>`manifestDigest`: `Digest`<br>`basePackageId`: `?Id`<br>`expectedRevision`: `?Revision` | `ProposalRecord` |
 | `addons.logs` | **Query**<br>`packageId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<Diagnostic>` |
-| `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
-| `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 
 ### Help
 
@@ -2297,6 +2297,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `pendingBundle` | `?ArtifactRef` · *revision 2+* |
 | `available` | `?Items<PackageOffer>` · *revision 2+* |
 | `installed` | `?bool` · *revision 2+* |
+| `disabledProjects` | `?Items<Id>` · *revision 3+* |
 
 ### HelpTopic
 

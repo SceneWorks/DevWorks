@@ -88,6 +88,7 @@ pub struct AddonsScreen {
     pub config_text: HashMap<String, String>,
     /// Project IDs the package is disabled for, being edited (comma separated), per package.
     pub projects_text: HashMap<String, String>,
+    project_bases: HashMap<String, (String, i64)>,
     pub filter: String,
     pub busy: bool,
     /// A configuration refusal whose field errors are being fetched: (package, diagnostic).
@@ -578,7 +579,30 @@ impl AddonsScreen {
                     )
                     .color(theme::MUTED),
                 );
-                let text = self.projects_text.entry(id.clone()).or_default();
+                let saved = r
+                    .disabled_projects
+                    .as_ref()
+                    .map(|p| {
+                        p.0.iter()
+                            .map(|p| p.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let text = self
+                    .projects_text
+                    .entry(id.clone())
+                    .or_insert_with(|| saved.clone());
+                let base = self
+                    .project_bases
+                    .entry(id.clone())
+                    .or_insert_with(|| (saved.clone(), revision));
+                if text.as_str() == base.0 || text.as_str() == saved {
+                    *text = saved.clone();
+                    *base = (saved, revision);
+                }
+                // An unsaved draft keeps its own CAS revision across catalog refreshes.
+                let revision = base.1;
                 ui.text_edit_singleline(text).widget_info(|| {
                     egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Disabled projects")
                 });
@@ -633,7 +657,7 @@ use devworks_core::services::packages::{
 use serde_json::{Value, json};
 
 /// The revision of `addons.*` records the screen reads (effective availability and the rest).
-pub const ADDONS_REVISION: u64 = 2;
+pub const ADDONS_REVISION: u64 = 3;
 /// Media type of a package bundle artifact.
 pub const BUNDLE_MEDIA_TYPE: &str = "application/vnd.devworks.package";
 /// Largest bundle file the screen hashes and uploads.
@@ -989,5 +1013,58 @@ mod tests {
             actions.borrow().last(),
             Some(AddonsAction::Approve { update: true, .. })
         ));
+    }
+    #[test]
+    fn saved_project_overrides_initialize_the_editor_and_refresh_preserves_unsaved_changes() {
+        let mut r = record(true);
+        r.disabled_projects = Some(devworks_core::protocol::support::BoundedList(vec![
+            devworks_core::protocol::Id::new("project-a").unwrap(),
+        ]));
+        let state = Rc::new(RefCell::new((AddonsScreen::default(), r, Vec::new())));
+        let ui_state = state.clone();
+        let mut h = Harness::new_ui(move |ui| {
+            let mut st = ui_state.borrow_mut();
+            let (screen, record, actions) = &mut *st;
+            screen.detail(ui, record, actions);
+        });
+        h.run();
+        h.get_by_label("Project enablement").click();
+        h.run();
+        assert_eq!(state.borrow().0.projects_text["first-pack"], "project-a");
+        // Clean editors track refreshed saved state.
+        state
+            .borrow_mut()
+            .1
+            .disabled_projects
+            .as_mut()
+            .unwrap()
+            .0
+            .push(devworks_core::protocol::Id::new("project-b").unwrap());
+        state.borrow_mut().1.revision = devworks_core::protocol::Revision::new(2).unwrap();
+        h.run();
+        assert_eq!(
+            state.borrow().0.projects_text["first-pack"],
+            "project-a, project-b"
+        );
+        // An unsaved edit survives a subsequent catalog refresh and is what Save submits.
+        state.borrow_mut().0.projects_text.insert(
+            "first-pack".into(),
+            "project-a, project-b, project-c".into(),
+        );
+        state
+            .borrow_mut()
+            .1
+            .disabled_projects
+            .as_mut()
+            .unwrap()
+            .0
+            .clear();
+        state.borrow_mut().1.revision = devworks_core::protocol::Revision::new(3).unwrap();
+        h.run();
+        h.get_by_label("Save project enablement").click();
+        h.run();
+        assert!(
+            matches!(state.borrow().2.last(), Some(AddonsAction::ProjectEnablement { disabled, revision: 2, .. }) if disabled == &["project-a", "project-b", "project-c"])
+        );
     }
 }

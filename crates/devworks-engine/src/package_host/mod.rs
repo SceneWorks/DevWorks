@@ -69,8 +69,8 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::ports::packages::{Inspection, PackageActivity, QuiescenceGuard};
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{
-    ApplicationStore, ReadOptions, StorageError, StoredPackage, WriteOptions, read_snapshot,
-    run_write,
+    ApplicationStore, ReadOptions, StorageError, StoredPackage, WriteOptions, WriteTransaction,
+    read_snapshot, run_write, write_job,
 };
 use devworks_core::ports::{IdKind, IdSource};
 use devworks_core::protocol::records::{PackageAvailability, Severity};
@@ -478,6 +478,37 @@ impl Drop for Gate {
     }
 }
 
+fn attribution_work(
+    key: (String, Value),
+    kind: String,
+    mut payload: Value,
+) -> impl FnOnce(&mut dyn WriteTransaction) -> Result<i64, StorageError> + Send {
+    if let (Value::Object(m), Value::Object(k)) = (&mut payload, &key.1) {
+        for (a, b) in k {
+            m.insert(a.clone(), b.clone());
+        }
+    }
+    let package = key.0;
+    move |tx| {
+        let actor = tx.store().host_actor.clone();
+        let revision = tx.packages().package(&package)?.map_or(1, |p| p.revision);
+        let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+        tx.history()
+            .append(devworks_core::ports::storage::NewEvent {
+                id,
+                actor,
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "package".into(),
+                aggregate_id: package,
+                aggregate_revision: revision.max(1),
+                kind,
+                payload,
+            })
+    }
+}
+
 impl PackageHost {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -881,31 +912,22 @@ impl PackageHost {
 
     /// Records an invocation event in the package's history (best effort: the invocation's
     /// effects are journaled by the operations it reaches; this attributes the version used).
-    fn attribute(&self, key: &(String, Value), kind: &str, mut payload: Value) {
-        if let (Value::Object(m), Value::Object(k)) = (&mut payload, &key.1) {
-            for (a, b) in k {
-                m.insert(a.clone(), b.clone());
-            }
-        }
-        let (package, kind) = (key.0.clone(), kind.to_owned());
-        let _ = run_write(&*self.store, WriteOptions::default(), move |tx| {
-            let actor = tx.store().host_actor.clone();
-            let revision = tx.packages().package(&package)?.map_or(1, |p| p.revision);
-            let id = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
-            tx.history()
-                .append(devworks_core::ports::storage::NewEvent {
-                    id,
-                    actor,
-                    project_id: None,
-                    root_id: None,
-                    operation_id: None,
-                    aggregate_kind: "package".into(),
-                    aggregate_id: package,
-                    aggregate_revision: revision.max(1),
-                    kind,
-                    payload,
-                })
-        });
+    fn attribute(&self, key: &(String, Value), kind: &str, payload: Value) {
+        let _ = run_write(
+            &*self.store,
+            WriteOptions::default(),
+            attribution_work(key.clone(), kind.to_owned(), payload),
+        );
+    }
+
+    fn enqueue_attribute(&self, key: &(String, Value), kind: &str, payload: Value) {
+        let _ = self.store.submit_write(
+            WriteOptions::default(),
+            write_job(
+                attribution_work(key.clone(), kind.to_owned(), payload),
+                |_| {},
+            ),
+        );
     }
 
     /// Invocations one instance multiplexes: its declared limit, capped by the host.
@@ -1651,7 +1673,7 @@ impl PackageHost {
             inst.key.generation,
         );
         let deadline_ms = req.deadline.as_millis().clamp(1, 86_400_000) as u32;
-        let wait_for = req.deadline;
+        let deadline = Instant::now() + req.deadline;
         let sent = session.invoke(slot.clone(), |id| HostRequest::Invoke {
             jsonrpc: RpcVersion::V2,
             id,
@@ -1680,7 +1702,7 @@ impl PackageHost {
                 Unsent::Refused(InvokeRefusal::NotReady(e))
             });
         }
-        self.attribute(
+        self.enqueue_attribute(
             &run_key(&inst, &req_package, &req_contribution),
             "PackageInvoked",
             json!({"invocationId": invocation_id, "operationId": operation, "scope": scope_json}),
@@ -1695,11 +1717,15 @@ impl PackageHost {
         });
         // The host enforces the deadline (monotonic clock) and releases the admission once the
         // outcome is terminal.
-        let (watched, deadline) = (run.clone(), wait_for);
+        let watched = run.clone();
         std::thread::Builder::new()
             .name("package-invocation".into())
             .spawn(move || {
-                if watched.slot.wait(deadline).is_none() {
+                if watched
+                    .slot
+                    .wait(deadline.saturating_duration_since(Instant::now()))
+                    .is_none()
+                {
                     watched.cancel();
                 }
                 while watched.slot.wait(Duration::from_secs(1)).is_none() {

@@ -3966,3 +3966,94 @@ fn a_prerelease_runtime_never_satisfies_a_stable_requirement() {
         ("Incompatible".into(), "10.0.100-preview.1")
     );
 }
+
+#[test]
+fn invocation_deadline_and_handle_do_not_wait_for_a_busy_history_writer() {
+    let _s = serial();
+    let a = App::new();
+    package(a.install(&a.user, &Spec::new("history-bound-pack", "1.0.0")));
+    a.ready("history-bound-pack");
+    let gate = Arc::new(Gate::default());
+    let _release = Release(gate.clone());
+    gate.arm(IdKind::Event);
+    let held = gate.clone();
+    a.store
+        .submit_write(
+            WriteOptions::default(),
+            write_job(
+                move |_| {
+                    held.pass(IdKind::Event);
+                    Ok(())
+                },
+                |_| {},
+            ),
+        )
+        .unwrap();
+    assert!(gate.entered(Duration::from_secs(10)));
+    let host = a.app().packages().unwrap().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let result = host.invoke(InvokeRequest {
+            package_id: "history-bound-pack".into(), contribution_id: "history-bound-pack/wait".into(),
+            scope: InvocationScope::Workspace,
+            input: serde_json::from_value(json!({"artifactId": "i", "versionId": "v", "sha256": "e".repeat(64), "byteLength": "1", "mediaType": "a/b"})).unwrap(),
+            operation_id: id("op-history-bound"), deadline: Duration::from_millis(200), allowed_operations: vec![], kind: InvocationKind::Ordinary,
+        });
+        let _ = tx.send(result);
+    });
+    let handle = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("history must not delay the invocation handle")
+        .unwrap();
+    assert!(matches!(
+        finished(handle.wait(Duration::from_secs(2))),
+        InvocationOutcome::CancelledBeforeEffect
+    ));
+    assert!(
+        !gate.returned(),
+        "deadline enforced while history is still blocked"
+    );
+    gate.release();
+    thread.join().unwrap();
+}
+
+#[test]
+fn saved_project_overrides_are_readable_at_revision_three_after_restart() {
+    let _s = serial();
+    let mut a = App::new();
+    package(a.install(&a.user, &Spec::new("overrides-pack", "1.0.0")));
+    let configured = package(a.domain(&a.user, "addons.configure", json!({"kind": "addons.configure", "packageId": "overrides-pack", "expectedRevision": a.record("overrides-pack").revision.get().to_string(), "config": {"schema": host_schema_ref(PROJECT_ENABLEMENT_SCHEMA).unwrap(), "value": {"disabledProjects": ["project-a", "project-b"]}}})));
+    assert!(
+        configured.disabled_projects.is_none(),
+        "revision two stays unchanged"
+    );
+    a.shutdown();
+    a.boot();
+    let frame = json!({"protocol": "1.0-draft.1", "mode": "Query", "queryId": "saved-overrides", "schemaRevision": 3, "body": {"kind": "addons.catalog", "page": {"limit": 100}}});
+    let reply = a
+        .app()
+        .query(&a.user, "addons.catalog", frame.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result {
+        result: OperationResult::AddonsCatalog { value },
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}");
+    };
+    let record = value
+        .items
+        .0
+        .iter()
+        .find(|p| p.id.as_str() == "overrides-pack")
+        .unwrap();
+    let projects: Vec<_> = record
+        .disabled_projects
+        .as_ref()
+        .unwrap()
+        .0
+        .iter()
+        .map(|p| p.as_str())
+        .collect();
+    assert_eq!(projects, ["project-a", "project-b"]);
+}
