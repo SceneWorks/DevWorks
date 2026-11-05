@@ -207,7 +207,7 @@ fn tokenize(text: &str) -> Vec<Tok> {
                         break;
                     }
                 } else {
-                    i += 1;
+                    i += text[i..].chars().next().unwrap().len_utf8();
                 }
             }
             advance_lines(start, i.min(b.len()), &mut line);
