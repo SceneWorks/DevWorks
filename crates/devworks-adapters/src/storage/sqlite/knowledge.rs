@@ -1125,13 +1125,13 @@ macro_rules! knowledge_reads {
             fn knowledge_running_source_deletion(
                 &self,
                 scope: &KnowledgeScope,
-                source: &str,
+                source: Option<&str>,
             ) -> Result<Option<Id>, StorageError> {
                 db(self
                     .conn
                     .query_row(
                         "SELECT write_id FROM knowledge_source_deletions WHERE scope_key=?1 AND \
-                         source=?2 AND state='Running'",
+                         (?2 IS NULL OR source=?2) AND state='Running' ORDER BY write_id LIMIT 1",
                         params![scope.key(), source],
                         |r| r.get::<_, String>(0),
                     )
