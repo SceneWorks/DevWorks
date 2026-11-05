@@ -620,6 +620,18 @@ fn native_history_grading_excludes_its_own_root_scoped_audit_receipts() {
         other => panic!("{other:?}"),
     };
     let first = extract(fx.command(&worker, "evals.grade", body.clone()));
+    let attached_eval_audit = fx.read(|snapshot| {
+        Ok(snapshot
+            .history()
+            .page(&EventFilter::Root(root("root-a")), 0, 500)?
+            .events
+            .iter()
+            .any(|event| event.payload.get("operation") == Some(&json!("evals.grade"))))
+    });
+    assert!(
+        attached_eval_audit,
+        "feedback regression requires an eval audit event on the observed root"
+    );
     let second = extract(fx.command(&worker, "evals.grade", body));
     assert_eq!(
         first.id, second.id,
