@@ -32336,6 +32336,268 @@
       "typedValid": false
     },
     {
+      "entry": "domain-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-input-router.route",
+      "normalized": {
+        "body": {
+          "effort": "Default",
+          "expectedContextEpoch": "0",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "kind": "router.route",
+          "requiredCapabilities": [],
+          "sessionId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-router.route",
+      "normalized": {
+        "kind": "router.route",
+        "value": {
+          "connectionId": "id-a",
+          "effectiveEffort": "High",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "modelId": "id-a",
+          "pinId": "id-a",
+          "pinRevision": "1",
+          "requestedEffort": "High",
+          "resolvedEndpointProfile": "OpenAiResponses",
+          "resolvedIdentityOrigin": "Resolved",
+          "resolvedUpstreamModelId": "provider/astra-6.1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-input-router.pin",
+      "normalized": {
+        "body": {
+          "effort": "Default",
+          "expectedPinRevision": "1",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "kind": "router.pin",
+          "sessionId": "id-a"
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-router.pin",
+      "normalized": {
+        "kind": "router.pin",
+        "value": {
+          "connectionId": "id-a",
+          "effectiveEffort": "High",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "modelId": "id-a",
+          "pinId": "id-a",
+          "pinRevision": "1",
+          "requestedEffort": "High",
+          "resolvedEndpointProfile": "OpenAiResponses",
+          "resolvedIdentityOrigin": "Resolved",
+          "resolvedUpstreamModelId": "provider/astra-6.1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-input-router.availability",
+      "normalized": {
+        "body": {
+          "effort": "Default",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "kind": "router.availability",
+          "requiredCapabilities": [],
+          "sessionId": "session-a"
+        },
+        "mode": "Query",
+        "protocol": "1.0-draft.1",
+        "queryId": "request-a",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-router.availability",
+      "normalized": {
+        "kind": "router.availability",
+        "value": {
+          "available": false,
+          "blockedReasonCodes": [],
+          "eligibleModelIds": [],
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "pin": {
+            "connectionId": "id-a",
+            "effectiveEffort": "High",
+            "intent": {
+              "kind": "Tier",
+              "tier": "Max"
+            },
+            "modelId": "id-a",
+            "pinId": "id-a",
+            "pinRevision": "1",
+            "requestedEffort": "High",
+            "resolvedEndpointProfile": "OpenAiResponses",
+            "resolvedIdentityOrigin": "Resolved",
+            "resolvedUpstreamModelId": "provider/astra-6.1"
+          },
+          "pinEligible": true,
+          "pinReason": "Failover"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-pin-migration-observation",
+      "normalized": {
+        "kind": "router.pin",
+        "value": {
+          "connectionId": "id-a",
+          "effectiveEffort": "High",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "modelId": "id-a",
+          "pinId": "id-a",
+          "pinRevision": "1",
+          "requestedEffort": "High",
+          "resolvedEndpointProfile": "OpenAiResponses",
+          "resolvedIdentityOrigin": "Migration25CurrentCatalog",
+          "resolvedUpstreamModelId": "provider/astra-6.1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-pin-unknown-identity",
+      "normalized": {
+        "kind": "router.pin",
+        "value": {
+          "connectionId": "id-a",
+          "effectiveEffort": "High",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "modelId": "id-a",
+          "pinId": "id-a",
+          "pinRevision": "1",
+          "requestedEffort": "High",
+          "resolvedIdentityOrigin": "Unknown"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "r3-result-pin-no-new-history-fields",
+      "normalized": {
+        "kind": "router.pin",
+        "value": {
+          "connectionId": "id-a",
+          "effectiveEffort": "High",
+          "intent": {
+            "kind": "Tier",
+            "tier": "Max"
+          },
+          "modelId": "id-a",
+          "pinId": "id-a",
+          "pinRevision": "1",
+          "requestedEffort": "High"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r1-result-pin-snapshot",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a member introduced after schema revision 2 is present",
+      "expectedSchemaValid": false,
+      "id": "reject-r2-result-availability-snapshot",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": "a revision-gated member is omitted, never null",
+      "expectedSchemaValid": false,
+      "id": "reject-r3-result-null-pin-snapshot",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
       "entry": "domain-request.r2",
       "error": null,
       "expectedSchemaValid": true,
@@ -39025,7 +39287,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-13-1277",
+      "id": "r3-preview-source-13-1289",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -39046,7 +39308,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-13-1277",
+      "id": "r3-delete-source-13-1289",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -39069,7 +39331,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-15-1279",
+      "id": "r3-preview-source-15-1291",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -39090,7 +39352,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-15-1279",
+      "id": "r3-delete-source-15-1291",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",
@@ -39113,7 +39375,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-preview-source-256-1281",
+      "id": "r3-preview-source-256-1293",
       "normalized": {
         "body": {
           "kind": "knowledge.diagnostics",
@@ -39134,7 +39396,7 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
-      "id": "r3-delete-source-256-1281",
+      "id": "r3-delete-source-256-1293",
       "normalized": {
         "body": {
           "expectedScopeRevision": "1",

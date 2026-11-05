@@ -1853,17 +1853,17 @@
 </tr>
 <tr>
 <td><code>router.route</code></td>
-<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code></td>
+<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedContextEpoch</code>: <code>Counter</code><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>RouteChoice</code></td>
 </tr>
 <tr>
 <td><code>router.pin</code></td>
-<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedPinRevision</code>: <code>Revision</code><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code></td>
+<td><strong>Command</strong><br><code>sessionId</code>: <code>Id</code><br><code>expectedPinRevision</code>: <code>Revision</code><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>RouteChoice</code></td>
 </tr>
 <tr>
 <td><code>router.availability</code></td>
-<td><strong>Query</strong><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code><br><code>sessionId</code>: <code>?Id</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Query</strong><br><code>intent</code>: <code>RouteIntent</code><br><code>effort</code>: <code>EffortName</code><br><code>requiredCapabilities</code>: <code>Items&lt;Label&gt;</code><br><code>sessionId</code>: <code>?Id</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>RouteAvailability</code></td>
 </tr>
 <tr>
@@ -6127,6 +6127,18 @@
 <tr>
 <td><code>replacedPinId</code></td>
 <td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>resolvedUpstreamModelId</code></td>
+<td><code>?Text</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>resolvedEndpointProfile</code></td>
+<td><code>?EndpointKind</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>resolvedIdentityOrigin</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h3 id="routeavailability">RouteAvailability</h3>

@@ -42,3 +42,6 @@ The DW-71 eval contract adds `evals.grade`/`evals.results`, immutable supplied s
 
 
 DW-108 registers `router.catalog` revision 3 with a query-only `RouteCatalogModel`; configured `RouteModel` inputs remain unchanged. `earlierName: RouteModel` with `earlierBefore: 3` folds the query projection to the recorded name for revisions 1 and 2, preserving every legacy schema byte. Revision-3 fixtures cover plural serving-scope targets, unknown and unavailable inventory, strict gated fields and rejected configuration injection. Evidence lives in `docs/architecture/validation/latest-model-contracts/`; no model inference or provider runtime acceptance is claimed by schema verification.
+
+
+The same DW-108 revision-3 outputs retain concrete pin snapshots on `RouteChoice`: upstream model ID, endpoint profile and explicit identity origin. `router.route`/`router.pin` register [1,3], while `router.availability` retains [1,2,3]. `Migration25CurrentCatalog` is an observation of the current row, not a fabricated historical resolution; old receipt JSON stays unchanged. Fixture admission coverage is 502 exact operation/mode/revision bindings, computed from the register.

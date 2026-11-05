@@ -557,9 +557,9 @@ All 356 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<RouteCatalogModel>` |
 | `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ConnectionRecord>` |
-| `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>` | `RouteChoice` |
-| `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName` | `RouteChoice` |
-| `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RouteAvailability` |
+| `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
+| `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
+| `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteAvailability` |
 | `router.usage` | **Query**<br>`rootId`: `?RootId`<br>`sessionId`: `?Id`<br>`jobRunId`: `?Id`<br>`page`: `PageRequest` | `UsageReport` |
 | `router.request_status` | **Query**<br>`requestId`: `Id` | `OperationRef` |
 | `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<ModelPriceStatus>` |
@@ -2081,6 +2081,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `pinId` | `Id` |
 | `pinRevision` | `Revision` |
 | `replacedPinId` | `?Id` |
+| `resolvedUpstreamModelId` | `?Text` · *revision 3+* |
+| `resolvedEndpointProfile` | `?EndpointKind` · *revision 3+* |
+| `resolvedIdentityOrigin` | `?Label` · *revision 3+* |
 
 ### RouteAvailability
 

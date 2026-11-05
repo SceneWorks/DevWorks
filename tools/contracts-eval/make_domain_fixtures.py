@@ -536,6 +536,20 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Revision 3 retains concrete pin identity; migration observations never claim historical origin.
+resolved_pin={**pin_choice,'resolvedUpstreamModelId':'provider/astra-6.1','resolvedEndpointProfile':sample('EndpointKind'),'resolvedIdentityOrigin':'Resolved'}
+for name in ['router.route','router.pin']:
+ case('r3-input-'+name,'domain-request.r3',command_at(name,3))
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':resolved_pin})
+case('r3-input-router.availability','domain-request.r3',domain('router.availability',3,sessionId='session-a'))
+case('r3-result-router.availability','operation-result.r3',{'kind':'router.availability','value':{**availability_r2,'pin':resolved_pin}})
+case('r3-result-pin-migration-observation','operation-result.r3',{'kind':'router.pin','value':{**resolved_pin,'resolvedIdentityOrigin':'Migration25CurrentCatalog'}})
+case('r3-result-pin-unknown-identity','operation-result.r3',{'kind':'router.pin','value':{**pin_choice,'resolvedIdentityOrigin':'Unknown'}})
+case('r3-result-pin-no-new-history-fields','operation-result.r3',{'kind':'router.pin','value':pin_choice})
+case('reject-r1-result-pin-snapshot','operation-result',{'kind':'router.pin','value':resolved_pin},False,False)
+case('reject-r2-result-availability-snapshot','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':resolved_pin}},False,False)
+case('reject-r3-result-null-pin-snapshot','operation-result.r3',{'kind':'router.route','value':{**resolved_pin,'resolvedUpstreamModelId':None}},False,False)
+
 # Schema revision 2 (indexing status): freshness, per-language coverage, semantic pack state and
 # every overlay with its lifecycle state and snapshot provenance.
 oid='0123456789abcdef0123456789abcdef01234567'
