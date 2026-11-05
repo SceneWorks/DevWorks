@@ -555,7 +555,7 @@ All 356 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<RouteModel>` |
+| `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<RouteCatalogModel>` |
 | `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ConnectionRecord>` |
 | `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>` | `RouteChoice` |
 | `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName` | `RouteChoice` |
@@ -3541,6 +3541,27 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | Field | Type |
 | --- | --- |
 | `value` | `DynamicJson` |
+
+### RouteCatalogModel
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `displayName` | `Label` |
+| `endpointProfile` | `EndpointKind` |
+| `upstreamModelId` | `Text` |
+| `enabled` | `bool` |
+| `tierMemberships` | `Items<TierName>` |
+| `efforts` | `Items<EffortName>` |
+| `imageInput` | `bool` |
+| `tools` | `bool` |
+| `revision` | `Revision` |
+| `contextTokens` | `?PositiveCounter` · *revision 2+* |
+| `connectionId` | `?Id` · *revision 2+* |
+| `latestFamily` | `?Id` · *revision 3+* |
+| `resolvesToModelIds` | `?Items<Id>` · *revision 3+* |
+| `available` | `?bool` · *revision 3+* |
+| `availabilityReason` | `?Label` · *revision 3+* |
 
 ## Machine sources
 

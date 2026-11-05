@@ -8211,6 +8211,62 @@
     "schemaValid": true
   },
   {
+    "id": "r3-input-router.catalog",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.catalog\",\"page\":{\"limit\":20},\"includeDisabled\":false},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-router.catalog",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-catalog-unavailable",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[],\"available\":false,\"availabilityReason\":\"MissingFromInventory\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-catalog-unknown",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[],\"availabilityReason\":\"InventoryUnknown\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-catalog-latest",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-catalog-latest",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-catalog-null-availability",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":null,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-configure-catalog-facts",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Model\",\"model\":{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-result-router.configure",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"router.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
@@ -8883,42 +8939,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1269",
+    "id": "r3-preview-source-13-1277",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1269",
+    "id": "r3-delete-source-13-1277",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1271",
+    "id": "r3-preview-source-15-1279",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1271",
+    "id": "r3-delete-source-15-1279",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1273",
+    "id": "r3-preview-source-256-1281",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1273",
+    "id": "r3-delete-source-256-1281",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

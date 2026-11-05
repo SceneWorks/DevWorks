@@ -405,8 +405,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Those eight package operations expose saved project overrides at revision 3.
     // Git grouped coverage, retained Git links, browser provenance and artifact source reads
     // add 23 operation/mode/revision admissions. Two new eval operations bring the
-    // revision-1 bindings to 361 and the complete revision/mode coverage to 498.
-    assert_eq!(admitted.len(), 498);
+    // revision-1 bindings to 361 and the complete revision/mode coverage to 498. Router catalog revision 3 adds one admission.
+    assert_eq!(admitted.len(), 499);
 }
 
 #[test]

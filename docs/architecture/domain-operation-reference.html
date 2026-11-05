@@ -1843,8 +1843,8 @@
 </thead>
 <tbody><tr>
 <td><code>router.catalog</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>includeDisabled</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
-<td><code>Page&lt;RouteModel&gt;</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><code>includeDisabled</code>: <code>bool</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>Page&lt;RouteCatalogModel&gt;</code></td>
 </tr>
 <tr>
 <td><code>router.connections</code></td>
@@ -10057,6 +10057,79 @@
 <tbody><tr>
 <td><code>value</code></td>
 <td><code>DynamicJson</code></td>
+</tr>
+</tbody></table>
+<h3 id="routecatalogmodel">RouteCatalogModel</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>displayName</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>endpointProfile</code></td>
+<td><code>EndpointKind</code></td>
+</tr>
+<tr>
+<td><code>upstreamModelId</code></td>
+<td><code>Text</code></td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>tierMemberships</code></td>
+<td><code>Items&lt;TierName&gt;</code></td>
+</tr>
+<tr>
+<td><code>efforts</code></td>
+<td><code>Items&lt;EffortName&gt;</code></td>
+</tr>
+<tr>
+<td><code>imageInput</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>tools</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>contextTokens</code></td>
+<td><code>?PositiveCounter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>connectionId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>latestFamily</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>resolvesToModelIds</code></td>
+<td><code>?Items&lt;Id&gt;</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>?bool</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>availabilityReason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h2 id="machine-sources">Machine sources</h2>
