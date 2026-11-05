@@ -9,8 +9,8 @@ use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 use crate::protocol::support::*;
 use crate::protocol::{
     Activation, ActorId, AssignmentId, Blockers, CommandId, CorrelationId, Counter,
-    EligibilityTarget, Event, EventId, Id, OperationId, OperationState, ProjectId, Purpose,
-    RequestKey, ResourceId, Revision, RootControl, RootId,
+    EligibilityTarget, EventId, Id, OperationId, OperationState, ProjectId, Purpose, RequestKey,
+    ResourceId, Revision, RootControl, RootId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10262,7 +10262,7 @@ pub struct AllocationRecovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_handoff: Option<HandoffRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_activity: Option<Event>,
+    pub last_activity: Option<AllocationActivity>,
     pub unmet_acceptance: Items<AcceptanceCriterion>,
 }
 impl Check for AllocationRecovery {
@@ -10403,5 +10403,53 @@ impl Revisioned for AllocationSelection {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationActivityPayload {
+    pub value: DynamicJson,
+}
+impl Check for AllocationActivityPayload {
+    fn check(&self) -> Result<(), String> {
+        self.value.check()?;
+        crate::protocol::rules::record(
+            "AllocationActivityPayload",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationActivity {
+    pub event_id: Id,
+    pub sequence: Revision,
+    pub actor_id: ActorId,
+    pub occurred_at_ms: Counter,
+    pub kind: Label,
+    pub work_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<AllocationActivityPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_unavailable_reason: Option<Label>,
+}
+impl Check for AllocationActivity {
+    fn check(&self) -> Result<(), String> {
+        self.event_id.check()?;
+        self.sequence.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.kind.check()?;
+        self.work_id.check()?;
+        self.payload.check()?;
+        self.payload_unavailable_reason.check()?;
+        crate::protocol::rules::record(
+            "AllocationActivity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
     }
 }

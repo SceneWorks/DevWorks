@@ -3914,7 +3914,7 @@
         "previous_session_id": "?Id",
         "links": "Items<WorkLink>",
         "latest_handoff": "?HandoffRecord",
-        "last_activity": "?Event",
+        "last_activity": "?AllocationActivity",
         "unmet_acceptance": "Items<AcceptanceCriterion>"
       }
     },
@@ -3947,6 +3947,25 @@
         "Claimed",
         "Recovered"
       ]
+    },
+    "AllocationActivityPayload": {
+      "kind": "record",
+      "fields": {
+        "value": "DynamicJson"
+      }
+    },
+    "AllocationActivity": {
+      "kind": "record",
+      "fields": {
+        "event_id": "Id",
+        "sequence": "Revision",
+        "actor_id": "ActorId",
+        "occurred_at_ms": "Counter",
+        "kind": "Label",
+        "work_id": "Id",
+        "payload": "?AllocationActivityPayload",
+        "payload_unavailable_reason": "?Label"
+      }
     }
   },
   "operations": {
