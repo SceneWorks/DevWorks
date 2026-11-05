@@ -786,8 +786,12 @@ fn failover_repins_within_the_pool_and_keeps_the_replacement_after_recovery() {
         ConnectionState::ReauthenticationRequired,
         None,
     );
-    fx.dir
-        .set(CLAUDE, "conn-claude-2", ConnectionState::Connected, None);
+    fx.dir.set(
+        CLAUDE,
+        "conn-claude-2",
+        ConnectionState::Connected,
+        Some(&["claude-opus-5-5"]),
+    );
     let (moved, wrote) = chosen(fx.route("s1", tier("High"), "Default", &[]));
     assert!(wrote);
     assert_eq!(moved.model_id.as_str(), "opus");
@@ -2068,4 +2072,128 @@ fn alias_metadata_unions_current_scope_declarations_but_requests_require_one_joi
     let both = fx.availability(named("sol-latest"), "Default", &["vision", "tools"], None);
     assert_eq!(codes(&both), ["ToolsUnsupported", "VisionUnsupported"]);
     assert_eq!(fx.cursor("High"), 0);
+}
+
+#[test]
+fn a_global_row_cannot_escape_its_latest_connection_scope_during_assessment() {
+    let fx = Fx::new();
+    // Sol's global configured row is latest only on the unavailable Z connection. The A
+    // connection lists both it and a newer release: it may never serve old Sol as latest.
+    let mut newer = versioned("sol-new", "gpt-7-sol", CODEX, "a-codex");
+    newer.image_input = false;
+    fx.add_model(newer);
+    fx.dir.clear();
+    fx.dir.set(
+        CODEX,
+        "a-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.1-sol", "gpt-7-sol"]),
+    );
+    fx.dir.set(
+        CODEX,
+        "z-codex",
+        ConnectionState::ReauthenticationRequired,
+        Some(&["gpt-6.1-sol"]),
+    );
+    let unavailable = fx.availability(named("sol-latest"), "Default", &["vision"], None);
+    assert!(
+        !unavailable.available,
+        "A's older capable row must not masquerade as latest"
+    );
+    assert_eq!(
+        codes(&unavailable),
+        ["CredentialsRequired", "VisionUnsupported"]
+    );
+    fx.cool("sol-new", T0 + 60_000);
+    let unavailable = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert!(!unavailable.available);
+    assert_eq!(codes(&unavailable), ["Cooling", "CredentialsRequired"]);
+    fx.dir.set(
+        CODEX,
+        "z-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.1-sol"]),
+    );
+    let (choice, _) = chosen(fx.route("s1", named("sol-latest"), "Default", &["vision"]));
+    assert_eq!(choice.model_id.as_str(), "sol");
+    assert_eq!(
+        choice.connection_id.as_str(),
+        "z-codex",
+        "retain the actual max-version scope"
+    );
+}
+
+#[test]
+fn bare_and_canonical_publisher_forms_share_one_numeric_family_scope() {
+    let fx = Fx::new();
+    fx.add_model(versioned(
+        "sol-prefixed",
+        "openai/gpt-7-sol",
+        CODEX,
+        "conn-codex",
+    ));
+    assert_eq!(
+        ids(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["sol-prefixed"]
+    );
+    fx.cool("sol-prefixed", T0 + 60_000);
+    let unavailable = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert!(!unavailable.available);
+    assert_eq!(codes(&unavailable), ["Cooling"]);
+}
+
+#[test]
+fn a_pin_never_silently_changes_connection_to_escape_latest_scope_constraints() {
+    let fx = Fx::new();
+    let mut newer = versioned("sol-new", "gpt-7-sol", CODEX, "a-codex");
+    newer.image_input = false;
+    fx.add_model(newer);
+    fx.dir.clear();
+    fx.dir.set(
+        CODEX,
+        "a-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.1-sol", "gpt-7-sol"]),
+    );
+    fx.dir.set(
+        CODEX,
+        "z-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.1-sol"]),
+    );
+    let (pin, _) = chosen(fx.route("s1", named("sol-latest"), "Default", &["vision"]));
+    assert_eq!(pin.connection_id.as_str(), "z-codex");
+    fx.dir.set(
+        CODEX,
+        "z-codex",
+        ConnectionState::ReauthenticationRequired,
+        Some(&["gpt-6.1-sol"]),
+    );
+    let availability = fx.availability(named("sol-latest"), "Default", &["vision"], Some("s1"));
+    assert!(!availability.available);
+    assert_eq!(availability.pin_eligible, Some(false));
+    assert_eq!(
+        refused(fx.route("s1", named("sol-latest"), "Default", &["vision"])).code,
+        DomainErrorCode::CredentialsRequired
+    );
+    assert_eq!(fx.pin_row("s1").unwrap().pin_id, pin.pin_id);
+    let auxiliary = fx.read(|snapshot| {
+        fx.router.route_auxiliary(
+            snapshot,
+            &AuxiliaryRequest {
+                purpose: Purpose::Title,
+                session_id: Some(id("s1")),
+                intent: serde_json::from_value(named("sol-latest")).unwrap(),
+                effort: EffortName::Default,
+                required_capabilities: vec!["vision".into()],
+            },
+        )
+    });
+    assert!(auxiliary.is_err());
+    // A changed request can legitimately use A's newest release, with an explicit new pin.
+    let (changed, wrote) = chosen(fx.route("s1", named("sol-latest"), "Default", &[]));
+    assert!(wrote);
+    assert_eq!(changed.model_id.as_str(), "sol-new");
+    assert_eq!(changed.connection_id.as_str(), "a-codex");
+    assert_ne!(changed.pin_id, pin.pin_id);
 }
