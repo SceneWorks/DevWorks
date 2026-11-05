@@ -123,6 +123,7 @@ pub struct AdmittedCommand {
     targets: Vec<Id>,
     project_targets: Vec<crate::protocol::ProjectId>,
     resume_grants: Vec<GrantUse>,
+    authorization: Authorization,
 }
 impl AdmittedCommand {
     pub fn descriptor(&self) -> &'static OperationDescriptor {
@@ -155,6 +156,10 @@ impl AdmittedCommand {
     /// work spends each one together with a non-refused decision; a use case reads them (never
     /// writes them) to learn which manual-resume conditions the invocation was authorized to
     /// clear.
+    /// Admission proof retained by durable effects; grant uses are spent by the gateway.
+    pub fn authorization(&self) -> &Authorization {
+        &self.authorization
+    }
     pub fn resume_grants(&self) -> &[GrantUse] {
         &self.resume_grants
     }
@@ -483,6 +488,7 @@ impl Gateway<'_> {
             targets: decoded.targets,
             project_targets: decoded.project_targets,
             resume_grants: authorization.grants().to_vec(),
+            authorization: authorization.clone(),
         };
         // Preparation runs only for an admitted, currently authorized command and before its unit
         // of work; it never records a receipt, so a failure here is retryable with the same key.
@@ -1699,6 +1705,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn diagnostics(&mut self) -> &mut dyn crate::ports::storage::DiagnosticRepository {
         self.inner.get_mut().diagnostics()
+    }
+    fn git(&mut self) -> &mut dyn crate::ports::storage::GitRepository {
+        self.inner.get_mut().git()
     }
     fn browser(&mut self) -> &mut dyn crate::ports::storage::BrowserRepository {
         self.inner.get_mut().browser()

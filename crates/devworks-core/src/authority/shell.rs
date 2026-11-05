@@ -1870,7 +1870,8 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         "status" | "log" | "show" | "diff" | "fetch" | "add" | "commit" | "init" | "describe"
         | "blame" | "ls-files" | "ls-tree" | "rev-parse" | "rev-list" | "shortlog" | "grep"
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
-        | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file" => true,
+        | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file"
+        | "ls-remote" | "merge-base" | "check-attr" => true,
         "stash" => match rest.first().map(|w| w.text.as_str()) {
             Some("drop" | "clear") => consequential(c, &dir),
             _ => true,
@@ -2051,6 +2052,9 @@ fn push(rest: &[Word], c: &mut Collector) {
     if rewrites && (refspecs.is_empty() || broad || refspecs.iter().any(current_branch)) {
         // The rewritten destination cannot be determined before dispatch.
         c.hold(InputNeeded::UnresolvedTarget);
+    }
+    if rewrites || refspecs.is_empty() {
+        c.hold(InputNeeded::GitPushOwnerRequired);
     }
 }
 

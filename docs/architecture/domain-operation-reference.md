@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 351 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 354 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -149,7 +149,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `history.events` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.events'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/query-request.r2.schema.json)) | `HistoryPage<Event>` |
 | `history.work_lineage` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<LineageRecord>` |
-| `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<AttributedGitLink>` |
+| `history.git_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HistoryPage<AttributedGitLink>` |
 | `history.evidence_links` | **Query**<br>`rootId`: `RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `HistoryPage<EvidenceLink>` |
 | `history.operation_status` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'history.operation_status'} | `OperationRef` |
 | `history.tool_usage` | **Query**<br>`rootId`: `?RootId`<br>`projectId`: `?ProjectId`<br>`workspace`: `?bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `UsagePage` |
@@ -315,9 +315,9 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
-| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
-| `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'} | `ArtifactReadContent` |
+| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3, 4 ([revision 4 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
+| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3, 4 ([revision 4 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
+| `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'}<br><br>**Schema revisions** 1, 4 ([revision 4 input](contracts/artifact-query-request.r3.schema.json)) | `ArtifactReadContent` |
 | `artifacts.preview` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Preview'} | `ArtifactPreview` |
 | `artifacts.export` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Export'} | `ArtifactExport` |
 | `artifacts.reference` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Reference'} | `MutationSummary` |
@@ -403,7 +403,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `git.diff` | **Query**<br>`repositoryId`: `Id`<br>`worktreeId`: `?Id`<br>`base`: `GitOid`<br>`head`: `GitOid`<br>`paths`: `Items<RelativePath>`<br>`page`: `PageRequest` | `Page<ArtifactRef>` |
 | `git.commit` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Commit'} | `GitInspection` |
 | `git.push` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Push'} | `GitInspection` |
-| `git.pull_request` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'OpenPullRequest'} | `GitLink` |
+| `git.pull_request` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'OpenPullRequest'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/git-command-request.r2.schema.json)) | `GitLink` |
 | `git.integrate` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Integrate'} | `DeliverySnapshot` |
 | `git.cleanup` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Cleanup'} | `MutationSummary` |
 
@@ -464,14 +464,14 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `browser.sessions` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Command**<br>`action`: `BrowserSessionAction` | `Page<BrowserSession>` |
-| `browser.inspect` | **Query**<br>`target`: `BrowserTarget` | `BrowserSnapshot` |
-| `browser.navigate` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision`<br>`targetId`: `?Id`<br>`location`: `BrowserLocation` | `BrowserSnapshot` |
-| `browser.input` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision`<br>`action`: `BrowserInput` | `BrowserObservation` |
-| `browser.upload` | **Command**<br>`node`: `BrowserNode`<br>`files`: `NonEmpty<ArtifactRef>` | `BrowserObservation` |
-| `browser.screenshot` | **Query**<br>`target`: `BrowserTarget`<br>`fullPage`: `bool` | `ArtifactRef` |
-| `browser.console` | **Query**<br>`sessionId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<BrowserObservation>` |
-| `browser.network` | **Query**<br>`sessionId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<BrowserObservation>` |
+| `browser.sessions` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Command**<br>`action`: `BrowserSessionAction`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<BrowserSession>` |
+| `browser.inspect` | **Query**<br>`target`: `BrowserTarget`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `BrowserSnapshot` |
+| `browser.navigate` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision`<br>`targetId`: `?Id`<br>`location`: `BrowserLocation`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `BrowserSnapshot` |
+| `browser.input` | **Command**<br>`sessionId`: `Id`<br>`expectedRevision`: `Revision`<br>`action`: `BrowserInput`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `BrowserObservation` |
+| `browser.upload` | **Command**<br>`node`: `BrowserNode`<br>`files`: `NonEmpty<ArtifactRef>`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `BrowserObservation` |
+| `browser.screenshot` | **Query**<br>`target`: `BrowserTarget`<br>`fullPage`: `bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ArtifactRef` |
+| `browser.console` | **Query**<br>`sessionId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<BrowserObservation>` |
+| `browser.network` | **Query**<br>`sessionId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<BrowserObservation>` |
 
 ### Desktop
 
@@ -1620,6 +1620,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `head` | `GitOid` |
 | `actorId` | `?ActorId` · *revision 2+* |
 | `occurredAtMs` | `?Counter` · *revision 2+* |
+| `worktreePath` | `?Text` · *revision 3+* |
+| `worktreeRemoved` | `?bool` · *revision 3+* |
+| `agentSessionId` | `?Id` · *revision 3+* |
+| `repositoryUrl` | `?Url` · *revision 3+* |
 
 ### ReleaseRecord
 
@@ -1706,6 +1710,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `state` | `ItemState` |
 | `targetIds` | `Items<Id>` |
 | `processOwnerId` | `Id` |
+| `testedRepository` | `?TestedRepositoryRevision` · *revision 3+* |
 
 ### BrowserTarget
 
@@ -1759,6 +1764,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `sequence` | `Counter` |
 | `evidence` | `ArtifactRef` |
 | `truncated` | `bool` |
+| `testedRepository` | `?TestedRepositoryRevision` · *revision 3+* |
 
 ### DesktopRecord
 
@@ -2773,13 +2779,14 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `scope` | `DataScope` |
 | `referenceCount` | `Counter` |
 | `tags` | `?ArtifactTags` · *revision 2+* |
+| `testedRepository` | `?TestedRepositoryRevision` · *revision 4+* |
 
 ### ArtifactReadContent
 
 | Kind | Fields |
 | --- | --- |
-| `Text` | `artifact`: `ArtifactRef`<br>`firstByte`: `Counter`<br>`nextByte`: `Counter`<br>`content`: `Content`<br>`truncated`: `bool` |
-| `Binary` | `artifact`: `ArtifactRef`<br>`streamId`: `Id`<br>`firstByte`: `Counter`<br>`byteLength`: `Counter`<br>`expiresAtMs`: `Counter` |
+| `Text` | `artifact`: `ArtifactRef`<br>`firstByte`: `Counter`<br>`nextByte`: `Counter`<br>`content`: `Content`<br>`truncated`: `bool`<br>`testedRepository`: `?TestedRepositoryRevision` |
+| `Binary` | `artifact`: `ArtifactRef`<br>`streamId`: `Id`<br>`firstByte`: `Counter`<br>`byteLength`: `Counter`<br>`expiresAtMs`: `Counter`<br>`testedRepository`: `?TestedRepositoryRevision` |
 
 ### ArtifactPreview
 
@@ -3378,6 +3385,18 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### QueueSide
 
 `Before`, `After`.
+
+### TestedRepositoryRevision
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `worktreeId` | `Id` |
+| `head` | `GitOid` |
+| `dirty` | `bool` |
+| `ownershipRevision` | `Revision` |
+| `observedAtMs` | `Counter` |
+| `repositoryUrl` | `?Url` |
 
 ## Machine sources
 

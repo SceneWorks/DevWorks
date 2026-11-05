@@ -375,6 +375,9 @@ impl ReadSnapshot for MemSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead {
         &self.unsupported
     }
+    fn git(&self) -> &dyn GitRead {
+        &self.unsupported
+    }
     fn browser(&self) -> &dyn BrowserRead {
         &self.unsupported
     }
@@ -467,6 +470,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository {
+        &mut self.unsupported
+    }
+    fn git(&mut self) -> &mut dyn GitRepository {
         &mut self.unsupported
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
@@ -2637,5 +2643,45 @@ impl KnowledgeRepository for Unsupported {
     }
     fn map_knowledge_import(&mut self, _: &Id, _: i64, _: &Id, _: &Id) -> Result<(), StorageError> {
         nope()
+    }
+}
+
+impl GitRead for Unsupported {
+    fn git_worktree_for_branch(
+        &self,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<StoredGitWorktree>, StorageError> {
+        Ok(None)
+    }
+    fn git_pending_worktrees(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
+    fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
+        Ok(None)
+    }
+    fn git_worktrees(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGitWorktree>, StorageError> {
+        Ok(vec![])
+    }
+}
+impl GitRepository for Unsupported {
+    fn insert_git_worktree(&mut self, _: &StoredGitWorktree) -> Result<(), StorageError> {
+        Err(StorageError::InvalidRecord(
+            "Git test store not configured".into(),
+        ))
+    }
+    fn update_git_worktree(&mut self, _: &StoredGitWorktree, _: i64) -> Result<(), StorageError> {
+        Err(StorageError::InvalidRecord(
+            "Git test store not configured".into(),
+        ))
     }
 }

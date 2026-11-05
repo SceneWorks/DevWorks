@@ -118,11 +118,21 @@ pub struct ProjectsUi {
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
     pub texts: BTreeMap<(String, bool), TextState>,
+    pub git: BTreeMap<String, GitView>,
     /// Index status, runs and the section's indexing sources (DW-23).
     pub indexing: super::indexing::IndexingUi,
     /// Applied project mutations; a list query started before the latest is re-queried.
     pub mutations: u64,
     pub list_at: u64,
+}
+
+#[derive(Default)]
+pub struct GitView {
+    pub inspection: Option<devworks_core::protocol::records::GitInspection>,
+    pub error: Option<String>,
+    pub base: String,
+    pub head: String,
+    pub patch: Option<String>,
 }
 
 /// What the screens ask the shell to do.
@@ -139,6 +149,8 @@ enum Action {
     SaveBase(String),
     InheritBase(String),
     LoadTexts(String),
+    InspectGit(String),
+    DiffGit(String),
     RemoveIndex(RepositoryRecord),
     Index(super::indexing::IndexAction),
     /// Scheduled jobs scoped to the project.
@@ -223,6 +235,15 @@ impl Shell {
             "Reading the repository base directory",
             "settings.read_effective",
             move |b| ops::project_settings_read(b, &p, &[BASE_DIRECTORY]),
+        );
+    }
+    fn load_git(&mut self, repository: &str) {
+        let r = repository.to_owned();
+        self.query(
+            Slot::GitInspect(r.clone()),
+            "Inspecting repository",
+            "git.inspect",
+            move |be| ops::git_inspect(be, &r),
         );
     }
     fn load_texts(&mut self, repository: &str) {
@@ -407,6 +428,19 @@ impl Shell {
                             "Saving the repository base directory",
                             "settings.save_revision",
                             frame,
+                        );
+                    }
+                }
+                Action::InspectGit(r) => self.load_git(&r),
+                Action::DiffGit(r) => {
+                    if let Some(view) = self.projects.git.get(&r) {
+                        let (base, head) =
+                            (view.base.trim().to_owned(), view.head.trim().to_owned());
+                        self.query(
+                            Slot::GitDiff(r.clone()),
+                            "Reading Git patch",
+                            "git.diff",
+                            move |be| ops::git_diff(be, &r, &base, &head),
                         );
                     }
                 }
@@ -692,6 +726,51 @@ impl Shell {
                             self.load_base(&p);
                         }
                     }
+                }
+            }
+            (Slot::GitInspect(r), Reply::Query(q)) => {
+                let view = self.projects.git.entry(r).or_default();
+                match ops::git_inspected(q) {
+                    Ok(value) => {
+                        view.head = value.head.hex.clone();
+                        view.inspection = Some(value);
+                        view.error = None;
+                    }
+                    Err(e) => view.error = Some(e.describe()),
+                }
+            }
+            (Slot::GitDiff(r), Reply::Query(q)) => match ops::git_patch(q) {
+                Ok(Some(artifact)) => {
+                    self.query(
+                        Slot::GitDiffContent(r),
+                        "Reading patch artifact",
+                        "artifacts.read",
+                        move |be| ops::artifact_read(be, &artifact),
+                    );
+                }
+                Ok(None) => {
+                    self.projects.git.entry(r).or_default().patch =
+                        Some("No changes between these commits.".into())
+                }
+                Err(e) => self.projects.git.entry(r).or_default().error = Some(e.describe()),
+            },
+            (Slot::GitDiffContent(r), Reply::Query(q)) => {
+                let view = self.projects.git.entry(r).or_default();
+                match ops::read_content(q) {
+                    Ok(devworks_core::protocol::records::ArtifactReadContent::Text {
+                        content,
+                        truncated,
+                        ..
+                    }) => {
+                        view.patch = Some(if truncated {
+                            format!("{}\n[Preview truncated]", content.0)
+                        } else {
+                            content.0
+                        });
+                        view.error = None;
+                    }
+                    Ok(_) => view.error = Some("The patch artifact did not contain text.".into()),
+                    Err(e) => view.error = Some(e.describe()),
                 }
             }
             (Slot::RepositoryText(r, readme), Reply::Query(q)) => {
@@ -1937,6 +2016,69 @@ fn repository_detail(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(&r.name.0).strong());
+            if ui.small_button("Inspect source control").clicked() {
+                actions.push(Action::InspectGit(r.id.as_str().to_owned()));
+            }
+            if let Some(view) = projects.git.get_mut(r.id.as_str()) {
+                if let Some(error) = &view.error {
+                    widgets::caption(ui, error);
+                }
+                if let Some(state) = &view.inspection {
+                    widgets::caption(
+                        ui,
+                        if state.dirty {
+                            "Uncommitted changes"
+                        } else {
+                            "Clean checkout"
+                        },
+                    );
+                    let github = r
+                        .remote_url
+                        .as_ref()
+                        .and_then(|u| {
+                            devworks_core::services::git::github::Repository::from_remote(&u.0)
+                        })
+                        .map(|r| format!("https://github.com/{}/{}", r.owner, r.name));
+                    if let Some(branch) = &state.branch {
+                        if let Some(url) = &github {
+                            ui.hyperlink_to(
+                                &branch.0,
+                                devworks_core::services::git::github::branch_url(url, &branch.0)
+                                    .unwrap_or_else(|| url.clone()),
+                            );
+                        } else {
+                            ui.label(&branch.0);
+                        }
+                    }
+                    if let Some(url) = &github {
+                        ui.hyperlink_to(
+                            &state.head.hex,
+                            format!("{url}/commit/{}", state.head.hex),
+                        );
+                    } else {
+                        ui.monospace(&state.head.hex);
+                    }
+                }
+                egui::CollapsingHeader::new("Compare commits")
+                    .id_salt(("git-diff", r.id.as_str()))
+                    .show(ui, |ui| {
+                        ui.label("Base commit");
+                        ui.text_edit_singleline(&mut view.base);
+                        ui.label("Head commit");
+                        ui.text_edit_singleline(&mut view.head);
+                        if ui.small_button("Read patch").clicked() {
+                            actions.push(Action::DiffGit(r.id.as_str().to_owned()));
+                        }
+                        if let Some(patch) = &view.patch {
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    ui.monospace(patch);
+                                });
+                        }
+                    });
+            }
+
             ui.horizontal_wrapped(|ui| {
                 chip(ui, life_label(&r.lifecycle), Tone::Neutral);
                 chip(

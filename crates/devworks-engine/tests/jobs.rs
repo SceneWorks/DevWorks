@@ -285,6 +285,7 @@ fn boot_over(
     let mut use_cases = UseCases::new().with_queue();
     use_cases.register(DOCS, None, Some(docs.clone()));
     let composition = Composition {
+        git: None,
         browser: None,
         packages: None,
         store: store.clone(),

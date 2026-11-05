@@ -96,6 +96,8 @@ pub enum LaunchRefusal {
     Blocked(CommandVerdict),
     /// The preflight holds the command for input or approval; nothing was started.
     NeedsInput(CommandVerdict),
+    /// An approval of a generic process cannot replace the Git owner's ref/lease checks.
+    GitPushOwnerRequired,
     /// The dispatch-time resource check refused the lease.
     Resource(DispatchFailure),
     /// The invocation's project is archived or deleted: it allocates no work (nothing was
@@ -236,6 +238,12 @@ pub struct ProcessSupervisor {
 }
 
 impl ProcessSupervisor {
+    /// Inherited environment supplied by the native process host. Helpers that clear the
+    /// environment can preserve platform necessities while removing command-specific overrides.
+    pub fn environment(&self) -> Vec<(String, String)> {
+        self.host.environment()
+    }
+
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         host: Arc<dyn ProcessHost>,
@@ -300,8 +308,30 @@ impl ProcessSupervisor {
             policy.protected_branches,
             &env,
         );
+        let git_owner_required = matches!(&verdict,CommandVerdict::NeedsInput { held,.. } if held.contains(&crate::authority::destructive::InputNeeded::GitPushOwnerRequired));
+        let owned_git_push = if git_owner_required {
+            if let Some(operation) = &request.operation_id {
+                read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                    Ok(snapshot
+                        .operations()
+                        .operation(operation)?
+                        .is_some_and(|record| {
+                            record.capability == "git.push"
+                                && record.root_id.as_ref() == ctx.root_id()
+                                && record.assignment_id.as_ref() == ctx.assignment_id()
+                        }))
+                })?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let refusal = match &verdict {
             CommandVerdict::Blocked { .. } => Some(LaunchRefusal::Blocked(verdict.clone())),
+            CommandVerdict::NeedsInput { .. } if git_owner_required && !owned_git_push => {
+                Some(LaunchRefusal::GitPushOwnerRequired)
+            }
             CommandVerdict::NeedsInput { .. } if !request.approved_hold => {
                 Some(LaunchRefusal::NeedsInput(verdict.clone()))
             }

@@ -434,7 +434,10 @@ pub struct WorkUi {
     pub activity: Activity,
     /// Current records of opened features (readiness at schema revision 2).
     pub detail: BTreeMap<String, WorkRecord>,
+    pub git: BTreeMap<String, ListState<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
+    pub git_inspections:
+        BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
     /// The feature the board shows.
     pub board: Option<String>,
     /// The selected card of the board.
@@ -530,6 +533,9 @@ enum Action {
     Run(&'static str, WorkRecord),
     SelectCard(Option<String>),
     OpenDetail(String),
+    RefreshGit(String),
+    InspectGit(String, String),
+    OpenGitSession(String),
 }
 
 fn kind_label(w: &WorkRecord) -> &'static str {
@@ -686,6 +692,7 @@ impl Shell {
         );
     }
     fn load_detail(&mut self, w: &WorkRecord) {
+        self.load_git_links(w.id.as_str(), None);
         let op = if matches!(w.kind, WorkKind::Feature) {
             "features.get"
         } else {
@@ -697,6 +704,18 @@ impl Shell {
             "Reading work",
             op,
             move |be| wops::work_get(be, op, &id),
+        );
+    }
+    fn load_git_links(&mut self, work: &str, cursor: Option<String>) {
+        if cursor.is_none() {
+            self.work.git.insert(work.to_owned(), ListState::default());
+        }
+        let root = work.to_owned();
+        self.query(
+            Slot::WorkGit(root.clone()),
+            "Reading source control",
+            "history.git_links",
+            move |be| wops::git_links(be, &root, cursor.as_deref()),
         );
     }
     fn inspect(&mut self, root: &str) {
@@ -897,6 +916,21 @@ impl Shell {
                         "features.request_plan_approval",
                         move |be| wops::work_command(be, "features.request_plan_approval", body),
                     );
+                }
+                Action::InspectGit(repository, tree) => {
+                    self.query(
+                        Slot::WorkGitInspect(repository.clone(), tree.clone()),
+                        "Inspecting checkout",
+                        "git.inspect",
+                        move |be| ops::git_inspect_worktree(be, &repository, Some(&tree)),
+                    );
+                }
+                Action::RefreshGit(root) => self.load_git_links(&root, None),
+                Action::OpenGitSession(session) => {
+                    self.chat.selected = Some(session.clone());
+                    self.chat.notice = None;
+                    self.load_transcript(&session);
+                    self.navigate(Route::Chat);
                 }
                 Action::Inspect(root) => self.inspect(&root),
                 Action::Run(op, w) => {
@@ -1161,6 +1195,23 @@ impl Shell {
                     }
                 }
             }
+            (Slot::WorkGitInspect(_, tree), Reply::Query(q)) => {
+                self.work
+                    .git_inspections
+                    .insert(tree, ops::git_inspected(q).map_err(|e| e.describe()));
+            }
+            (Slot::WorkGit(id), Reply::Query(q)) => match wops::git_links_result(q) {
+                Ok(page) => {
+                    let state = self.work.git.entry(id.clone()).or_default();
+                    state.items.extend(page.items.0);
+                    state.loaded = true;
+                    state.more = page.has_more;
+                    if let Some(cursor) = page.next_cursor {
+                        self.load_git_links(&id, Some(cursor.0));
+                    }
+                }
+                Err(error) => self.work.git.entry(id).or_default().error = Some(error.describe()),
+            },
             (Slot::WorkDetail(id), Reply::Query(q)) => match wops::work_record(q) {
                 Ok(w) => {
                     self.work.detail.insert(id, w);
@@ -2635,6 +2686,7 @@ fn feature_detail(
         if !f.description.0.is_empty() {
             ui.label(&f.description.0);
         }
+        source_control(ui, work, f.id.as_str(), actions);
         ui.add_space(6.0);
         // Approval and readiness are separate facts, shown apart.
         chip(ui, approval_label(f), if f.approval.is_some() { Tone::Good } else { Tone::Attention });
@@ -3309,6 +3361,7 @@ fn card_detail(
         if !w.description.0.is_empty() {
             ui.label(&w.description.0);
         }
+        source_control(ui, work, w.id.as_str(), actions);
         // Workflow status: moving it never starts, pauses or completes execution.
         let mut target = w.status_id.as_str().to_owned();
         egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))
@@ -3472,4 +3525,136 @@ fn card_detail(
             widgets::caption(ui, format!("#{} by {}", e.sequence.as_str(), e.actor_id.0.as_str()));
         }
     });
+}
+
+fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
+    egui::CollapsingHeader::new("Source control")
+        .id_salt(("work-git", root))
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui.small_button("Refresh source control").clicked() {
+                actions.push(Action::RefreshGit(root.to_owned()));
+            }
+            let Some(state) = work.git.get(root) else {
+                widgets::caption(ui, "Source control has not been read.");
+                return;
+            };
+            if let Some(error) = &state.error {
+                widgets::caption(ui, error);
+            }
+            if !state.loaded {
+                ui.spinner();
+                return;
+            }
+            if state.items.is_empty() {
+                widgets::caption(ui, "No recorded Git associations.");
+            }
+            // Retain the latest event for each resource, while the full event history remains in Activity.
+            let mut latest = BTreeMap::new();
+            for link in &state.items {
+                latest.insert(
+                    (
+                        link.repository_id.as_str(),
+                        link.worktree_id.as_ref().map(|id| id.as_str()),
+                        link.pull_request_url.as_ref().map(|u| u.0.as_str()),
+                    ),
+                    link,
+                );
+            }
+            for link in latest.values() {
+                ui.separator();
+                if let Some(url) = &link.repository_url {
+                    ui.hyperlink_to(link.repository_id.as_str(), &url.0);
+                } else {
+                    ui.label(link.repository_id.as_str());
+                }
+                if let Some(path) = &link.worktree_path {
+                    ui.label(&path.0);
+                }
+                widgets::caption(
+                    ui,
+                    if link.worktree_removed == Some(true) {
+                        "Removed worktree · retained history"
+                    } else {
+                        "Recorded worktree"
+                    },
+                );
+                if let Some(tree) = &link.worktree_id
+                    && link.worktree_removed != Some(true)
+                {
+                    if ui.small_button("Inspect checkout").clicked() {
+                        actions.push(Action::InspectGit(
+                            link.repository_id.as_str().to_owned(),
+                            tree.as_str().to_owned(),
+                        ));
+                    }
+                    if let Some(observed) = work.git_inspections.get(tree.as_str()) {
+                        match observed {
+                            Ok(state) => {
+                                widgets::caption(
+                                    ui,
+                                    if state.dirty {
+                                        "Observed checkout · uncommitted changes"
+                                    } else {
+                                        "Observed checkout · clean"
+                                    },
+                                );
+                                if let Some(branch) = &state.branch {
+                                    if let Some(url) = link.repository_url.as_ref().and_then(|u| {
+                                        devworks_core::services::git::github::branch_url(
+                                            &u.0, &branch.0,
+                                        )
+                                    }) {
+                                        ui.hyperlink_to(&branch.0, url);
+                                    } else {
+                                        ui.label(&branch.0);
+                                    }
+                                }
+                                if let Some(url) = &link.repository_url {
+                                    ui.hyperlink_to(
+                                        &state.head.hex,
+                                        format!("{}/commit/{}", url.0, state.head.hex),
+                                    );
+                                } else {
+                                    ui.monospace(&state.head.hex);
+                                }
+                            }
+                            Err(error) => {
+                                widgets::caption(ui, error);
+                            }
+                        }
+                    }
+                }
+                widgets::caption(ui, "Recorded association");
+                if let Some(branch) = &link.branch {
+                    if let Some(url) = &link.repository_url {
+                        ui.hyperlink_to(
+                            &branch.0,
+                            devworks_core::services::git::github::branch_url(&url.0, &branch.0)
+                                .unwrap_or_else(|| url.0.clone()),
+                        );
+                    } else {
+                        ui.label(&branch.0);
+                    }
+                }
+                if let Some(url) = &link.repository_url {
+                    ui.hyperlink_to(
+                        &link.head.hex,
+                        format!("{}/commit/{}", url.0, link.head.hex),
+                    );
+                } else {
+                    ui.monospace(&link.head.hex);
+                }
+                if let Some(url) = &link.pull_request_url {
+                    ui.hyperlink_to("Pull request", &url.0);
+                }
+                if let Some(session) = &link.agent_session_id
+                    && ui
+                        .link(format!("Producing session {}", session.as_str()))
+                        .clicked()
+                {
+                    actions.push(Action::OpenGitSession(session.as_str().to_owned()));
+                }
+            }
+        });
 }

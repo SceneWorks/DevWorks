@@ -255,6 +255,11 @@ pub enum Slot {
     WorkActivity(String),
     /// One work item's current record (readiness included).
     WorkDetail(String),
+    WorkGit(String),
+    WorkGitInspect(String, String),
+    GitInspect(String),
+    GitDiff(String),
+    GitDiffContent(String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
     /// A new feature, task or issue in a project.

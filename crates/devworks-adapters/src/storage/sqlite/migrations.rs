@@ -316,6 +316,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0021_browser_sessions.sql"),
         rebuilds_tables: false,
     },
+    // Additive owned Git identities; preserves all earlier reader/writer floors.
+    Migration {
+        version: 22,
+        minimum_reader: 8,
+        minimum_writer: 19,
+        sql: include_str!("migrations/0022_git_worktrees.sql"),
+        rebuilds_tables: false,
+    },
+    // Old writers cannot preserve invocation-bound provenance on new browser evidence.
+    Migration {
+        version: 23,
+        minimum_reader: 8,
+        minimum_writer: 23,
+        sql: include_str!("migrations/0023_browser_source.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -609,3 +625,11 @@ pub const MIGRATION_0020_SHA256: &str =
 /// Recorded checksum of migration 21; shipped SQL is immutable.
 pub const MIGRATION_0021_SHA256: &str =
     "27be7d33bb8b6ff768c4de0c2f688ba5442ef699a06130349a054913dcd5bc77";
+
+/// Recorded checksum of migration 22.
+pub const MIGRATION_0022_SHA256: &str =
+    "2d0815af52a522e23870f9a2af56dc2a6f2f5227fbb842d1377cd49f84e02524";
+
+/// Recorded checksum of migration 23.
+pub const MIGRATION_0023_SHA256: &str =
+    "bd92e57bf3aa579397301ccbb06deb45570712db11fa2ff229045e0c92c59c93";

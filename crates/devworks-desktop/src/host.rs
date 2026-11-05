@@ -254,7 +254,7 @@ async fn compose(
         id_source.clone(),
         clock.clone(),
         store.clone(),
-        http,
+        http.clone(),
         secrets,
         Arc::new(devworks_adapters::OsEntropy),
     ));
@@ -345,6 +345,28 @@ async fn compose(
     runtime_config.shutdown_grace = runtime_config
         .shutdown_grace
         .min(quiesce_bound(config.shutdown_bound));
+    let git_root = config.data_root.join("worktrees");
+    let git = std::fs::create_dir_all(&git_root)
+        .and_then(|()| std::fs::canonicalize(&git_root))
+        .ok()
+        .and_then(|path| {
+            let name = path.to_str()?;
+            let digest = devworks_core::fingerprint::sha256_hex(name.as_bytes());
+            let root = Id::new(format!("git-root-{}", &digest[..24])).ok()?;
+            Some(devworks_engine::git::GitComposition {
+                config: devworks_core::services::git::GitConfig {
+                    roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
+                    filesystem: Some(Arc::new(NativeFilesystem::new())),
+                    github: Some(Arc::new(
+                        devworks_core::services::git::github::GitHubClient {
+                            http,
+                            secrets: connections.clone(),
+                        },
+                    )),
+                    ..devworks_core::services::git::GitConfig::default()
+                },
+            })
+        });
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
@@ -360,6 +382,7 @@ async fn compose(
         diagnostics,
         // Owned browser sessions: discovered or configured Chromium-family browsers, owned
         // profiles under the data root, launched through the process owner.
+        git,
         browser: Some(devworks_engine::browser::BrowserComposition {
             platform: Arc::new(NativeBrowserPlatform::new(
                 &config.data_root,

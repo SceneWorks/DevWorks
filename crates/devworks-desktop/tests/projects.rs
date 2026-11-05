@@ -483,6 +483,8 @@ fn seed_browser(engine: &devworks_desktop::host::Engine, session: &str, project:
             payload: serde_json::json!({}),
         })?;
         tx.browser().insert_browser_session(&StoredBrowserSession {
+            tested_repository: None,
+            source_binding: None,
             id: Id::new(session.clone()).unwrap(),
             revision: 1,
             phase: BrowserPhase::Starting,

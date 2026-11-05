@@ -4250,6 +4250,28 @@ impl Shell {
                     filter,
                     selection,
                     |ui, a: &ArtifactRecord, selected| {
+                        if let Some(source) = &a.tested_repository {
+                            if let Some(url) = &source.repository_url {
+                                ui.hyperlink_to(
+                                    &source.head.hex,
+                                    format!("{}/commit/{}", url.0, source.head.hex),
+                                );
+                            } else {
+                                ui.monospace(&source.head.hex);
+                            }
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "{} · {}",
+                                    source.repository_id.as_str(),
+                                    if source.dirty {
+                                        "dirty at observation"
+                                    } else {
+                                        "clean at observation"
+                                    }
+                                ),
+                            );
+                        }
                         let r = ui.selectable_label(
                             selected,
                             format!(
@@ -4343,6 +4365,27 @@ impl Shell {
                             ItemState::Enabled => "enabled",
                         };
                         let scope = scopes.get(s.id.as_str()).map_or("", String::as_str);
+                        if let Some(source) = &s.tested_repository {
+                            if let Some(url) = &source.repository_url {
+                                ui.hyperlink_to(
+                                    &source.head.hex,
+                                    format!("{}/commit/{}", url.0, source.head.hex),
+                                );
+                            }
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "{} · worktree {} · {} · {} · observed {}",
+                                    source.repository_id.as_str(),
+                                    source.worktree_id.as_str(),
+                                    source.head.hex,
+                                    if source.dirty { "dirty" } else { "clean" },
+                                    source.observed_at_ms.as_str()
+                                ),
+                            );
+                        } else {
+                            widgets::caption(ui, "No tested repository revision recorded");
+                        }
                         ui.selectable_label(
                             selected,
                             format!(

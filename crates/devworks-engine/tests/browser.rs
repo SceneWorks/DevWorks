@@ -1119,19 +1119,30 @@ impl Fx {
         real: Arc<dyn BrowserPlatform>,
         browser: BrowserConfig,
     ) -> Self {
+        Self::boot_with_source(h, platform, real, browser, false)
+    }
+    fn boot_with_source(
+        h: Harness,
+        platform: Arc<FakePlatform>,
+        real: Arc<dyn BrowserPlatform>,
+        browser: BrowserConfig,
+        source: bool,
+    ) -> Self {
         let rt = runtime();
         let store = h.open();
         seed_project(&h);
         let user = principal(&*store, "user-a", PrincipalKind::Human);
-        let app = rt
-            .block_on(boot(composition(
-                &h,
-                store,
-                real,
-                browser,
-                platform.unverified_stop.clone(),
-            )))
-            .unwrap();
+        let mut composition = composition(
+            &h,
+            store.clone(),
+            real,
+            browser,
+            platform.unverified_stop.clone(),
+        );
+        if source {
+            composition.git = Some(source_fixture(&h, &*store, user.principal()));
+        }
+        let app = rt.block_on(boot(composition)).unwrap();
         Self {
             h: Some(h),
             rt,
@@ -1472,6 +1483,7 @@ fn composition(
                 None,
             ),
         ),
+        git: None,
         browser: Some(BrowserComposition {
             platform,
             fs: Arc::new(NativeFilesystem::new()),
@@ -3370,6 +3382,7 @@ fn a_notice_page_never_skips_an_observation_published_meanwhile() {
                 let recorded_at_ms = tx.now_ms();
                 tx.browser()
                     .insert_browser_observation(&StoredBrowserObservation {
+                        tested_repository: None,
                         session_id: sid.clone(),
                         sequence,
                         channel: BrowserChannel::Console,
@@ -4955,4 +4968,326 @@ fn cancelling_an_undispatched_close_allows_replacement_cleanup() {
     fx.succeeded(&user, second);
     assert_eq!(fx.session(&session).phase, BrowserPhase::Closed);
     assert!(matches!(NativeProcessHost.probe(&identity), Probe::Gone));
+}
+
+fn source_git(path: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .current_dir(path)
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+fn source_fixture(
+    h: &Harness,
+    store: &dyn ApplicationStore,
+    owner: &ActorId,
+) -> devworks_engine::git::GitComposition {
+    use devworks_core::authority::destructive::FilesystemResolver;
+    use devworks_core::protocol::data::{GitOid, ObjectFormat};
+    use devworks_core::services::git::{GitConfig, RegisteredGitRoot};
+    let primary = h.root.join("tested-primary");
+    let owned = h.root.join("tested-owned");
+    std::fs::create_dir(&primary).unwrap();
+    std::fs::create_dir(&owned).unwrap();
+    let primary = primary.canonicalize().unwrap();
+    let owned = owned.canonicalize().unwrap();
+    let tree = owned.join("tree");
+    source_git(&primary, &["init", "-b", "main"]);
+    std::fs::write(primary.join("source.txt"), "initial\n").unwrap();
+    source_git(&primary, &["add", "source.txt"]);
+    source_git(&primary, &["commit", "-m", "initial"]);
+    source_git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "tested",
+            tree.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    let fs = NativeFilesystem::new();
+    let identity = |path: &str| {
+        fs.resolve(path, None)
+            .unwrap()
+            .target
+            .unwrap()
+            .identity
+            .unwrap()
+    };
+    let location = GitWorktreeLocation {
+        root: identity(tree.to_str().unwrap()),
+        git_dir: identity(&source_git(
+            &tree,
+            &["rev-parse", "--path-format=absolute", "--git-dir"],
+        )),
+        common_dir: identity(&source_git(
+            &tree,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )),
+    };
+    let record = StoredGitWorktree {
+        id: id("tested-tree"),
+        repository_id: id("tested-repository"),
+        work_id: id("root-a"),
+        owner: owner.clone(),
+        ownership_revision: 1,
+        owner_root_id: Some(devworks_core::protocol::RootId(id("root-a"))),
+        owner_assignment_id: None,
+        registered_root_id: id("tested-owned"),
+        path: tree.to_str().unwrap().into(),
+        branch: "refs/heads/tested".into(),
+        head: GitOid {
+            format: ObjectFormat::Sha1,
+            hex: source_git(&tree, &["rev-parse", "HEAD"]),
+        },
+        revision: 1,
+        removed: false,
+        location: Some(location),
+        pending_operation_id: None,
+        last_operation_id: None,
+        last_result: None,
+    };
+    let path = primary.to_str().unwrap().to_owned();
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_repository(&StoredRepository {
+            id: id("tested-repository"),
+            location: path.clone(),
+            name: "Tested repository".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: "Active".into(),
+            languages: vec![],
+            revision: 1,
+            registered_at_ms: T0,
+        })?;
+        tx.projects()
+            .set_members(&ProjectId(id("project-a")), &[id("tested-repository")])?;
+        tx.work()
+            .set_work_repositories(&id("root-a"), &[id("tested-repository")])?;
+        tx.git().insert_git_worktree(&record)
+    })
+    .unwrap();
+    devworks_engine::git::GitComposition {
+        config: GitConfig {
+            roots: vec![RegisteredGitRoot {
+                id: id("tested-owned"),
+                path: owned.to_str().unwrap().into(),
+            }],
+            filesystem: Some(Arc::new(fs)),
+            ..GitConfig::default()
+        },
+    }
+}
+#[test]
+fn browser_evidence_resolves_its_invocation_worktree_and_preserves_old_sources() {
+    browser_source_case(false);
+}
+#[test]
+fn installed_browser_records_real_worktree_provenance_when_opted_in() {
+    if std::env::var("DEVWORKS_BROWSER_TESTS").ok().as_deref() != Some("1") {
+        return;
+    }
+    browser_source_case(true);
+}
+fn browser_source_case(native: bool) {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let h = Harness::new();
+    let tree = h.root.join("tested-owned/tree");
+    let platform = Arc::new(FakePlatform::new(&h.root));
+    let real: Arc<dyn BrowserPlatform> = if native {
+        Arc::new(NativeBrowserPlatform::new(
+            &h.root,
+            std::env::var_os("DEVWORKS_BROWSER").map(PathBuf::from),
+        ))
+    } else {
+        platform.clone()
+    };
+    let asset = real
+        .assets()
+        .into_iter()
+        .find(|a| a.qualification == Qualification::Present)
+        .unwrap()
+        .id;
+    let fx = Fx::boot_with_source(h, platform, real, BrowserConfig::default(), true);
+    assert!(
+        fx.app().git().is_some(),
+        "Git source must qualify before browser admission"
+    );
+    let scoped = fx.user.clone().with_lineage(
+        Some(ProjectId(id("project-a"))),
+        Some(devworks_core::protocol::RootId(id("root-a"))),
+        None,
+    );
+    let bound = devworks_core::services::git::context::bind_worktree(
+        &**fx.app().store(),
+        scoped.clone(),
+        &id("tested-tree"),
+    )
+    .unwrap();
+    let create_body = json!({"action":{"kind":"Create","scope":{"kind":"Project","projectId":"project-a"},"browserAssetId":asset}});
+    let create_key = fx.key();
+    let created = fx.command(&bound, "browser.sessions", &create_key, create_body.clone());
+    let op = match Fx::decision(&created) {
+        DomainDecision::Accepted { operation_id } => operation_id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let session = match fx.succeeded(&bound, &op) {
+        OperationResult::BrowserSessions { value } => value.items.0[0].id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let original = fx.session(&session).tested_repository.unwrap();
+    assert_eq!(original["dirty"], false);
+    let initial_head = source_git(&tree, &["rev-parse", "HEAD"]);
+    assert_eq!(original["head"]["hex"], initial_head);
+    std::fs::write(tree.join("source.txt"), "changed\n").unwrap();
+    let nav=fx.accepted(&bound,"browser.navigate",json!({"sessionId":session,"expectedRevision":fx.session(&session).revision.to_string(),"location":{"kind":"Blank"}}));
+    let snap = fx.snapshot(fx.completion(&bound, &nav));
+    let evidence = |artifact: &ArtifactRef| {
+        read(&**fx.app().store(), |s| {
+            s.artifacts().version(&artifact.version_id)
+        })
+        .unwrap()
+        .source["source"]["testedRepository"]
+            .clone()
+    };
+    let first = evidence(&snap.accessibility);
+    assert_eq!(first["head"]["hex"], initial_head);
+    assert_eq!(first["dirty"], true);
+    source_git(&tree, &["commit", "-am", "changed"]);
+    let next_head = source_git(&tree, &["rev-parse", "HEAD"]);
+    assert_ne!(initial_head, next_head);
+    let screenshot = match fx.result(
+        &bound,
+        "browser.screenshot",
+        json!({"target":snap.target,"fullPage":false}),
+    ) {
+        OperationResult::BrowserScreenshot { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let second = evidence(&screenshot);
+    assert_eq!(second["head"]["hex"], next_head);
+    assert_eq!(second["dirty"], false);
+    // The same immutable source is available over the public artifact byte-read contract,
+    // including image streams, rather than only through the internal storage repository.
+    let read_source = |artifact: &ArtifactRef| {
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":4,"queryId":fx.key(),"query":{"kind":"Read","artifactId":artifact.artifact_id,"versionId":artifact.version_id},"limit":1});
+        match fx
+            .app()
+            .query(&scoped, "artifacts.read", frame.to_string().as_bytes())
+            .unwrap()
+        {
+            DomainQueryReply::Result {
+                result: OperationResult::ArtifactsRead { value },
+                ..
+            } => match value {
+                devworks_core::protocol::records::ArtifactReadContent::Text {
+                    tested_repository,
+                    ..
+                }
+                | devworks_core::protocol::records::ArtifactReadContent::Binary {
+                    tested_repository,
+                    ..
+                } => serde_json::to_value(tested_repository).unwrap(),
+            },
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(read_source(&screenshot), second);
+    assert_eq!(read_source(&snap.accessibility), first);
+    assert_eq!(
+        evidence(&snap.accessibility),
+        first,
+        "old immutable evidence retains its original observation"
+    );
+    assert_eq!(
+        fx.session(&session).tested_repository.unwrap(),
+        original,
+        "session start source never follows later commits"
+    );
+    let unbound = match fx.result(
+        &scoped,
+        "browser.screenshot",
+        json!({"target":snap.target,"fullPage":false}),
+    ) {
+        OperationResult::BrowserScreenshot { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        evidence(&unbound).is_null(),
+        "an unbound invocation never borrows the session's source"
+    );
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"source-list","body":{"kind":"browser.sessions","scope":{"kind":"Project","projectId":"project-a"},"page":{"limit":10}}});
+    let result = fx
+        .app()
+        .query(&scoped, "browser.sessions", frame.to_string().as_bytes())
+        .unwrap();
+    assert!(
+        serde_json::to_value(result)
+            .unwrap()
+            .to_string()
+            .contains(&initial_head)
+    );
+    let second_create = fx.accepted(&bound, "browser.sessions", create_body.clone());
+    let second_session = match fx.succeeded(&bound, &second_create) {
+        OperationResult::BrowserSessions { value } => value.items.0[0].id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let git_launches = || {
+        let connection = rusqlite::Connection::open(fx.h().root.join("workspace.sqlite")).unwrap();
+        connection
+            .query_row(
+                "SELECT count(*) FROM owned_processes WHERE lower(program) IN ('git','git.exe')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let before_close = git_launches();
+    fx.close(&scoped, &second_session);
+    assert_eq!(
+        git_launches(),
+        before_close,
+        "Close never starts a Git helper, even with a valid source binding"
+    );
+    let store = fx.app().store();
+    let host = store.info().host_actor;
+    run_write(&**store, WriteOptions::default(), move |tx| {
+        let mut row = tx.git().git_worktree(&id("tested-tree"))?.unwrap();
+        let revision = row.revision;
+        row.revision += 1;
+        row.ownership_revision += 1;
+        row.owner = host.clone();
+        row.owner_root_id = None;
+        row.owner_assignment_id = None;
+        tx.git().update_git_worktree(&row, revision)
+    })
+    .unwrap();
+    assert_eq!(
+        fx.fault(
+            &bound,
+            "browser.screenshot",
+            json!({"target":snap.target,"fullPage":false})
+        )
+        .code,
+        DomainErrorCode::SourceChanged
+    );
+    let replay = fx.command(&bound, "browser.sessions", &create_key, create_body);
+    assert!(
+        matches!(replay, CommandReply::Recorded { replayed: true, .. }),
+        "a source refusal never loses an earlier receipt"
+    );
+    fx.close(&scoped, &session);
 }

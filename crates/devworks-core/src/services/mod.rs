@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod browser;
 pub mod cursor;
 pub mod diagnostics;
+pub mod git;
 pub mod history;
 pub mod indexing;
 pub mod jobs;
@@ -105,6 +106,21 @@ impl UseCases {
     pub fn with_settings(mut self, service: Arc<settings::service::SettingsService>) -> Self {
         for op in settings::service::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// The six owned Git task operations share one service and gateway on every surface.
+    pub fn with_git(mut self, service: Arc<git::GitService>) -> Self {
+        for operation in [
+            "git.worktree",
+            "git.inspect",
+            "git.diff",
+            "git.commit",
+            "git.push",
+            "git.pull_request",
+        ] {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }

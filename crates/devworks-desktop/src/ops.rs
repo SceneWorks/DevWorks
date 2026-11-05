@@ -361,7 +361,7 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
 }
 pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
     json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "schemaRevision": 4,
         "query": {"kind": "List", "workspace": true}, "limit": PAGE_LIMIT})
     .to_string()
     .into_bytes()
@@ -369,7 +369,7 @@ pub fn workspace_artifacts(backend: &dyn Backend) -> Vec<u8> {
 /// `artifacts.list` of one project's artifacts.
 pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
     json!({"protocol": PROTOCOL, "queryId": backend.token("q"),
-        "schemaRevision": WORKSPACE_ARTIFACT_REVISION,
+        "schemaRevision": 4,
         "query": {"kind": "List", "projectId": project}, "limit": PAGE_LIMIT})
     .to_string()
     .into_bytes()
@@ -393,10 +393,13 @@ pub fn browser_sessions_list(backend: &dyn Backend, project: Option<&str>) -> Ve
         Some(p) => json!({"kind": "Project", "projectId": p}),
         None => json!({"kind": "Workspace"}),
     };
-    query_frame(
-        backend,
-        "browser.sessions",
-        json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
+    at_revision(
+        query_frame(
+            backend,
+            "browser.sessions",
+            json!({"scope": scope, "page": {"limit": PAGE_LIMIT}}),
+        ),
+        3,
     )
 }
 pub fn browser_sessions(outcome: QueryOutcome) -> Result<(Vec<BrowserSession>, bool), Failure> {
@@ -1170,5 +1173,38 @@ pub fn configured(outcome: CommandOutcome) -> Result<bool, Failure> {
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+
+pub fn git_inspect(backend: &dyn Backend, repository: &str) -> Vec<u8> {
+    git_inspect_worktree(backend, repository, None)
+}
+pub fn git_inspect_worktree(
+    backend: &dyn Backend,
+    repository: &str,
+    worktree: Option<&str>,
+) -> Vec<u8> {
+    let mut frame = json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.inspect","repositoryId":repository}});
+    if let Some(worktree) = worktree {
+        frame["body"]["worktreeId"] = json!(worktree);
+    }
+    frame.to_string().into_bytes()
+}
+pub fn git_inspected(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::GitInspection, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::GitInspect { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("git.inspect", &other)),
+    }
+}
+pub fn git_diff(backend: &dyn Backend, repository: &str, base: &str, head: &str) -> Vec<u8> {
+    let oid = |hex: &str| json!({"format":if hex.len()==64 {"Sha256"} else {"Sha1"},"hex":hex});
+    json!({"mode":"Query","protocol":PROTOCOL,"queryId":backend.token("q"),"body":{"kind":"git.diff","repositoryId":repository,"base":oid(base),"head":oid(head),"paths":[],"page":{"limit":1}}}).to_string().into_bytes()
+}
+pub fn git_patch(outcome: QueryOutcome) -> Result<Option<ArtifactRef>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::GitDiff { value }, _) => Ok(value.items.0.into_iter().next()),
+        (other, _) => Err(unexpected("git.diff", &other)),
     }
 }

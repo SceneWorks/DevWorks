@@ -55,9 +55,10 @@
 //! pipes the process owner hands over); the browser opens no DevTools port. Out-of-process
 //! (cross-site) frames attach as flattened child sessions: they are inspected, driven and
 //! revisioned like same-process frames, and clicks into them are placed through their owner
-//! element's content box (a rotated or skewed frame owner is not supported). The tested
-//! repository revision is not part of the host invocation context yet, so evidence records the
-//! work lineage it has.
+//! element's content box (a rotated or skewed frame owner is not supported). Worktree-bound
+//! invocations resolve their physical checkout and current SHA/dirty state through the Git
+//! service; sessions retain their start source and each observation retains its own source.
+//! Unbound invocations record no repository revision.
 pub mod cdp;
 pub mod live;
 
@@ -342,9 +343,32 @@ enum Staged {
         profile: Profile,
         batch: String,
         paths: Vec<String>,
+        tested_repository: Option<Value>,
+        binding: Option<Value>,
+    },
+    Source {
+        tested_repository: Option<Value>,
+        binding: Option<Value>,
     },
     /// A file could not be granted; `decide` records the refusal.
     Refused(Refusal),
+}
+
+fn staged_source(command: &AdmittedCommand) -> (Option<Value>, Option<Value>) {
+    match command.prepared::<Staged>() {
+        Some(
+            Staged::Source {
+                tested_repository,
+                binding,
+            }
+            | Staged::Files {
+                tested_repository,
+                binding,
+                ..
+            },
+        ) => (tested_repository.clone(), binding.clone()),
+        _ => (None, None),
+    }
 }
 
 /// The browser domain service.
@@ -358,6 +382,7 @@ pub struct BrowserService {
     ids: Arc<dyn IdSource>,
     clock: Arc<dyn Clock>,
     config: BrowserConfig,
+    git_source: Option<Arc<crate::services::git::GitService>>,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
     views: Mutex<HashMap<String, View>>,
     assets: RwLock<Vec<BrowserAsset>>,
@@ -440,6 +465,12 @@ pub fn session_record(s: &StoredBrowserSession) -> BrowserSession {
                 .filter_map(|t| Id::new(t.clone()).ok())
                 .collect(),
         ),
+        tested_repository: s
+            .tested_repository
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .expect("validated stored browser source"),
         process_owner_id: s
             .process_id
             .clone()
@@ -565,6 +596,7 @@ impl BrowserService {
             ids,
             clock,
             config,
+            git_source: None,
             slots: Mutex::new(HashMap::new()),
             views: Mutex::new(HashMap::new()),
             assets: RwLock::new(assets),
@@ -573,6 +605,41 @@ impl BrowserService {
         }
     }
 
+    pub fn with_git_source(
+        mut self,
+        source: Option<Arc<crate::services::git::GitService>>,
+    ) -> Self {
+        self.git_source = source;
+        self
+    }
+    fn tested_source(
+        &self,
+        ctx: &InvocationContext,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Option<Value>, Failure> {
+        if ctx.worktree().is_none() {
+            return Ok(None);
+        }
+        self.git_source
+            .as_ref()
+            .ok_or_else(|| {
+                Refusal::new(DomainErrorCode::UnsupportedCapability, "git_source", None)
+            })?
+            .observe_source(ctx, stop)
+    }
+    fn binding_source(
+        &self,
+        binding: Option<&Value>,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Option<Value>, Failure> {
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
+        let binding: crate::services::git::context::SourceBinding =
+            serde_json::from_value(binding.clone())
+                .map_err(|_| StorageError::InvalidRecord("browser source binding".into()))?;
+        self.tested_source(&binding.context(&*self.store)?, stop)
+    }
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
     }
@@ -921,6 +988,9 @@ impl BrowserService {
                         "the launch was blocked by the process preflight".to_owned()
                     }
                     LaunchRefusal::NeedsInput(_) => "the launch needs an approval".to_owned(),
+                    LaunchRefusal::GitPushOwnerRequired => {
+                        "Git pushes must use the owned Git service".to_owned()
+                    }
                     LaunchRefusal::Resource(f) => format!("the launch was refused: {f:?}"),
                     LaunchRefusal::Spawn(e) => format!("the browser could not be started: {e}"),
                     LaunchRefusal::Storage(e) => format!("the launch could not be recorded: {e}"),
@@ -1095,9 +1165,12 @@ impl BrowserService {
 
     /// Publishes the buffered console and network notifications of `live` as observations.
     fn flush_notices(&self, id: &Id, live: &mut Live) {
-        let Ok(Some(s)) = self.read_session(id) else {
+        let Ok(Some(mut s)) = self.read_session(id) else {
             return;
         };
+        // Teardown is unbound resource maintenance, not a UI-test invocation. Never start
+        // Git reads while closing, and never substitute the session's old start revision.
+        s.tested_repository = None;
         let dropped = std::mem::take(&mut live.cdp.dropped) > 0;
         for channel in [BrowserChannel::Console, BrowserChannel::Network] {
             let buffer = match channel {
@@ -1348,6 +1421,22 @@ impl BrowserService {
                 "the session is closing",
             );
         }
+        let source = match self.binding_source(
+            op.payload.get("sourceBinding").filter(|v| !v.is_null()),
+            &|| slot.closing.load(Ordering::SeqCst),
+        ) {
+            Ok(source) => source,
+            Err(_) => {
+                return failed(
+                    DomainErrorCode::SourceChanged,
+                    "git_source",
+                    "the tested worktree could not be observed before dispatch",
+                );
+            }
+        };
+        let mut observed_operation = op.clone();
+        observed_operation.payload["testedRepository"] = source.unwrap_or(Value::Null);
+        let op = &observed_operation;
         let mut guard = slot.live.lock().unwrap_or_else(|p| p.into_inner());
         let Some(live) = guard.as_mut() else {
             return failed(
@@ -1485,8 +1574,11 @@ impl BrowserService {
         s: &StoredBrowserSession,
         title: String,
         media_type: &str,
-        source: Value,
+        mut source: Value,
     ) -> Evidence {
+        if let Some(repository) = &s.tested_repository {
+            source["testedRepository"] = repository.clone();
+        }
         Evidence {
             scope: match &s.project_id {
                 Some(p) => ArtifactScope::Project(p.clone()),
@@ -1526,6 +1618,7 @@ impl BrowserService {
         );
         let id = s.id.clone();
         let operation = operation.cloned();
+        let tested_repository = s.tested_repository.clone();
         self.artifacts
             .publish_evidence(&*self.store, evidence, bytes, move |tx, r| {
                 let Some(current) = tx.browser().browser_session(&id)? else {
@@ -1545,6 +1638,7 @@ impl BrowserService {
                         version_id: r.version_id.clone(),
                         truncated,
                         recorded_at_ms,
+                        tested_repository: tested_repository.clone(),
                     })?;
                 let host = tx.store().host_actor.clone();
                 let aggregate = match &operation {
@@ -1631,7 +1725,16 @@ impl BrowserService {
         let main = live.targets[i].main_frame().to_owned();
         let target = live.targets[i].wire(&live.session, &main);
         let snapshot = self
-            .snapshot_of(live, &target, bounds, Some(&op.id))
+            .snapshot_of(
+                live,
+                &target,
+                bounds,
+                Some(&op.id),
+                op.payload
+                    .get("testedRepository")
+                    .filter(|v| !v.is_null())
+                    .cloned(),
+            )
             .map_err(post_dispatch)?;
         Ok(json!({"result": OperationResult::BrowserNavigate { value: snapshot }}))
     }
@@ -1731,13 +1834,18 @@ impl BrowserService {
         let doc = live
             .observe_after(i, before, describe, bounds)
             .map_err(ActionError::After)?;
-        let s = self
+        let mut s = self
             .read_session(&live.session)
             .ok()
             .flatten()
             .ok_or_else(|| {
                 ActionError::After(cdp::CdpError::Protocol("session vanished".into()))
             })?;
+        s.tested_repository = op
+            .payload
+            .get("testedRepository")
+            .filter(|v| !v.is_null())
+            .cloned();
         let (evidence, sequence) = self
             .publish_observation(&s, BrowserChannel::Action, &doc, false, Some(&op.id))
             .map_err(|e| ActionError::After(cdp::CdpError::Protocol(format!("{e:?}"))))?;
@@ -1746,6 +1854,12 @@ impl BrowserService {
             sequence: counter(sequence),
             evidence,
             truncated: false,
+            tested_repository: s
+                .tested_repository
+                .clone()
+                .map(serde_json::from_value)
+                .transpose()
+                .expect("validated browser source"),
         };
         let result = if op.capability == UPLOAD {
             OperationResult::BrowserUpload { value }
@@ -1761,15 +1875,17 @@ impl BrowserService {
         target: &BrowserTarget,
         bounds: &Bounds,
         operation: Option<&OperationId>,
+        tested_repository: Option<Value>,
     ) -> Result<BrowserSnapshot, ActionError> {
         let (wire, url, title, bytes) = live.snapshot(target, bounds)?;
-        let s = self
+        let mut s = self
             .read_session(&live.session)
             .ok()
             .flatten()
             .ok_or_else(|| {
                 ActionError::Before(cdp::CdpError::Protocol("session vanished".into()))
             })?;
+        s.tested_repository = tested_repository;
         let evidence = self.session_evidence(
             &s,
             format!("Accessibility snapshot of {}", wire.target_id.as_str()),
@@ -2263,6 +2379,7 @@ impl BrowserService {
         ctx: &InvocationContext,
         scope: &DataScope,
         asset_id: &Id,
+        command: &AdmittedCommand,
     ) -> Result<Decided, Failure> {
         let project = match scope {
             DataScope::Project { project_id } => {
@@ -2355,6 +2472,8 @@ impl BrowserService {
             root_id: ctx.root_id().cloned(),
             assignment_id: ctx.assignment_id().cloned(),
             asset_id: asset_id.as_str().to_owned(),
+            tested_repository: staged_source(command).0,
+            source_binding: staged_source(command).1,
             process_id: None,
             create_operation_id: op.clone(),
             uncertain_operation_id: None,
@@ -2623,7 +2742,7 @@ impl BrowserService {
                 );
             }
             Some(Staged::Refused(r)) => return Err(r.clone().into()),
-            None => Vec::new(),
+            None | Some(Staged::Source { .. }) => Vec::new(),
         };
         let needs_files = matches!(
             command.input(),
@@ -2651,6 +2770,7 @@ impl BrowserService {
             payload: json!({
                 "sessionId": s.id.as_str(), "input": input_json, "staged": staged,
                 "after": s.last_action_operation_id.as_ref().map(|o| o.0.as_str()),
+                "sourceBinding": staged_source(command).1,
             }),
         })?;
         tx.browser().set_last_action(&s.id, &op)?;
@@ -2814,7 +2934,7 @@ impl BrowserService {
         }
         let bounds = self.config.bounds();
         let value = self.with_live(&s.id, |live| {
-            self.snapshot_of(live, target, &bounds, None)
+            self.snapshot_of(live, target, &bounds, None, s.tested_repository.clone())
                 .map_err(|e| action_failure(e, target))
         })?;
         Ok(OperationResult::BrowserInspect { value })
@@ -3020,6 +3140,11 @@ fn observation_page(
             sequence: counter(o.sequence),
             evidence: crate::services::artifacts::version_ref(&v),
             truncated: o.truncated,
+            tested_repository: o
+                .tested_repository
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|_| StorageError::InvalidRecord("observation source".into()))?,
         });
     }
     Ok(items)
@@ -3144,7 +3269,10 @@ impl QueryHandler for BrowserService {
             return Ok(None);
         };
         let session = |id: &Id| -> Result<StoredBrowserSession, Failure> {
-            env.read(|s| Ok(session_of(s.browser(), ctx, id)))?
+            let mut session = env.read(|s| Ok(session_of(s.browser(), ctx, id)))??;
+            session.tested_repository =
+                self.tested_source(ctx, &|| env.stopped(self.clock.now_ms().get()))?;
+            Ok(session)
         };
         let observed = match input {
             ops::Input::Inspect(i) => session(&i.target.session_id)
@@ -3252,6 +3380,41 @@ impl CommandHandler for BrowserService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
+        let close = matches!(
+            command.input(),
+            OperationInput::Browser(ops::Input::SessionsCommand(ops::SessionsCommandInput {
+                action: BrowserSessionAction::Close { .. },
+                ..
+            }))
+        );
+        if close {
+            return Ok(None);
+        }
+        let tested_repository =
+            match self.tested_source(ctx, &|| env.stopped(self.clock.now_ms().get())) {
+                Ok(source) => source,
+                Err(failure) => {
+                    return Ok(Some(Prepared::new(Staged::Refused(match failure {
+                        Failure::Refused(r) => r,
+                        _ => Refusal::new(DomainErrorCode::SourceChanged, "git_source", None),
+                    }))));
+                }
+            };
+        let binding =
+            match crate::services::git::context::SourceBinding::prepare(ctx, &*self.store) {
+                Ok(binding) => binding,
+                Err(StorageError::ScopeDenied) => {
+                    return Ok(Some(Prepared::new(Staged::Refused(Refusal::new(
+                        DomainErrorCode::SourceChanged,
+                        "git_source",
+                        None,
+                    )))));
+                }
+                Err(error) => return Err(error),
+            }
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|_| StorageError::InvalidRecord("browser source binding".into()))?;
         let (session, files): (Id, Vec<ArtifactRef>) = match command.input() {
             OperationInput::Browser(ops::Input::Upload(i)) => {
                 (i.node.target.session_id.clone(), i.files.0.clone())
@@ -3261,7 +3424,12 @@ impl CommandHandler for BrowserService {
                 location: BrowserLocation::Artifact { artifact },
                 ..
             })) => (session_id.clone(), vec![artifact.clone()]),
-            _ => return Ok(None),
+            _ => {
+                return Ok(Some(Prepared::new(Staged::Source {
+                    tested_repository,
+                    binding,
+                })));
+            }
         };
         if env.stopped(self.clock.now_ms().get()) {
             return Err(StorageError::Cancelled);
@@ -3327,6 +3495,8 @@ impl CommandHandler for BrowserService {
             profile,
             batch,
             paths,
+            tested_repository,
+            binding,
         })))
     }
 
@@ -3359,12 +3529,42 @@ impl CommandHandler for BrowserService {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        if let Some(Staged::Refused(r)) = command.prepared::<Staged>() {
+            return decided(tx, Err(r.clone().into()));
+        }
+        if ctx.worktree().is_some() {
+            let close = matches!(
+                command.input(),
+                OperationInput::Browser(ops::Input::SessionsCommand(ops::SessionsCommandInput {
+                    action: BrowserSessionAction::Close { .. },
+                    ..
+                }))
+            );
+            if !close {
+                let binding = staged_source(command).1.and_then(|v| {
+                    serde_json::from_value::<crate::services::git::context::SourceBinding>(v).ok()
+                });
+                if !binding
+                    .as_ref()
+                    .map(|b| b.validate_in(tx))
+                    .transpose()?
+                    .unwrap_or(false)
+                {
+                    return decided(
+                        tx,
+                        Err(
+                            Refusal::new(DomainErrorCode::SourceChanged, "git_source", None).into(),
+                        ),
+                    );
+                }
+            }
+        }
         let outcome = match command.input() {
             OperationInput::Browser(ops::Input::SessionsCommand(i)) => match &i.action {
                 BrowserSessionAction::Create {
                     scope,
                     browser_asset_id,
-                } => self.create(tx, ctx, scope, browser_asset_id),
+                } => self.create(tx, ctx, scope, browser_asset_id, command),
                 BrowserSessionAction::Close {
                     session_id,
                     expected_revision,

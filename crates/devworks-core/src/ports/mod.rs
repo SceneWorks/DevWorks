@@ -142,8 +142,10 @@ pub struct GrantUse {
 /// fence inside its transaction before the receipt lookup, and a query re-checks them on a fresh
 /// snapshot before publishing its result, so a change committed after authorization (a revoked
 /// or re-bound principal, a narrowed access policy) fences the request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorityFence {
+    /// Current durable task-branch ownership and repository membership.
+    GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.
     Principal { actor: ActorId, revision: i64 },
     /// Digest of the access-relevant effective policy of the invocation's scope.

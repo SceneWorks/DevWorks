@@ -1206,11 +1206,19 @@
         "pull_request_url": "?Url",
         "head": "GitOid",
         "actor_id": "?ActorId",
-        "occurred_at_ms": "?Counter"
+        "occurred_at_ms": "?Counter",
+        "worktree_path": "?Text",
+        "worktree_removed": "?bool",
+        "agent_session_id": "?Id",
+        "repository_url": "?Url"
       },
       "since": {
         "actor_id": 2,
-        "occurred_at_ms": 2
+        "occurred_at_ms": 2,
+        "worktree_path": 3,
+        "worktree_removed": 3,
+        "agent_session_id": 3,
+        "repository_url": 3
       },
       "earlierName": "GitLink"
     },
@@ -1321,7 +1329,11 @@
         "revision": "Revision",
         "state": "ItemState",
         "target_ids": "Items<Id>",
-        "process_owner_id": "Id"
+        "process_owner_id": "Id",
+        "tested_repository": "?TestedRepositoryRevision"
+      },
+      "since": {
+        "tested_repository": 3
       }
     },
     "BrowserTarget": {
@@ -1397,7 +1409,11 @@
         "session_id": "Id",
         "sequence": "Counter",
         "evidence": "ArtifactRef",
-        "truncated": "bool"
+        "truncated": "bool",
+        "tested_repository": "?TestedRepositoryRevision"
+      },
+      "since": {
+        "tested_repository": 3
       }
     },
     "DesktopRecord": {
@@ -2699,10 +2715,12 @@
         "created_at_ms": "Counter",
         "scope": "DataScope",
         "reference_count": "Counter",
-        "tags": "?ArtifactTags"
+        "tags": "?ArtifactTags",
+        "tested_repository": "?TestedRepositoryRevision"
       },
       "since": {
-        "tags": 2
+        "tags": 2,
+        "tested_repository": 4
       }
     },
     "ArtifactReadContent": {
@@ -2713,14 +2731,24 @@
           "first_byte": "Counter",
           "next_byte": "Counter",
           "content": "Content",
-          "truncated": "bool"
+          "truncated": "bool",
+          "tested_repository": "?TestedRepositoryRevision"
         },
         "Binary": {
           "artifact": "ArtifactRef",
           "stream_id": "Id",
           "first_byte": "Counter",
           "byte_length": "Counter",
-          "expires_at_ms": "Counter"
+          "expires_at_ms": "Counter",
+          "tested_repository": "?TestedRepositoryRevision"
+        }
+      },
+      "variantSince": {
+        "Text": {
+          "tested_repository": 4
+        },
+        "Binary": {
+          "tested_repository": 4
         }
       }
     },
@@ -3566,6 +3594,18 @@
         "Before",
         "After"
       ]
+    },
+    "TestedRepositoryRevision": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "worktree_id": "Id",
+        "head": "GitOid",
+        "dirty": "bool",
+        "ownership_revision": "Revision",
+        "observed_at_ms": "Counter",
+        "repository_url": "?Url"
+      }
     }
   },
   "operations": {
@@ -7739,12 +7779,14 @@
     "artifacts.save": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "artifacts.list": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "history.events": [
       1,
@@ -7756,7 +7798,8 @@
     ],
     "history.git_links": [
       1,
-      2
+      2,
+      3
     ],
     "history.evidence_links": [
       1,
@@ -8131,6 +8174,54 @@
     "knowledge.delete_by_source": [
       1,
       3
+    ],
+    "git.pull_request": [
+      1,
+      2
+    ],
+    "browser.sessions": [
+      1,
+      2,
+      3
+    ],
+    "browser.inspect": [
+      1,
+      2,
+      3
+    ],
+    "browser.navigate": [
+      1,
+      2,
+      3
+    ],
+    "browser.input": [
+      1,
+      2,
+      3
+    ],
+    "browser.upload": [
+      1,
+      2,
+      3
+    ],
+    "browser.screenshot": [
+      1,
+      2,
+      3
+    ],
+    "browser.console": [
+      1,
+      2,
+      3
+    ],
+    "browser.network": [
+      1,
+      2,
+      3
+    ],
+    "artifacts.read": [
+      1,
+      4
     ]
   },
   "familyRules": {

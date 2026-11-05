@@ -198,6 +198,7 @@
 pub mod browser;
 pub mod diagnostics;
 pub mod dispatch;
+pub mod git;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;

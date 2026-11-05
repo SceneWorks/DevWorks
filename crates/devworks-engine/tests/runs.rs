@@ -2617,6 +2617,7 @@ fn composition_with(
                 None,
             ),
         ),
+        git: None,
         browser: None,
         packages: None,
         use_cases: UseCases::new(),

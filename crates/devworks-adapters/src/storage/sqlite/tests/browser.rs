@@ -37,6 +37,8 @@ fn seeded(h: &Harness) -> SqliteStore {
 
 fn session(s: &SqliteStore) -> StoredBrowserSession {
     StoredBrowserSession {
+        tested_repository: None,
+        source_binding: None,
         id: id("bs-1"),
         revision: 1,
         phase: BrowserPhase::Starting,
@@ -228,6 +230,7 @@ fn observation_sequences_are_allocated_by_the_session_without_changing_its_revis
     write(&s, move |tx| tx.browser().insert_browser_session(&new)).unwrap();
     // An observation needs an allocated sequence and an existing artifact version.
     let orphan = StoredBrowserObservation {
+        tested_repository: None,
         session_id: id("bs-1"),
         sequence: 1,
         channel: BrowserChannel::Console,
@@ -291,4 +294,53 @@ fn observation_sequences_are_allocated_by_the_session_without_changing_its_revis
             .next_observation_sequence(&id("missing"))),
         Err(StorageError::NotFound { .. })
     ));
+}
+
+#[test]
+fn browser_source_migration_keeps_old_evidence_nullable_and_blocks_old_writers() {
+    use crate::storage::sqlite::MIGRATION_0023_SHA256;
+    let migration = MIGRATIONS.iter().find(|m| m.version == 23).unwrap();
+    assert_eq!(
+        devworks_core::fingerprint::sha256_hex(migration.sql.as_bytes()),
+        MIGRATION_0023_SHA256
+    );
+    assert_eq!(
+        (migration.minimum_reader, migration.minimum_writer),
+        (8, 23)
+    );
+    let h = Harness::new();
+    let legacy = SqliteStore::open_with(h.config(), &through(21)).unwrap();
+    run_write(&legacy, WriteOptions::default(), |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: OperationId(id("old-browser-create")),
+                root_id: None,
+                assignment_id: None,
+                capability: "browser.create".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({}),
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    let info = legacy.info();
+    let boot = info.boot_id.unwrap();
+    let actor = info.host_actor;
+    legacy.with_writer_connection(move |connection| {
+        super::super::conn::db(connection.execute("INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,asset_id,create_operation_id,targets,observation_seq,created_at,updated_at,revision) VALUES('old-browser',?1,'Starting',?2,'Host','chrome','old-browser-create','[]',0,1,1,1)",rusqlite::params![boot.as_str(),actor.0.as_str()]))?;
+        Ok(())
+    }).unwrap();
+    drop(legacy);
+    let store = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    assert_eq!(store.compatibility().unwrap().minimum_writer, 23);
+    let old = read_snapshot(&store, &ReadOptions::default(), |snapshot| {
+        snapshot.browser().browser_session(&id("old-browser"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        old.tested_repository.is_none() && old.source_binding.is_none(),
+        "a migration never invents historical source evidence"
+    );
 }

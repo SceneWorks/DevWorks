@@ -36,13 +36,13 @@ const OWNER_KINDS: [&str; 6] = ["Human", "Agent", "Package", "McpClient", "Sched
 /// Most registered targets one session keeps (the browser service's live bound).
 pub use devworks_core::ports::browser::MAX_TARGETS;
 
-const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,close_operation_id,observation_seq,created_at,updated_at,revision";
+const COLUMNS: &str = "id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,last_action_operation_id,close_operation_id,tested_repository,source_binding,observation_seq,created_at,updated_at,revision";
 type Raw = (Vec<Option<String>>, [i64; 4]);
 fn row(r: &Row<'_>) -> rusqlite::Result<Raw> {
-    let text = (0..17)
+    let text = (0..19)
         .map(|i| r.get(i))
         .collect::<rusqlite::Result<Vec<Option<String>>>>()?;
-    Ok((text, [r.get(17)?, r.get(18)?, r.get(19)?, r.get(20)?]))
+    Ok((text, [r.get(19)?, r.get(20)?, r.get(21)?, r.get(22)?]))
 }
 fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
     let mut t = text.into_iter();
@@ -68,6 +68,13 @@ fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
     let detail = next();
     let last_action_operation_id = opt_id(next())?.map(OperationId);
     let close_operation_id = opt_id(next())?.map(OperationId);
+    let tested_repository = next()
+        .map(|v| serde_json::from_str(&v).map_err(|_| corrupt("browser source")))
+        .transpose()?;
+    validate_source(tested_repository.as_ref())?;
+    let source_binding = next()
+        .map(|v| serde_json::from_str(&v).map_err(|_| corrupt("browser source binding")))
+        .transpose()?;
     Ok(StoredBrowserSession {
         id,
         revision: num[3],
@@ -80,6 +87,8 @@ fn session_of((text, num): Raw) -> Result<StoredBrowserSession, StorageError> {
         root_id,
         assignment_id,
         asset_id,
+        tested_repository,
+        source_binding,
         process_id,
         create_operation_id,
         uncertain_operation_id,
@@ -114,7 +123,7 @@ fn observations(
     n: i64,
 ) -> Result<Vec<StoredBrowserObservation>, StorageError> {
     let mut s = db(conn.prepare_cached(
-        "SELECT sequence,artifact_id,version_id,truncated,recorded_at FROM browser_observations WHERE session_id=?1 AND channel=?2 AND sequence>?3 ORDER BY sequence LIMIT ?4",
+        "SELECT sequence,artifact_id,version_id,truncated,recorded_at,tested_repository FROM browser_observations WHERE session_id=?1 AND channel=?2 AND sequence>?3 ORDER BY sequence LIMIT ?4",
     ))?;
     let rows = db(db(
         s.query_map(params![session.as_str(), channel.as_str(), after, n], |r| {
@@ -124,12 +133,17 @@ fn observations(
                 r.get::<_, String>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, i64>(4)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         }),
     )?
     .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter()
-        .map(|(sequence, a, v, truncated, at)| {
+        .map(|(sequence, a, v, truncated, at, source)| {
+            let tested_repository = source
+                .map(|v| serde_json::from_str(&v).map_err(|_| corrupt("observation source")))
+                .transpose()?;
+            validate_source(tested_repository.as_ref())?;
             Ok(StoredBrowserObservation {
                 session_id: session.clone(),
                 sequence,
@@ -138,6 +152,7 @@ fn observations(
                 version_id: id_of(v)?,
                 truncated: truncated != 0,
                 recorded_at_ms: at,
+                tested_repository,
             })
         })
         .collect()
@@ -195,7 +210,22 @@ macro_rules! browser_reads {
 browser_reads!(Snapshot<'_>);
 browser_reads!(Unit<'_>);
 
+fn validate_source(source: Option<&serde_json::Value>) -> Result<(), StorageError> {
+    if let Some(source) = source {
+        use devworks_core::protocol::support::Check;
+        let record: devworks_core::protocol::records::TestedRepositoryRevision =
+            serde_json::from_value(source.clone())
+                .map_err(|_| invalid("tested repository revision"))?;
+        record.check().map_err(invalid)?;
+    }
+    Ok(())
+}
 fn check(s: &StoredBrowserSession) -> Result<String, StorageError> {
+    validate_source(s.tested_repository.as_ref())?;
+    if s.tested_repository.is_some() != s.source_binding.is_some() {
+        return Err(invalid("browser source requires its host binding"));
+    }
+
     if !OWNER_KINDS.contains(&s.owner_kind.as_str()) {
         return Err(invalid(
             "browser session owner kind is not a principal kind",
@@ -240,7 +270,7 @@ impl BrowserRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,observation_seq,created_at,updated_at,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17,1)",
+            "INSERT INTO browser_sessions(id,boot_id,state,owner_id,owner_kind,agent_session_id,project_id,root_id,assignment_id,asset_id,process_id,create_operation_id,uncertain_operation_id,targets,detail,observation_seq,created_at,updated_at,revision,tested_repository,source_binding) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17,1,?18,?19)",
         ))?
         .execute(params![
             s.id.as_str(),
@@ -260,6 +290,8 @@ impl BrowserRepository for Unit<'_> {
             s.detail,
             s.observation_sequence,
             self.now,
+            s.tested_repository.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("browser source"))?,
+            s.source_binding.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("browser binding"))?,
         ]))?;
         Ok(())
     }
@@ -287,6 +319,8 @@ impl BrowserRepository for Unit<'_> {
             || current.root_id != s.root_id
             || current.assignment_id != s.assignment_id
             || current.asset_id != s.asset_id
+            || current.tested_repository != s.tested_repository
+            || current.source_binding != s.source_binding
             || current.create_operation_id != s.create_operation_id
             || current.phase.settled()
             || (current.process_id.is_some() && current.process_id != s.process_id)
@@ -365,6 +399,7 @@ impl BrowserRepository for Unit<'_> {
                     kind: "browser_session",
                     id: o.session_id.as_str().to_owned(),
                 })?;
+        validate_source(o.tested_repository.as_ref())?;
         if o.sequence <= 0 || o.sequence > session.observation_sequence {
             return Err(invalid(
                 "an observation sequence must be allocated by its session",
@@ -382,7 +417,7 @@ impl BrowserRepository for Unit<'_> {
             });
         }
         db(db(self.conn.prepare_cached(
-            "INSERT INTO browser_observations(session_id,sequence,channel,artifact_id,version_id,truncated,recorded_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO browser_observations(session_id,sequence,channel,artifact_id,version_id,truncated,recorded_at,tested_repository) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         ))?
         .execute(params![
             o.session_id.as_str(),
@@ -392,6 +427,7 @@ impl BrowserRepository for Unit<'_> {
             o.version_id.as_str(),
             i64::from(o.truncated),
             o.recorded_at_ms,
+            o.tested_repository.as_ref().map(serde_json::to_string).transpose().map_err(|_| invalid("observation source"))?,
         ]))?;
         Ok(())
     }

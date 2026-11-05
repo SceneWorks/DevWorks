@@ -60,6 +60,7 @@ const CAPABILITY: AuthorityCapability = AuthorityCapability { _sealed: () };
 pub mod deletion;
 pub mod destructive;
 pub mod disclosure;
+mod git;
 pub mod policy;
 pub mod reads;
 pub mod redact;

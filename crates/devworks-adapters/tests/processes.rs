@@ -733,6 +733,44 @@ fn policy_parts() -> (NativeFilesystem, ProtectedRoots) {
 }
 
 #[test]
+fn generic_process_approval_cannot_bypass_owned_git_push_resolution() {
+    let _serial = serial();
+    let fx = Fx::new();
+    let supervisor = fx.supervisor();
+    let (fs, roots) = policy_parts();
+    let policy = LaunchPolicy {
+        fs: &fs,
+        roots: &roots,
+        protected_branches: &[],
+    };
+    let actor = fx.agent("agent-a", "project-a", "s-a");
+    for approved in [false, true] {
+        let spec = ProcessSpec::new(&[
+            "git".into(),
+            "push".into(),
+            "--force".into(),
+            "origin".into(),
+            "abc:refs/heads/task-alias".into(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            supervisor.launch(
+                &actor,
+                LaunchRequest {
+                    spec,
+                    operation_id: None,
+                    lease: None,
+                    approved_hold: approved
+                },
+                &policy
+            ),
+            Err(LaunchRefusal::GitPushOwnerRequired)
+        ));
+    }
+    assert!(supervisor.owned().is_empty());
+}
+
+#[test]
 fn launch_preflight_blocks_destructive_commands_before_anything_runs() {
     let _serial = serial();
     let fx = Fx::new();

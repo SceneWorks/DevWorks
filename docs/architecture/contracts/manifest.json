@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-04",
+  "date": "2026-11-05",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -85,7 +85,11 @@
     },
     {
       "file": "domain-command-reply.r3.schema.json",
-      "sha256": "0bae80d7925fd96993bcd8713a8fda8b3f60aaebbf91a590fe84e41457956f70"
+      "sha256": "54b6e9011222454485c515228d86f06ec3c33ddab31865b71ce2d78cd1665b23"
+    },
+    {
+      "file": "domain-command-reply.r4.schema.json",
+      "sha256": "bee6b9527ca78e2f6fc723db690668882e752fd3dc3d4375c3786cec578be815"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -97,7 +101,11 @@
     },
     {
       "file": "domain-query-reply.r3.schema.json",
-      "sha256": "24948d8c4e0210aa765c5ad045a03cf81fb03339c8e7c10fedbdf7c730678fab"
+      "sha256": "9cacc96093a8b3a4f56f8972de540b84bbe0061c3c3c994cc47b370a84b64180"
+    },
+    {
+      "file": "domain-query-reply.r4.schema.json",
+      "sha256": "520e5f038ccc6fcdce13a95ea32fe347ce2a4032780847c23213944f0ab99d7f"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -122,6 +130,10 @@
     {
       "file": "event.schema.json",
       "sha256": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc"
+    },
+    {
+      "file": "git-command-request.r2.schema.json",
+      "sha256": "447d08945cc303e3f4096f18ba9a4863cc7cf22ce378b99608c5628222886da3"
     },
     {
       "file": "git-command-request.schema.json",
@@ -157,7 +169,11 @@
     },
     {
       "file": "operation-completion.r3.schema.json",
-      "sha256": "12bad91ed178a3da87b50c66eee5163b6d528ea21b724468482c4bb650f3e265"
+      "sha256": "bc45dad8ab0cd7246e18e313ae2c634eb60ae02213e9f2845386009537cb9162"
+    },
+    {
+      "file": "operation-completion.r4.schema.json",
+      "sha256": "8101f9df2791a1a8017e5a21d5220493e84222bdc9afcb3b381f033dc898e621"
     },
     {
       "file": "operation-completion.schema.json",
@@ -169,7 +185,11 @@
     },
     {
       "file": "operation-result.r3.schema.json",
-      "sha256": "6d101df882b5b9ad11b9c1b3297154bb2a7ab0f29b7b17c5cbec95905bd097fc"
+      "sha256": "4c5553dfa942592e10fc14b4d069c46101783fea60c5ce325c9a0b9da6e5b436"
+    },
+    {
+      "file": "operation-result.r4.schema.json",
+      "sha256": "4421d98c44a27eb5f73602e31ea0462971bd23c9352bd36f538706a67c14a926"
     },
     {
       "file": "operation-result.schema.json",

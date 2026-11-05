@@ -11,6 +11,7 @@ use super::helper::{HelperFault, HelperLimits, HelperRunner};
 use super::paths::{relative_ok, unit_key};
 use crate::context::InvocationContext;
 use crate::ports::process::ProcessSpec;
+use crate::protocol::OperationId;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -54,6 +55,7 @@ pub struct Git<'a> {
 pub struct RevisionObservation {
     pub head: String,
     pub dirty: bool,
+    pub branch: Option<String>,
 }
 
 /// One entry of a commit's tree.
@@ -96,6 +98,9 @@ pub struct WorktreeEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GitFault {
     Helper(HelperFault),
+    SourceChanged,
+    Unborn,
+    Unqualified,
     /// Output that does not parse as Git's documented format.
     Malformed(String),
 }
@@ -103,6 +108,11 @@ impl std::fmt::Display for GitFault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Helper(h) => write!(f, "git {h}"),
+            Self::SourceChanged => f.write_str("Git HEAD changed during observation"),
+            Self::Unqualified => {
+                f.write_str("dirty-state reading cannot safely qualify this checkout")
+            }
+            Self::Unborn => f.write_str("unborn HEAD has no tested revision"),
             Self::Malformed(m) => write!(f, "unexpected git output: {m}"),
         }
     }
@@ -128,6 +138,11 @@ impl GitFault {
 }
 
 impl Git<'_> {
+    pub fn version(&self, dir: &Path) -> Result<String, GitFault> {
+        self.line(dir, &["version"])?
+            .ok_or_else(|| GitFault::Malformed("Git version unavailable".into()))
+    }
+
     fn spec(&self, dir: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> ProcessSpec {
         let mut argv: Vec<String> = vec![self.program.to_owned()];
         argv.extend(args.iter().map(|a| (*a).to_owned()));
@@ -137,14 +152,29 @@ impl Git<'_> {
         // no file-system monitor program runs for a read, no optional lock is taken and no
         // credential prompt can block. External diff and text conversion drivers are disabled
         // per command (`--no-ext-diff`, `--no-textconv`).
-        spec.env = vec![
-            ("GIT_CONFIG_COUNT".into(), "1".into()),
+        // Git locator/configuration environment must not redirect an owned-worktree read.
+        // Preserve the native host environment (PATH/SystemRoot etc.) without inherited GIT_*
+        // overrides, then apply only this helper's fixed configuration.
+        spec.clear_env = true;
+        spec.env = self
+            .runner
+            .environment()
+            .into_iter()
+            .filter(|(key, _)| !key.to_ascii_uppercase().starts_with("GIT_"))
+            .collect();
+        spec.env.extend(vec![
+            ("GIT_CONFIG_COUNT".into(), "2".into()),
             ("GIT_CONFIG_KEY_0".into(), "core.fsmonitor".into()),
             ("GIT_CONFIG_VALUE_0".into(), "false".into()),
+            // v0/v1 hide non-HEAD symbolic refs. Local and qualified GitHub transports must
+            // request v2 so a task-name alias cannot conceal a protected destination.
+            ("GIT_CONFIG_KEY_1".into(), "protocol.version".into()),
+            ("GIT_CONFIG_VALUE_1".into(), "2".into()),
             ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
+            ("GIT_LITERAL_PATHSPECS".into(), "1".into()),
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("LC_ALL".into(), "C".into()),
-        ];
+        ]);
         spec.stdin = stdin;
         spec
     }
@@ -170,6 +200,239 @@ impl Git<'_> {
         }
     }
 
+    /// Execute one fixed Git mutation under its committed operation identity. The caller
+    /// owns branch/path/authority validation and must observe the postcondition separately.
+    pub(crate) fn mutation(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        operation: &OperationId,
+        approved_hold: bool,
+    ) -> Result<Vec<u8>, GitFault> {
+        Ok(self.runner.run_recorded(
+            self.ctx,
+            self.spec(dir, args, stdin),
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 1024 * 1024,
+            },
+            self.stop,
+            operation,
+            approved_hold,
+        )?)
+    }
+
+    /// Resolve one literal ref, with no revision-expression interpretation.
+    pub fn branch_head(&self, dir: &Path, reference: &str) -> Result<Option<String>, GitFault> {
+        if !reference.starts_with("refs/heads/") || reference.contains(['\0', '\n']) {
+            return Err(GitFault::Malformed("invalid branch ref".into()));
+        }
+        self.line(dir, &["show-ref", "--verify", "--hash", reference])
+    }
+
+    /// All push destinations of the named remote. The Git service requires exactly one and
+    /// binds it to the journal; execution uses the resolved URL rather than re-reading a name.
+    pub fn push_urls(&self, dir: &Path, remote: &str) -> Result<Vec<String>, GitFault> {
+        if remote.starts_with('-') || remote.contains(['\0', '\n', ':', '/']) {
+            return Err(GitFault::Malformed("invalid remote name".into()));
+        }
+        let out = self.run(
+            dir,
+            &["remote", "get-url", "--push", "--all", remote],
+            64 * 1024,
+        )?;
+        let text =
+            String::from_utf8(out).map_err(|_| GitFault::Malformed("remote encoding".into()))?;
+        Ok(text.lines().map(str::to_owned).collect())
+    }
+
+    /// A resolved remote URL must remain literal when passed back to Git. Refuse a second
+    /// pushInsteadOf rewrite, then ask Git itself about insteadOf without opening a connection
+    /// (https://git-scm.com/docs/git-ls-remote#Documentation/git-ls-remote.txt---get-url).
+    pub fn literal_push_url(&self, dir: &Path, url: &str) -> Result<String, GitFault> {
+        let rules = match self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--get-regexp",
+                "^url\\..*\\.pushinsteadof$",
+            ],
+            64 * 1024,
+        ) {
+            Ok(rules) => rules,
+            Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => vec![],
+            Err(error) => return Err(error),
+        };
+        for rule in rules.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let text = std::str::from_utf8(rule)
+                .map_err(|_| GitFault::Malformed("push rewrite encoding".into()))?;
+            let (_, prefix) = text
+                .split_once('\n')
+                .ok_or_else(|| GitFault::Malformed("push rewrite configuration".into()))?;
+            if url.starts_with(prefix) {
+                return Err(GitFault::Malformed(
+                    "literal push URL matches pushInsteadOf".into(),
+                ));
+            }
+        }
+        self.line(dir, &["ls-remote", "--get-url", "--", url])?
+            .ok_or_else(|| GitFault::Malformed("literal push URL unavailable".into()))
+    }
+
+    pub fn remote_default(&self, dir: &Path, url: &str) -> Result<Option<String>, GitFault> {
+        let bytes = self.run(
+            dir,
+            &["ls-remote", "--symref", "--", url, "HEAD"],
+            64 * 1024,
+        )?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| GitFault::Malformed("remote HEAD encoding".into()))?;
+        let mut found = None;
+        for line in text.lines() {
+            if let Some(reference) = line
+                .strip_prefix("ref: ")
+                .and_then(|r| r.strip_suffix("\tHEAD"))
+            {
+                if !reference.starts_with("refs/heads/") || found.is_some() {
+                    return Err(GitFault::Malformed("remote symbolic HEAD".into()));
+                }
+                found = Some(reference.to_owned());
+            }
+        }
+        Ok(found)
+    }
+
+    /// Native absolute Git metadata paths. Remove the output terminator only, preserving
+    /// legitimate embedded whitespace in paths.
+    pub fn metadata_dirs(&self, dir: &Path) -> Result<(String, String), GitFault> {
+        Ok((
+            self.absolute_path(dir, "--git-dir")?,
+            self.absolute_path(dir, "--git-common-dir")?,
+        ))
+    }
+    pub fn worktree_root(&self, dir: &Path) -> Result<String, GitFault> {
+        self.absolute_path(dir, "--show-toplevel")
+    }
+    fn absolute_path(&self, dir: &Path, option: &str) -> Result<String, GitFault> {
+        let mut bytes = self.run(
+            dir,
+            &["rev-parse", "--path-format=absolute", option],
+            64 * 1024,
+        )?;
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+            if cfg!(windows) && bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+        }
+        let path = String::from_utf8(bytes)
+            .map_err(|_| GitFault::Malformed("Git metadata path encoding".into()))?;
+        if !Path::new(&path).is_absolute() {
+            return Err(GitFault::Malformed(
+                "Git metadata path is not absolute".into(),
+            ));
+        }
+        Ok(path)
+    }
+
+    /// A remote branch may itself be a symbolic ref. Updating that alias would update its
+    /// destination, so owned-branch authority cannot authorize it (not even with an OID lease).
+    pub fn remote_symbolic_target(
+        &self,
+        dir: &Path,
+        url: &str,
+        reference: &str,
+    ) -> Result<Option<String>, GitFault> {
+        let bytes = self.run(
+            dir,
+            &["ls-remote", "--symref", "--", url, reference],
+            64 * 1024,
+        )?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| GitFault::Malformed("remote symbolic ref encoding".into()))?;
+        let mut found = None;
+        for line in text.lines() {
+            if let Some(record) = line.strip_prefix("ref: ") {
+                let (target, name) = record
+                    .split_once('\t')
+                    .ok_or_else(|| GitFault::Malformed("remote symbolic ref".into()))?;
+                if name == reference {
+                    if target.is_empty() || found.is_some() {
+                        return Err(GitFault::Malformed("ambiguous remote symbolic ref".into()));
+                    }
+                    found = Some(target.to_owned());
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    /// One remote branch's exact head. An absent ref is distinct from a failed observation.
+    pub fn remote_head(
+        &self,
+        dir: &Path,
+        url: &str,
+        reference: &str,
+    ) -> Result<Option<String>, GitFault> {
+        let out = self.run(
+            dir,
+            &["ls-remote", "--refs", "--", url, reference],
+            64 * 1024,
+        )?;
+        let text = String::from_utf8(out)
+            .map_err(|_| GitFault::Malformed("remote ref encoding".into()))?;
+        let lines: Vec<_> = text.lines().collect();
+        match lines.as_slice() {
+            [] => Ok(None),
+            [line] => match line.split_once('\t') {
+                Some((head, found)) if found == reference && oid_ok(head) => Ok(Some(head.into())),
+                _ => Err(GitFault::Malformed("remote ref response".into())),
+            },
+            _ => Err(GitFault::Malformed("ambiguous remote ref response".into())),
+        }
+    }
+    /// Whether the observed remote commit is an ancestor of the exact local head. Missing
+    /// local objects are a refusal, never a reason to infer a fast forward.
+    pub fn is_ancestor(&self, dir: &Path, base: &str, head: &str) -> Result<bool, GitFault> {
+        if !oid_ok(base) || !oid_ok(head) {
+            return Err(GitFault::Malformed("invalid ancestry IDs".into()));
+        }
+        match self.run(dir, &["merge-base", "--is-ancestor", base, head], 1024) {
+            Ok(_) => Ok(true),
+            Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn commit_message(&self, dir: &Path, head: &str) -> Result<String, GitFault> {
+        if !oid_ok(head) {
+            return Err(GitFault::Malformed("invalid commit ID".into()));
+        }
+        let bytes = self.run(
+            dir,
+            &["show", "--no-patch", "--format=%B", head],
+            64 * 1024 + 1024,
+        )?;
+        String::from_utf8(bytes).map_err(|_| GitFault::Malformed("commit message encoding".into()))
+    }
+
+    /// Parents of an exact commit object (never a revision expression).
+    pub fn commit_parents(&self, dir: &Path, head: &str) -> Result<Vec<String>, GitFault> {
+        if !oid_ok(head) {
+            return Err(GitFault::Malformed("invalid commit ID".into()));
+        }
+        let parents = self
+            .line(dir, &["show", "--no-patch", "--format=%P", head])?
+            .unwrap_or_default();
+        let parents: Vec<String> = parents.split_whitespace().map(str::to_owned).collect();
+        if parents.iter().any(|p| !oid_ok(p)) {
+            return Err(GitFault::Malformed("invalid commit parents".into()));
+        }
+        Ok(parents)
+    }
+
     /// The commit `HEAD` names (`None` on an unborn branch).
     pub fn head(&self, dir: &Path) -> Result<Option<String>, GitFault> {
         let oid = self.line(dir, &["rev-parse", "-q", "--verify", "HEAD^{commit}"])?;
@@ -183,30 +446,230 @@ impl Git<'_> {
     /// attribution if HEAD changes during observation; never substitute a repository's
     /// primary checkout for the host-resolved invocation worktree.
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
-        let before = self
-            .head(dir)?
-            .ok_or_else(|| GitFault::Malformed("unborn HEAD has no tested revision".into()))?;
-        let status = self.run(
+        let before = self.head(dir)?.ok_or(GitFault::Unborn)?;
+        let dirty = self.safe_dirty(dir, 0)?;
+        let branch = self.branch(dir)?;
+        let after = self.head(dir)?;
+        if after.as_deref() != Some(before.as_str()) {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(RevisionObservation {
+            head: before,
+            dirty,
+            branch,
+        })
+    }
+
+    /// Head-only preparation never needs to hash worktree contents or run clean filters.
+    pub fn head_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
+        let head = self.head(dir)?.ok_or(GitFault::Unborn)?;
+        let branch = self.branch(dir)?;
+        if self.head(dir)?.as_ref() != Some(&head) {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(RevisionObservation {
+            head,
+            branch,
+            dirty: false,
+        })
+    }
+
+    /// Git may run arbitrary clean/process filters while computing status. Determine whether
+    /// tracked paths need them before hashing; never invent a dirty bit using raw bytes in
+    /// place of a configured canonical transformation. Submodules are read separately so
+    /// each repository's local filter configuration receives the same checks.
+    fn safe_dirty(&self, dir: &Path, depth: usize) -> Result<bool, GitFault> {
+        if depth > 32 {
+            return Err(GitFault::Unqualified);
+        }
+        let config = match self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--get-regexp",
+                "^filter\\..*\\.(clean|process)$",
+            ],
+            MAX_LISTING_BYTES,
+        ) {
+            Ok(out) => out,
+            Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => vec![],
+            Err(e) => return Err(e),
+        };
+        let mut filters = std::collections::BTreeSet::new();
+        let mut overrides = std::collections::BTreeSet::new();
+        for record in config.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let (key, value) = record.split_at(
+                record
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .ok_or_else(|| GitFault::Malformed("filter configuration".into()))?,
+            );
+            let key = std::str::from_utf8(key).map_err(|_| GitFault::Unqualified)?;
+            let name = key
+                .strip_prefix("filter.")
+                .and_then(|k| k.rsplit_once('.'))
+                .map(|(n, _)| n)
+                .ok_or(GitFault::Unqualified)?;
+            overrides.insert(name.to_owned());
+            if value.len() > 1 {
+                filters.insert(name.to_owned());
+            }
+        }
+        let listing = self.run(dir, &["ls-files", "--stage", "-z"], MAX_LISTING_BYTES)?;
+        let mut paths = Vec::new();
+        let mut submodules = Vec::new();
+        for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let tab = record
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or_else(|| GitFault::Malformed("index entry".into()))?;
+            paths.extend_from_slice(&record[tab + 1..]);
+            paths.push(0);
+            if record.starts_with(b"160000 ") {
+                let path =
+                    std::str::from_utf8(&record[tab + 1..]).map_err(|_| GitFault::Unqualified)?;
+                if !relative_ok(path) {
+                    return Err(GitFault::Unqualified);
+                }
+                let header =
+                    std::str::from_utf8(&record[..tab]).map_err(|_| GitFault::Unqualified)?;
+                submodules.push((
+                    path.to_owned(),
+                    header
+                        .split_whitespace()
+                        .nth(1)
+                        .ok_or(GitFault::Unqualified)?
+                        .to_owned(),
+                ));
+            }
+        }
+        if !filters.is_empty() && !paths.is_empty() {
+            let attributes = self.runner.run(
+                self.ctx,
+                self.spec(dir, &["check-attr", "-z", "--stdin", "filter"], Some(paths)),
+                HelperLimits {
+                    deadline: self.deadline,
+                    max_stdout: MAX_LISTING_BYTES,
+                },
+                self.stop,
+            )?;
+            let fields: Vec<_> = attributes
+                .split(|b| *b == 0)
+                .filter(|r| !r.is_empty())
+                .collect();
+            if fields.len() % 3 != 0 {
+                return Err(GitFault::Malformed("filter attributes".into()));
+            }
+            for attr in fields.as_chunks::<3>().0 {
+                if filters.iter().any(|name| name.as_bytes() == attr[2]) {
+                    return Err(GitFault::Unqualified);
+                }
+            }
+        }
+        let mut spec = self.spec(
             dir,
             &[
                 "status",
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=normal",
-                "--ignore-submodules=none",
+                "--ignore-submodules=dirty",
             ],
-            MAX_LISTING_BYTES,
-        )?;
-        let after = self.head(dir)?;
-        if after.as_deref() != Some(before.as_str()) {
-            return Err(GitFault::Malformed(
-                "HEAD changed during revision observation".into(),
-            ));
+            None,
+        );
+        // Even an attribute change between the check and status cannot select an executable
+        // from the observed configuration. Configuration itself is host-controlled state.
+        let mut count = 2;
+        for name in overrides {
+            for (suffix, value) in [("clean", ""), ("process", ""), ("required", "false")] {
+                spec.env.push((
+                    format!("GIT_CONFIG_KEY_{count}"),
+                    format!("filter.{name}.{suffix}"),
+                ));
+                spec.env
+                    .push((format!("GIT_CONFIG_VALUE_{count}"), value.into()));
+                count += 1;
+            }
         }
-        Ok(RevisionObservation {
-            head: before,
-            dirty: !status.is_empty(),
-        })
+        spec.env
+            .iter_mut()
+            .find(|(k, _)| k == "GIT_CONFIG_COUNT")
+            .unwrap()
+            .1 = count.to_string();
+        let status = self.runner.run(
+            self.ctx,
+            spec,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: MAX_LISTING_BYTES,
+            },
+            self.stop,
+        )?;
+        let mut dirty = !status.is_empty();
+        for (path, expected) in submodules {
+            let child = dir.join(path);
+            // An uninitialized submodule has no checkout and contributes no worktree dirt.
+            // rev-parse would otherwise walk up to its parent repository.
+            let fs = self.runner.filesystem().ok_or(GitFault::Unqualified)?;
+            let marker = fs
+                .resolve(
+                    child.join(".git").to_str().ok_or(GitFault::Unqualified)?,
+                    None,
+                )
+                .map_err(|_| GitFault::SourceChanged)?;
+            if marker.target.is_none() {
+                continue;
+            }
+            let root = self.worktree_root(&child)?;
+            let expected_root = fs
+                .resolve(child.to_str().ok_or(GitFault::Unqualified)?, None)
+                .map_err(|_| GitFault::SourceChanged)?;
+            let actual_root = fs
+                .resolve(&root, None)
+                .map_err(|_| GitFault::SourceChanged)?;
+            if expected_root
+                .target
+                .as_ref()
+                .and_then(|t| t.identity.as_ref())
+                != actual_root
+                    .target
+                    .as_ref()
+                    .and_then(|t| t.identity.as_ref())
+            {
+                return Err(GitFault::SourceChanged);
+            }
+            dirty |= self.head(&child)?.as_deref() != Some(&expected);
+            dirty |= self.safe_dirty(&child, depth + 1)?;
+        }
+        Ok(dirty)
+    }
+
+    /// A complete bounded patch for immutable commits. Path selectors are literal, never
+    /// Git pathspec programs or command options.
+    pub fn patch(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+        paths: &[String],
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(base) || !oid_ok(head) || paths.iter().any(|p| !relative_ok(p)) {
+            return Err(GitFault::Malformed("diff identity or path".into()));
+        }
+        let mut args = vec![
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "--submodule=short",
+            base,
+            head,
+            "--",
+        ];
+        args.extend(paths.iter().map(String::as_str));
+        self.run(dir, &args, MAX_LISTING_BYTES)
     }
 
     /// The branch `HEAD` points at (`refs/heads/...`), `None` when detached.
@@ -561,13 +1024,33 @@ mod tests {
         use std::sync::Mutex;
         struct Replies(Mutex<VecDeque<Vec<u8>>>);
         impl HelperRunner for Replies {
+            fn environment(&self) -> Vec<(String, String)> {
+                vec![
+                    ("GIT_DIR".into(), "/unrelated/.git".into()),
+                    ("git_work_tree".into(), "/unrelated".into()),
+                    ("PATH".into(), "/usr/bin".into()),
+                ]
+            }
             fn run(
                 &self,
                 _: &InvocationContext,
-                _: ProcessSpec,
+                spec: ProcessSpec,
                 _: HelperLimits,
                 _: &(dyn Fn() -> bool + Sync),
             ) -> Result<Vec<u8>, HelperFault> {
+                assert!(spec.clear_env);
+                assert!(spec.env.iter().all(|(key, _)| !matches!(
+                    key.to_ascii_uppercase().as_str(),
+                    "GIT_DIR" | "GIT_WORK_TREE"
+                )));
+                assert!(
+                    spec.env
+                        .iter()
+                        .any(|(key, value)| key == "PATH" && value == "/usr/bin")
+                );
+                if spec.args.iter().any(|a| a == "config" || a == "ls-files") {
+                    return Ok(vec![]);
+                }
                 Ok(self
                     .0
                     .lock()
@@ -600,6 +1083,7 @@ mod tests {
             let runner = Replies(Mutex::new(VecDeque::from([
                 head.as_bytes().to_vec(),
                 status,
+                b"refs/heads/task-a".to_vec(),
                 after.into_bytes(),
             ])));
             let git = Git {
@@ -615,10 +1099,7 @@ mod tests {
                     assert_eq!(observed.head, head);
                     assert_eq!(observed.dirty, dirty);
                 }
-                Err(GitFault::Malformed(message)) => {
-                    assert!(changed);
-                    assert!(message.contains("HEAD changed"));
-                }
+                Err(GitFault::SourceChanged) => assert!(changed),
                 other => panic!("{other:?}"),
             }
         }

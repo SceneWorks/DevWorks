@@ -174,6 +174,7 @@ fn composition(
                 None,
             ),
         ),
+        git: None,
         browser: None,
         packages: None,
         use_cases: UseCases::new().with_settings(Arc::new(SettingsService {

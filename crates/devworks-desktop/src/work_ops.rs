@@ -212,3 +212,26 @@ pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
         other => Err(unexpected("run control", &other)),
     }
 }
+
+/// Retained source-control associations use the shared history query, including removed paths.
+pub fn git_links(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    let mut frame = json!({"protocol":PROTOCOL,"schemaRevision":3,"queryId":backend.token("q"),"mode":"Query",
+        "body":{"kind":"history.git_links","rootId":root,"page":{"limit":200}}});
+    if let Some(cursor) = cursor {
+        frame["body"]["page"]["cursor"] = json!(cursor);
+    }
+    frame.to_string().into_bytes()
+}
+pub fn git_links_result(
+    outcome: QueryOutcome,
+) -> Result<
+    devworks_core::protocol::support::HistoryPage<
+        devworks_core::protocol::records::AttributedGitLink,
+    >,
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryGitLinks { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("history.git_links", &other)),
+    }
+}

@@ -82,6 +82,10 @@ pub struct StoredBrowserSession {
     pub assignment_id: Option<AssignmentId>,
     /// The browser asset the session runs (`chrome`, `chromium`, `edge`, `configured`).
     pub asset_id: String,
+    /// Immutable source observed for the creating invocation; absent for unbound sessions.
+    pub tested_repository: Option<serde_json::Value>,
+    /// Trusted original invocation witness retained with the immutable session-start source.
+    pub source_binding: Option<serde_json::Value>,
     /// The owned process tree, once launched.
     pub process_id: Option<Id>,
     /// The journaled Create operation.
@@ -144,6 +148,7 @@ pub struct StoredBrowserObservation {
     /// Notifications were dropped (bounded buffer) or the evidence was cut to its bound.
     pub truncated: bool,
     pub recorded_at_ms: i64,
+    pub tested_repository: Option<serde_json::Value>,
 }
 
 /// Which sessions a listing returns.

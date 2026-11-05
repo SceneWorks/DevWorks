@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 pub const MAX_TARGETS: usize = 256;
 
 /// Stable identity of a filesystem object (device/volume and file number).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FileIdentity {
     pub volume: u64,
     pub file: u64,
@@ -309,6 +309,8 @@ pub enum InputNeeded {
     /// fully model (the lexical backstop), or a recognized consequential operation that is not
     /// refused but cannot be allowed.
     UnmodeledConsequentialCommand,
+    /// Ref-rewriting or implicit Git pushes need the Git owner's concrete destination checks.
+    GitPushOwnerRequired,
 }
 impl InputNeeded {
     pub fn as_str(self) -> &'static str {
@@ -321,6 +323,7 @@ impl InputNeeded {
             Self::OpaqueCommand => "OpaqueCommand",
             Self::UnresolvedProtectedRoot => "UnresolvedProtectedRoot",
             Self::UnmodeledConsequentialCommand => "UnmodeledConsequentialCommand",
+            Self::GitPushOwnerRequired => "GitPushOwnerRequired",
         }
     }
 }

@@ -3179,7 +3179,13 @@ fn revision_two_lineage_evidence_and_git_records_carry_structured_attribution() 
     assert!(git.summary.0.contains("by user-a"));
     for op in ["history.work_lineage", "history.git_links"] {
         assert_eq!(
-            fault(fx.at(&user, op, body.clone(), Some(3))).code,
+            fault(fx.at(
+                &user,
+                op,
+                body.clone(),
+                Some(if op == "history.git_links" { 4 } else { 3 })
+            ))
+            .code,
             DomainErrorCode::SchemaMismatch
         );
     }

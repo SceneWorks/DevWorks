@@ -636,6 +636,28 @@ pub const TAGS_SINCE: SchemaRevision = SchemaRevision(2);
 
 /// The wire record of `a` at version `v` for a caller that negotiated `revision`. Tags are read
 /// (and their stored form validated) only for a caller that can receive them.
+fn tested_repository(
+    v: &StoredVersion,
+    revision: SchemaRevision,
+) -> Result<Option<crate::protocol::records::TestedRepositoryRevision>, StorageError> {
+    if revision < SchemaRevision(4) {
+        return Ok(None);
+    }
+    let source = v
+        .source
+        .pointer("/source/testedRepository")
+        .map(|value| {
+            serde_json::from_value::<crate::protocol::records::TestedRepositoryRevision>(
+                value.clone(),
+            )
+            .map_err(|_| StorageError::InvalidRecord("stored tested repository revision".into()))
+        })
+        .transpose()?;
+    if let Some(source) = &source {
+        crate::protocol::support::Check::check(source).map_err(StorageError::InvalidRecord)?;
+    }
+    Ok(source)
+}
 fn record(
     read: &dyn crate::ports::storage::ArtifactRead,
     a: &StoredArtifact,
@@ -657,6 +679,7 @@ fn record(
         None
     };
     Ok(ArtifactRecord {
+        tested_repository: tested_repository(v, revision)?,
         artifact: version_ref(v),
         name: label(&a.title),
         created_at_ms: counter(a.created_at_ms),
@@ -2133,6 +2156,7 @@ impl ArtifactService {
                 let next = first + text.len() as u64;
                 return Ok(OperationResult::ArtifactsRead {
                     value: ArtifactReadContent::Text {
+                        tested_repository: tested_repository(&version, query.schema_revision())?,
                         artifact: reference,
                         first_byte: counter(first as i64),
                         next_byte: counter(next as i64),
@@ -2165,6 +2189,7 @@ impl ArtifactService {
         );
         Ok(OperationResult::ArtifactsRead {
             value: ArtifactReadContent::Binary {
+                tested_repository: tested_repository(&version, query.schema_revision())?,
                 artifact: reference,
                 stream_id: grant.stream_id,
                 first_byte: counter(0),

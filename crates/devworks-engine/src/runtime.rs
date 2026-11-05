@@ -165,6 +165,8 @@ pub struct Composition {
     /// owned processes, supervises it and closes its sessions at shutdown. When absent, no
     /// browser operation is registered (nothing unqualified is advertised).
     pub browser: Option<BrowserComposition>,
+    /// Native Git owner; missing executable/filesystem is not advertised.
+    pub git: Option<crate::git::GitComposition>,
     /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service
     /// (replacing any the caller registered), starts the package host after process recovery and
     /// stops its helpers cooperatively at shutdown. `None`: no package host (packages are not
@@ -320,6 +322,7 @@ pub struct Runtime {
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
+    git: Option<Arc<devworks_core::services::git::GitService>>,
     browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
@@ -377,6 +380,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         power,
         diagnostics,
         browser,
+        git,
         packages,
         use_cases,
         mut consumers,
@@ -391,20 +395,59 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_host,
         resources.clone(),
     ));
-    let browser = browser.map(|b| {
-        Arc::new(BrowserService::new(
+    let git = git.and_then(|composition| {
+        let fs = composition.config.filesystem.clone()?;
+        let helpers = Arc::new(
+            devworks_core::services::indexing::helper::SupervisedHelpers {
+                supervisor: supervisor.clone(),
+                store: store.clone(),
+                fs,
+            },
+        );
+        Some(Arc::new(devworks_core::services::git::GitService::new(
             store.clone(),
-            b.platform,
+            helpers,
             artifacts.clone(),
-            supervisor.clone(),
-            b.fs,
-            b.app_data_root,
             ids.clone(),
             clock.clone(),
-            b.config,
-        ))
+            composition.config,
+        )))
+    });
+    let git = match git {
+        Some(service) => {
+            let probe = service.clone();
+            if tokio::task::spawn_blocking(move || probe.qualify())
+                .await
+                .unwrap_or(false)
+            {
+                Some(service)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let browser = browser.map(|b| {
+        Arc::new(
+            BrowserService::new(
+                store.clone(),
+                b.platform,
+                artifacts.clone(),
+                supervisor.clone(),
+                b.fs,
+                b.app_data_root,
+                ids.clone(),
+                clock.clone(),
+                b.config,
+            )
+            .with_git_source(git.clone()),
+        )
     });
     let mut use_cases = use_cases;
+    if let Some(service) = &git {
+        use_cases = use_cases.with_git(service.clone());
+        consumers.push(crate::git::consumer(service.clone()));
+    }
     if let Some(b) = &browser {
         use_cases = use_cases.with_browser(b.clone());
         consumers.push(crate::browser::consumer(b.clone()));
@@ -645,6 +688,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
     let mut tasks = vec![delivery, collection, housekeeping];
+    if let Some(service) = &git {
+        tasks.push(tokio::spawn(crate::git::run(service.clone())));
+    }
     if let Some(b) = &browser {
         let svc = b.clone();
         diagnostics.register_source(Arc::new(move |now| svc.health(now)));
@@ -715,6 +761,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics,
         monitor,
         browser,
+        git,
         browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
@@ -809,6 +856,10 @@ impl Runtime {
             self.command(ctx, "artifacts.save", raw)
         })
     }
+    pub fn git(&self) -> Option<&Arc<devworks_core::services::git::GitService>> {
+        self.git.as_ref()
+    }
+
     /// The browser service the `browser.*` use cases, its effect consumer and supervision
     /// share (`None` when no browser is composed). Typed completions of accepted browser
     /// commands are read through [`BrowserService::completion`].
@@ -1007,6 +1058,9 @@ impl Runtime {
         // Browser sessions close through the process owner (their records settle and profiles
         // are removed) before the remaining owned trees are stopped. Like every wait above, it
         // starts only after the run-control hold committed and is abandoned at the one deadline:
+        if let Some(git) = &self.git {
+            git.stop();
+        }
         // a close that does not return in time leaves its trees to the owned-tree stop below.
         if let Some(b) = self.browser.clone() {
             let closing = tokio::task::spawn_blocking(move || b.shutdown());
