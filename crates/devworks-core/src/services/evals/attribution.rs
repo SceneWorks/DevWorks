@@ -9,7 +9,7 @@ use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{
     SessionRead, StorageError, StoredContextSource, StoredEntry, StoredSession,
 };
-use crate::protocol::records::{ContextSource, EvalRevisionContext};
+use crate::protocol::records::{EvalRevisionContext, EvalRevisionSource};
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{Counter, Id, Revision};
 use crate::services::sessions::transcript::{ContextSourceInput, SourceDisposition};
@@ -109,16 +109,12 @@ fn input(source: &StoredContextSource) -> Result<ContextSourceInput, StorageErro
         },
     })
 }
-fn wire(source: &ContextSourceInput) -> Result<ContextSource, StorageError> {
-    Ok(ContextSource {
-        id: source.source_id.clone(),
-        kind: BoundedText(match source.disposition {
-            SourceDisposition::Included => source.kind.clone(),
-            other => format!("{}:{}", source.kind, other.as_str().to_ascii_lowercase()),
-        }),
-        source_revision: Revision::new(source.source_revision).map_err(invalid)?,
-        artifact: source.artifact.clone(),
-        token_estimate: Counter::new(source.token_estimate).map_err(invalid)?,
+fn wire(source: &ContextSourceInput) -> Result<EvalRevisionSource, StorageError> {
+    Ok(EvalRevisionSource {
+        source_id: source.source_id.clone(),
+        kind: BoundedText(source.kind.clone()),
+        revision: Revision::new(source.source_revision).map_err(invalid)?,
+        disposition: BoundedText(source.disposition.as_str().into()),
     })
 }
 
