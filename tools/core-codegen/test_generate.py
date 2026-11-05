@@ -40,7 +40,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'router.route', 'router.pin',
             'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
             'next_work.claim_project_queue', 'next_work.claim_feature_task',
-            'next_work.inspect_claim', 'next_work.release_claim',
+            'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
@@ -101,6 +101,13 @@ class SchemaRevisionRules(unittest.TestCase):
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3})
         self.assertEqual(generate.introduced_in(configure), {2})
+
+    def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
+        operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')
+        self.assertEqual([r['revision'] for r in operation['schemaRevisions']], [3])
+        self.assertEqual(generate.introduced_in(operation), {3})
+        results = generate.gen_results(generate.operations())
+        self.assertIn('#[schemars(extend("x-since" = 3))]\n    #[serde(rename = "next_work.inspect_queue")]', results)
 
     def test_a_history_page_result_is_projected(self):
         # HistoryPage gates its own checkpoint, so every result carrying it is projected.

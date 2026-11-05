@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-05",
-  "catalogSha256": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+  "catalogSha256": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
   "familyCount": 49,
-  "operationCount": 356,
-  "concreteInputCandidates": 356,
+  "operationCount": 357,
+  "concreteInputCandidates": 357,
   "domainInputsPending": 0,
   "families": [
     {
@@ -2267,6 +2267,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": " Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn.",
+          "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 3,
+          "operation": "next_work.inspect_queue",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "next_work.inspect_queue",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "next_work.inspect_queue"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "next_work.inspect_queue"
+          },
+          "resultValueType": "AllocationQueueSnapshot",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Read the authoritative queue and workflow revisions, including empty queues. With featureId, validate visible same-project feature ownership and return its task queue revision; otherwise return the project feature/standalone queue revision. No allocation, receipt or revision bump. Introduced at schema revision 3; older callers cannot select this operation.",
           "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

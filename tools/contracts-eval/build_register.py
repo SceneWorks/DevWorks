@@ -75,7 +75,7 @@ for f in CATALOG['families']:
         descriptor=OPS.get(qualified)
         mode=descriptor['mode'] if descriptor else ('Query' if qualified in LEGACY_QUERIES else 'Command')
         modes=['Query','Command'] if mode=='Hybrid' else [mode]
-        ops.append({'operation':qualified,'inputSchema':binding[0]+'.schema.json' if binding else None,'variant':binding[1] if binding else None,'selectionConstraint':{'pointer':pointer(binding[0]),'equals':binding[1]} if binding and binding[1] else None,
+        ops.append({**({'introducedRevision':descriptor['introducedRevision']} if descriptor and 'introducedRevision' in descriptor else {}),'operation':qualified,'inputSchema':binding[0]+'.schema.json' if binding else None,'variant':binding[1] if binding else None,'selectionConstraint':{'pointer':pointer(binding[0]),'equals':binding[1]} if binding and binding[1] else None,
             'requestModes':modes,'modePolicies':[{'mode':m,'authority':'ScopedRead' if m=='Query' else descriptor['authority'] if descriptor else 'Existing host command authority','effect':'ReadOnly or declared external read' if m=='Query' else descriptor['effect'] if descriptor else 'Existing journaled command contract'} for m in modes],'resultSchema':'operation-result.schema.json','resultSelectionConstraint':{'pointer':'/kind','equals':qualified},'resultValueType':descriptor['result'] if descriptor else LEGACY_RESULTS[qualified],
             'queryReplySchema':'domain-query-reply.schema.json' if 'Query' in modes else None,'commandReplySchema':'domain-command-reply.schema.json' if 'Command' in modes else None,
             'completionSchema':'operation-completion.schema.json' if 'Command' in modes else None,

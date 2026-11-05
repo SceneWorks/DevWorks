@@ -163,7 +163,7 @@ pub struct OperationDescriptor {
     /// The register binds an `OperationCompletion` contract for asynchronous outcomes. Only such
     /// an operation may answer a command with `Accepted` (a durable operation still running).
     pub completion: bool,
-    /// Every schema revision this operation accepts, ascending; the first is always 1.
+    /// Every schema revision this operation accepts, ascending, starting at its explicit introduction revision.
     pub revisions: &'static [SchemaRevision],
 }
 impl OperationDescriptor {

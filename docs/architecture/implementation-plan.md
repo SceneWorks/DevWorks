@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 377 requirements, 356 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 77 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 377 requirements, 357 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 77 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -316,7 +316,7 @@ Automatic allocation skips incomplete/unapproved plans and wholly blocked roots 
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `workflows.list`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.inspect_claim`, `next_work.release_claim`
+**Operations:** `workflows.list`, `workflows.create_status`, `workflows.rename_status`, `workflows.order`, `workflows.reassign_and_remove`, `next_work.claim_project_queue`, `next_work.claim_feature_task`, `next_work.inspect_claim`, `next_work.release_claim`, `next_work.inspect_queue`
 
 **Primary requirement cases:** See supporting and integration obligations.
 

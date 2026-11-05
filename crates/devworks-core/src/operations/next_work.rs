@@ -91,6 +91,25 @@ impl Revisioned for ReleaseClaimInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `next_work.inspect_queue` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InspectQueueInput {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<Id>,
+}
+impl Check for InspectQueueInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.feature_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for InspectQueueInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `next_work` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -102,6 +121,8 @@ pub enum Input {
     InspectClaim(InspectClaimInput),
     /// `next_work.release_claim` (Command).
     ReleaseClaim(ReleaseClaimInput),
+    /// `next_work.inspect_queue` (Query).
+    InspectQueue(InspectQueueInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -110,6 +131,7 @@ impl Input {
             Self::ClaimFeatureTask(_) => "next_work.claim_feature_task",
             Self::InspectClaim(_) => "next_work.inspect_claim",
             Self::ReleaseClaim(_) => "next_work.release_claim",
+            Self::InspectQueue(_) => "next_work.inspect_queue",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -118,6 +140,7 @@ impl Input {
             Self::ClaimFeatureTask(_) => Mode::Command,
             Self::InspectClaim(_) => Mode::Query,
             Self::ReleaseClaim(_) => Mode::Command,
+            Self::InspectQueue(_) => Mode::Query,
         }
     }
 }

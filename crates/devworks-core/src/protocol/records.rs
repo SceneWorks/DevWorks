@@ -10020,3 +10020,26 @@ impl Revisioned for AllocationClaimRecord {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationQueueSnapshot {
+    pub project_id: ProjectId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<Id>,
+    pub queue_revision: Revision,
+    pub workflow_revision: Revision,
+}
+impl Check for AllocationQueueSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.feature_id.check()?;
+        self.queue_revision.check()?;
+        self.workflow_revision.check()?;
+        crate::protocol::rules::record(
+            "AllocationQueueSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}

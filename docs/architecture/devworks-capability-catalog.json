@@ -88,7 +88,8 @@
         "claim_project_queue",
         "claim_feature_task",
         "inspect_claim",
-        "release_claim"
+        "release_claim",
+        "inspect_queue"
       ],
       "effectAndAuthority": "Atomic scoped write; claim/start distinct, idempotency and pauses respected",
       "status": "Proposed; exact command/tool schemas require review"

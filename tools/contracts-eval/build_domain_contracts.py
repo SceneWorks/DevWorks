@@ -88,7 +88,7 @@ for mode in ['Query','Command']:
  for n,d in OPS.items():
   if included(d,mode):
    one=d.get('exactlyOne',[]);fs=opfields(d,mode)
-   lines += ['    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
+   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')
@@ -110,7 +110,7 @@ lines += [ATTR+'#[serde(tag="mode", rename_all_fields="camelCase", deny_unknown_
  'impl Revisioned for DomainRequest {fn retain_revision(&mut self,revision:u32){match self{Self::Query{body,..}=>body.retain_revision(revision),Self::Command{body,..}=>body.retain_revision(revision)}}}', '']
 results={n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS
 lines += [TAG+'pub enum OperationResult {']
-for n,t in results.items(): lines += [f'    #[serde(rename="{n}")] {pascal(n)} {{value:{rust(t)}}},']
+for n,t in results.items(): lines += [*([f'    #[schemars(extend("x-since" = {OPS[n]["introducedRevision"]}))]'] if OPS.get(n,{}).get('introducedRevision',1)>1 else []),f'    #[serde(rename="{n}")] {pascal(n)} {{value:{rust(t)}}},']
 lines += ['}', 'impl OperationResult {pub fn operation(&self)->&\'static str{match self{']
 for n in results: lines += [f' Self::{pascal(n)} {{..}}=>"{n}",']
 lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),String>{match self{']

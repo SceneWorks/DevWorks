@@ -341,9 +341,10 @@ def check_revisions(o):
     numbers = [r['revision'] for r in revs]
     if numbers != REVISIONS.get(n, [1]):
         fail(f'register revisions {numbers} differ from domain-spec for {n}')
-    if numbers[0] != 1 or numbers != sorted(set(numbers)):
-        fail('schema revisions must start at 1 and increase for ' + n)
-    if revs[0]['inputSchema'] != o['inputSchema'] or revs[0]['resultSchema'] != o['resultSchema']:
+    introduced = DOMAIN_OPS.get(n, {}).get('introducedRevision', 1)
+    if numbers[0] != introduced or numbers != sorted(set(numbers)):
+        fail(f'schema revisions must start at operation introduction {introduced} and increase for ' + n)
+    if numbers[0] == 1 and (revs[0]['inputSchema'] != o['inputSchema'] or revs[0]['resultSchema'] != o['resultSchema']):
         fail('revision 1 must bind the operation\'s base schemas for ' + n)
     base = o['inputSchema'].removesuffix('.schema.json')
     for r in revs:
@@ -446,6 +447,8 @@ def introduced_in(o):
     d = DOMAIN_OPS.get(n)
     out = set()
     if d:
+        if d.get('introducedRevision', 1) > 1:
+            out.add(d['introducedRevision'])
         out |= set(d.get('since', {}).values())
         for key in ('fields', 'queryFields', 'commandFields'):
             for t in d.get(key, {}).values():
@@ -554,7 +557,7 @@ def gen_results(ops):
            '//! refuses to publish a result whose discriminator differs from the admitted operation.',
            *imports(used), 'use schemars::JsonSchema;', 'use serde::{Deserialize, Serialize};', '',
            TAGGED + 'pub enum OperationResult {']
-    out += [f'    #[serde(rename = "{n}")]\n    {pascal(n)} {{ value: {rust(t)} }},' for n, t in results]
+    out += [(f'    #[schemars(extend("x-since" = {DOMAIN_OPS[n]["introducedRevision"]}))]\n' if DOMAIN_OPS.get(n, {}).get('introducedRevision', 1) > 1 else '') + f'    #[serde(rename = "{n}")]\n    {pascal(n)} {{ value: {rust(t)} }},' for n, t in results]
     out += ['}', 'impl OperationResult {', '    pub fn operation(&self) -> &\'static str {', '        match self {']
     out += [f'            Self::{pascal(n)} {{ .. }} => "{n}",' for n, _ in results]
     out += ['        }', '    }', '}', 'impl Check for OperationResult {', '    fn check(&self) -> Result<(), String> {',

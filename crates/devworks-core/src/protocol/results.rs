@@ -105,6 +105,9 @@ pub enum OperationResult {
     NextWorkInspectClaim { value: AllocationClaimRecord },
     #[serde(rename = "next_work.release_claim")]
     NextWorkReleaseClaim { value: AllocationClaimRecord },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "next_work.inspect_queue")]
+    NextWorkInspectQueue { value: AllocationQueueSnapshot },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -780,6 +783,7 @@ impl OperationResult {
             Self::NextWorkClaimFeatureTask { .. } => "next_work.claim_feature_task",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
             Self::NextWorkReleaseClaim { .. } => "next_work.release_claim",
+            Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -1146,6 +1150,7 @@ impl Check for OperationResult {
             Self::NextWorkClaimFeatureTask { value } => value.check()?,
             Self::NextWorkInspectClaim { value } => value.check()?,
             Self::NextWorkReleaseClaim { value } => value.check()?,
+            Self::NextWorkInspectQueue { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,

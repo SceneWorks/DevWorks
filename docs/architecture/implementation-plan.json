@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "289d6547ecfc378670ea56b8978ffff3ba3fe42e009b65a805f3982b111b3b10",
-    "devworks-capability-catalog.json": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+    "devworks-capability-catalog.json": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "1539d99cc176272090bca64a6a34ab9543688178af209a351221eba5c9a9456f",
+    "contracts/family-coverage.json": "b2a82a23247637d4dccd1d179687912797cbcafedf349d34785e42d81343967e",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "13310c40c64d9bf533bc43319adae03655b11cf862d18b12387fae405e56a38f"
   },
   "counts": {
     "slices": 77,
     "operationFamilies": 49,
-    "operations": 356,
+    "operations": 357,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 356,
+    "inputSchemaCandidates": 357,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -1155,7 +1155,8 @@
         "next_work.claim_project_queue",
         "next_work.claim_feature_task",
         "next_work.inspect_claim",
-        "next_work.release_claim"
+        "next_work.release_claim",
+        "next_work.inspect_queue"
       ],
       "primaryRequirements": [],
       "supportingRequirements": [
@@ -12948,7 +12949,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Command"
       ],
@@ -12962,7 +12963,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Command"
       ],
@@ -12976,7 +12977,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Query"
       ],
@@ -12990,9 +12991,23 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "next_work.inspect_queue",
+      "family": "next_work",
+      "serviceOwner": "WorkService",
+      "primarySlice": "workflow",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "AllocationQueueSnapshot",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
