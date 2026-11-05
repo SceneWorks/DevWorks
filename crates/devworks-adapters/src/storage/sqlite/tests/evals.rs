@@ -55,6 +55,7 @@ fn report(name: &str) -> StoredEvalRun {
         project_id: None,
         session_id: id("source-session"),
         session_revision: 1,
+        session_sequence: 0,
         measurement_digest: "a".repeat(64),
         created_at_ms: 2,
         source_watermark: 0,
@@ -168,7 +169,7 @@ fn eval_records_reject_invalid_scope_source_revisions_and_bounds() {
         insert(&store, stale),
         Err(StorageError::InvalidRecord(_))
     ));
-    for field in 0..6 {
+    for field in 0..7 {
         let mut invalid = report(&format!("invalid-{field}"));
         match field {
             0 => invalid.suite_revision = -1,
@@ -176,6 +177,7 @@ fn eval_records_reject_invalid_scope_source_revisions_and_bounds() {
             2 => invalid.source_watermark = -1,
             3 => invalid.created_at_ms = -1,
             4 => invalid.source_watermark = i64::MAX,
+            5 => invalid.session_sequence = -1,
             _ => invalid.measurement_digest = "g".repeat(64),
         }
         assert!(matches!(
@@ -243,4 +245,33 @@ fn project_eval_reports_require_the_source_project() {
     run.project_id = Some(ProjectId(id("project-a")));
     insert(&store, run.clone()).unwrap();
     assert_eq!(get(&store, "project-run"), Some(run));
+}
+
+#[test]
+fn transcript_append_without_revision_change_fences_stale_eval_report() {
+    let harness = Harness::new();
+    let store = harness.store();
+    seed(&store);
+    insert(&store, report("prior")).unwrap();
+    // Host transcript entries advance next_seq without advancing the session revision.
+    store
+        .with_writer_connection(|connection| {
+            super::super::conn::db(connection.execute(
+                "UPDATE sessions SET next_seq=2 WHERE id='source-session'",
+                [],
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    let stale = report("stale-transcript");
+    assert!(matches!(
+        insert(&store, stale),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    assert!(get(&store, "stale-transcript").is_none());
+    let mut fresh = report("fresh-transcript");
+    fresh.session_sequence = 1;
+    insert(&store, fresh.clone()).unwrap();
+    assert_eq!(get(&store, "fresh-transcript"), Some(fresh));
+    assert_eq!(get(&store, "prior"), Some(report("prior")));
 }

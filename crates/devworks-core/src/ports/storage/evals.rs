@@ -15,6 +15,8 @@ pub struct StoredEvalRun {
     pub project_id: Option<ProjectId>,
     pub session_id: Id,
     pub session_revision: i64,
+    /// Last durable transcript sequence captured by the grading snapshot.
+    pub session_sequence: i64,
     /// Lowercase SHA-256 over the measurement definition.
     pub measurement_digest: String,
     pub created_at_ms: i64,

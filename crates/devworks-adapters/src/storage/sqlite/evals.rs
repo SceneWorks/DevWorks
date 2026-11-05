@@ -20,7 +20,7 @@ fn runs<P: rusqlite::Params>(
     params: P,
 ) -> Result<Vec<StoredEvalRun>, StorageError> {
     let mut statement = db(conn.prepare_cached(&format!(
-        "SELECT id,suite_id,suite_revision,project_id,session_id,session_revision,measurement_digest,created_at,source_watermark,report_json FROM eval_runs WHERE {tail}"
+        "SELECT id,suite_id,suite_revision,project_id,session_id,session_revision,session_sequence,measurement_digest,created_at,source_watermark,report_json FROM eval_runs WHERE {tail}"
     )))?;
     let rows = db(db(statement.query_map(params, |row| {
         Ok((
@@ -30,10 +30,11 @@ fn runs<P: rusqlite::Params>(
             row.get::<_, Option<String>>(3)?,
             row.get::<_, String>(4)?,
             row.get::<_, i64>(5)?,
-            row.get::<_, String>(6)?,
-            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, String>(7)?,
             row.get::<_, i64>(8)?,
-            row.get::<_, String>(9)?,
+            row.get::<_, i64>(9)?,
+            row.get::<_, String>(10)?,
         ))
     }))?
     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -46,6 +47,7 @@ fn runs<P: rusqlite::Params>(
                 project,
                 session,
                 session_revision,
+                session_sequence,
                 measurement_digest,
                 created_at_ms,
                 source_watermark,
@@ -58,6 +60,7 @@ fn runs<P: rusqlite::Params>(
                     project_id: project.map(id).transpose()?.map(ProjectId),
                     session_id: id(session)?,
                     session_revision,
+                    session_sequence,
                     measurement_digest,
                     created_at_ms,
                     source_watermark,
@@ -103,11 +106,12 @@ impl EvalRepository for Unit<'_> {
     fn insert_eval_run(&mut self, run: &StoredEvalRun) -> Result<(), StorageError> {
         if run.suite_revision < 0
             || run.session_revision < 0
+            || run.session_sequence < 0
             || run.created_at_ms < 0
             || run.source_watermark < 0
         {
             return Err(invalid(
-                "eval revisions, time and watermark must be nonnegative",
+                "eval revisions, sequence, time and watermark must be nonnegative",
             ));
         }
         if run.measurement_digest.len() != 64
@@ -132,9 +136,15 @@ impl EvalRepository for Unit<'_> {
         let session = db(self
             .conn
             .query_row(
-                "SELECT project_id,revision FROM sessions WHERE id=?1",
+                "SELECT project_id,revision,next_seq FROM sessions WHERE id=?1",
                 [run.session_id.as_str()],
-                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
             .optional())?
         .ok_or_else(|| StorageError::NotFound {
@@ -147,12 +157,15 @@ impl EvalRepository for Unit<'_> {
         if session.1 != run.session_revision {
             return Err(invalid("eval source session revision changed"));
         }
+        if session.2 - 1 != run.session_sequence {
+            return Err(invalid("eval source transcript sequence changed"));
+        }
         if run.source_watermark > self.committed_sequence()? {
             return Err(invalid("eval source watermark is in the future"));
         }
         db(self.conn.execute(
-            "INSERT INTO eval_runs(id,suite_id,suite_revision,project_id,session_id,session_revision,measurement_digest,created_at,source_watermark,report_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-            params![run.id.as_str(), run.suite_id.as_str(), run.suite_revision, run.project_id.as_ref().map(|project| project.0.as_str()), run.session_id.as_str(), run.session_revision, run.measurement_digest, run.created_at_ms, run.source_watermark, report],
+            "INSERT INTO eval_runs(id,suite_id,suite_revision,project_id,session_id,session_revision,session_sequence,measurement_digest,created_at,source_watermark,report_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![run.id.as_str(), run.suite_id.as_str(), run.suite_revision, run.project_id.as_ref().map(|project| project.0.as_str()), run.session_id.as_str(), run.session_revision, run.session_sequence, run.measurement_digest, run.created_at_ms, run.source_watermark, report],
         ))?;
         Ok(())
     }
