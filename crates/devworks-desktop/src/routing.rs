@@ -535,6 +535,7 @@ mod tests {
         concrete.available = Some(true);
         concrete.efforts.0 = vec![EffortName::High];
         let mut alias = model("astra-latest");
+        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
         alias.available = Some(true);
         alias.resolves_to_model_ids =
             Some(serde_json::from_value(serde_json::json!([concrete.id])).unwrap());
