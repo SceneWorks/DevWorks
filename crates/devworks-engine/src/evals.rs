@@ -11,9 +11,15 @@ use devworks_core::services::evals::EvalService;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 
 const PAGE: u16 = 64;
+
+/// Latest completed background catch-up pass, including an observable storage failure.
+#[derive(Clone, Debug)]
+pub struct EvalPass {
+    pub result: Result<usize, StorageError>,
+}
 
 /// One owned grading loop. Memory and each read are bounded by a page; a sweep follows its
 /// keyset through the whole durable population so older sessions cannot starve behind the head.
@@ -26,6 +32,7 @@ pub struct EvalSupervisor {
     fence: Arc<RwLock<bool>>,
     wake: Notify,
     ticking: tokio::sync::Mutex<()>,
+    status: watch::Sender<Option<EvalPass>>,
 }
 impl EvalSupervisor {
     /// The host MUST supply only already authorized immutable suites. An empty set disables
@@ -35,6 +42,7 @@ impl EvalSupervisor {
         service: Arc<EvalService>,
         suites: Vec<EvalSuiteSnapshot>,
     ) -> Arc<Self> {
+        let (status, _) = watch::channel(None);
         Arc::new(Self {
             store,
             service,
@@ -43,7 +51,11 @@ impl EvalSupervisor {
             fence: Arc::new(RwLock::new(false)),
             wake: Notify::new(),
             ticking: tokio::sync::Mutex::new(()),
+            status,
         })
+    }
+    pub fn watch(&self) -> watch::Receiver<Option<EvalPass>> {
+        self.status.subscribe()
     }
     pub fn notify(&self) {
         self.wake.notify_one();
@@ -71,7 +83,8 @@ impl EvalSupervisor {
     }
     pub async fn run(self: Arc<Self>, every: Duration) {
         while !self.stopping.load(Ordering::SeqCst) {
-            let _ = self.tick().await;
+            let result = self.tick().await;
+            self.status.send_replace(Some(EvalPass { result }));
             if self.stopping.load(Ordering::SeqCst) {
                 break;
             }
@@ -155,6 +168,9 @@ impl EvalSupervisor {
                     match result {
                         Ok(true) => graded += 1,
                         Ok(false) => {}
+                        Err(StorageError::InvalidRecord(reason))
+                            if reason == "eval session is no longer terminal"
+                                || reason == "automatic grading stopped" => {}
                         Err(e) => {
                             if failure.is_none() {
                                 failure = Some(e);
