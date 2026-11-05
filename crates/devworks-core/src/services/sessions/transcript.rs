@@ -756,7 +756,9 @@ fn write_batch(
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
             token_estimate: s.token_estimate,
             disposition: s.disposition.as_str().to_owned(),
-            sequence: last,
+            // These sources describe the context used for this batch, including its first
+            // step. Recording the tail would incorrectly hide them from earlier steps.
+            sequence: first,
         })?;
     }
     for (i, u) in batch.usage.iter().enumerate() {

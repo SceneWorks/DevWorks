@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod browser;
 pub mod cursor;
 pub mod diagnostics;
+pub mod evals;
 pub mod git;
 pub mod history;
 pub mod indexing;
@@ -66,6 +67,14 @@ pub struct UseCases {
 }
 
 impl UseCases {
+    /// Recorded-work evaluation uses the same admission and receipt path on every surface.
+    pub fn with_evals(mut self, service: Arc<evals::EvalService>) -> Self {
+        for operation in evals::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
