@@ -5,8 +5,10 @@ use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::StatusRecord;
-use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
-use devworks_core::protocol::{CommandReply, ProjectId, RootId};
+use devworks_core::protocol::results::{
+    DomainCommandReply as CommandReply, DomainDecision, DomainQueryReply, OperationResult,
+};
+use devworks_core::protocol::{ProjectId, RootId};
 use devworks_core::services::{UseCases, runs::ControlService, work::WorkService};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -206,10 +208,7 @@ fn occupied_removal_fences_preview_and_reassigns_history_revision_and_queue_atom
             .queue_revision(&ProjectId(id("project")), PROJECT_QUEUE))
             > queue
     );
-    let events = read(&*f.store, |s| {
-        s.history()
-            .page(&EventFilter::Project(ProjectId(id("project"))), 0, 500)
-    });
+    let events = read(&*f.store, |s| s.history().page(&EventFilter::All, 0, 500));
     assert!(
         events
             .events
@@ -223,6 +222,14 @@ fn occupied_removal_fences_preview_and_reassigns_history_revision_and_queue_atom
             .any(|e| e.kind == "WorkflowStatusRemoved")
     );
     assert!(!f.statuses().iter().any(|s| s.id == source.id));
+    let default = write(&*f.store, |tx| {
+        devworks_core::services::work::workflow::default_status(tx, &ProjectId(id("project")))
+    })
+    .unwrap();
+    assert_eq!(
+        default.id, destination.id,
+        "internal plan defaults follow the surviving Backlog semantic"
+    );
     // Ordinary issue creation can address the surviving custom Backlog identity.
     let mut body = json!({"kind":"issues.create","projectId":"project","title":"After","description":"","repositoryIds":[],"priority":1});
     body["statusId"] = json!(destination.id);
