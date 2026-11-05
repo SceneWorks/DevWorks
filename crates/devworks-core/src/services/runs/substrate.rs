@@ -823,6 +823,15 @@ impl ControlService {
             }
             Err(e) => return Err(e),
         }
+        if let Some(execution) = &a.execution_id {
+            crate::services::work::allocation::transfer(
+                tx,
+                &a.work_id.0,
+                execution,
+                Some(&a.session_id),
+                actor,
+            )?;
+        }
         record(
             tx,
             actor,
@@ -1333,5 +1342,49 @@ impl ControlService {
             }
             after = page.last().cloned();
         }
+    }
+}
+
+impl ControlService {
+    /// Cooperative scheduling yield; preserves desired execution, blockers and assignments.
+    /// The project allocator retains its slot until this activation has stopped and every
+    /// descendant/effect/process has quiesced. A pending activation has never launched.
+    pub fn request_allocation_yield(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        root_id: &RootId,
+    ) -> Result<(), StorageError> {
+        let Some(root) = tx.sessions().work_root(root_id)? else {
+            return Ok(());
+        };
+        let Some(before) = tx.runs().live_activation(root_id)? else {
+            return Ok(());
+        };
+        if before.phase == ActivationPhase::Stopping {
+            return Ok(());
+        }
+        if before.phase == ActivationPhase::Pending {
+            self.stop_activation(
+                tx,
+                &root,
+                &before,
+                ActivationOutcome::Prevented,
+                Some("yielded for prerequisite work"),
+            )?;
+            return Ok(());
+        }
+        let mut after = before.clone();
+        after.phase = ActivationPhase::Stopping;
+        after.stop_cause = Some(StopCause::Superseded);
+        after.stop_requested_at_ms = Some(tx.now_ms());
+        self.update(
+            tx,
+            &root,
+            &before,
+            after,
+            "AllocationYieldRequested",
+            json!({"reason":"fully dependency-blocked; waiting for quiescence"}),
+        )?;
+        Ok(())
     }
 }

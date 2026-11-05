@@ -109,6 +109,8 @@ pub(crate) fn set_links(
     after.updated_at_ms = tx.now_ms();
     after.updated_by = Some(ctx.principal().clone());
     tx.work().update_work(&after, t.revision)?;
+    super::items::bump(tx, project, &[after.queue()])?;
+    super::allocation::invalidate_work(tx, ctx, &after.id)?;
     let added: Vec<&str> = prereqs
         .iter()
         .filter(|p| !current.contains(p))

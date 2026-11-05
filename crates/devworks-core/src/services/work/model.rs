@@ -357,7 +357,7 @@ pub fn record(
         handoffs: BoundedList(handoffs.into_iter().map(|h| h.item).collect()),
         attempt_count: counter(attempts.len() as i64),
         attempts: BoundedList(attempts),
-        claim: None,
+        claim: super::allocation::projected_claim(read, w)?,
         merged_awaiting_acceptance: false,
         acceptance_report: brief.acceptance_report.clone(),
         detail_cursor,

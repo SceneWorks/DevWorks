@@ -469,10 +469,7 @@ impl WorkService {
         }
         let status = match c.status {
             Some(s) => status_of(tx, c.project, s)?.0,
-            None => {
-                let id = workflow::default_status_id(c.project, workflow::DEFAULT_KEY);
-                status_of(tx, c.project, &id)?.0
-            }
+            None => workflow::default_status(tx, c.project)?,
         };
         let queue = match c.feature {
             Some(f) => feature_queue(f),
@@ -1078,9 +1075,8 @@ impl WorkService {
         tx.work().update_work(&after, before.revision)?;
         // A feature's task-set revision covers its cards' workflow status (a re-plan closes the
         // unfinished cards it leaves out, so it must not act on a status it did not see).
-        if before.parent_feature_id.is_some() {
-            bump(tx, &before.project_id, &[before.queue()])?;
-        }
+        bump(tx, &before.project_id, &[before.queue()])?;
+        super::allocation::invalidate_work(tx, ctx, &before.id)?;
         // A workflow move never changes execution: no pause, start, stop or completion of a run.
         event(
             tx,
@@ -1546,6 +1542,7 @@ impl WorkService {
                 },
             });
         }
+        super::allocation::invalidate_work(tx, ctx, &before.id)?;
         let mut after = before.clone();
         after.parent_feature_id = target.clone();
         let queue = after.queue();

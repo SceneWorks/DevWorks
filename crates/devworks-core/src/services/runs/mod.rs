@@ -1282,6 +1282,12 @@ impl ControlService {
                 Some(root.project_id.0.clone()),
             ));
         }
+        crate::services::work::allocation::check_start(tx, self, ctx, &root).map_err(
+            |f| match f {
+                Failure::Storage(e) => Fail::Storage(e),
+                Failure::Refused(r) => Fail::Refused(r, vec![]),
+            },
+        )?;
         let control = ensure_control(tx, &root.id)?;
         let root_level = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?;
         let manual: Vec<&StoredBlocker> = root_level
@@ -1346,7 +1352,15 @@ impl ControlService {
             plan.approved_revision(),
             "Start",
         )?;
-        let _ = activation;
+        if let Some(a) = activation {
+            crate::services::work::allocation::transfer(
+                tx,
+                &root.id.0,
+                &a.id,
+                None,
+                ctx.principal(),
+            )?;
+        }
         Ok(DomainDecision::Applied {
             result: snapshot_result(tx.runs(), &root.id, |value| OperationResult::RunsStart {
                 value,

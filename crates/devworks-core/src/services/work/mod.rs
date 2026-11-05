@@ -93,6 +93,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub mod allocation;
 pub mod deps;
 pub mod items;
 pub mod model;
@@ -105,7 +106,11 @@ pub mod workflow_ops;
 pub use model::{fold, link_id, plan_digest, plan_units, search_key};
 
 /// The operations [`WorkService`] is registered for.
-pub const OPERATIONS: [&str; 29] = [
+pub const OPERATIONS: [&str; 33] = [
+    "next_work.claim_project_queue",
+    "next_work.claim_feature_task",
+    "next_work.inspect_claim",
+    "next_work.release_claim",
     "features.list",
     "features.get",
     "features.create",
@@ -388,6 +393,9 @@ impl QueryHandler for WorkService {
             OperationInput::Workflows(wops::Input::List(i)) => self
                 .list_workflow(snapshot, ctx, i)
                 .map(|(v, s)| (O::WorkflowsList { value: v }, s)),
+            OperationInput::NextWork(crate::operations::next_work::Input::InspectClaim(i)) => {
+                self.inspect_claim(snapshot, ctx, i)
+            }
             OperationInput::Features(fops::Input::List(i)) => self
                 .list(snapshot, ctx, Family::Features, &items::list_args(i))
                 .map(|(v, s)| (O::FeaturesList { value: v }, s)),
@@ -435,6 +443,22 @@ impl CommandHandler for WorkService {
                 wops::Input::RenameStatus(i) => self.rename_status(tx, ctx, i),
                 wops::Input::Order(i) => self.order_statuses(tx, ctx, i),
                 wops::Input::ReassignAndRemove(i) => self.reassign_and_remove_status(tx, ctx, i),
+                _ => Err(refuse(
+                    DomainErrorCode::UnsupportedCapability,
+                    "operation",
+                    None,
+                )),
+            },
+            OperationInput::NextWork(i) => match i {
+                crate::operations::next_work::Input::ClaimProjectQueue(i) => {
+                    self.allocate_project(tx, ctx, i)
+                }
+                crate::operations::next_work::Input::ClaimFeatureTask(i) => {
+                    self.allocate_task(tx, ctx, i)
+                }
+                crate::operations::next_work::Input::ReleaseClaim(i) => {
+                    self.release_allocation(tx, ctx, i)
+                }
                 _ => Err(refuse(
                     DomainErrorCode::UnsupportedCapability,
                     "operation",

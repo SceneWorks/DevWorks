@@ -301,6 +301,11 @@ impl RunSupervisor {
         report.expired = store::write(&self.store, move |tx| service.recover_expired(tx)).await?;
         let service = self.service.clone();
         report.swept = store::write(&self.store, move |tx| service.sweep_expired_waits(tx)).await?;
+        let service = self.service.clone();
+        store::write(&self.store, move |tx| {
+            devworks_core::services::work::allocation::reconcile(tx, &service)
+        })
+        .await?;
         self.signal_stopping().await?;
         report.archived = self.finish_archive_stops().await?;
         (report.stops, report.failed) = self.execute_stops().await?;
