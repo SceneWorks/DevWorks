@@ -58,7 +58,7 @@ fn evaluation_event(event: &EventRecord) -> bool {
         .payload
         .get("operation")
         .and_then(Value::as_str)
-        .is_some_and(|operation| operation.starts_with("evals."))
+        .is_some_and(|operation| matches!(operation, "evals.grade" | "evals.results"))
 }
 
 fn event_body(e: &EventRecord) -> Value {

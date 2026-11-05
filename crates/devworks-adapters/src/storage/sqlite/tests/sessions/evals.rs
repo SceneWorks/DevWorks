@@ -340,7 +340,7 @@ fn recorded_nonbinary_outcomes_stay_out_of_the_pass_rate_and_incomplete_never_pa
             contains("text", "AssistantAttempt", "ok"),
             tool_check(),
             contains("unsupported", "HostNotice", "ok"),
-            contains("absent", "NotARecordedKind", "ok"),
+            contains("absent", "UserMessage", "ok"),
         ]),
     );
     for expected in [

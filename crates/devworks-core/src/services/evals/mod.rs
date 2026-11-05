@@ -3,6 +3,7 @@
 //! Supplied suite snapshots are measurements for this run, not activated or gating suites.
 pub mod attribution;
 pub mod automatic;
+pub mod records;
 
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
@@ -20,12 +21,13 @@ use crate::ports::{
 use crate::protocol::provider::{Digest, TranscriptBody, UserContent};
 use crate::protocol::records::*;
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, BoundedText, Check, Probability};
+use crate::protocol::support::{BoundedList, BoundedText, Check, DynamicJson, Probability};
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::cursor::CursorBinding;
 use crate::services::sessions::{
     Failure, Refusal, counter, decided, query_fault, rev, visible_session,
 };
+use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 
 pub const OPERATIONS: [&str; 2] = ["evals.grade", "evals.results"];
@@ -221,6 +223,7 @@ fn matched(check: &EvalDeterministicCheck, entry: &StoredEntry) -> bool {
                         == Some(operation.0.as_str()))
         }
         EvalPredicate::TranscriptContains { entry_kind, .. } => entry.kind == entry_kind.0,
+        EvalPredicate::RecordFieldEquals { .. } => false,
     }
 }
 fn evaluate(
@@ -319,7 +322,104 @@ fn evaluate(
                 (EvalOutcome::Failed, "Literal visible-text mismatch (proxy)")
             })
         }
+        EvalPredicate::RecordFieldEquals { .. } => Ok((
+            EvalOutcome::GraderError,
+            "Record predicate addressed as transcript",
+        )),
     }
+}
+
+fn visit_snapshot(
+    snapshot: &dyn ReadSnapshot,
+    session: &StoredSession,
+    source: &EvalRecordSource,
+    visitor: &mut dyn FnMut(records::ObservedRecord) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
+    let read = match source {
+        EvalRecordSource::WorkState => records::RecordRead::Work(snapshot.work()),
+        EvalRecordSource::HistoryEvent => records::RecordRead::History(snapshot.history()),
+        _ => records::RecordRead::Sessions(snapshot.sessions()),
+    };
+    records::visit_records(
+        read,
+        session,
+        source,
+        snapshot.stamp().committed_sequence,
+        visitor,
+    )
+}
+fn selected_sources(suite: &EvalSuiteSnapshot) -> Vec<EvalRecordSource> {
+    let mut names = std::collections::BTreeSet::new();
+    suite
+        .checks
+        .0
+        .iter()
+        .filter_map(|check| match &check.predicate {
+            EvalPredicate::RecordFieldEquals { source, .. } => {
+                let name = serde_json::to_string(source).expect("record source");
+                names.insert(name).then(|| source.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+fn hash_record(hash: &mut Sha256, record: records::ObservedRecord) -> Result<(), StorageError> {
+    // The provenance watermark can move on unrelated commits. Only selected source identities
+    // and their captured content belong in the measurement's immutable evidence identity.
+    let body = crate::jcs::canonicalize(&serde_json::json!({"kind":record.source.kind,
+        "id":record.source.entry_id,"body":record.body}))
+    .map_err(|_| invalid("record canonicalization"))?;
+    hash.update((body.len() as u64).to_be_bytes());
+    hash.update(body.as_bytes());
+    Ok(())
+}
+fn snapshot_evidence_digest(
+    snapshot: &dyn ReadSnapshot,
+    session: &StoredSession,
+    suite: &EvalSuiteSnapshot,
+    stopped: &dyn Fn() -> bool,
+) -> Result<String, StorageError> {
+    let mut hash = Sha256::new();
+    hash.update(b"recorded-evidence-v1");
+    for source in selected_sources(suite) {
+        hash.update(serde_json::to_vec(&source).map_err(|_| invalid("record source"))?);
+        visit_snapshot(snapshot, session, &source, &mut |record| {
+            if stopped() {
+                return Err(StorageError::Cancelled);
+            }
+            hash_record(&mut hash, record)
+        })?;
+    }
+    Ok(hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+fn transaction_evidence_digest(
+    tx: &mut dyn WriteTransaction,
+    session: &StoredSession,
+    suite: &EvalSuiteSnapshot,
+) -> Result<String, StorageError> {
+    let mut hash = Sha256::new();
+    hash.update(b"recorded-evidence-v1");
+    let watermark = tx.committed_sequence()?;
+    for source in selected_sources(suite) {
+        hash.update(serde_json::to_vec(&source).map_err(|_| invalid("record source"))?);
+        let read = match source {
+            EvalRecordSource::WorkState => records::RecordRead::Work(tx.work()),
+            EvalRecordSource::HistoryEvent => records::RecordRead::History(tx.history()),
+            _ => records::RecordRead::Sessions(tx.sessions()),
+        };
+        records::visit_records(read, session, &source, watermark, &mut |record| {
+            hash_record(&mut hash, record)
+        })?;
+    }
+    Ok(hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 /// The evaluator holds only coherent read interfaces and never replays the observed work.
@@ -338,14 +438,16 @@ fn build_report(
         .map_err(|_| invalid("suite canonicalization"))?
         .as_bytes(),
     );
+    let evidence = snapshot_evidence_digest(snapshot, session, suite, &stopped)?;
     let identity = sha256_hex(
         format!(
-            "recorded-eval-v1|{}|{}|{}|{}|{}",
+            "recorded-eval-v1|{}|{}|{}|{}|{}|{}",
             snapshot.stamp().store_id.0.as_str(),
             session.id.as_str(),
             session.revision,
             session.last_durable_sequence(),
-            measurement
+            measurement,
+            evidence
         )
         .as_bytes(),
     );
@@ -359,6 +461,30 @@ fn build_report(
     let mut seen = vec![false; suite.checks.0.len()];
     let mut omitted = vec![0i64; suite.checks.0.len()];
     let mut cancelled = vec![0i64; suite.checks.0.len()];
+    let mut missing_records = vec![0i64; suite.checks.0.len()];
+    let invalid_checks: Vec<bool> = suite
+        .checks
+        .0
+        .iter()
+        .map(|check| match &check.predicate {
+            EvalPredicate::RecordFieldEquals {
+                pointer, expected, ..
+            } => matches!(
+                records::field_outcome(&serde_json::Value::Null, &pointer.0, &expected.0).0,
+                EvalOutcome::GraderError
+            ),
+            EvalPredicate::TranscriptContains { entry_kind, .. } => {
+                !matches!(entry_kind.0.as_str(), "AssistantAttempt" | "UserMessage")
+            }
+            _ => false,
+        })
+        .collect();
+    for (n, invalid) in invalid_checks.iter().enumerate() {
+        if *invalid {
+            seen[n] = true;
+        }
+    }
+
     let mut retained_bytes = serde_json::to_vec(suite)
         .map_err(|_| invalid("suite"))?
         .len();
@@ -377,7 +503,7 @@ fn build_report(
             }
             after = entry.sequence;
             for (n, check) in suite.checks.0.iter().enumerate() {
-                if !matched(check, entry) {
+                if invalid_checks[n] || !matched(check, entry) {
                     continue;
                 }
                 seen[n] = true;
@@ -400,6 +526,7 @@ fn build_report(
                     coverage: coverage([(outcome.clone(), 1)]),
                     outcome,
                     detail: text(detail),
+                    observed_value: None,
                 };
                 let bytes = serde_json::to_vec(&instance)
                     .map_err(|_| invalid("eval instance"))?
@@ -415,7 +542,81 @@ fn build_report(
         }
     }
     for (n, check) in suite.checks.0.iter().enumerate() {
+        if invalid_checks[n] {
+            continue;
+        }
+        let EvalPredicate::RecordFieldEquals {
+            source,
+            pointer,
+            expected,
+        } = &check.predicate
+        else {
+            continue;
+        };
+        visit_snapshot(snapshot, session, source, &mut |record| {
+            seen[n] = true;
+            if stopped() {
+                if abort_on_cancel {
+                    return Err(StorageError::Cancelled);
+                }
+                cancelled[n] += 1;
+                return Ok(());
+            }
+            if instances.len() + 2 * suite.checks.0.len() >= RETAINED_INSTANCES
+                || retained_bytes >= RETAINED_BYTES
+            {
+                omitted[n] += 1;
+                return Ok(());
+            }
+            let (outcome, detail) = records::field_outcome(&record.body, &pointer.0, &expected.0);
+            let observed_value = match record.body.pointer(&pointer.0).cloned() {
+                None => None,
+                Some(value) => match serde_json::from_value::<DynamicJson>(value) {
+                    Ok(value) => Some(EvalObservedValue { value }),
+                    Err(_) => {
+                        omitted[n] += 1;
+                        return Ok(());
+                    }
+                },
+            };
+            let instance = EvalInstanceResult {
+                check_id: check.id.clone(),
+                source: Some(record.source),
+                revision: record.revision,
+                coverage: coverage([(outcome.clone(), 1)]),
+                outcome,
+                detail: text(detail),
+                observed_value,
+            };
+            let bytes = serde_json::to_vec(&instance)
+                .map_err(|_| invalid("record instance"))?
+                .len();
+            if retained_bytes + bytes > RETAINED_BYTES {
+                omitted[n] += 1;
+                retained_bytes = RETAINED_BYTES;
+            } else {
+                retained_bytes += bytes;
+                instances.push(instance);
+            }
+            Ok(())
+        })?;
+        if !seen[n] {
+            seen[n] = true;
+            missing_records[n] = 1;
+        }
+    }
+    for (n, check) in suite.checks.0.iter().enumerate() {
         for (outcome, count, detail) in [
+            (
+                EvalOutcome::GraderError,
+                i64::from(invalid_checks[n]),
+                "Invalid deterministic predicate configuration",
+            ),
+            (
+                EvalOutcome::EvidenceUnavailable,
+                missing_records[n],
+                "No retained record for this source",
+            ),
             (
                 EvalOutcome::NotApplicable,
                 i64::from(!seen[n]),
@@ -442,6 +643,7 @@ fn build_report(
                 coverage: coverage([(outcome.clone(), count)]),
                 outcome,
                 detail: text(detail),
+                observed_value: None,
             });
         }
     }
@@ -455,6 +657,7 @@ fn build_report(
         source_watermark: counter(snapshot.stamp().committed_sequence),
         session_revision: rev(session.revision),
         session_sequence: counter(session.last_durable_sequence()),
+        evidence_digest: Digest::try_from(evidence).map_err(|_| invalid("evidence digest"))?,
         measurement_digest: Digest::try_from(measurement)
             .map_err(|_| invalid("measurement digest"))?,
         outcome: outcome.clone(),
@@ -498,6 +701,16 @@ fn persist(
             target_id: session.id.clone(),
             expected: rev(report.session_sequence.get() + 1),
             current: rev(session.next_sequence),
+        })));
+    }
+    if transaction_evidence_digest(tx, &session, &report.suite)? != report.evidence_digest.as_str()
+    {
+        return Err(StorageError::RevisionConflict(Box::new(RevisionConflict {
+            dimension: crate::protocol::RevisionDimension::Source,
+            target_kind: "evaluation_evidence",
+            target_id: session.id.clone(),
+            expected: rev(report.source_watermark.get() + 1),
+            current: rev(tx.committed_sequence()? + 1),
         })));
     }
     if let Some(existing) = tx.evals().eval_run(&report.id)? {
