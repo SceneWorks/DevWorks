@@ -435,11 +435,13 @@
         "usage",
         "authority"
       ],
-      "acceptance": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.",
+      "acceptance": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility. Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported.",
       "gates": [
         "G03"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Approved plan; native implementation pending",
+      "codegraphItem": "DW-22",
+      "codegraphFeature": "DW-F6"
     },
     {
       "key": "structural",
@@ -1623,6 +1625,35 @@
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
       "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+    },
+    {
+      "key": "session_auto_routing",
+      "id": "DW-107",
+      "type": "Feature",
+      "title": "Choose and pin DevWorks Auto once per new session",
+      "operations": [],
+      "dependsOnKeys": [
+        "chat",
+        "tool_turn",
+        "systemone"
+      ],
+      "acceptance": "AC1: New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated. AC2: The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing. AC3: SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance.",
+      "gates": [
+        "G03",
+        "G11"
+      ],
+      "status": "Approved plan; native implementation pending",
+      "codegraphItem": "DW-107",
+      "codegraphFeature": "DW-F6",
+      "codegraphStateAtSync": "ready",
+      "integratesOperations": [
+        "router.catalog",
+        "router.route",
+        "router.pin",
+        "router.availability",
+        "router.decide",
+        "router.configure"
+      ]
     }
   ],
   "retiredSlices": [
@@ -1696,7 +1727,8 @@
       "distribution",
       "performance",
       "mcp_server",
-      "mcp_server_access"
+      "mcp_server_access",
+      "session_auto_routing"
     ],
     "eval_acceptance": [
       "eval_recorded",
@@ -1730,5 +1762,22 @@
       "DW-82"
     ],
     "scope": "Existing EVAL plan metadata only; runtime and operation contracts remain in their tracked items. Baseline and EVAL terminal acceptance dependencies remain distinct."
+  },
+  "autoRoutingSynchronization": {
+    "date": "2026-11-05",
+    "feature": "DW-F6",
+    "requirements": [
+      "ROUTE-19",
+      "ROUTE-21",
+      "ROUTE-22",
+      "ROUTE-23",
+      "ROUTE-24"
+    ],
+    "items": [
+      "DW-22",
+      "DW-107"
+    ],
+    "finalAcceptance": "DW-61",
+    "scope": "Approved planning metadata only; no native implementation or inference acceptance."
   }
 }

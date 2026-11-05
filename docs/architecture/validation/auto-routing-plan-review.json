@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-05",
+  "scope": "Approved planning publication only; no runtime or inference acceptance",
+  "requirementsVerified": 374,
+  "unrelatedRequirementsPreserved": 369,
+  "counts": {
+    "slices": 76,
+    "operationFamilies": 48,
+    "operations": 354,
+    "requirements": 374,
+    "requirementsByStatus": {
+      "Confirmed": 227,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 354,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "word": {
+    "pages": 72,
+    "sourceParagraphsVerified": 374,
+    "visualReview": "All72 pages inspected in contact sheets; routing pages18,19,28 inspected at full size. No clipping or overlap observed.",
+    "sha256": "1e44f7b172fe01d2c657ea946ced8fb880cb8a78bd1f29a06d720afcea26a9ea"
+  },
+  "readers": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "codegraphVersions": {
+    "DW-F6": 4,
+    "DW-107": 2,
+    "DW-22": 5,
+    "DW-61": 7
+  },
+  "passed": true
+}

@@ -10,23 +10,23 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "ebd08539b5872f5c53dc9066d92b8819dcb59c187198050d6abbf5705b2a9cae",
+    "implementation-slices.json": "03c60c0a0b0d4e938c896d6a7bb1887e7356c2b663d9130de42e1cbba68f33fb",
     "devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
-    "devworks-requirements-traceability.json": "879b7608c45fd59b39658745b740d1fe1b0134919c1cd0f072bdfe6f476f8dcd",
+    "devworks-requirements-traceability.json": "6ad3e8c13edf72067769749a89c0dc58ce03173a6c19aa4c9884cf5175c49628",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
     "contracts/family-coverage.json": "62275741cba370ae4ad7e2f06b1ea44a37827899b1c5dc8588eb866b5e0d0347",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
-    "codegraph-work-map.json": "8d4238671a6a4c0067be5f8dd8c0efd9367f32cd4c2c42938dfbd964bbba30a7"
+    "codegraph-work-map.json": "9b5a65398764acfe4a0020a6fd11dccb2321766989fd91450066d094e176334b"
   },
   "counts": {
-    "slices": 75,
+    "slices": 76,
     "operationFamilies": 48,
     "operations": 354,
-    "requirements": 370,
+    "requirements": 374,
     "requirementsByStatus": {
-      "Confirmed": 223,
+      "Confirmed": 227,
       "Proposed": 147
     },
     "inputSchemaCandidates": 354,
@@ -103,6 +103,7 @@
     "DW-061",
     "DW-064",
     "DW-063",
+    "DW-107",
     "DW-062",
     "DW-071",
     "DW-072",
@@ -308,6 +309,7 @@
       ],
       "supportingRequirements": [
         "ROUTE-19",
+        "ROUTE-22",
         "UI-01",
         "UI-02",
         "UI-03",
@@ -378,6 +380,7 @@
         "ADDON-02",
         "ADDON-03",
         "ADDON-04",
+        "ROUTE-23",
         "ART-01",
         "ART-02",
         "ART-03",
@@ -622,6 +625,7 @@
         "CACHE-04",
         "CACHE-05",
         "CACHE-06",
+        "ROUTE-24",
         "CONTEXT-01",
         "CONTEXT-02",
         "CONTEXT-03",
@@ -1362,6 +1366,8 @@
         "CONTROL-11",
         "CONTROL-12",
         "CONTROL-13",
+        "ROUTE-22",
+        "ROUTE-24",
         "WORK-01",
         "WORK-02",
         "WORK-03",
@@ -1432,6 +1438,8 @@
       "supportingRequirements": [
         "ROUTE-19",
         "ROUTE-20",
+        "ROUTE-22",
+        "ROUTE-24",
         "UI-01",
         "UI-02",
         "UI-03",
@@ -1513,13 +1521,16 @@
         "ROUTE-15",
         "ROUTE-09",
         "ROUTE-10",
-        "ROUTE-19",
         "ROUTE-20"
       ],
       "supportingRequirements": [
         "ROUTE-16",
         "ROUTE-17",
         "ROUTE-18",
+        "ROUTE-19",
+        "ROUTE-21",
+        "ROUTE-22",
+        "ROUTE-24",
         "UI-10"
       ],
       "capabilityCases": [
@@ -1590,6 +1601,7 @@
         "ROUTE-09",
         "ROUTE-10",
         "ROUTE-18",
+        "ROUTE-21",
         "SEC-01",
         "SEC-02",
         "SEC-03",
@@ -1662,6 +1674,7 @@
         "CACHE-05",
         "CACHE-06",
         "ROUTE-20",
+        "ROUTE-23",
         "RAG-01",
         "RAG-02",
         "RAG-03",
@@ -1755,6 +1768,7 @@
         "AGENT-15",
         "AGENT-16",
         "AGENT-17",
+        "ROUTE-24",
         "COORD-09",
         "COORD-10"
       ],
@@ -1826,6 +1840,8 @@
         "CACHE-05",
         "CACHE-06",
         "ROUTE-18",
+        "ROUTE-21",
+        "ROUTE-23",
         "JOB-01",
         "JOB-02",
         "JOB-03",
@@ -1872,11 +1888,13 @@
         "usage",
         "authority"
       ],
-      "acceptance": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.",
+      "acceptance": "Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility. Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported.",
       "gates": [
         "G03"
       ],
-      "status": "Planned; implementation not authorized or started",
+      "status": "Approved plan; native implementation pending",
+      "codegraphItem": "DW-22",
+      "codegraphFeature": "DW-F6",
       "dependsOn": [
         "DW-017",
         "DW-018",
@@ -1888,7 +1906,8 @@
         "router.decide"
       ],
       "primaryRequirements": [
-        "ROUTE-18"
+        "ROUTE-18",
+        "ROUTE-21"
       ],
       "supportingRequirements": [
         "ROUTE-01",
@@ -1906,6 +1925,8 @@
         "ROUTE-15",
         "ROUTE-09",
         "ROUTE-10",
+        "ROUTE-22",
+        "ROUTE-23",
         "UI-10"
       ],
       "capabilityCases": [
@@ -4636,7 +4657,8 @@
         "distribution",
         "performance",
         "mcp_server",
-        "mcp_server_access"
+        "mcp_server_access",
+        "session_auto_routing"
       ],
       "acceptance": "Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance.",
       "gates": [
@@ -4705,7 +4727,8 @@
         "DW-060",
         "DW-061",
         "DW-063",
-        "DW-064"
+        "DW-064",
+        "DW-107"
       ],
       "ownedOperations": [],
       "primaryRequirements": [
@@ -5311,6 +5334,53 @@
         "EVAL-13",
         "EVAL-14"
       ],
+      "capabilityCases": [],
+      "sourceEntryIds": [],
+      "workloads": [],
+      "pendingInputSchemas": [],
+      "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
+      "key": "session_auto_routing",
+      "id": "DW-107",
+      "type": "Feature",
+      "title": "Choose and pin DevWorks Auto once per new session",
+      "operations": [],
+      "dependsOnKeys": [
+        "chat",
+        "tool_turn",
+        "systemone"
+      ],
+      "acceptance": "AC1: New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated. AC2: The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing. AC3: SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance.",
+      "gates": [
+        "G03",
+        "G11"
+      ],
+      "status": "Approved plan; native implementation pending",
+      "codegraphItem": "DW-107",
+      "codegraphFeature": "DW-F6",
+      "codegraphStateAtSync": "ready",
+      "integratesOperations": [
+        "router.catalog",
+        "router.route",
+        "router.pin",
+        "router.availability",
+        "router.decide",
+        "router.configure"
+      ],
+      "dependsOn": [
+        "DW-016",
+        "DW-020",
+        "DW-022"
+      ],
+      "ownedOperations": [],
+      "primaryRequirements": [
+        "ROUTE-19",
+        "ROUTE-22",
+        "ROUTE-23",
+        "ROUTE-24"
+      ],
+      "supportingRequirements": [],
       "capabilityCases": [],
       "sourceEntryIds": [],
       "workloads": [],
@@ -7241,7 +7311,7 @@
     {
       "requirement": "ROUTE-19",
       "requirementStatus": "Confirmed",
-      "statement": "Offer explicit Tier Max, Tier High, Tier Mid and Tier Low selections before named models in every chat model selector. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto as a distinct explicit OpenRouter upstream route, not a synonym for DevWorks tier selection. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty.",
+      "statement": "Every chat model selector offers DevWorks Auto under ROUTE-22\u201324, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty.",
       "sourceSection": "10 Routing providers usage and costs",
       "architectureSection": "inference-router-and-provider-contracts",
       "owner": "InferenceRouter and transport adapters",
@@ -7249,8 +7319,9 @@
       "validationGate": "G03",
       "plannedCase": "AT-ROUTE-19",
       "designStatus": "Proposed architecture mapping; not an implementation/test result",
-      "primarySlice": "router",
+      "primarySlice": "session_auto_routing",
       "supportingSlices": [
+        "router",
         "chat",
         "settings"
       ],
@@ -7271,6 +7342,87 @@
       "supportingSlices": [
         "chat",
         "transports"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "ROUTE-21",
+      "requirementStatus": "Confirmed",
+      "statement": "Support a configurable pool of multiple SystemOne decision models, separate from conversational tiers. Each new automatically selected logical decision request takes the next eligible pool member in durable round-robin order and never creates or reuses a session pin. Filter by declared question/media/input capabilities, enabled state, usable connection, authorization, availability and current policy. Preserve direct model-ID invocation for callers deliberately selecting a decision model. Concurrent allocation and restart retain the cursor and request identity; receipt replay reuses a known decision rather than dispatching another inference.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "inference-router-and-provider-contracts",
+      "owner": "InferenceRouter and transport adapters",
+      "validationFamily": "Deterministic provider/routing/budget conformance",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-21",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "systemone",
+      "supportingSlices": [
+        "router",
+        "credentials",
+        "usage"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "ROUTE-22",
+      "requirementStatus": "Confirmed",
+      "statement": "Offer DevWorks Auto as a distinct route selection. Immediately before a new session's first generation request, classify the required tier from its initial prompt, role, task/assignment and authorized project context using a versioned, inspectable rubric. The only valid tier answers are Low, Mid, High and Max. Prefer an eligible SystemOne decision model under ROUTE-21. Explicit named-model and tier selections bypass classification. Explicit upstream auto routes, including OpenRouter Auto and Auto Beta, bypass DevWorks tier classification and retain their configured upstream identity. Preserve existing saved selections and defaults unless explicitly changed; new worker sessions receive their own initial assignment.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "inference-router-and-provider-contracts",
+      "owner": "InferenceRouter and transport adapters",
+      "validationFamily": "Deterministic provider/routing/budget conformance",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-22",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "session_auto_routing",
+      "supportingSlices": [
+        "systemone",
+        "router",
+        "chat",
+        "settings",
+        "delegation"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "ROUTE-23",
+      "requirementStatus": "Confirmed",
+      "statement": "If no SystemOne model is usable for the initial tier decision, use the next eligible Low-tier generation model as an auxiliary classifier through the shared router. This classifier request targets Low directly, has no conversational pin, and cannot recursively invoke tier selection. Treat malformed/non-tier answers, missing capabilities, authentication, exhausted credits, cooldowns, capacity and transport failures honestly. Attempts are bounded per model; other model successes cannot reset a failing model's retry limit. Try eligible decision candidates before falling back, and eligible Low candidates within a bounded pass; if neither path yields a valid decision, wait or refuse with a concrete reason rather than inventing a tier. Attribute classifier and generation attempts separately under existing authority, cost and feature-budget controls.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "inference-router-and-provider-contracts",
+      "owner": "InferenceRouter and transport adapters",
+      "validationFamily": "Deterministic provider/routing/budget conformance",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-23",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "session_auto_routing",
+      "supportingSlices": [
+        "systemone",
+        "transports",
+        "usage",
+        "authority"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "ROUTE-24",
+      "requirementStatus": "Confirmed",
+      "statement": "Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment.",
+      "sourceSection": "10 Routing providers usage and costs",
+      "architectureSection": "inference-router-and-provider-contracts",
+      "owner": "InferenceRouter and transport adapters",
+      "validationFamily": "Deterministic provider/routing/budget conformance",
+      "validationGate": "G03",
+      "plannedCase": "AT-ROUTE-24",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "session_auto_routing",
+      "supportingSlices": [
+        "router",
+        "sessions",
+        "tool_turn",
+        "chat",
+        "delegation"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },

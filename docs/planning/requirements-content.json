@@ -1066,13 +1066,41 @@
         "req",
         "ROUTE-19",
         "Confirmed",
-        "Offer explicit Tier Max, Tier High, Tier Mid and Tier Low selections before named models in every chat model selector. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto as a distinct explicit OpenRouter upstream route, not a synonym for DevWorks tier selection. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty."
+        "Every chat model selector offers DevWorks Auto under ROUTE-22\u201324, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty."
       ],
       [
         "req",
         "ROUTE-20",
         "Confirmed",
         "Provide reasoning effort as a separate selector alongside the route/model selector in every chat composer, including the shared Home/sidebar session. Persist the selected effort independently of tier or model. Advertise and send only the effort values supported by the configured model, endpoint and access mode; preserve requested and effective effort in route/usage diagnostics. A nondefault explicit effort is an eligibility constraint and cannot silently disappear on failover. Provider Default is a separate choice. Model labels must not encode effort, and changing effort must not itself change tier membership or derive another tier from a model name."
+      ],
+      [
+        "req",
+        "ROUTE-21",
+        "Confirmed",
+        "Support a configurable pool of multiple SystemOne decision models, separate from conversational tiers. Each new automatically selected logical decision request takes the next eligible pool member in durable round-robin order and never creates or reuses a session pin. Filter by declared question/media/input capabilities, enabled state, usable connection, authorization, availability and current policy. Preserve direct model-ID invocation for callers deliberately selecting a decision model. Concurrent allocation and restart retain the cursor and request identity; receipt replay reuses a known decision rather than dispatching another inference."
+      ],
+      [
+        "req",
+        "ROUTE-22",
+        "Confirmed",
+        "Offer DevWorks Auto as a distinct route selection. Immediately before a new session's first generation request, classify the required tier from its initial prompt, role, task/assignment and authorized project context using a versioned, inspectable rubric. The only valid tier answers are Low, Mid, High and Max. Prefer an eligible SystemOne decision model under ROUTE-21. Explicit named-model and tier selections bypass classification. Explicit upstream auto routes, including OpenRouter Auto and Auto Beta, bypass DevWorks tier classification and retain their configured upstream identity. Preserve existing saved selections and defaults unless explicitly changed; new worker sessions receive their own initial assignment."
+      ],
+      [
+        "req",
+        "ROUTE-23",
+        "Confirmed",
+        "If no SystemOne model is usable for the initial tier decision, use the next eligible Low-tier generation model as an auxiliary classifier through the shared router. This classifier request targets Low directly, has no conversational pin, and cannot recursively invoke tier selection. Treat malformed/non-tier answers, missing capabilities, authentication, exhausted credits, cooldowns, capacity and transport failures honestly. Attempts are bounded per model; other model successes cannot reset a failing model's retry limit. Try eligible decision candidates before falling back, and eligible Low candidates within a bounded pass; if neither path yields a valid decision, wait or refuse with a concrete reason rather than inventing a tier. Attribute classifier and generation attempts separately under existing authority, cost and feature-budget controls."
+      ],
+      [
+        "req",
+        "ROUTE-24",
+        "Confirmed",
+        "Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment."
+      ],
+      [
+        "p",
+        "Automatic routing acceptance: new Auto sessions and independent workers classify once through the SystemOne pool or direct Low fallback; explicit selections and upstream Auto/Auto Beta bypass it. Verify durable tier/model affinity across turns, tool continuations, compaction and restart, bounded per-model faults, no recursive classification, no hidden cross-tier fallback, and attributed classifier/generation usage. ROUTE-21\u201324; CACHE-01\u201306. Native implementation is tracked by DW-22 and DW-107; planning and pilot judgments are not runtime acceptance."
       ],
       [
         "p",
