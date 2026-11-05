@@ -1,10 +1,10 @@
 //! DW-109: authored metadata, independent of membership, across the real gateway and store.
 use super::*;
 
-fn refused_metadata(reply: DomainCommandReply) -> DomainFault {
+fn refused_metadata(reply: DomainCommandReply) -> Option<DomainFault> {
     match reply {
-        CommandReply::Rejected { fault, .. } => fault,
-        other => super::refused(other),
+        CommandReply::Rejected { .. } => None,
+        other => Some(super::refused(other)),
     }
 }
 
@@ -133,7 +133,7 @@ fn invalid_or_stale_metadata_edits_are_atomic_and_explicit_clears_are_idempotent
         &card,
         json!({"taskType": "Bug"}),
     )));
-    let stale = refused_metadata(edit3(&fx, &fx.user(), &card, json!({"labels": ["Stale"]})));
+    let stale = refused(edit3(&fx, &fx.user(), &card, json!({"labels": ["Stale"]})));
     assert_eq!(stale.code, DomainErrorCode::RevisionConflict);
     for patch in [
         json!({"taskType": "Task", "clearTaskType": true}),
