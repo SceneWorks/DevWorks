@@ -48,14 +48,20 @@ pub fn parse(upstream: &str) -> Option<ParsedVersion> {
                 return None;
             }
             (family, digits, &['.'])
-        } else if let Some(rest) = model.strip_prefix("claude-") {
-            let (family, digits) = rest.split_once('-')?;
+        } else {
+            let rest = model.strip_prefix("claude-")?;
+            let (first, after) = rest.split_once('-')?;
+            let (family, digits) = if FAMILIES[4..].contains(&first) {
+                (first, after)
+            } else {
+                // Anthropic's older releases place the numeric version before the family.
+                let (digits, family) = rest.rsplit_once('-')?;
+                (family, digits)
+            };
             if !FAMILIES[4..].contains(&family) {
                 return None;
             }
             (family, digits, &['.', '-'])
-        } else {
-            return None;
         };
     let mut version = Vec::new();
     for part in digits.split(separators) {
@@ -156,6 +162,11 @@ mod tests {
         assert_eq!(dated.snapshot.as_deref(), Some("20261105"));
         assert_eq!(dated.namespace, "anthropic");
         assert_eq!(parse("claude-sonnet-5.5").unwrap().version, dated.version);
+        assert_eq!(
+            parse("claude-3-7-sonnet-20250219").unwrap().version,
+            vec![3, 7]
+        );
+        assert_eq!(parse("claude-5.5-opus").unwrap().family, "opus");
         assert_eq!(parse("gpt-6.0-sol").unwrap().version, vec![6]);
     }
 

@@ -13,7 +13,7 @@ use devworks_core::gateway::Gateway;
 use devworks_core::ports::router::{ConnectionDirectory, ConnectionState, ConnectionStatus};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::records::{
-    EffortName, RouteAvailability, RouteChoice, RouteIntent, RouteModel, SettingAssignment,
+    EffortName, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, SettingAssignment,
     TierName,
 };
 use devworks_core::protocol::results::{
@@ -90,10 +90,23 @@ impl Fx {
             Arc::new(Directory::default()),
             Arc::new(AtomicU64::new(0)),
         );
-        fx.dir
-            .set(CLAUDE, "conn-claude", ConnectionState::Connected, None);
-        fx.dir
-            .set(CODEX, "conn-codex", ConnectionState::Connected, None);
+        fx.dir.set(
+            CLAUDE,
+            "conn-claude",
+            ConnectionState::Connected,
+            Some(&[
+                "claude-fable-5-1",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "claude-haiku-5-5",
+            ]),
+        );
+        fx.dir.set(
+            CODEX,
+            "conn-codex",
+            ConnectionState::Connected,
+            Some(&["gpt-6-astra", "gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna"]),
+        );
         fx.store
             .with_writer_connection(|c| {
                 super::super::conn::db(c.execute_batch(
@@ -325,7 +338,7 @@ impl Fx {
         include_disabled: bool,
         limit: u32,
         cursor: Option<&str>,
-    ) -> Page<RouteModel> {
+    ) -> Page<RouteCatalogModel> {
         let mut page = json!({"limit": limit});
         if let Some(c) = cursor {
             page["cursor"] = json!(c);
@@ -385,7 +398,55 @@ impl Fx {
         });
     }
     fn add_model(&self, m: StoredRouteModel) {
-        self.write(move |tx| tx.router().put_route_model(&m, None));
+        // The scripted provider publishes configured test models in its complete snapshot.
+        // Individual inventory tests can replace that snapshot with Directory::set.
+        for c in self
+            .dir
+            .0
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .filter(|c| c.profile == m.endpoint_profile)
+            .filter(|c| m.connection_id.as_ref().is_none_or(|id| id == &c.id))
+        {
+            if let Some(discovered) = &mut c.discovered {
+                discovered.insert(m.upstream_model_id.clone());
+            }
+        }
+        self.write(move |tx| {
+            if let Some(id) = &m.connection_id
+                && tx.router().connection(id)?.is_none()
+            {
+                let now = tx.now_ms();
+                tx.router().put_connection(
+                    &StoredConnection {
+                        id: id.clone(),
+                        name: "Scripted connection".into(),
+                        profile: m.endpoint_profile.clone(),
+                        endpoint: "https://example.test".into(),
+                        enabled: true,
+                        open_router: None,
+                        credential_ref: None,
+                        credential_revision: 0,
+                        credential_epoch: None,
+                        lifecycle: "Disconnected".into(),
+                        state_reason: None,
+                        account_digest: None,
+                        access_expires_at_ms: None,
+                        risk: None,
+                        discovered: None,
+                        discovered_at_ms: None,
+                        healthy: None,
+                        checked_at_ms: None,
+                        revision: 1,
+                        created_at_ms: now,
+                        updated_at_ms: now,
+                    },
+                    None,
+                )?;
+            }
+            tx.router().put_route_model(&m, None)
+        });
     }
 }
 
@@ -890,10 +951,18 @@ fn custom_members_join_the_full_tier_pool() {
         "local-qwen"
     );
     // With everything connected, the full pool rotates (no hidden local-first subset).
-    fx.dir
-        .set(CLAUDE, "conn-claude", ConnectionState::Connected, None);
-    fx.dir
-        .set(CODEX, "conn-codex", ConnectionState::Connected, None);
+    fx.dir.set(
+        CLAUDE,
+        "conn-claude",
+        ConnectionState::Connected,
+        Some(&["claude-haiku-5-5"]),
+    );
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6-luna"]),
+    );
     let got: Vec<String> = ["s2", "s3", "s4"]
         .iter()
         .map(|s| model_of(fx.route(s, tier("Low"), "Default", &[])))
@@ -1375,4 +1444,318 @@ fn a_reused_pin_records_the_latest_requests_requirements() {
     let (same, wrote) = chosen(fx.route("s1", tier("High"), "Default", &["vision"]));
     assert!(!wrote);
     assert_eq!(same.pin_revision.get(), 2);
+}
+
+fn versioned(model_id: &str, upstream: &str, profile: &str, connection: &str) -> StoredRouteModel {
+    let mut m = custom(model_id, profile, true, Some(200_000));
+    m.upstream_model_id = upstream.into();
+    m.connection_id = Some(id(connection));
+    m
+}
+
+#[test]
+fn latest_uses_numeric_inventory_versions_and_retains_concrete_pins_across_promotion_restart_replay()
+ {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-6-9", "gpt-6.9-sol", CODEX, "conn-codex"));
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.9-sol"]),
+    );
+    let body = json!({"sessionId":"s1", "expectedContextEpoch":"0", "intent":tier("High"),
+        "effort":"Default", "requiredCapabilities":[]});
+    fx.set_members("High", &["sol-latest"]);
+    let (first, _) =
+        chosen(fx.command_keyed(&fx.user(), "router.route", "latest-receipt", body.clone()));
+    assert_eq!(first.model_id.as_str(), "sol-6-9");
+    assert_eq!(fx.cursor("High"), 1);
+    fx.add_model(versioned("sol-6-10", "gpt-6.10-sol", CODEX, "conn-codex"));
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.10-sol", "gpt-6.9-sol"]),
+    );
+    let latest = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert_eq!(ids(&latest), ["sol-6-10"]);
+    assert_eq!(fx.cursor("High"), 1, "refresh takes no round-robin turn");
+    let (kept, wrote) = chosen(fx.route("s1", tier("High"), "Default", &[]));
+    assert!(!wrote);
+    assert_eq!(kept.pin_id, first.pin_id);
+    assert_eq!(kept.model_id, first.model_id);
+    assert_eq!(
+        fx.availability(tier("High"), "Default", &[], Some("s1"))
+            .pin_eligible,
+        Some(true)
+    );
+    let fx = fx.restart();
+    let (kept, wrote) = chosen(fx.route("s1", tier("High"), "Default", &[]));
+    assert!(!wrote);
+    assert_eq!(kept.model_id.as_str(), "sol-6-9");
+    assert_eq!(
+        model_of(fx.route("s2", tier("High"), "Default", &[])),
+        "sol-6-10"
+    );
+    let replay = fx.command_keyed(&fx.user(), "router.route", "latest-receipt", body);
+    let (decision, replayed) = recorded(replay);
+    assert!(replayed);
+    match decision {
+        DomainDecision::Applied {
+            result: OperationResult::RouterRoute { value },
+        } => assert_eq!(value.model_id, first.model_id),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(fx.cursor("High"), 2);
+}
+
+#[test]
+fn latest_falls_back_only_on_inventory_or_policy_and_never_for_capabilities_or_cooldown() {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-old", "gpt-6.9-sol", CODEX, "conn-codex"));
+    let mut newest = versioned("sol-new", "gpt-6.10-sol", CODEX, "conn-codex");
+    newest.image_input = false;
+    fx.add_model(newest);
+    let listed = &["gpt-6.9-sol", "gpt-6.10-sol"];
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(listed),
+    );
+    let unsupported = fx.availability(named("sol-latest"), "Default", &["vision"], None);
+    assert!(!unsupported.available);
+    assert_eq!(codes(&unsupported), ["VisionUnsupported"]);
+    assert_eq!(
+        model_of(fx.route("s1", named("sol-old"), "Default", &["vision"])),
+        "sol-old"
+    );
+    fx.cool("sol-new", T0 + 60_000);
+    let cooling = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert!(!cooling.available);
+    assert_eq!(codes(&cooling), ["Cooling"]);
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.9-sol"]),
+    );
+    assert_eq!(
+        ids(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["sol-old"]
+    );
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(listed),
+    );
+    fx.uncool("sol-new");
+    assert_eq!(
+        ids(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["sol-new"]
+    );
+    fx.dir
+        .0
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .find(|c| c.id.as_str() == "conn-codex")
+        .unwrap()
+        .excluded = vec!["gpt-6.10-*".into()];
+    assert_eq!(
+        ids(&fx.availability(named("sol-latest"), "Default", &[], None)),
+        ["sol-old"]
+    );
+}
+
+#[test]
+fn tier_family_slots_promote_while_custom_and_named_selections_stay_exact() {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-new", "gpt-7-sol", CODEX, "conn-codex"));
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-7-sol", "gpt-6.1-sol"]),
+    );
+    fx.add_model(custom("custom-code", "CompatibleChat", true, None));
+    fx.dir
+        .set("CompatibleChat", "local", ConnectionState::Connected, None);
+    // Legacy saved membership remains an editable family slot; the outside family is exact.
+    fx.set_members("High", &["sol", "custom-code"]);
+    assert_eq!(
+        model_of(fx.route("s1", tier("High"), "Default", &[])),
+        "sol-new"
+    );
+    assert_eq!(
+        model_of(fx.route("s2", tier("High"), "Default", &[])),
+        "custom-code"
+    );
+    assert_eq!(
+        model_of(fx.route("s3", named("sol"), "Default", &[])),
+        "sol"
+    );
+    assert_eq!(fx.cursor("High"), 2);
+    fx.set_members("High", &["custom-code"]);
+    assert_eq!(
+        model_of(fx.route("s1", tier("High"), "Default", &[])),
+        "custom-code"
+    );
+}
+
+#[test]
+fn concrete_pins_never_survive_on_a_different_snapshot_identity() {
+    let fx = Fx::new();
+    let undated = "claude-opus-5-5";
+    let dated = "claude-opus-5-5-20261105";
+    fx.add_model(versioned("opus-dated", dated, CLAUDE, "conn-claude"));
+    fx.dir.set(
+        CLAUDE,
+        "conn-claude",
+        ConnectionState::Connected,
+        Some(&[undated]),
+    );
+    assert_eq!(
+        model_of(fx.route("s1", named("opus-latest"), "Default", &[])),
+        "opus"
+    );
+    fx.dir.set(
+        CLAUDE,
+        "conn-claude",
+        ConnectionState::Connected,
+        Some(&[dated]),
+    );
+    assert_eq!(
+        fx.availability(named("opus-latest"), "Default", &[], Some("s1"))
+            .pin_eligible,
+        Some(false)
+    );
+    let (replaced, wrote) = chosen(fx.route("s1", named("opus-latest"), "Default", &[]));
+    assert!(wrote);
+    assert_eq!(replaced.model_id.as_str(), "opus-dated");
+    assert!(
+        !fx.availability(named("opus"), "Default", &[], None)
+            .available
+    );
+}
+
+#[test]
+fn latest_requires_inventory_but_explicit_declared_models_remain_exact() {
+    let fx = Fx::new();
+    fx.dir
+        .set(CODEX, "conn-codex", ConnectionState::Connected, None);
+    let unknown = fx.availability(named("sol-latest"), "Default", &[], None);
+    assert!(!unknown.available);
+    assert_eq!(codes(&unknown), ["NotDiscovered"]);
+    assert_eq!(
+        model_of(fx.route("s1", named("sol"), "Default", &[])),
+        "sol"
+    );
+    assert_eq!(fx.cursor("High"), 0);
+}
+
+#[test]
+fn multiple_provider_scopes_count_as_one_logical_family_round_robin_slot() {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-scope-a", "gpt-6.9-sol", CODEX, "conn-codex"));
+    fx.add_model(versioned("sol-scope-b", "gpt-7-sol", CODEX, "conn-codex-b"));
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-6.9-sol"]),
+    );
+    fx.dir.set(
+        CODEX,
+        "conn-codex-b",
+        ConnectionState::Connected,
+        Some(&["gpt-7-sol"]),
+    );
+    fx.add_model(custom("custom-code", "CompatibleChat", true, None));
+    fx.dir
+        .set("CompatibleChat", "local", ConnectionState::Connected, None);
+    fx.set_members("High", &["sol-latest", "custom-code"]);
+    assert_eq!(
+        model_of(fx.route("s1", tier("High"), "Default", &[])),
+        "sol-scope-a"
+    );
+    assert_eq!(
+        model_of(fx.route("s2", tier("High"), "Default", &[])),
+        "custom-code"
+    );
+    fx.cool("sol-scope-a", T0 + 60_000);
+    assert_eq!(
+        model_of(fx.route("s3", tier("High"), "Default", &[])),
+        "sol-scope-b"
+    );
+    assert_eq!(fx.cursor("High"), 3);
+}
+
+#[test]
+fn catalog_revision_three_exposes_eight_virtual_aliases_and_exact_inventory_availability() {
+    let fx = Fx::new();
+    fx.add_model(versioned("sol-new", "gpt-7-sol", CODEX, "conn-codex"));
+    fx.dir.set(
+        CODEX,
+        "conn-codex",
+        ConnectionState::Connected,
+        Some(&["gpt-7-sol"]),
+    );
+    let body = json!({"page":{"limit":50}, "includeDisabled":false});
+    let reply = result(fx.query_at(&fx.user(), "router.catalog", body.clone(), Some(3)));
+    let OperationResult::RouterCatalog { value } = reply else {
+        panic!("catalog")
+    };
+    let aliases: Vec<_> = value
+        .items
+        .0
+        .iter()
+        .filter(|m| m.latest_family.is_some())
+        .collect();
+    assert_eq!(aliases.len(), 8);
+    let sol = aliases
+        .iter()
+        .find(|m| m.id.as_str() == "sol-latest")
+        .unwrap();
+    assert_eq!(sol.display_name.0, "Sol Latest");
+    assert_eq!(sol.available, Some(true));
+    assert_eq!(
+        sol.resolves_to_model_ids.as_ref().unwrap().0,
+        [id("sol-new")]
+    );
+    assert!(matches!(
+        sol.tier_memberships.0.as_slice(),
+        [TierName::High]
+    ));
+    let missing_exact = value
+        .items
+        .0
+        .iter()
+        .find(|m| m.id.as_str() == "sol")
+        .unwrap();
+    assert_eq!(missing_exact.available, Some(false));
+    assert_eq!(
+        missing_exact.availability_reason.as_ref().unwrap().0,
+        "NotDiscovered"
+    );
+    assert!(missing_exact.tier_memberships.0.is_empty());
+    assert!(missing_exact.latest_family.is_none());
+    for revision in [1, 2] {
+        let OperationResult::RouterCatalog { value } =
+            result(fx.query_at(&fx.user(), "router.catalog", body.clone(), Some(revision)))
+        else {
+            panic!("catalog")
+        };
+        assert!(value.items.0.iter().all(|m| m.latest_family.is_none()));
+        assert!(
+            value
+                .items
+                .0
+                .iter()
+                .all(|m| !m.id.as_str().ends_with("-latest"))
+        );
+    }
+    assert_eq!(fx.cursor("High"), 0);
 }
