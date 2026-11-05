@@ -98,13 +98,13 @@ pub enum OperationResult {
     #[serde(rename = "workflows.reassign_and_remove")]
     WorkflowsReassignAndRemove { value: MutationSummary },
     #[serde(rename = "next_work.claim_project_queue")]
-    NextWorkClaimProjectQueue { value: ClaimRecord },
+    NextWorkClaimProjectQueue { value: AllocationClaimRecord },
     #[serde(rename = "next_work.claim_feature_task")]
-    NextWorkClaimFeatureTask { value: ClaimRecord },
+    NextWorkClaimFeatureTask { value: AllocationClaimRecord },
     #[serde(rename = "next_work.inspect_claim")]
-    NextWorkInspectClaim { value: ClaimRecord },
+    NextWorkInspectClaim { value: AllocationClaimRecord },
     #[serde(rename = "next_work.release_claim")]
-    NextWorkReleaseClaim { value: ClaimRecord },
+    NextWorkReleaseClaim { value: AllocationClaimRecord },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -1490,6 +1490,14 @@ impl Revisioned for OperationResult {
             Self::TasksAcceptanceEvidence { value } => value.retain_revision(revision),
             Self::TasksSyncPlan { value } => value.retain_revision(revision),
             Self::TasksSetFeature { value } => value.retain_revision(revision),
+            Self::WorkflowsList { value } => value.retain_revision(revision),
+            Self::WorkflowsCreateStatus { value } => value.retain_revision(revision),
+            Self::WorkflowsRenameStatus { value } => value.retain_revision(revision),
+            Self::WorkflowsOrder { value } => value.retain_revision(revision),
+            Self::NextWorkClaimProjectQueue { value } => value.retain_revision(revision),
+            Self::NextWorkClaimFeatureTask { value } => value.retain_revision(revision),
+            Self::NextWorkInspectClaim { value } => value.retain_revision(revision),
+            Self::NextWorkReleaseClaim { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),

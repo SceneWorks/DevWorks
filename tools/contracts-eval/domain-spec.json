@@ -548,7 +548,15 @@
         "revision": "Revision",
         "label": "Label",
         "category": "Label",
-        "rank": "Counter"
+        "rank": "Counter",
+        "workflow_revision": "?Revision",
+        "affected_work_digest": "?Digest",
+        "affected_work_count": "?Counter"
+      },
+      "since": {
+        "workflow_revision": 3,
+        "affected_work_digest": 3,
+        "affected_work_count": 3
       }
     },
     "ClaimRecord": {
@@ -3815,6 +3823,32 @@
       },
       "earlierName": "RouteModel",
       "earlierBefore": 3
+    },
+    "AllocationClaimRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "work_id": "Id",
+        "owner_id": "ActorId",
+        "fence": "Counter",
+        "expires_at_ms": "Counter",
+        "state": "LeaseState",
+        "work_kind": "?WorkKind",
+        "work_revision": "?Revision",
+        "project_id": "?ProjectId",
+        "root_id": "?RootId",
+        "owner_session_id": "?Id",
+        "queue_revision": "?Revision"
+      },
+      "since": {
+        "work_kind": 3,
+        "work_revision": 3,
+        "project_id": 3,
+        "root_id": 3,
+        "owner_session_id": 3,
+        "queue_revision": 3
+      },
+      "earlierName": "ClaimRecord"
     }
   },
   "operations": {
@@ -4283,7 +4317,7 @@
       "result": "Page<StatusRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant."
     },
     "workflows.create_status": {
       "operation": "workflows.create_status",
@@ -4298,7 +4332,7 @@
       "result": "StatusRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant."
     },
     "workflows.rename_status": {
       "operation": "workflows.rename_status",
@@ -4312,7 +4346,7 @@
       "result": "StatusRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant."
     },
     "workflows.order": {
       "operation": "workflows.order",
@@ -4325,7 +4359,7 @@
       "result": "Page<StatusRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact unique permutation of existing status IDs."
+      "rules": "Exact unique permutation of existing status IDs. Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant."
     },
     "workflows.reassign_and_remove": {
       "operation": "workflows.reassign_and_remove",
@@ -4350,10 +4384,10 @@
         "expected_queue_revision": "Revision",
         "lease_ms": "PositiveCounter"
       },
-      "result": "ClaimRecord",
+      "result": "AllocationClaimRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds."
+      "rules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
     },
     "next_work.claim_feature_task": {
       "operation": "next_work.claim_feature_task",
@@ -4363,10 +4397,10 @@
         "expected_task_set_revision": "Revision",
         "lease_ms": "PositiveCounter"
       },
-      "result": "ClaimRecord",
+      "result": "AllocationClaimRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity."
+      "rules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
     },
     "next_work.inspect_claim": {
       "operation": "next_work.inspect_claim",
@@ -4374,10 +4408,10 @@
       "fields": {
         "claim_id": "Id"
       },
-      "result": "ClaimRecord",
+      "result": "AllocationClaimRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
     },
     "next_work.release_claim": {
       "operation": "next_work.release_claim",
@@ -4386,10 +4420,10 @@
         "claim_id": "Id",
         "expected_fence": "Counter"
       },
-      "result": "ClaimRecord",
+      "result": "AllocationClaimRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn."
     },
     "runs.redirect": {
       "operation": "runs.redirect",
@@ -8463,6 +8497,38 @@
       3
     ],
     "router.pin": [
+      1,
+      3
+    ],
+    "workflows.list": [
+      1,
+      3
+    ],
+    "workflows.create_status": [
+      1,
+      3
+    ],
+    "workflows.rename_status": [
+      1,
+      3
+    ],
+    "workflows.order": [
+      1,
+      3
+    ],
+    "next_work.claim_project_queue": [
+      1,
+      3
+    ],
+    "next_work.claim_feature_task": [
+      1,
+      3
+    ],
+    "next_work.inspect_claim": [
+      1,
+      3
+    ],
+    "next_work.release_claim": [
       1,
       3
     ]

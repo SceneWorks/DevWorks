@@ -1039,6 +1039,27 @@ pub struct StatusRecord {
     pub label: Label,
     pub category: Label,
     pub rank: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
+    pub workflow_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub affected_work_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub affected_work_count: Option<Counter>,
 }
 impl Check for StatusRecord {
     fn check(&self) -> Result<(), String> {
@@ -1047,11 +1068,28 @@ impl Check for StatusRecord {
         self.label.check()?;
         self.category.check()?;
         self.rank.check()?;
+        self.workflow_revision.check()?;
+        self.affected_work_digest.check()?;
+        self.affected_work_count.check()?;
         crate::protocol::rules::record(
             "StatusRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for StatusRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.workflow_revision = None;
+        }
+        if revision < 3 {
+            self.affected_work_digest = None;
+        }
+        if revision < 3 {
+            self.affected_work_count = None;
+        }
     }
 }
 
@@ -9881,6 +9919,104 @@ impl Revisioned for RouteCatalogModel {
         }
         if revision < 3 {
             self.availability_reason = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "ClaimRecord", "before": 3}))]
+pub struct AllocationClaimRecord {
+    pub id: Id,
+    pub work_id: Id,
+    pub owner_id: ActorId,
+    pub fence: Counter,
+    pub expires_at_ms: Counter,
+    pub state: LeaseState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkKind", extend("x-since" = 3))]
+    pub work_kind: Option<WorkKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
+    pub work_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 3))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RootId", extend("x-since" = 3))]
+    pub root_id: Option<RootId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub owner_session_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
+    pub queue_revision: Option<Revision>,
+}
+impl Check for AllocationClaimRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.work_id.check()?;
+        self.owner_id.check()?;
+        self.fence.check()?;
+        self.expires_at_ms.check()?;
+        self.state.check()?;
+        self.work_kind.check()?;
+        self.work_revision.check()?;
+        self.project_id.check()?;
+        self.root_id.check()?;
+        self.owner_session_id.check()?;
+        self.queue_revision.check()?;
+        crate::protocol::rules::record(
+            "AllocationClaimRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for AllocationClaimRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.work_kind = None;
+        }
+        if revision < 3 {
+            self.work_revision = None;
+        }
+        if revision < 3 {
+            self.project_id = None;
+        }
+        if revision < 3 {
+            self.root_id = None;
+        }
+        if revision < 3 {
+            self.owner_session_id = None;
+        }
+        if revision < 3 {
+            self.queue_revision = None;
         }
     }
 }
