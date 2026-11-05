@@ -71,7 +71,9 @@
 //! CodeGraph's preview token is replaced by the expected plan and task-set revisions.
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
-use crate::operations::{OperationInput, features as fops, issues as iops, tasks as tops};
+use crate::operations::{
+    OperationInput, features as fops, issues as iops, tasks as tops, workflows as wops,
+};
 use crate::ports::storage::{
     ACTIVE, ARCHIVED, DELETED, FEATURE, NewEvent, ProjectRead, ReadSnapshot, StorageError,
     StoredProject, StoredStatus, StoredWork, WorkRead, WriteTransaction,
@@ -103,7 +105,7 @@ pub mod workflow_ops;
 pub use model::{fold, link_id, plan_digest, plan_units, search_key};
 
 /// The operations [`WorkService`] is registered for.
-pub const OPERATIONS: [&str; 24] = [
+pub const OPERATIONS: [&str; 29] = [
     "features.list",
     "features.get",
     "features.create",
@@ -128,6 +130,11 @@ pub const OPERATIONS: [&str; 24] = [
     "tasks.acceptance_evidence",
     "tasks.sync_plan",
     "tasks.set_feature",
+    "workflows.list",
+    "workflows.create_status",
+    "workflows.rename_status",
+    "workflows.order",
+    "workflows.reassign_and_remove",
 ];
 /// History aggregate of a work item (`aggregate_id` = work ID).
 pub const WORK_AGGREGATE: &str = "work";
@@ -378,6 +385,9 @@ impl QueryHandler for WorkService {
         use crate::protocol::results::OperationResult as O;
         use items::Family;
         let answered = match query.input() {
+            OperationInput::Workflows(wops::Input::List(i)) => self
+                .list_workflow(snapshot, ctx, i)
+                .map(|(v, s)| (O::WorkflowsList { value: v }, s)),
             OperationInput::Features(fops::Input::List(i)) => self
                 .list(snapshot, ctx, Family::Features, &items::list_args(i))
                 .map(|(v, s)| (O::FeaturesList { value: v }, s)),
@@ -420,6 +430,17 @@ impl CommandHandler for WorkService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let outcome = match command.input() {
+            OperationInput::Workflows(i) => match i {
+                wops::Input::CreateStatus(i) => self.create_status(tx, ctx, i),
+                wops::Input::RenameStatus(i) => self.rename_status(tx, ctx, i),
+                wops::Input::Order(i) => self.order_statuses(tx, ctx, i),
+                wops::Input::ReassignAndRemove(i) => self.reassign_and_remove_status(tx, ctx, i),
+                _ => Err(refuse(
+                    DomainErrorCode::UnsupportedCapability,
+                    "operation",
+                    None,
+                )),
+            },
             OperationInput::Features(i) => match i {
                 fops::Input::Create(i) => self.create_features(tx, ctx, i),
                 fops::Input::EditPlan(i) => self.edit_plan(tx, ctx, i),
