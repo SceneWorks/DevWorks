@@ -3103,3 +3103,118 @@ fn adding_or_removing_a_dependency_manifest_reconciles_the_files_it_governs() {
         "a locally deleted Podfile makes Pods/ eligible"
     );
 }
+
+#[test]
+fn inherited_call_bindings_follow_the_composed_overlay_candidate_set() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("overlay-candidates");
+    let dir = src.join("repo");
+    repo(
+        &dir,
+        &[
+            ("a.rs", "fn caller() { ping(); }\n"),
+            ("b.rs", "fn ping() {}\n"),
+        ],
+    );
+    git(&dir, &["checkout", "-q", "-b", "topic"]);
+    write(&dir, "c.rs", "fn ping() {}\n");
+    let topic = commit(&dir, "add another candidate");
+    git(&dir, &["checkout", "-q", "main"]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let r = fx.repository_at(&dir);
+    run_of(decision(fx.index(&r, false, "1")));
+    fx.drain();
+    let baseline = fx.published(&r);
+    let call = |view: &views::ViewLayers| {
+        let v = view.clone();
+        fx.read(move |s| views::unit_edges(s.indexing(), &v, "a.rs"))
+            .into_iter()
+            .find(|(e, _)| e.kind == "CALLS" && e.payload["targetName"] == json!("ping"))
+            .unwrap()
+    };
+    assert_eq!(call(&baseline).0.payload["targetUnit"], json!("b.rs"));
+    run_of(decision(refresh_ref(&fx, &r, "topic")));
+    fx.drain();
+    let branch = overlay_at(&fx, &r, &topic);
+    let branch_view = exact_view(&fx, branch.view_id.as_ref().unwrap());
+    let ambiguous = call(&branch_view);
+    assert_eq!(ambiguous.0.payload["resolution"], json!("Unresolved"));
+    assert_eq!(ambiguous.0.payload["candidates"], json!(2));
+    assert!(!ambiguous.1);
+    assert_eq!(
+        call(&baseline).0.payload["targetUnit"],
+        json!("b.rs"),
+        "baseline remains immutable"
+    );
+    let refresh = || {
+        let w = worktree_id(&r, &fx.identity(&dir));
+        run_of(decision(fx.index_command("indexing.refresh_overlay", json!({"kind":"RefreshOverlay", "repositoryId":r,"worktreeId":w,"expectedSourceRevision":"1"}))));
+        fx.drain();
+        let (r, w) = (r.clone(), w.clone());
+        let o = fx.read(move |s| s.indexing().overlay_for(&r, &w)).unwrap();
+        assert_eq!(o.state, OVERLAY_READY);
+        exact_view(&fx, o.view_id.as_ref().unwrap())
+    };
+    write(&dir, "c.rs", "fn ping() {}\n");
+    assert_eq!(
+        call(&refresh()).0.payload["resolution"],
+        json!("Unresolved")
+    );
+    std::fs::remove_file(dir.join("b.rs")).unwrap();
+    let rebound = call(&refresh());
+    assert!(rebound.1);
+    assert_eq!(rebound.0.payload["targetUnit"], json!("c.rs"));
+}
+
+#[test]
+fn python_absolute_and_explicit_relative_imports_choose_their_own_modules() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("python-imports");
+    let dir = src.join("repo");
+    repo(
+        &dir,
+        &[
+            ("foo.py", "root_value = 1\n"),
+            ("pkg/__init__.py", ""),
+            ("pkg/foo.py", "local_value = 2\n"),
+            ("pkg/sub/__init__.py", ""),
+            (
+                "pkg/consumer.py",
+                "import foo\nfrom .foo import local_value\n",
+            ),
+            ("pkg/sub/consumer.py", "from ..foo import local_value\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let r = fx.repository_at(&dir);
+    run_of(decision(fx.index(&r, false, "1")));
+    fx.drain();
+    let v = fx.published(&r);
+    let imports = |key: &'static str| {
+        let v = v.clone();
+        fx.read(move |s| views::unit_edges(s.indexing(), &v, key))
+            .into_iter()
+            .filter(|(e, _)| e.kind == "IMPORTS")
+            .map(|(e, resolves)| {
+                assert!(resolves, "{e:?}");
+                (
+                    e.payload["targetName"].as_str().unwrap().to_owned(),
+                    e.payload["targetUnit"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let direct = imports("pkg/consumer.py");
+    assert_eq!(direct.get("foo").map(String::as_str), Some("foo.py"));
+    assert_eq!(direct.get(".foo").map(String::as_str), Some("pkg/foo.py"));
+    assert_eq!(
+        imports("pkg/sub/consumer.py")
+            .get("..foo")
+            .map(String::as_str),
+        Some("pkg/foo.py")
+    );
+}

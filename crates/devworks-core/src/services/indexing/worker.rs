@@ -2132,16 +2132,16 @@ fn target_kinds(edge: &str) -> Option<&'static [&'static str]> {
 
 /// The nodes of unit `key` as the layers compose it (`None`: absent or deleted).
 fn layered_unit_nodes(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     layers: &[Id],
     key: &str,
 ) -> Result<Option<Vec<StoredNode>>, StorageError> {
     for g in layers {
-        if let Some(u) = s.indexing().unit(g, key)? {
+        if let Some(u) = s.unit(g, key)? {
             if u.action != UNIT_REPLACE {
                 return Ok(None);
             }
-            return Ok(Some(s.indexing().nodes(g, key)?));
+            return Ok(Some(s.nodes(g, key)?));
         }
     }
     Ok(None)
@@ -2150,7 +2150,7 @@ fn layered_unit_nodes(
 /// The package directory a Go import names, from the nearest `go.mod` above `from` (its module
 /// path must be the import's prefix): `Err` when that manifest has no unique module identity.
 fn go_import_dir(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     layers: &[Id],
     from: &str,
     import: &str,
@@ -2199,7 +2199,7 @@ type NameCache = HashMap<String, (Candidates, bool)>;
 /// (each optionally limited to definition lines) and package directories (Go files directly in
 /// them, including the one a module-relative import names).
 fn handler_scope(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     layers: &[Id],
     unit: &str,
     payload: &Value,
@@ -2275,6 +2275,27 @@ fn import_candidates(from: &str, module: &str) -> Vec<String> {
         }
         Some(parts.join("/"))
     };
+    if from.ends_with(".py") {
+        // Python 3 bare/dotted imports are absolute. Leading dots explicitly select
+        // the importing package (one dot), then its parents; never guess a sibling.
+        let dots = module.bytes().take_while(|b| *b == b'.').count();
+        if dots > 0 && (dir.is_empty() || dots > dir.split('/').count()) {
+            return out;
+        }
+        let body = module[dots..].replace('.', "/");
+        let path = if dots == 0 {
+            Some(body)
+        } else {
+            join(dir, &format!("{}{}", "../".repeat(dots - 1), body))
+        };
+        if let Some(path) = path.filter(|p| !p.is_empty()) {
+            if !module.ends_with('.') {
+                out.push(format!("{path}.py"));
+            }
+            out.push(format!("{path}/__init__.py"));
+        }
+        return out;
+    }
     if module.starts_with("./") || module.starts_with("../") {
         if let Some(p) = join(dir, module) {
             for ext in [
@@ -2358,7 +2379,7 @@ pub(crate) fn link_generation(
                 for e in s.indexing().edges(&g, &u.unit_key)? {
                     let mut payload = e.payload.clone();
                     let source = swift_extension_source(
-                        s,
+                        s.indexing(),
                         &g,
                         &low,
                         repo.as_str(),
@@ -2367,7 +2388,7 @@ pub(crate) fn link_generation(
                         &mut payload,
                     )?;
                     let target = link_target(
-                        s,
+                        s.indexing(),
                         &g,
                         &low,
                         repo.as_str(),
@@ -2408,13 +2429,51 @@ pub(crate) fn link_generation(
     }
 }
 
+/// Re-evaluates inherited edges against the complete immutable composed view. The
+/// generation linker uses these same name, receiver, import and Swift-module rules.
+pub(crate) fn link_view_edges(
+    read: &dyn IndexRead,
+    repository: &str,
+    layers: &[Id],
+    unit: &str,
+    mut edges: Vec<StoredEdge>,
+) -> Result<Vec<StoredEdge>, StorageError> {
+    let Some((top, lower)) = layers.split_first() else {
+        return Ok(edges);
+    };
+    let mut cache = NameCache::new();
+    let mut scopes = None;
+    for edge in &mut edges {
+        let mut payload = edge.payload.clone();
+        let source =
+            swift_extension_source(read, top, lower, repository, unit, edge, &mut payload)?;
+        let target = link_target(
+            read,
+            top,
+            lower,
+            repository,
+            unit,
+            edge,
+            &mut payload,
+            &mut cache,
+            &mut scopes,
+        )?;
+        edge.source_node_id = source;
+        if let Some(target) = target {
+            edge.target_node_id = target;
+        }
+        edge.payload = payload;
+    }
+    Ok(edges)
+}
+
 /// The retained `SwiftTypeReference` endpoint kinds (`IsSwiftTypeNode`).
 const SWIFT_TYPE_KINDS: [&str; 4] = ["Class", "Interface", "Struct", "Enum"];
 
 /// The source of an edge a Swift extension of a type declared elsewhere contributes (see
 /// [`link_generation`]); any other edge keeps its source.
 fn swift_extension_source(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     repository: &str,
@@ -2482,7 +2541,7 @@ fn mark_name_bound(payload: &mut Value, name_bound: bool) {
 /// updated to say how it was established.
 #[allow(clippy::too_many_arguments)]
 fn link_target(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     g: &Id,
     low: &[Id],
     repo: &str,
@@ -2639,7 +2698,7 @@ fn simple_name(name: &str) -> String {
 /// Nodes whose qualified name is exactly `qualified_name`, visible from `generation` (then
 /// `lower` layers, skipping units a higher layer mentions): (unit key, kind, node ID).
 fn visible_qualified(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     qualified_name: &str,
@@ -2656,7 +2715,7 @@ fn visible_qualified(
 /// Nodes named `name` visible from `generation` (then `lower` layers, skipping units a higher
 /// layer mentions): (unit key, kind, node ID).
 fn visible_named(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     name: &str,
@@ -2725,7 +2784,7 @@ const CANDIDATE_CAP: u16 = MAX_PAGE;
 /// `generation` and then `lower` layers, skipping units a higher layer mentions. Sets `cut` when
 /// a layer has more than [`CANDIDATE_CAP`] such nodes (the answer is then incomplete).
 fn visible_nodes(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     name: &str,
@@ -2737,9 +2796,9 @@ fn visible_nodes(
     layers.extend(lower.iter().cloned());
     for (i, g) in layers.iter().enumerate() {
         let found = if qualified {
-            s.indexing().nodes_qualified(g, name, CANDIDATE_CAP)?
+            s.nodes_qualified(g, name, CANDIDATE_CAP)?
         } else {
-            s.indexing().nodes_named(g, name, CANDIDATE_CAP)?
+            s.nodes_named(g, name, CANDIDATE_CAP)?
         };
         if found.len() >= usize::from(CANDIDATE_CAP) {
             cut.set(true);
@@ -2747,7 +2806,7 @@ fn visible_nodes(
         for n in found {
             let mut masked = false;
             for higher in &layers[..i] {
-                if s.indexing().unit(higher, &n.unit_key)?.is_some() {
+                if s.unit(higher, &n.unit_key)?.is_some() {
                     masked = true;
                     break;
                 }
@@ -2794,7 +2853,7 @@ fn is_swift_unit(unit: &str) -> bool {
 
 /// The Swift types at dotted `path` (exact qualified names in Swift units, never by simple name).
 fn swift_type_nodes(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     path: &str,
@@ -2902,7 +2961,7 @@ fn labels_accept(declared: &str, call: &str) -> bool {
 /// type of the caller's unit by its exact qualified name, else the single owner-kind node of
 /// that simple name; with whether its name is unique (symbolic ownership allowed).
 fn receiver_owner(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     unit: &str,
@@ -2952,7 +3011,7 @@ fn receiver_owner(
 /// the call's, and, for a Swift caller with several candidates, the one its module sees.
 #[allow(clippy::too_many_arguments)]
 fn call_candidates(
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
     unit: &str,
@@ -3055,7 +3114,7 @@ fn call_candidates(
 /// declares no Swift module.
 fn swift_scopes<'c>(
     cache: &'c mut Option<SwiftScopes>,
-    s: &dyn ReadSnapshot,
+    s: &dyn IndexRead,
     generation: &Id,
     lower: &[Id],
 ) -> Result<Option<&'c SwiftScopes>, StorageError> {
@@ -3069,13 +3128,13 @@ fn swift_scopes<'c>(
 
 /// Reads the SwiftPM and Xcode targets (from `Package.swift` and `project.pbxproj` units) and
 /// every Swift file's module imports, as the layers compose them.
-fn load_swift_scopes(s: &dyn ReadSnapshot, layers: &[Id]) -> Result<SwiftScopes, StorageError> {
+fn load_swift_scopes(s: &dyn IndexRead, layers: &[Id]) -> Result<SwiftScopes, StorageError> {
     // The visible units: the highest layer that mentions a key decides it.
     let mut visible: BTreeMap<String, Option<Id>> = BTreeMap::new();
     for g in layers {
         let mut after: Option<String> = None;
         loop {
-            let page = s.indexing().units(g, after.as_deref(), 500)?;
+            let page = s.units(g, after.as_deref(), 500)?;
             for u in &page {
                 visible
                     .entry(u.unit_key.clone())
@@ -3095,7 +3154,7 @@ fn load_swift_scopes(s: &dyn ReadSnapshot, layers: &[Id]) -> Result<SwiftScopes,
         if name != "Package.swift" && name != "project.pbxproj" {
             continue;
         }
-        for n in s.indexing().nodes(g, key)? {
+        for n in s.nodes(g, key)? {
             let p = &n.payload["properties"];
             let ecosystem = p["ecosystem"].as_str();
             if n.kind != "Module" || !matches!(ecosystem, Some("swiftpm" | "xcode")) {
@@ -3122,7 +3181,7 @@ fn load_swift_scopes(s: &dyn ReadSnapshot, layers: &[Id]) -> Result<SwiftScopes,
         if !is_swift_unit(key) {
             continue;
         }
-        for e in s.indexing().edges(g, key)? {
+        for e in s.edges(g, key)? {
             let p = &e.payload["properties"];
             let module = e.payload["targetName"].as_str().unwrap_or_default();
             // Module imports only: not a type reference, not the previous walk's written path.
@@ -3312,6 +3371,20 @@ mod tests {
         );
         let py = import_candidates("pkg/mod.py", "pkg.helpers");
         assert!(py.contains(&"pkg/helpers.py".to_owned()));
+        assert_eq!(
+            import_candidates("pkg/consumer.py", "foo"),
+            vec!["foo.py", "foo/__init__.py"]
+        );
+        assert_eq!(
+            import_candidates("pkg/consumer.py", ".foo"),
+            vec!["pkg/foo.py", "pkg/foo/__init__.py"]
+        );
+        assert_eq!(
+            import_candidates("pkg/sub/consumer.py", "..foo"),
+            vec!["pkg/foo.py", "pkg/foo/__init__.py"]
+        );
+        assert!(import_candidates("pkg/consumer.py", "..foo").is_empty());
+        assert!(import_candidates("consumer.py", ".foo").is_empty());
         // A dotted include is a header, never a module path.
         for (from, include, want) in [
             ("src/main.c", "foo.h", "src/foo.h"),
