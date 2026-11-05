@@ -1806,8 +1806,8 @@ impl Live {
     /// Sends input to the page only while the reference it acts on is still current. Every
     /// awaited call before it (a focus query, a hit test, a node description) absorbs the
     /// events that arrived meanwhile, so a navigation during it has advanced the document
-    /// revision: the reference is checked again here, after the last of them and before the
-    /// first event, and input never reaches a replacement document. `changed` says whether the
+    /// revision: the reference is checked again here, after the last of them and before
+    /// each event, and input never reaches a replacement document. `changed` says whether the
     /// action already ran page handlers (a scroll or a focus): a stale reference is then an
     /// unknown outcome rather than "nothing was sent". Every input path sends through here.
     fn send_input(
@@ -1818,12 +1818,18 @@ impl Live {
         events: &[(&str, Value)],
         bounds: &Bounds,
     ) -> Result<(), ActionError> {
-        let checked = match current {
-            Current::Target(t) => self.resolve(t).map(|_| ()),
-            Current::Node(n) => self.resolve_node(n).map(|_| ()),
-        };
-        checked.map_err(|e| if changed { post_dispatch(e) } else { e })?;
-        for (method, params) in events {
+        for (index, (method, params)) in events.iter().enumerate() {
+            let checked = match current {
+                Current::Target(t) => self.resolve(t).map(|_| ()),
+                Current::Node(n) => self.resolve_node(n).map(|_| ()),
+            };
+            checked.map_err(|e| {
+                if changed || index > 0 {
+                    post_dispatch(e)
+                } else {
+                    e
+                }
+            })?;
             self.call(Some(session), method, params.clone(), bounds.call)
                 .map_err(ActionError::After)?;
         }

@@ -3583,6 +3583,39 @@ fn input_is_never_sent_into_a_document_that_replaced_its_target_during_a_query()
 }
 
 #[test]
+fn navigation_during_pointer_move_stops_the_click_before_press_and_release() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let b = fx.platform.browser(&session);
+    let before = b.lock().unwrap().log.len();
+    b.lock().unwrap().navigate_on = Some((
+        "Input.dispatchMouseEvent".into(),
+        "https://app.test/form".into(),
+    ));
+    let click = json!({"kind": "Click", "node": node(&snap, &ax, "Submit"), "button": "Primary"});
+    assert!(matches!(
+        fx.input(&user, &session, click),
+        OperationCompletion::OutcomeUnknown { .. }
+    ));
+    let browser = b.lock().unwrap();
+    assert!(browser.navigate_on.is_none(), "the pointer move navigated");
+    let events: Vec<_> = browser.log[before..]
+        .iter()
+        .filter(|m| m["method"] == "Input.dispatchMouseEvent")
+        .map(|m| m["params"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        events,
+        ["mouseMoved"],
+        "no click in the replacement document"
+    );
+}
+
+#[test]
 fn a_click_is_never_sent_to_whatever_covers_its_node() {
     let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
     let fx = Fx::new();
