@@ -106,7 +106,7 @@ pub const STAGED_TTL_MS: i64 = 30 * 60 * 1000;
 const CREDENTIAL_READ_ATTEMPTS: usize = 3;
 /// Connected connections rediscover their models this often (reference
 /// `ModelListRefreshInterval`).
-pub const DISCOVERY_INTERVAL_MS: i64 = 6 * 60 * 60 * 1000;
+pub const DISCOVERY_INTERVAL_MS: i64 = 60 * 60 * 1000;
 /// An unavailable connection is tested again this often.
 pub const UNAVAILABLE_RECHECK_MS: i64 = 60 * 1000;
 /// How often the host reconciles orphaned secret handles.
@@ -446,6 +446,7 @@ enum Exchange {
 /// one read its request was built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CheckBasis {
+    connection_revision: i64,
     credential_revision: i64,
     profile: String,
     endpoint: String,
@@ -453,20 +454,23 @@ struct CheckBasis {
 impl CheckBasis {
     fn of(c: &StoredConnection) -> Self {
         Self {
+            connection_revision: c.revision,
             credential_revision: c.credential_revision,
             profile: c.profile.clone(),
             endpoint: c.endpoint.clone(),
         }
     }
-    fn from_access(a: &Access) -> Self {
+    fn from_access(a: &Access, connection_revision: i64) -> Self {
         Self {
+            connection_revision,
             credential_revision: a.credential_revision,
             profile: a.profile.clone(),
             endpoint: a.endpoint.clone(),
         }
     }
     fn matches(&self, c: &StoredConnection) -> bool {
-        self.credential_revision == c.credential_revision
+        self.connection_revision == c.revision
+            && self.credential_revision == c.credential_revision
             && self.profile == c.profile
             && self.endpoint == c.endpoint
     }
@@ -1045,7 +1049,7 @@ impl ConnectionService {
                 .map_err(|e| AccessError::Unavailable(format!("{e:?}")))?
                 .ok_or(AccessError::NotFound)?;
             self.usable(&now, testing)?;
-            if CheckBasis::from_access(&a).matches(&now) {
+            if CheckBasis::from_access(&a, now.revision).matches(&now) {
                 return Ok(a);
             }
         }
@@ -1476,6 +1480,21 @@ impl ConnectionService {
             }
         };
         let run = |a: &Access| {
+            // Refresh may have rotated the credential. Read its current connection revision
+            // after access; a newer check or any configuration change invalidates this result.
+            let current = self
+                .read(|s| s.router().connection(&a.connection_id))
+                .ok()
+                .flatten();
+            let basis = CheckBasis::from_access(a, current.as_ref().map_or(-1, |c| c.revision));
+            if current.as_ref().is_none_or(|c| !basis.matches(c)) {
+                return Checked {
+                    basis,
+                    outcome: Err(ListFailure::Unreachable(
+                        "the connection changed before discovery".into(),
+                    )),
+                };
+            }
             let auth = match (&a.credential, a.profile.as_str()) {
                 (AccessCredential::None, _) => discovery::Auth::None,
                 (AccessCredential::ApiKey(k), "AnthropicMessages") => {
@@ -1490,7 +1509,7 @@ impl ConnectionService {
                 }
             };
             Checked {
-                basis: CheckBasis::from_access(a),
+                basis,
                 outcome: discovery::list(
                     &*self.http,
                     &self.endpoints,
@@ -2904,6 +2923,15 @@ fn apply_check(
     Ok(true)
 }
 
+/// Stable identity for one exact upstream model served by one connection. Snapshot suffixes
+/// are identity, never stripped. The digest input is structured to avoid delimiter collisions.
+pub fn discovered_model_id(profile: &str, connection: &Id, upstream: &str) -> Id {
+    let identity =
+        serde_json::to_vec(&(profile, connection.as_str(), upstream)).expect("strings serialize");
+    let digest = crate::fingerprint::sha256_hex(&identity);
+    Id::new(format!("drmodel_{}", &digest[..40])).expect("bounded digest identifier")
+}
+
 /// Applies provider-reported facts to the catalog models a connection serves: an unknown
 /// context window from the model list; for OpenRouter, the reported tools and image support
 /// and, when none is declared, the supported efforts (reference `UpdateOpenRouterModelsAsync`).
@@ -2913,7 +2941,55 @@ fn apply_discovery(
     d: &Discovery,
 ) -> Result<(), StorageError> {
     let listed: BTreeSet<String> = d.models.iter().map(|m| m.id.clone()).collect();
-    let models = all_models(tx.router())?;
+    let mut models = all_models(tx.router())?;
+    // Discovery adds exact models to the same catalog. A configured global or bound row,
+    // including a user-disabled row, already owns that identity and must never be bypassed.
+    if !matches!(c.profile.as_str(), "SystemOne" | "Embedding") {
+        let mut position = models.iter().map(|m| m.position).max().unwrap_or(0);
+        let permitted = status_filter(c);
+        for found in d.models.iter().filter(|m| {
+            permitted.permits(&m.id)
+                && (matches!(
+                    c.profile.as_str(),
+                    "CodexSubscriptionResponses"
+                        | "ClaudeSubscriptionMessages"
+                        | "AnthropicMessages"
+                ) || crate::services::router::latest::parse(&m.id).is_some()
+                    || d.conversational.contains(&m.id))
+        }) {
+            if found.id == select::OPEN_ROUTER_AUTO_UPSTREAM
+                || models.iter().any(|m| {
+                    m.endpoint_profile == c.profile
+                        && m.upstream_model_id == found.id
+                        && m.connection_id.as_ref().is_none_or(|id| id == &c.id)
+                })
+            {
+                continue;
+            }
+            let reported = d
+                .reported
+                .iter()
+                .find(|(id, _)| id == &found.id)
+                .map(|(_, r)| r);
+            position = position.saturating_add(1);
+            let model = StoredRouteModel {
+                id: discovered_model_id(&c.profile, &c.id, &found.id),
+                display_name: found.id.clone(),
+                endpoint_profile: c.profile.clone(),
+                upstream_model_id: found.id.clone(),
+                enabled: true,
+                efforts: reported.map(|r| r.efforts.clone()).unwrap_or_default(),
+                image_input: reported.and_then(|r| r.vision).unwrap_or(false),
+                tools: reported.and_then(|r| r.tools).unwrap_or(false),
+                context_tokens: found.context_tokens,
+                connection_id: Some(c.id.clone()),
+                position,
+                revision: 1,
+                updated_at_ms: tx.now_ms(),
+            };
+            models.push(tx.router().put_route_model(&model, None)?);
+        }
+    }
     for m in models.iter().filter(|m| {
         m.endpoint_profile == c.profile && m.connection_id.as_ref().is_none_or(|b| b == &c.id)
     }) {
@@ -2922,13 +2998,7 @@ fn apply_discovery(
         {
             continue;
         }
-        let found = d.models.iter().find(|x| {
-            select::lists(
-                &c.profile,
-                &BTreeSet::from([x.id.clone()]),
-                &m.upstream_model_id,
-            )
-        });
+        let found = d.models.iter().find(|x| x.id == m.upstream_model_id);
         let mut next = m.clone();
         if next.context_tokens.is_none() {
             next.context_tokens = found.and_then(|x| x.context_tokens);

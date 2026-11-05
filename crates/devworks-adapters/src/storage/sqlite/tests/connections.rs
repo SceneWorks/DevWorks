@@ -2596,3 +2596,418 @@ fn risk_withdrawn_while_a_refresh_waits_for_another_sends_no_second_refresh() {
         "the waiting request does not refresh a disabled connection's token"
     );
 }
+
+#[test]
+fn inventory_refresh_is_hourly_reversible_per_connection_and_keeps_user_choices() {
+    assert_eq!(DISCOVERY_INTERVAL_MS, 3_600_000);
+    let mut cx = Cx::new();
+    for (connection, endpoint) in [("one", "http://one.test/v1"), ("two", "http://two.test/v1")] {
+        cx.add(connection, "CompatibleChat", endpoint, None);
+        for (suffix, enabled) in [("on", true), ("off", false)] {
+            let model = json!({"id": format!("{connection}-{suffix}"), "displayName": suffix,
+                "endpointProfile": "CompatibleChat", "upstreamModelId": "custom-model-v1",
+                "connectionId": connection, "enabled": enabled, "tierMemberships": [],
+                "efforts": ["Low"], "imageInput": true, "tools": true, "revision": "1"});
+            summary(cx.configure(json!({"kind": "Model", "model": model})));
+        }
+        cx.http.on(
+            Method::Get,
+            &format!("{endpoint}/models"),
+            200,
+            json!({"data": [{"id": "custom-model-v1"}]}),
+        );
+        summary(
+            cx.configure(
+                json!({"kind": "SignIn", "connectionId": connection, "action": "Inspect"}),
+            ),
+        );
+    }
+    let configured = cx.read(|r| r.router().route_model(&id("one-on"))).unwrap();
+    assert!(cx.availability("one-on").available);
+    assert!(!cx.availability("one-off").available);
+    cx.http.reset(
+        Method::Get,
+        "http://one.test/v1/models",
+        200,
+        json!({"data": []}),
+    );
+    cx.advance(DISCOVERY_INTERVAL_MS - 1);
+    cx.svc.tick();
+    assert_eq!(cx.http.requests("http://one.test").len(), 1);
+    cx.advance(1);
+    cx.svc.tick();
+    assert!(!cx.availability("one-on").available);
+    assert!(cx.availability("two-on").available);
+    assert_eq!(
+        cx.read(|r| r.router().route_model(&id("one-on"))).unwrap(),
+        configured
+    );
+    assert!(cx.row("one").enabled);
+    assert!(
+        !cx.read(|r| r.router().route_model(&id("one-off")))
+            .unwrap()
+            .enabled
+    );
+
+    // Restart does not reset the deadline. An overdue reopen refreshes on its first host tick.
+    cx.advance(DISCOVERY_INTERVAL_MS);
+    cx = cx.restart();
+    cx.http.reset(
+        Method::Get,
+        "http://one.test/v1/models",
+        200,
+        json!({"data": [{"id": "custom-model-v1"}]}),
+    );
+    cx.svc.tick();
+    assert!(cx.availability("one-on").available);
+    assert!(!cx.availability("one-off").available);
+    assert_eq!(
+        cx.read(|r| r.router().route_model(&id("one-on"))).unwrap(),
+        configured
+    );
+    assert!(
+        cx.http
+            .requests("http://one.test")
+            .iter()
+            .all(|r| r.method == Method::Get && r.url.ends_with("/models"))
+    );
+}
+
+#[test]
+fn failed_malformed_or_partial_refresh_keeps_the_last_complete_inventory() {
+    let cx = Cx::new();
+    let key = cx.stage("inventory-key");
+    cx.add("inventory", "AnthropicMessages", ANTHROPIC, Some(&key));
+    cx.http.on(
+        Method::Get,
+        ANTHROPIC,
+        200,
+        json!({"data": [{"id": "claude-opus-5-5", "max_input_tokens": 8000}], "has_more": false}),
+    );
+    summary(
+        cx.configure(json!({"kind": "SignIn", "connectionId": "inventory", "action": "Inspect"})),
+    );
+    let before = cx.row("inventory");
+    for (status, body) in [
+        (503, json!({})),
+        (
+            200,
+            json!({"data": [{"id": "claude-haiku-5-5"}, {}], "has_more": false}),
+        ),
+        (200, json!({"data": [{"id": "claude-haiku-5-5"}]})),
+        (
+            200,
+            json!({"data": [{"id": "claude-haiku-5-5"}], "has_more": true, "last_id": "wrong"}),
+        ),
+    ] {
+        cx.advance(1);
+        cx.http.reset(Method::Get, ANTHROPIC, status, body);
+        let _ = cx
+            .configure(json!({"kind": "SignIn", "connectionId": "inventory", "action": "Inspect"}));
+        let after = cx.row("inventory");
+        assert_eq!(after.discovered, before.discovered);
+        assert_eq!(after.discovered_at_ms, before.discovered_at_ms);
+        assert_eq!(after.healthy, Some(false));
+    }
+    // A later page failing is also a failed whole inventory, even after valid first-page rows.
+    cx.http.reset(
+        Method::Get,
+        ANTHROPIC,
+        200,
+        json!({"data": [{"id": "new-model"}], "has_more": true, "last_id": "new-model"}),
+    );
+    cx.http.on(Method::Get, ANTHROPIC, 503, json!({}));
+    let _ =
+        cx.configure(json!({"kind": "SignIn", "connectionId": "inventory", "action": "Inspect"}));
+    assert_eq!(cx.row("inventory").discovered, before.discovered);
+    assert_eq!(
+        cx.row("inventory").discovered_at_ms,
+        before.discovered_at_ms
+    );
+}
+
+#[test]
+fn systemone_inventory_refresh_keeps_decision_configuration_out_of_conversational_catalog() {
+    let cx = Cx::new();
+    cx.add("system", "SystemOne", "http://system.test/v1", None);
+    cx.http.on(
+        Method::Get,
+        "http://system.test/v1/models",
+        200,
+        json!({"data": [{"id": "jev-2"}]}),
+    );
+    let before = cx.read(|r| r.router().route_models(None, 500)).len();
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "system", "action": "Inspect"})));
+    assert_eq!(cx.row("system").discovered.unwrap()[0].id, "jev-2");
+    assert_eq!(
+        cx.read(|r| r.router().route_models(None, 500)).len(),
+        before
+    );
+    assert!(
+        cx.read(|r| r.router().decision_models(None, 500))
+            .is_empty()
+    );
+    cx.advance(DISCOVERY_INTERVAL_MS);
+    cx.http.reset(
+        Method::Get,
+        "http://system.test/v1/models",
+        200,
+        json!({"data": []}),
+    );
+    cx.svc.tick();
+    assert!(cx.row("system").discovered.unwrap().is_empty());
+}
+
+#[test]
+fn discovered_versions_materialize_exact_connection_rows_without_bypassing_disabled_models() {
+    use devworks_core::services::router::connections::discovered_model_id;
+    let cx = Cx::new();
+    for (connection, endpoint) in [("one", "http://one.test/v1"), ("two", "http://two.test/v1")] {
+        cx.add(connection, "CompatibleChat", endpoint, None);
+    }
+    // An explicit disabled global model must not acquire a fresh enabled identity on discovery.
+    let disabled = json!({"id": "disabled-exact", "displayName": "Disabled exact version",
+        "endpointProfile": "CompatibleChat", "upstreamModelId": "gpt-5.1-sol",
+        "enabled": false, "tierMemberships": [], "efforts": ["High"],
+        "imageInput": true, "tools": true, "revision": "1"});
+    summary(cx.configure(json!({"kind": "Model", "model": disabled})));
+    for (connection, endpoint) in [("one", "http://one.test/v1"), ("two", "http://two.test/v1")] {
+        cx.http.on(
+            Method::Get,
+            &format!("{endpoint}/models"),
+            200,
+            json!({"data": [
+                {"id": "gpt-5.1-sol"}, {"id": "gpt-5.2-sol"}, {"id": "gpt-5.2-sol-20261105"}
+            ]}),
+        );
+        summary(
+            cx.configure(
+                json!({"kind": "SignIn", "connectionId": connection, "action": "Inspect"}),
+            ),
+        );
+        assert!(
+            cx.read(|r| r.router().route_model(&discovered_model_id(
+                "CompatibleChat",
+                &id(connection),
+                "gpt-5.1-sol"
+            )))
+            .is_none()
+        );
+        let model_id = discovered_model_id("CompatibleChat", &id(connection), "gpt-5.2-sol");
+        let model = cx.read(|r| r.router().route_model(&model_id)).unwrap();
+        assert_eq!(model.connection_id, Some(id(connection)));
+        assert!(model.enabled);
+        assert!(!model.tools && !model.image_input && model.efforts.is_empty());
+        assert_eq!(model.context_tokens, None);
+        assert_ne!(
+            model.id,
+            discovered_model_id("CompatibleChat", &id(connection), "gpt-5.2-sol-20261105")
+        );
+    }
+    assert!(
+        !cx.read(|r| r.router().route_model(&id("disabled-exact")))
+            .unwrap()
+            .enabled
+    );
+    assert_ne!(
+        discovered_model_id("CompatibleChat", &id("one"), "gpt-5.2-sol"),
+        discovered_model_id("CompatibleChat", &id("two"), "gpt-5.2-sol")
+    );
+    // User edits on a discovered row survive missing and returning inventory entries.
+    let model_id = discovered_model_id("CompatibleChat", &id("one"), "gpt-5.2-sol");
+    let chosen = model_id.clone();
+    let disabled = cx.write(move |tx| {
+        let mut model = tx.router().route_model(&chosen)?.unwrap();
+        model.enabled = false;
+        model.display_name = "My version".into();
+        tx.router().put_route_model(&model, Some(model.revision))
+    });
+    for data in [json!([]), json!([{"id": "gpt-5.2-sol"}])] {
+        cx.http.reset(
+            Method::Get,
+            "http://one.test/v1/models",
+            200,
+            json!({"data": data}),
+        );
+        summary(
+            cx.configure(json!({"kind": "SignIn", "connectionId": "one", "action": "Inspect"})),
+        );
+    }
+    assert_eq!(
+        cx.read(|r| r.router().route_model(&model_id)).unwrap(),
+        disabled
+    );
+}
+
+#[test]
+fn newly_discovered_rows_use_only_their_exact_provider_capability_facts() {
+    use devworks_core::services::router::connections::discovered_model_id;
+    let cx = Cx::new();
+    let key = cx.stage("fixture-openrouter-key");
+    cx.add("or", "OpenRouterChat", OPENROUTER, Some(&key));
+    cx.http.on(Method::Get, OPENROUTER, 200, json!({"data": [
+        {"id": "openai/gpt-5.1-sol", "context_length": 128000, "supported_parameters": ["tools"], "architecture": {"input_modalities": ["text", "image"]}, "reasoning": {"supported_efforts": ["low", "high"]}},
+        {"id": "openai/gpt-5.2-sol"}
+    ]}));
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "or", "action": "Inspect"})));
+    let known = cx
+        .read(|r| {
+            r.router().route_model(&discovered_model_id(
+                "OpenRouterChat",
+                &id("or"),
+                "openai/gpt-5.1-sol",
+            ))
+        })
+        .unwrap();
+    assert!(known.tools && known.image_input);
+    assert_eq!(known.efforts, ["Low", "High"]);
+    assert_eq!(known.context_tokens, Some(128000));
+    let unknown = cx
+        .read(|r| {
+            r.router().route_model(&discovered_model_id(
+                "OpenRouterChat",
+                &id("or"),
+                "openai/gpt-5.2-sol",
+            ))
+        })
+        .unwrap();
+    assert!(!unknown.tools && !unknown.image_input);
+    assert!(unknown.efforts.is_empty());
+    assert_eq!(unknown.context_tokens, None);
+}
+
+#[test]
+fn an_older_inflight_inventory_cannot_overwrite_a_newer_successful_refresh() {
+    let cx = Arc::new(Cx::new());
+    cx.add("race", "CompatibleChat", "http://race.test/v1", None);
+    cx.http.on(
+        Method::Get,
+        "http://race.test/v1/models",
+        200,
+        json!({"data": [{"id": "old-version"}]}),
+    );
+    let inner = cx.clone();
+    cx.http.during("http://race.test", move || {
+        inner.http.reset(
+            Method::Get,
+            "http://race.test/v1/models",
+            200,
+            json!({"data": [{"id": "new-version"}]}),
+        );
+        summary(
+            inner.configure(json!({"kind": "SignIn", "connectionId": "race", "action": "Inspect"})),
+        );
+        inner.http.reset(
+            Method::Get,
+            "http://race.test/v1/models",
+            200,
+            json!({"data": [{"id": "old-version"}]}),
+        );
+    });
+    let _ = cx.configure(json!({"kind": "SignIn", "connectionId": "race", "action": "Inspect"}));
+    assert_eq!(
+        cx.row("race")
+            .discovered
+            .unwrap()
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["new-version"]
+    );
+    use devworks_core::services::router::connections::discovered_model_id;
+    assert!(
+        cx.read(|r| r.router().route_model(&discovered_model_id(
+            "CompatibleChat",
+            &id("race"),
+            "old-version"
+        )))
+        .is_none()
+    );
+}
+
+#[test]
+fn a_connection_configuration_change_during_discovery_discards_its_result() {
+    let cx = Arc::new(Cx::new());
+    cx.add("race", "CompatibleChat", "http://race.test/v1", None);
+    cx.http.on(
+        Method::Get,
+        "http://race.test/v1/models",
+        200,
+        json!({"data": [{"id": "kept-version"}]}),
+    );
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "race", "action": "Inspect"})));
+    let before = cx.row("race");
+    cx.http.reset(
+        Method::Get,
+        "http://race.test/v1/models",
+        200,
+        json!({"data": [{"id": "stale-version"}]}),
+    );
+    let inner = cx.clone();
+    cx.http.during("http://race.test", move || {
+        summary(edit_connection(
+            &inner,
+            "race",
+            "CompatibleChat",
+            "http://race.test/v1",
+            json!({"enabled": false}),
+        ));
+    });
+    let _ = cx.configure(json!({"kind": "SignIn", "connectionId": "race", "action": "Inspect"}));
+    let after = cx.row("race");
+    assert!(!after.enabled);
+    assert_eq!(after.discovered, before.discovered);
+    assert_eq!(after.discovered_at_ms, before.discovered_at_ms);
+}
+
+#[test]
+fn mixed_inventories_keep_all_types_without_advertising_unknown_or_nontext_models_as_chat() {
+    use devworks_core::services::router::connections::discovered_model_id;
+    let cx = Cx::new();
+    let key = cx.stage("mixed-key");
+    cx.add("mixed", "OpenRouterChat", OPENROUTER, Some(&key));
+    let rows = json!([
+        {"id": "openai/gpt-5.2-sol"},
+        {"id": "vendor/custom-chat", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}},
+        {"id": "vendor/embedding", "architecture": {"input_modalities": ["text"], "output_modalities": ["embedding"]}},
+        {"id": "vendor/image", "architecture": {"output_modalities": ["image"]}},
+        {"id": "vendor/unknown"}
+    ]);
+    cx.http
+        .on(Method::Get, OPENROUTER, 200, json!({"data": rows}));
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "mixed", "action": "Inspect"})));
+    assert_eq!(cx.row("mixed").discovered.unwrap().len(), 5);
+    for (upstream, expected) in [
+        ("openai/gpt-5.2-sol", true),
+        ("vendor/custom-chat", true),
+        ("vendor/embedding", false),
+        ("vendor/image", false),
+        ("vendor/unknown", false),
+    ] {
+        assert_eq!(
+            cx.read(|r| r.router().route_model(&discovered_model_id(
+                "OpenRouterChat",
+                &id("mixed"),
+                upstream
+            )))
+            .is_some(),
+            expected,
+            "{upstream}"
+        );
+    }
+    // Explicit configuration is the user's declaration that an unknown custom model is chat.
+    let model = json!({"id": "my-custom-chat", "displayName": "My custom chat",
+        "endpointProfile": "OpenRouterChat", "upstreamModelId": "vendor/unknown",
+        "connectionId": "mixed", "enabled": true, "tierMemberships": [],
+        "efforts": [], "imageInput": false, "tools": false, "revision": "1"});
+    summary(cx.configure(json!({"kind": "Model", "model": model})));
+    assert!(cx.availability("my-custom-chat").available);
+    cx.http
+        .reset(Method::Get, OPENROUTER, 200, json!({"data": []}));
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "mixed", "action": "Inspect"})));
+    assert!(!cx.availability("my-custom-chat").available);
+    cx.http
+        .reset(Method::Get, OPENROUTER, 200, json!({"data": rows}));
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "mixed", "action": "Inspect"})));
+    assert!(cx.availability("my-custom-chat").available);
+}
