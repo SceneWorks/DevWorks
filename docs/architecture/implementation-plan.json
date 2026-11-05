@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "03c60c0a0b0d4e938c896d6a7bb1887e7356c2b663d9130de42e1cbba68f33fb",
-    "devworks-capability-catalog.json": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
-    "devworks-requirements-traceability.json": "6ad3e8c13edf72067769749a89c0dc58ce03173a6c19aa4c9884cf5175c49628",
+    "implementation-slices.json": "9ccae062d174a5c9eda1321a466f19c047782931d854590b71525c874be5f04c",
+    "devworks-capability-catalog.json": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+    "devworks-requirements-traceability.json": "a41b3dcc24326dcc9e94eeabf49388f938309463bc383ce944e196b961bcfc00",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "62275741cba370ae4ad7e2f06b1ea44a37827899b1c5dc8588eb866b5e0d0347",
+    "contracts/family-coverage.json": "91fa39623f64e1ef2ad764ae69ecf19fa5bd9cca2a2c8d24b2c7eb635e402365",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "9b5a65398764acfe4a0020a6fd11dccb2321766989fd91450066d094e176334b"
   },
   "counts": {
     "slices": 76,
-    "operationFamilies": 48,
-    "operations": 354,
+    "operationFamilies": 49,
+    "operations": 356,
     "requirements": 374,
     "requirementsByStatus": {
       "Confirmed": 227,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 354,
+    "inputSchemaCandidates": 356,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -4862,7 +4862,10 @@
       "id": "DW-071",
       "type": "Feature",
       "title": "Grade recorded work end to end",
-      "operations": [],
+      "operations": [
+        "evals.grade",
+        "evals.results"
+      ],
       "dependsOnKeys": [],
       "acceptance": "Walking skeleton: add the evals architecture section, routing rule, evals.* operation contracts and implementation slices, and grade recorded DevWorks sessions with deterministic checks into persisted, revision-attributed results. Closes the traceability gap left when EVAL requirements were added. AC1: Running a suite with a deterministic check over recorded sessions persists results attributed to the revision in effect at each step, puts steps that cannot be attributed in an explicit mixed-revision group, and changes no work, repository or Knowledge record. AC2: Every instance, run and suite result has exactly one explicit outcome (passed, failed, unclear, not applicable, evidence unavailable, grader error, cancelled, budget exhausted) with eligible, graded and ungraded coverage counts; only passed and failed enter rates. AC3: The architecture reader, requirements traceability and implementation plan regenerate with every EVAL requirement and every evals.* operation owned, and no unowned requirement or operation.",
       "gates": [
@@ -4872,9 +4875,12 @@
       "codegraphItem": "DW-71",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "ready",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [],
-      "ownedOperations": [],
+      "ownedOperations": [
+        "evals.grade",
+        "evals.results"
+      ],
       "primaryRequirements": [
         "EVAL-02",
         "EVAL-14"
@@ -4904,7 +4910,7 @@
       "codegraphItem": "DW-72",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-014",
         "DW-071"
@@ -4941,7 +4947,7 @@
       "codegraphItem": "DW-73",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-017",
         "DW-019",
@@ -4979,7 +4985,7 @@
       "codegraphItem": "DW-74",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-015",
         "DW-020",
@@ -5016,7 +5022,7 @@
       "codegraphItem": "DW-75",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-071",
         "DW-072"
@@ -5059,7 +5065,7 @@
       "codegraphItem": "DW-76",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-014",
         "DW-017",
@@ -5100,7 +5106,7 @@
       "codegraphItem": "DW-77",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-021",
         "DW-051",
@@ -5140,7 +5146,7 @@
       "codegraphItem": "DW-78",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-014",
         "DW-030",
@@ -5183,7 +5189,7 @@
       "codegraphItem": "DW-79",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-014",
         "DW-020",
@@ -5223,7 +5229,7 @@
       "codegraphItem": "DW-80",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-045",
         "DW-072"
@@ -5258,7 +5264,7 @@
       "codegraphItem": "DW-81",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-064",
         "DW-071"
@@ -5302,7 +5308,7 @@
       "codegraphItem": "DW-82",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
       "dependsOn": [
         "DW-071",
         "DW-072",
@@ -11181,7 +11187,7 @@
       "requirementStatus": "Confirmed",
       "statement": "The harness must support eval suites that measure the behavior produced by harness skills, role instructions, harness-specific overrides, conventions and lesson rules delivered to sessions, harness code builds, and model or tier routing assigned to roles. A suite is a versioned asset with its own cases, graders, rubrics, fixtures and accepted exceptions, stored separately from the subject it measures, showing its origin, location and active revision as skills do under SKILL-04. Shared, harness-specific and package-contributed suites are supported; a package may contribute suites only for what it contributes.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11199,7 +11205,7 @@
       "requirementStatus": "Proposed",
       "statement": "Completed and stopped work must be graded automatically from durable history without re-running it: coordinator and worker transcripts and tool calls, Git, PR and review records, and the resulting work state. This covers DevWorks\u2019s own coordinator and worker sessions and the attributed command records of external harnesses connected as MCP clients under MCP-10; DevWorks holds no external harness transcripts and does not import them. Attribute graded behavior at the step level to the revisions in effect when it happened (skills, roles, overrides, conventions, rules, routing and running app version). A session can span several revisions under SKILL-05; a result that cannot be attributed to one revision belongs to an explicit mixed-revision group, never silently to one side. Grading reads only and never changes work, repositories, remotes or Knowledge.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11217,7 +11223,7 @@
       "requirementStatus": "Proposed",
       "statement": "Support deterministic checks over the event record, outcome checks over work state, model-graded rubrics through the internal router, and human verdicts. Every grader names the requirement, skill section or rule it enforces, and a check that measures only a proxy, such as a command pattern rather than intent, says so. A model-graded result records the judge model and settings, rubric revision, sampled instances and their population, and each verdict with its reason; each instance receives several independent votes and split votes are reported. A judge verdict is never presented as a deterministic result. A judge configuration is calibrated against human verdicts on a sample before its results can gate approval under EVAL-05, and its agreement rate is shown with its results; changing the judge model, settings or rubric is a measurement change under EVAL-06. All model-based judging, including production grading, is live inference under TEST-03; tests of the eval machinery use scripted judges and fixtures under TEST-02.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11234,7 +11240,7 @@
       "requirementStatus": "Proposed",
       "statement": "Support repeatable trials that run agent work against frozen inputs, such as snapshots of work records and repository revisions, in an isolated workspace. Trials may write only to disposable copies: throwaway repositories and remotes and stateful substitutes for the tracker, GitHub and other external services, so claiming, implementation, review and delivery can be evaluated end to end. Production destinations, real accounts and real credentials are unreachable from a trial; a case may also refuse all writes. Substitute services expose the real services\u2019 tool schemas. Each case runs a configured number of times, and results report each run\u2019s score, the share of runs that passed and whether every run passed. Trials are live inference under TEST-03 and never run within unit or integration tests. Each snapshot records its source, time, content identity and expected answer.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11251,7 +11257,7 @@
       "requirementStatus": "Confirmed",
       "statement": "Every change to an evaluable subject under EVAL-01 must carry eval evidence. For changes that need approval, run the applicable trials against the baseline and the candidate before the proposal is presented. For changes that take effect without approval, including user-saved edits, dreaming consolidations under DREAM-05 and user routing changes, record the comparison when it can run and always monitor after adoption under EVAL-07; evaluation adds no approval step where none exists. The comparison shows the target metric\u2019s change and every other metric\u2019s change with its method and uncertainty under EVAL-09, the run count and coverage under EVAL-14. Evidence is labeled improved, regressed, inconclusive or unvalidated. It is unvalidated when no applicable suite exists, the suite could not run or either arm falls below the suite\u2019s minimum sample or coverage; inconclusive is reserved for an adequately measured comparison without a meaningful difference. For an agent-authored change, regressed or unvalidated evidence blocks approval unless the user overrides it with a recorded reason; inconclusive evidence is shown without blocking. The user\u2019s own edits carry evidence without a gate. Eval evidence never replaces approval. Evidence is bound to immutable identities of the candidate and baseline, suite and case revisions, fixtures, grader and judge configurations, accepted exceptions and trial settings. Both arms use the same measurement revisions and settings except the declared subject under test; when that subject is a routing or model assignment, all other settings including the judge stay the same. Approval binds to the evaluated candidate; a later change to the candidate or to a measurement input it depends on returns the proposal to unvalidated until re-evaluated.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11269,7 +11275,7 @@
       "requirementStatus": "Confirmed",
       "statement": "A subject under evaluation must not be able to change its own measurement. Agents may draft suites, cases, graders, rubrics and fixtures; activating them requires user approval as a separate proposal with its own history. One proposal must not change both a subject and a suite that measures it. Accepted exceptions are authored by a person and record the check, matched instance, reason and approver.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11287,7 +11293,7 @@
       "requirementStatus": "Confirmed",
       "statement": "After a change is adopted, production grading continues and compares the new revision with the previous one under EVAL-09. When a monitored metric regresses past its declared criterion, notify the user with the evidence and propose a rollback; a rollback never happens without user approval. Use the subject\u2019s own activation mechanism: SKILL-08 revision-aware rollback for skills, roles and overrides; the revision and lifecycle mechanisms of CONV-02, KNOW-03 and DREAM-04 for conventions and lesson rules; the settings revision for role routing; and reinstallation of a prior build for app builds, which also requires SELF-03 approval, a compatibility check of stored data and migrations made since that build, and the SELF-02 restart and rollback mechanics. A build whose data changes cannot be safely reversed is reported as not rollback-capable, with the reason. A rollback preserves later unrelated edits or reports the conflict without overwriting them, and is monitored like any other change.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11304,7 +11310,7 @@
       "requirementStatus": "Proposed",
       "statement": "Failing checks must trace to the rule, skill section or lesson they enforce, with links to the exact transcript, tool call or record under HISTORY-01. Recurring failures should become candidate improvements in the Knowledge and dreaming flow with their eval evidence attached, such as a skill or role edit, hook, test or harness-code task, and feed the lesson recurrence views of KNOW-04 and KNOW-05. Before a failure becomes a proposal, sampled failing instances are checked so a grader defect is not reported as agent behavior, and that check and its outcome are recorded.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11321,7 +11327,7 @@
       "requirementStatus": "Proposed",
       "statement": "Results show counts with denominators, runs, coverage and revision groups, never a bare percentage. Each metric declares its comparison method, uncertainty measure and minimum effect; for example, a binary outcome reports the difference in proportions with a confidence interval, and a judged rubric includes the judge calibration. A difference whose uncertainty includes no change, or that falls short of the declared minimum effect, is inconclusive, and improvement is never claimed from a single run or case. Requirements fix no numeric thresholds; suites start with values labeled provisional, which are replaced by measured values and are never acceptance thresholds. Trial comparisons match cases, fixtures, models, tools, budgets and measurement revisions in both arms except the declared subject under test. Production comparisons use common measurement revisions for both cohorts, regrading retained evidence under one revision where available; otherwise the comparison is non-comparable and never triggers a regression notice or rollback proposal. Production comparisons disclose cohort differences in task mix and size, projects, models, routing and other revisions changed in the same period; a change coinciding with another change to the same behavior is reported as confounded. Where possible, validation uses cases other than those that motivated a proposal, and results say which were which.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11338,7 +11344,7 @@
       "requirementStatus": "Confirmed",
       "statement": "Trials and model-graded judging run through the internal router with attributed usage and costs under ROUTE-17, linked to the suite run and any proposal they validate. Suites run on demand, automatically when a proposal is created and on a schedule, and show the expected run count and cost estimate before a trial run starts. On-demand and proposal-triggered eval runs support a spending limit that pauses the run when reached. Scheduled eval runs follow JOB-09: they report usage and costs without a spending limit.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11355,7 +11361,7 @@
       "requirementStatus": "Confirmed",
       "statement": "Provide a dedicated Evals area showing each suite\u2019s cases and graders, latest results by revision, trends across revisions, failing instances linked to their evidence and accepted exceptions. Each proposal in the approval queue under REVIEW-01 shows its eval comparison and evidence status.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11372,7 +11378,7 @@
       "requirementStatus": "Proposed",
       "statement": "Agents can list suites, read results and evidence, run permitted suites and draft suite changes through the same operations as the UI, under normal tool access, project scope and authority. An agent cannot approve proposals, accept exceptions or activate suite changes without the approval EVAL-06 requires.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11389,7 +11395,7 @@
       "requirementStatus": "Proposed",
       "statement": "Suites are documented under SELF-04: what each measures, what each grader checks and cannot check, how to run it and how to read its results. Suite documentation ships with the suite version.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -11407,7 +11413,7 @@
       "requirementStatus": "Proposed",
       "statement": "Every instance, run and suite result has one explicit outcome: passed, failed, unclear, not applicable, evidence unavailable (for example a truncated external transcript or missing record), grader error, cancelled or budget exhausted. Report coverage with every rate: eligible, graded and ungraded instances, with reasons. Only passed and failed outcomes enter pass and fail rates; incomplete evidence never counts as a pass or silently leaves a denominator. Each suite declares per metric the minimum usable sample and required coverage a result needs to count as evidence under EVAL-05.",
       "sourceSection": "20 Conventions and skills",
-      "architectureSection": "testing-and-evidence",
+      "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
       "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
       "validationGate": "G11",
@@ -17222,6 +17228,34 @@
       "resultValueType": "McpClientAccess",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.grade",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_recorded",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalReport",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.results",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_recorded",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "Page<EvalReport>",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     }

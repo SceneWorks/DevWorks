@@ -19,6 +19,7 @@ pub mod database;
 pub mod desktop;
 pub mod documents;
 pub mod dreaming;
+pub mod evals;
 pub mod features;
 pub mod git;
 pub mod github;
@@ -106,6 +107,7 @@ pub enum OperationInput {
     Maintenance(maintenance::Input),
     RepositoryDocs(repository_docs::Input),
     McpServer(mcp_server::Input),
+    Evals(evals::Input),
 }
 impl OperationInput {
     pub fn operation(&self) -> &'static str {
@@ -158,6 +160,7 @@ impl OperationInput {
             Self::Maintenance(i) => i.operation(),
             Self::RepositoryDocs(i) => i.operation(),
             Self::McpServer(i) => i.operation(),
+            Self::Evals(i) => i.operation(),
         }
     }
     pub fn mode(&self) -> Mode {
@@ -210,6 +213,7 @@ impl OperationInput {
             Self::Maintenance(i) => i.mode(),
             Self::RepositoryDocs(i) => i.mode(),
             Self::McpServer(i) => i.mode(),
+            Self::Evals(i) => i.mode(),
         }
     }
 }

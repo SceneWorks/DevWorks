@@ -28,6 +28,7 @@ def sample(t):
  if t in ['ClaimDraft','KnowledgeClaim']:v['value']='A retained fact'
  if t=='KnowledgeBatch':v['claims']=[sample('ClaimDraft')]
  if t=='EnvironmentEntry':v['value']='fixture'
+ if t=='EvalReport':v['outcome']='not_applicable'
  if t=='DecisionQuestion':v['criteria']=[{'name':'yes'},{'name':'no'}]
  if t=='UsageItem':v['amountUsd']='0'
  if t=='ArtifactReadContent':v.update(content='fixture',nextByte='7',truncated=True)
@@ -78,6 +79,30 @@ def mutate(id,base,path,value,typed=False,schema=False,entry=None):
  else:cur[path[-1]]=value
  case(id,entry or next(c['entry'] for c in CASES if c['id']==base),obj,typed,schema)
 DELETE=object()
+# Eval contracts retain explicit outcome denominators and reject misleading proxy claims.
+mutate('reject-eval-query-mode','input-evals.grade-Command',['mode'],'Query')
+mutate('reject-eval-forged-activation','input-evals.grade-Command',['body','suite','active'],True)
+mutate('reject-eval-empty-suite','input-evals.grade-Command',['body','suite','checks'],[])
+mutate('reject-eval-unknown-outcome','result-evals.grade',['value','outcome'],'success')
+mutate('reject-eval-coverage-disagreement','result-evals.grade',['value','coverage','eligible'],'1',typed=False,schema=True)
+mutate('reject-eval-rate-without-denominator','result-evals.grade',['value','coverage','passRate'],1.0,typed=False,schema=True)
+mutate('eval-text-proxy-predicate','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'},typed=True,schema=True)
+mutate('reject-eval-false-enforced-rule','input-evals.grade-Command',['body','suite','checks',0,'measurement'],'EnforcedRule',typed=False,schema=True)
+mutate('eval-valid-text-proxy','input-evals.grade-Command',['body','suite','checks',0],{'id':'check-a','ruleRef':'RULE-1','measurement':'Proxy','predicate':{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'}},typed=True,schema=True)
+
+for outcome in TYPES['EvalOutcome']['values']:
+ coverage={'eligible':'1','graded':'1' if outcome in ['passed','failed'] else '0',
+   'ungraded':'0' if outcome in ['passed','failed'] else '1','passed':'1' if outcome=='passed' else '0',
+   'failed':'1' if outcome=='failed' else '0','ungradedReasons':[] if outcome in ['passed','failed'] else [{'outcome':outcome,'count':'1'}]}
+ if outcome in ['passed','failed']:coverage['passRate']=1.0 if outcome=='passed' else 0.0
+ report=copy.deepcopy(POS['result-evals.grade'])
+ instance={'checkId':'check-a','revision':{'kind':'Mixed','contextEpoch':'0','sources':[],'reason':'No complete historical manifest'},'outcome':outcome,'coverage':copy.deepcopy(coverage),'detail':'Fixture evidence'}
+ report['value'].update(outcome=outcome,coverage=copy.deepcopy(coverage),runs=[{'sessionId':'session-a','outcome':outcome,'coverage':copy.deepcopy(coverage),'instances':[instance]}])
+ case('eval-explicit-outcome-'+outcome,'operation-result',report)
+mutate('reject-eval-graded-ungraded-reason','eval-explicit-outcome-unclear',['value','coverage','ungradedReasons',0,'outcome'],'passed',typed=False,schema=True)
+mutate('reject-eval-wrong-reason-count','eval-explicit-outcome-unclear',['value','coverage','ungradedReasons',0,'count'],'2',typed=False,schema=True)
+mutate('reject-eval-rate-using-eligible','eval-explicit-outcome-passed',['value','coverage','passRate'],0.5,typed=False,schema=True)
+
 mutate('reject-self-human','input-approvals.record_human_decision-Command',['body','human'],True)
 mutate('reject-policy-grant','input-process.execute-Command',['body','grant'],{'allowAll':True})
 mutate('reject-raw-credential','input-router.configure-Command',['body','apiKey'],'not-a-real-key')

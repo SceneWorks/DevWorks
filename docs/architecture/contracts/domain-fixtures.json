@@ -2107,6 +2107,20 @@
     "schemaValid": true
   },
   {
+    "id": "input-evals.grade-Command",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.results-Query",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"evals.results\",\"sessionId\":\"id-a\",\"page\":{\"limit\":20}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-projects.list",
     "entry": "operation-result",
     "raw": "{\"kind\":\"projects.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
@@ -4179,6 +4193,20 @@
     "schemaValid": true
   },
   {
+    "id": "result-evals.grade",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"0\",\"graded\":\"0\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[]},\"runs\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.results",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.results\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-runs.start",
     "entry": "operation-result",
     "raw": "{\"kind\":\"runs.start\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"1\",\"desiredState\":\"Enabled\"},\"blockers\":{\"items\":[],\"hasMore\":false}}}",
@@ -4582,6 +4610,146 @@
     "entry": "operation-result",
     "raw": "{\"kind\":\"code.repository_dependencies\",\"value\":{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Nodes\",\"nodes\":[]}}}",
     "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-query-mode",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-eval-forged-activation",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}],\"active\":true}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-eval-empty-suite",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-eval-unknown-outcome",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"success\",\"coverage\":{\"eligible\":\"0\",\"graded\":\"0\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[]},\"runs\":[]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-eval-coverage-disagreement",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[]},\"runs\":[]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-rate-without-denominator",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"0\",\"graded\":\"0\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"runs\":[]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-text-proxy-predicate",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"TranscriptContains\",\"entryKind\":\"UserMessage\",\"text\":\"hello\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-false-enforced-rule",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"EnforcedRule\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-valid-text-proxy",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"check-a\",\"ruleRef\":\"RULE-1\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"TranscriptContains\",\"entryKind\":\"UserMessage\",\"text\":\"hello\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-passed",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-failed",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"failed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"1\",\"ungradedReasons\":[],\"passRate\":0.0},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"failed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"1\",\"ungradedReasons\":[],\"passRate\":0.0},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"failed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"0\",\"failed\":\"1\",\"ungradedReasons\":[],\"passRate\":0.0},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-unclear",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-not_applicable",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"not_applicable\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"not_applicable\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"not_applicable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"not_applicable\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-evidence_unavailable",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"evidence_unavailable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"evidence_unavailable\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"evidence_unavailable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"evidence_unavailable\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"evidence_unavailable\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"evidence_unavailable\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-grader_error",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"grader_error\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"grader_error\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"grader_error\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"grader_error\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"grader_error\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"grader_error\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-cancelled",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"cancelled\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"cancelled\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"cancelled\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"cancelled\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"cancelled\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"cancelled\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "eval-explicit-outcome-budget_exhausted",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"budget_exhausted\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"budget_exhausted\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"budget_exhausted\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"budget_exhausted\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"budget_exhausted\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"budget_exhausted\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-graded-ungraded-reason",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"passed\",\"count\":\"1\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-wrong-reason-count",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"2\"}]},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"unclear\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"0\",\"ungraded\":\"1\",\"passed\":\"0\",\"failed\":\"0\",\"ungradedReasons\":[{\"outcome\":\"unclear\",\"count\":\"1\"}]},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-eval-rate-using-eligible",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"evals.grade\",\"value\":{\"id\":\"id-a\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}]},\"createdAtMs\":\"0\",\"sourceWatermark\":\"0\",\"sessionRevision\":\"1\",\"measurementDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":0.5},\"runs\":[{\"sessionId\":\"session-a\",\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"instances\":[{\"checkId\":\"check-a\",\"revision\":{\"kind\":\"Mixed\",\"contextEpoch\":\"0\",\"sources\":[],\"reason\":\"No complete historical manifest\"},\"outcome\":\"passed\",\"coverage\":{\"eligible\":\"1\",\"graded\":\"1\",\"ungraded\":\"0\",\"passed\":\"1\",\"failed\":\"0\",\"ungradedReasons\":[],\"passRate\":1.0},\"detail\":\"Fixture evidence\"}]}]}}",
+    "typedValid": false,
     "schemaValid": true
   },
   {
@@ -8631,42 +8799,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1233",
+    "id": "r3-preview-source-13-1257",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1233",
+    "id": "r3-delete-source-13-1257",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1235",
+    "id": "r3-preview-source-15-1259",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1235",
+    "id": "r3-delete-source-15-1259",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1237",
+    "id": "r3-preview-source-256-1261",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1237",
+    "id": "r3-delete-source-256-1261",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

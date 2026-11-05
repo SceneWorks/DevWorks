@@ -739,6 +739,16 @@
       ],
       "effectAndAuthority": "Incoming server status plus human-only listener/client administration; protected credential flow, no self-grants, exact revision and scoped publication",
       "status": "Architecture candidate; actual protocol/authentication and gateway acceptance required"
+    },
+    {
+      "family": "evals",
+      "owner": "EvaluationService",
+      "operations": [
+        "grade",
+        "results"
+      ],
+      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation",
+      "status": "DW-71 deterministic walking-skeleton contract; remaining EVAL surface has separate tracked acceptance"
     }
   ]
 }

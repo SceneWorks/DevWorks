@@ -729,6 +729,10 @@ pub enum OperationResult {
     McpServerClients { value: Page<McpClientAccess> },
     #[serde(rename = "mcp_server.set_client_access")]
     McpServerSetClientAccess { value: McpClientAccess },
+    #[serde(rename = "evals.grade")]
+    EvalsGrade { value: EvalReport },
+    #[serde(rename = "evals.results")]
+    EvalsResults { value: Page<EvalReport> },
 }
 impl OperationResult {
     pub fn operation(&self) -> &'static str {
@@ -1091,6 +1095,8 @@ impl OperationResult {
             Self::McpServerConfigure { .. } => "mcp_server.configure",
             Self::McpServerClients { .. } => "mcp_server.clients",
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
+            Self::EvalsGrade { .. } => "evals.grade",
+            Self::EvalsResults { .. } => "evals.results",
         }
     }
 }
@@ -1451,6 +1457,8 @@ impl Check for OperationResult {
             Self::McpServerConfigure { value } => value.check()?,
             Self::McpServerClients { value } => value.check()?,
             Self::McpServerSetClientAccess { value } => value.check()?,
+            Self::EvalsGrade { value } => value.check()?,
+            Self::EvalsResults { value } => value.check()?,
         }
         crate::protocol::rules::result(
             self.operation(),

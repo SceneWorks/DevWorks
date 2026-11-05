@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 374 requirements, 354 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 76 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 374 requirements, 356 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 76 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -1139,7 +1139,7 @@ Walking skeleton: add the evals architecture section, routing rule, evals.* oper
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** `evals.grade`, `evals.results`
 
 **Primary requirement cases:** AT-EVAL-02, AT-EVAL-14
 
@@ -1157,7 +1157,7 @@ Suites become versioned assets stored apart from the subjects they measure, with
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-01, AT-EVAL-06, AT-EVAL-13
 
@@ -1175,7 +1175,7 @@ Model-graded rubrics run through the internal router with repeated votes and rec
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-03
 
@@ -1193,7 +1193,7 @@ Trials run agent work repeatedly against frozen snapshots in isolated workspaces
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-04
 
@@ -1211,7 +1211,7 @@ Comparisons between revisions report declared methods, uncertainty and coverage,
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-05, AT-EVAL-09
 
@@ -1229,7 +1229,7 @@ Every self-improvement subject's proposal path carries a before-and-after compar
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** See supporting and integration obligations.
 
@@ -1247,7 +1247,7 @@ Suites run from all three triggers with cost estimates and attributed usage, wit
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-10
 
@@ -1265,7 +1265,7 @@ After a change is adopted, regressions lead to approval-gated rollback proposals
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-07, AT-EVAL-08
 
@@ -1283,7 +1283,7 @@ People inspect suites, results and proposal evidence in a dedicated Evals area a
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** AT-EVAL-11, AT-EVAL-12
 
@@ -1301,7 +1301,7 @@ Installed packages can contribute eval suites for what they contribute, under th
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** See supporting and integration obligations.
 
@@ -1319,7 +1319,7 @@ Commands that external harnesses make through DevWorks as MCP clients are graded
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** See supporting and integration obligations.
 
@@ -1337,7 +1337,7 @@ Terminal integration: run the feature acceptance tests on the integrated branch,
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization
+**Operations:** DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items
 
 **Primary requirement cases:** See supporting and integration obligations.
 

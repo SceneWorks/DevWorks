@@ -28,6 +28,7 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
     }
 }
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    eval_record(name, v)?;
     match name {
         "ClaimDraft" => require(
             present(v, "objectId") || present(v, "value") || present(v, "valueJson"),
@@ -482,6 +483,81 @@ pub fn result(op: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Evaluation arithmetic preserves ungraded outcomes instead of folding them into a pass rate.
+fn eval_record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "EvalCoverage" {
+        let count = |k: &str| {
+            v[k].as_str()
+                .and_then(|s| s.parse::<u128>().ok())
+                .ok_or_else(|| format!("invalid eval count: {k}"))
+        };
+        let eligible = count("eligible")?;
+        let graded = count("graded")?;
+        let ungraded = count("ungraded")?;
+        let passed = count("passed")?;
+        let failed = count("failed")?;
+        require(
+            eligible == graded + ungraded && graded == passed + failed,
+            "eval coverage counts disagree",
+        )?;
+        let reasons = v["ungradedReasons"]
+            .as_array()
+            .ok_or("missing eval ungraded reasons")?;
+        let mut sum = 0_u128;
+        let mut seen = std::collections::HashSet::new();
+        for reason in reasons {
+            let outcome = reason["outcome"]
+                .as_str()
+                .ok_or("missing ungraded outcome")?;
+            require(
+                !matches!(outcome, "passed" | "failed") && seen.insert(outcome),
+                "graded or duplicate outcome in ungraded reasons",
+            )?;
+            let n = reason["count"]
+                .as_str()
+                .and_then(|s| s.parse::<u128>().ok())
+                .ok_or("invalid ungraded reason count")?;
+            require(n > 0, "zero ungraded reason count")?;
+            sum += n;
+        }
+        require(sum == ungraded, "ungraded reason counts disagree")?;
+        let rate = v
+            .get("passRate")
+            .filter(|x| !x.is_null())
+            .and_then(Value::as_f64);
+        require(
+            if graded == 0 {
+                rate.is_none()
+            } else {
+                rate.is_some_and(|x| (x - passed as f64 / graded as f64).abs() <= f64::EPSILON)
+            },
+            "eval pass rate must use only passed and failed",
+        )?;
+    }
+    if name == "EvalDeterministicCheck" {
+        require(
+            v["measurement"] == "Proxy",
+            "built-in deterministic predicates must declare proxy measurement",
+        )?;
+        require(
+            v["predicate"]["kind"] != "TranscriptContains"
+                || v["predicate"]["text"]
+                    .as_str()
+                    .is_some_and(|x| !x.is_empty()),
+            "empty transcript match is not a measurement",
+        )?;
+    }
+    if name == "EvalSuiteSnapshot" {
+        let checks = v["checks"].as_array().ok_or("missing eval checks")?;
+        let mut seen = std::collections::HashSet::new();
+        require(
+            checks.iter().all(|c| seen.insert(c["id"].to_string())),
+            "duplicate eval check identity",
+        )?;
     }
     Ok(())
 }
