@@ -251,3 +251,53 @@ fn feature_labels_and_plan_entry_metadata_share_authoring_and_projection() {
     let _ = applied(sync(entry));
     assert_eq!(metadata(&get3(&fx, &first.id)), metadata(&updated));
 }
+
+#[test]
+fn staged_inline_and_initial_plans_obey_the_same_metadata_revision() {
+    let fx = Fx::new();
+    let p = fx.project("Plan metadata", &[]);
+    let doc = fx.artifact(&p, 1);
+    let make = |suffix: &str| {
+        json!({"callerRef": format!("plan-{suffix}"), "features": [{
+        "callerRef": format!("feature-{suffix}"), "title": "Feature", "description": "", "repositoryIds": [],
+        "labels": ["Feature label"], "plan": draft(&doc, &[("E1", "Scope")], &[]),
+        "tasks": [{"clientKey": format!("task-{suffix}"), "title": "Typed plan task", "description": "", "repositoryIds": [], "dependencyKeys": [], "acceptance": [], "taskType": "Bug", "labels": ["Task label"]}]
+    }], "dependencyEdges": []})
+    };
+    let plan = make("staged");
+    let bytes = serde_json::to_vec(&plan).unwrap();
+    let artifact = fx.artifact_bytes(&p, &bytes, 71);
+    fx.staged
+        .0
+        .lock()
+        .unwrap()
+        .insert(devworks_core::fingerprint::sha256_hex(&bytes), bytes);
+    let stage = json!({"projectId": p.0.as_str(), "creation": {"kind": "StagedPlan", "artifact": artifact}});
+    let _ = refused_metadata(fx.command_at(&fx.agent(), "features.create", stage.clone(), Some(2)));
+    assert!(
+        fx.list("features.list", &p, 50, None, None)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    let _ = applied(fx.command_at(&fx.agent(), "features.create", stage, Some(3)));
+    let _ = applied(fx.command_at(&fx.agent(), "features.create", json!({"projectId": p.0.as_str(), "creation": {"kind": "AtomicPlan", "plan": make("inline")}}), Some(3)));
+    let (tasks, _) = fx.list("tasks.list", &p, 50, None, None).unwrap();
+    assert_eq!(tasks.len(), 2);
+    for task in tasks {
+        assert_eq!(
+            metadata(&get3(&fx, &task.id)),
+            json!({"type": "Bug", "labels": ["Task label"]})
+        );
+    }
+    let project = match applied(fx.command_at(&fx.user(), "projects.create", json!({"name": "Initial metadata", "description": "", "repositoryIds": [], "initialPlan": make("initial")}), Some(3))) {
+        OperationResult::ProjectsCreate { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let (tasks, _) = fx.list("tasks.list", &project.id, 50, None, None).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(
+        metadata(&get3(&fx, &tasks[0].id)),
+        json!({"type": "Bug", "labels": ["Task label"]})
+    );
+}

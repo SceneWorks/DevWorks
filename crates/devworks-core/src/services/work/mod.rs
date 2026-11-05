@@ -466,7 +466,9 @@ impl CommandHandler for WorkService {
                 )),
             },
             OperationInput::Features(i) => match i {
-                fops::Input::Create(i) => self.create_features(tx, ctx, i),
+                fops::Input::Create(i) => {
+                    self.create_features(tx, ctx, i, command.schema_revision().0)
+                }
                 fops::Input::EditPlan(i) => self.edit_plan(tx, ctx, i),
                 fops::Input::Prioritize(i) => self.prioritize_features(tx, ctx, i),
                 fops::Input::Dependencies(i) => self.feature_dependencies(tx, ctx, i),
@@ -496,7 +498,7 @@ impl CommandHandler for WorkService {
                 tops::Input::Assign(i) => self.assign(tx, ctx, i),
                 tops::Input::DependencyLinks(i) => self.task_dependencies(tx, ctx, i),
                 tops::Input::AcceptanceEvidence(i) => self.acceptance_evidence(tx, ctx, i),
-                tops::Input::SyncPlan(i) => self.sync_plan(tx, ctx, i),
+                tops::Input::SyncPlan(i) => self.sync_plan(tx, ctx, i, command.schema_revision().0),
                 tops::Input::SetFeature(i) => self.set_feature(tx, ctx, i),
                 _ => Err(refuse(
                     DomainErrorCode::UnsupportedCapability,

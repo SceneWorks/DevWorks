@@ -24,7 +24,7 @@ use crate::protocol::records::{
     PlanDraft, ProposalRecord, TaskPlanEntry, WorkRecord,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, Check, Label, Page};
+use crate::protocol::support::{BoundedList, Check, Label, Page, Revisioned};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::sessions::{content, label, rev};
 use serde_json::json;
@@ -372,6 +372,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &fops::CreateInput,
+        schema_revision: u32,
     ) -> R<DomainDecision> {
         open_project(tx, ctx, &i.project_id)?;
         let created = match &i.creation {
@@ -400,7 +401,7 @@ impl WorkService {
                 self.apply_atomic(tx, ctx, &i.project_id, plan, false)?
             }
             FeatureCreation::StagedPlan { artifact } => {
-                let plan = self.staged_plan(tx, ctx, &i.project_id, artifact)?;
+                let plan = self.staged_plan(tx, ctx, &i.project_id, artifact, schema_revision)?;
                 self.apply_atomic(tx, ctx, &i.project_id, &plan, false)?
             }
         };
@@ -428,6 +429,7 @@ impl WorkService {
         ctx: &InvocationContext,
         project: &ProjectId,
         a: &ArtifactRef,
+        schema_revision: u32,
     ) -> R<AtomicWorkPlan> {
         check_artifact(tx, ctx, project, a)?;
         let Some(reader) = &self.staged else {
@@ -456,6 +458,13 @@ impl WorkService {
             .map_err(|_| invalid("staged_plan", Some(&a.artifact_id)))?;
         plan.check()
             .map_err(|_| invalid("staged_plan", Some(&a.artifact_id)))?;
+        // Artifact-backed input observes the same negotiated schema as an inline plan.
+        // Refuse later fields, rather than discarding authored values or bypassing admission.
+        let mut projected = plan.clone();
+        projected.retain_revision(schema_revision);
+        if serde_json::to_value(&projected).ok() != serde_json::to_value(&plan).ok() {
+            return Err(invalid("staged_plan", Some(&a.artifact_id)));
+        }
         Ok(plan)
     }
 
@@ -857,6 +866,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &tops::SyncPlanInput,
+        schema_revision: u32,
     ) -> R<DomainDecision> {
         let feature = visible_feature(tx.work(), ctx, &i.feature_id.0)?;
         open_project(tx, ctx, &feature.project_id)?;
@@ -904,7 +914,7 @@ impl WorkService {
         self.write_links(tx, ctx, &project, &incoming)?;
         let project_plan = match (&i.project_plan, &i.staged_project_plan) {
             (Some(p), None) => Some(p.clone()),
-            (None, Some(a)) => Some(self.staged_plan(tx, ctx, &project, a)?),
+            (None, Some(a)) => Some(self.staged_plan(tx, ctx, &project, a, schema_revision)?),
             (None, None) => None,
             (Some(_), Some(_)) => return Err(invalid("project_plan", None)),
         };
