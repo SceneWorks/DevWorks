@@ -444,6 +444,7 @@ pub(crate) fn extract(source: &[u8], out: &mut Out<'_>) -> Result<(), ExtractFau
         toks,
         lines: &lines,
         out,
+        nesting: 0,
     };
     // Batches end at `GO` on its own line.
     let mut start = 0;
@@ -476,6 +477,7 @@ struct Sql<'c, 'o, 'a> {
     toks: Vec<Tok>,
     lines: &'c Lines,
     out: &'o mut Out<'a>,
+    nesting: usize,
 }
 
 #[derive(Default)]
@@ -709,6 +711,24 @@ impl Sql<'_, '_, '_> {
 
     /// The statements of `start..end`, with `current` the object whose body they are.
     fn statements(
+        &mut self,
+        start: usize,
+        end: usize,
+        current: Option<&str>,
+    ) -> Result<(), ExtractFault> {
+        const MAX_NESTING: usize = 32;
+        if self.nesting >= MAX_NESTING {
+            self.out
+                .failed("SQL statement nesting exceeds the supported limit".into());
+            return Ok(());
+        }
+        self.nesting += 1;
+        let result = self.scan_statements(start, end, current);
+        self.nesting -= 1;
+        result
+    }
+
+    fn scan_statements(
         &mut self,
         start: usize,
         end: usize,

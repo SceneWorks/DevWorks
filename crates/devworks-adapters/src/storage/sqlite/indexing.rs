@@ -1057,8 +1057,12 @@ impl IndexRepository for Unit<'_> {
         if run_terminal(&current.state) {
             return Err(invalid("a finished index run never changes again"));
         }
+        let queued_rebuild = current.kind == RUN_INDEX
+            && run.kind == RUN_REINDEX
+            && current.state == RUN_QUEUED
+            && run.state == RUN_QUEUED;
         if run.revision != expected + 1
-            || run.kind != current.kind
+            || (run.kind != current.kind && !queued_rebuild)
             || run.repository_id != current.repository_id
             || run.overlay_id != current.overlay_id
             || run.batch_id != current.batch_id

@@ -206,7 +206,7 @@ pub fn manifest_coverage(manifest: &Value) -> (CoverageState, Vec<String>) {
 }
 
 /// Whether a ready overlay was built under a source configuration other than `current` (the
-/// repository's effective configuration digest now): its build run recorded the one it used.
+/// repository's effective configuration digest now): its immutable view records the one used.
 pub fn overlay_config_moved(
     idx: &dyn IndexRead,
     o: &StoredOverlay,
@@ -215,9 +215,22 @@ pub fn overlay_config_moved(
     if o.state != OVERLAY_READY {
         return Ok(false);
     }
-    let built = match &o.run_id {
-        Some(r) => idx.run(r)?.map(|r| r.config_digest),
+    let built = match &o.view_id {
+        Some(v) => idx.view(v)?.and_then(|v| {
+            v.coverage
+                .get("configDigest")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }),
         None => None,
+    };
+    // Older views lack build provenance; retain their conservative request-time check.
+    let built = match built {
+        Some(digest) => Some(digest),
+        None => match &o.run_id {
+            Some(r) => idx.run(r)?.map(|r| r.config_digest),
+            None => None,
+        },
     };
     Ok(built.is_some_and(|b| b != current))
 }
