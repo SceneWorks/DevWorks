@@ -35,6 +35,8 @@ pub const OPERATIONS: [&str; 2] = ["evals.grade", "evals.results"];
 const REPORT_BYTES: usize = 512 * 1024;
 const RETAINED_BYTES: usize = 384 * 1024;
 const RETAINED_INSTANCES: usize = 499;
+// At most4MiB of native report JSON per result page, plus one lookahead report.
+const REPORT_PAGE: u32 = 8;
 
 pub struct EvalService {
     ids: Arc<dyn IdSource>,
@@ -95,6 +97,13 @@ impl EvalService {
             persist(tx, &report, true)
         })
     }
+}
+
+fn stored_report(value: serde_json::Value) -> Result<EvalReport, StorageError> {
+    let report: EvalReport =
+        serde_json::from_value(value).map_err(|_| invalid("stored eval report"))?;
+    report.check().map_err(StorageError::InvalidRecord)?;
+    Ok(report)
 }
 
 fn invalid(what: &str) -> StorageError {
@@ -455,7 +464,7 @@ fn build_report(
         .evals()
         .eval_run(&Id::new(identity.clone()).map_err(|_| invalid("eval id"))?)?
     {
-        return serde_json::from_value(existing.report).map_err(|_| invalid("stored eval report"));
+        return stored_report(existing.report);
     }
     let mut instances = Vec::new();
     let mut seen = vec![false; suite.checks.0.len()];
@@ -714,7 +723,7 @@ fn persist(
         })));
     }
     if let Some(existing) = tx.evals().eval_run(&report.id)? {
-        return serde_json::from_value(existing.report).map_err(|_| invalid("stored eval report"));
+        return stored_report(existing.report);
     }
     let created_at_ms = tx.now_ms();
     tx.evals().insert_eval_run(&StoredEvalRun {
@@ -816,7 +825,7 @@ impl QueryHandler for EvalService {
                         .and_then(|s| Id::new(s).map_err(|_| StorageError::CursorExpired))
                 })
                 .transpose()?;
-            let limit = input.page.limit.get().min(499) as u16;
+            let limit = input.page.limit.get().min(REPORT_PAGE) as u16;
             let mut rows = snapshot
                 .evals()
                 .eval_runs(&session.id, after.as_ref(), limit + 1)?;
@@ -830,9 +839,7 @@ impl QueryHandler for EvalService {
             };
             let reports = rows
                 .into_iter()
-                .map(|r| {
-                    serde_json::from_value(r.report).map_err(|_| invalid("stored eval report"))
-                })
+                .map(|r| stored_report(r.report))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((
                 OperationResult::EvalsResults {
