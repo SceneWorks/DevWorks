@@ -170,6 +170,8 @@ struct FakeBrowser {
     /// Once: when a page receives this method, it first navigates to this URL (its document is
     /// replaced while the request is answered), then answers from the new document.
     navigate_on: Option<(String, String)>,
+    /// Hover opens a same-document cover before a click can press.
+    cover_on_move: bool,
 }
 
 impl FakeBrowser {
@@ -655,6 +657,11 @@ impl FakeBrowser {
                     &id,
                     json!({"nodes": [{"nodeId": "p", "backendDOMNodeId": b, "properties": [{"name": "focused", "value": {"value": focused}}]}]}),
                 )
+            }
+            "Input.dispatchMouseEvent" if p["type"] == "mouseMoved" && self.cover_on_move => {
+                self.cover_on_move = false;
+                self.cover = Some(11);
+                self.reply(&id, json!({}));
             }
             "Input.dispatchMouseEvent" if p["type"] == "mouseWheel" => {
                 let i = page.unwrap();
@@ -4828,4 +4835,33 @@ fn an_installed_browser_end_to_end_when_opted_in() {
     assert_eq!(closed.phase, BrowserPhase::Closed);
     assert_eq!(NativeProcessHost.probe(&identity), Probe::Gone);
     assert!(!root.exists());
+}
+
+#[test]
+fn hover_cannot_redirect_a_click_to_a_same_document_cover() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let snap = fx.snapshot(fx.navigate(&user, &session, Some("t1"), "https://app.test/form"));
+    let ax = fx.json(&snap.accessibility);
+    let b = fx.platform.browser(&session);
+    let before = b.lock().unwrap().log.len();
+    b.lock().unwrap().cover_on_move = true;
+    let click = json!({"kind": "Click", "node": node(&snap, &ax, "Submit"), "button": "Primary"});
+    assert_eq!(
+        failed_kind(fx.input(&user, &session, click)),
+        "browser_node"
+    );
+    let browser = b.lock().unwrap();
+    let events: Vec<_> = browser.log[before..]
+        .iter()
+        .filter(|m| m["method"] == "Input.dispatchMouseEvent")
+        .map(|m| m["params"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["mouseMoved"]);
+    assert!(
+        !browser.cover_on_move,
+        "hover ran and changed the hit target"
+    );
 }

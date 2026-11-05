@@ -1695,8 +1695,19 @@ impl Live {
                             json!({"type": kind, "x": x, "y": y, "button": if count == 0 { "none" } else { button }, "clickCount": count}),
                         )
                     });
-                // The scroll already ran page handlers: a stale node is an unknown outcome.
-                self.send_input(Current::Node(node), true, &s, &events, bounds)?;
+                // Hover can navigate, move the node, or open a same-document cover.
+                self.send_input(Current::Node(node), true, &s, &events[..1], bounds)?;
+                self.resolve_node(node).map_err(post_dispatch)?;
+                if !self
+                    .click_reaches(i, &n, x, y, bounds)
+                    .map_err(post_dispatch)?
+                {
+                    return Err(ActionError::Refused {
+                        kind: "browser_node",
+                        detail: "the click point no longer reaches the node after pointer movement; nothing was clicked".into(),
+                    });
+                }
+                self.send_input(Current::Node(node), true, &s, &events[1..], bounds)?;
                 Ok(i)
             }
             BrowserInput::Text { node, text: t } => {
