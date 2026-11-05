@@ -1221,6 +1221,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             coverage: json!({
                 "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
                 "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "captureDigest": snap2.capture_digest,
+                "configDigest": cfg.digest,
             }),
         };
         tx.indexing().insert_view(&view)?;

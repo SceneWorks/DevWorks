@@ -400,3 +400,13 @@ fn csproj_files_name_their_project_and_nuget_references() {
             .any(|n| n.kind == "GoModule" && n.properties["module"] == json!("example.com/svc"))
     );
 }
+
+#[test]
+fn unicode_import_aliases_do_not_abort_endpoint_extraction() {
+    let x = extract(
+        "src/lib.rs",
+        "use crate::pà as x;\nuse axum::{Router, routing::get};\nfn app() -> Router { Router::new().route(\"/ok\", get(x::handler)) }\n",
+    );
+    assert!(routes(&x).iter().any(|(name, _)| name == "GET /ok"));
+    assert_eq!(handles(&x, "GET /ok").unwrap().0, "handler");
+}
