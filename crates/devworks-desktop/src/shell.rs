@@ -2233,7 +2233,9 @@ impl Shell {
             (Slot::BrowserClose(_), Reply::Command(c)) => {
                 match ops::browser_closed(c) {
                     Ok(true) => self.announce("The browser session is being closed."),
-                    Ok(false) => self.announce("The browser session had already stopped."),
+                    Ok(false) => self.announce(
+                        "Close is already requested, or the browser session has stopped.",
+                    ),
                     Err(Failure::Unknown) => {
                         self.announce("Closing the browser session: outcome not confirmed.")
                     }

@@ -4932,6 +4932,18 @@ fn cancelling_an_undispatched_close_allows_replacement_cleanup() {
         OperationState::CancelledBeforeDispatch
     );
     assert_eq!(fx.session(&session).phase, BrowserPhase::Stopping);
+    match fx.result(
+        &user,
+        "browser.sessions",
+        json!({"scope": workspace(), "page": {"limit": 10}}),
+    ) {
+        OperationResult::BrowserSessions { value } => assert!(
+            matches!(value.items.0[0].state, ItemState::Unavailable),
+            "an unverified stop must remain closable in the native UI: {:?}",
+            value.items.0[0].state
+        ),
+        other => panic!("{other:?}"),
+    }
     let reply = fx.command(&user,"browser.sessions",&fx.key(),json!({"action":{"kind":"Close","sessionId":session.as_str(),"expectedRevision":fx.session(&session).revision.to_string()}}));
     let DomainDecision::Accepted {
         operation_id: second,

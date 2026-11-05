@@ -389,15 +389,15 @@ fn kind_of(s: &str) -> PrincipalKind {
 }
 
 /// The wire state of a durable phase: `Partial` while starting, `Healthy` when ready,
-/// `Disabled` while stopping and once closed, `Failed` after a failure or crash, `Unavailable`
-/// when its stop could not be verified.
+/// `Disabled` once closed, `Failed` after a failure or crash, and `Unavailable` until a
+/// requested stop is verified (including a cancelled cleanup that needs another Close).
 pub fn wire_state(p: BrowserPhase) -> ItemState {
     match p {
         BrowserPhase::Starting => ItemState::Partial,
         BrowserPhase::Ready => ItemState::Healthy,
-        BrowserPhase::Stopping | BrowserPhase::Closed => ItemState::Disabled,
+        BrowserPhase::Closed => ItemState::Disabled,
         BrowserPhase::Failed => ItemState::Failed,
-        BrowserPhase::Uncertain => ItemState::Unavailable,
+        BrowserPhase::Stopping | BrowserPhase::Uncertain => ItemState::Unavailable,
     }
 }
 
