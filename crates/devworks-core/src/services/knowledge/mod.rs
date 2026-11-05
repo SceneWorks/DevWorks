@@ -1366,14 +1366,6 @@ pub(crate) fn bundle_of(
             }
         }
     }
-    for id in &cited {
-        if let Some(e) = k.knowledge_evidence(id)?
-            && e.deleted_at_ms.is_none()
-            && scoped.sees(&e.scope)
-        {
-            evidence.push(evidence_wire(&e, Some(&claim.id))?);
-        }
-    }
     let historical = at.is_some();
     let mut claims = vec![wire.clone()];
     let mut conflicts = Vec::new();
@@ -1453,6 +1445,22 @@ pub(crate) fn bundle_of(
             }
         }
     }
+    for relation in &visible_relations {
+        for id in &relation.evidence_ids {
+            if !cited.contains(id) {
+                cited.push(id.clone());
+            }
+        }
+    }
+    for id in &cited {
+        if let Some(e) = k.knowledge_evidence(id)?
+            && e.deleted_at_ms.is_none()
+            && scoped.sees(&e.scope)
+        {
+            evidence.push(evidence_wire(&e, Some(&claim.id))?);
+        }
+    }
+    truncated |= evidence.len() > 500;
     // The supersession chain, both directions, up to the wire list's 128 (flagged past it).
     let mut supersession = Vec::new();
     let mut back = wire.supersedes.clone();

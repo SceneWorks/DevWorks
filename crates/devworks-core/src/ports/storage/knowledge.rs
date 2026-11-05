@@ -488,10 +488,11 @@ pub trait KnowledgeRead {
         endpoints: &[Id],
     ) -> Result<Vec<StoredRelation>, StorageError>;
     /// The running deletion that fences `source` of exactly `scope`, if any.
+    /// With no source, returns any running deletion in that scope (bulk admission).
     fn knowledge_running_source_deletion(
         &self,
         scope: &KnowledgeScope,
-        source: &str,
+        source: Option<&str>,
     ) -> Result<Option<Id>, StorageError>;
     /// The newest writes of `scope`, at most `limit`.
     fn knowledge_recent_writes(
