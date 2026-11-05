@@ -241,16 +241,23 @@ impl PackageService {
     /// availability change. Host unit of work.
     pub fn record_index(
         &self,
-        configured: &[IndexSource],
         source: &IndexSource,
         outcome: Result<VerifiedIndex, String>,
     ) -> Result<(), StorageError> {
         let svc = self.clone_ports();
-        let keys: Vec<String> = configured.iter().map(source_key).collect();
         let source = source.clone();
         run_write(&*self.store, WriteOptions::default(), move |tx| {
+            // The fetch may have outlived a source edit. Only the effective configuration
+            // at this write can retain sources or accept the result.
+            let keys: Vec<String> = index_sources(tx.configuration())?
+                .iter()
+                .map(source_key)
+                .collect();
             tx.packages().retain_indexes(&keys)?;
             let key = source_key(&source);
+            if !keys.contains(&key) {
+                return Ok(());
+            }
             let earlier = tx
                 .packages()
                 .indexes()?
@@ -302,12 +309,12 @@ impl PackageService {
     }
 
     /// Forgets every recorded source that is no longer configured.
-    pub fn retain_configured_indexes(
-        &self,
-        configured: &[IndexSource],
-    ) -> Result<(), StorageError> {
-        let keys: Vec<String> = configured.iter().map(source_key).collect();
+    pub fn retain_configured_indexes(&self) -> Result<(), StorageError> {
         run_write(&*self.store, WriteOptions::default(), move |tx| {
+            let keys: Vec<String> = index_sources(tx.configuration())?
+                .iter()
+                .map(source_key)
+                .collect();
             tx.packages().retain_indexes(&keys)
         })
     }

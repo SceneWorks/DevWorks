@@ -221,6 +221,15 @@ impl PackageHost {
             Ok(o) => o,
             Err(_) => return RuntimeObservation::Missing("not found".into()),
         };
+        // Launch may have been in progress when shutdown took its process snapshot.
+        // Once launch returns it is registered: either that snapshot owns it, or we stop
+        // this late tree here before waiting for output/the ordinary probe timeout.
+        if self.is_stopping() {
+            let _ = self
+                .supervisor
+                .cancel(&owned, Duration::ZERO, Duration::from_millis(500));
+            return RuntimeObservation::Missing("the host is stopping".into());
+        }
         let out = Arc::new(Mutex::new(Vec::new()));
         let mut readers = Vec::new();
         if let Some((stdout, stderr)) = self.supervisor.take_output(&owned) {
@@ -273,8 +282,17 @@ impl PackageHost {
         };
         let mut seen = BTreeMap::new();
         for r in self.declared_runtimes() {
+            if self.is_stopping() {
+                return seen;
+            }
             let o = self.probe(&r, ports.search_path.as_deref());
+            if self.is_stopping() {
+                return seen;
+            }
             seen.insert(r, o);
+        }
+        if self.is_stopping() {
+            return seen;
         }
         ports.cache.set(seen.clone());
         let _ = self.service.observe_now("RuntimeProbe");
@@ -290,7 +308,7 @@ impl PackageHost {
         let Ok(sources) = self.service.configured_indexes() else {
             return 0;
         };
-        let _ = self.service.retain_configured_indexes(&sources);
+        let _ = self.service.retain_configured_indexes();
         let mut verified = 0;
         for source in &sources {
             if self.is_stopping() {
@@ -305,7 +323,7 @@ impl PackageHost {
                 break;
             }
             verified += usize::from(outcome.is_ok());
-            let _ = self.service.record_index(&sources, source, outcome);
+            let _ = self.service.record_index(source, outcome);
         }
         verified
     }
