@@ -1,9 +1,8 @@
 //! Recorded-work grading through native SQLite, host transcript writes and the gateway.
 use super::*;
 use devworks_core::protocol::records::{
-    EvalOutcome, EvalReport, EvalRevisionContext, EvalSuiteSnapshot,
+    EvalOutcome, EvalReport, EvalReportPage, EvalRevisionContext, EvalSuiteSnapshot,
 };
-use devworks_core::protocol::support::Page;
 use devworks_core::services::evals::{
     EvalService,
     attribution::{REVISION_CATEGORIES, revision_manifest},
@@ -49,7 +48,7 @@ fn results(
     session: &str,
     cursor: Option<&str>,
 ) -> DomainQueryReply {
-    let mut page = json!({"limit":"1"});
+    let mut page = json!({"limit":1});
     if let Some(cursor) = cursor {
         page["cursor"] = json!(cursor);
     }
@@ -59,7 +58,7 @@ fn results(
         json!({"sessionId":session,"page":page}),
     )
 }
-fn page(reply: DomainQueryReply) -> Page<EvalReport> {
+fn page(reply: DomainQueryReply) -> EvalReportPage {
     match result(reply) {
         OperationResult::EvalsResults { value } => value,
         other => panic!("{other:?}"),
@@ -246,7 +245,56 @@ fn host_append_without_session_revision_change_creates_new_report_and_scoped_cur
         fault(results(&fx, &fx.user(), "other-session", Some(&cursor))).code,
         DomainErrorCode::CursorExpired
     );
-    let foreign = fx.ctx("user-b", PrincipalKind::Human, Some("project-b"));
+    let keyed_body = json!({"sessionId":"session-a","suite":measurement});
+    let original = fx.command_keyed(
+        &fx.user(),
+        "evals.grade",
+        "scope-bound-grade",
+        keyed_body.clone(),
+    );
+    assert!(!recorded(original).1);
+    let replay = fx.command_keyed(
+        &fx.user(),
+        "evals.grade",
+        "scope-bound-grade",
+        keyed_body.clone(),
+    );
+    assert!(recorded(replay).1);
+    let confined = fx.ctx("agent-p", PrincipalKind::Agent, Some("project-a"));
+    let confined_body = json!({"sessionId":"session-a","suite":measurement});
+    applied(fx.command_keyed(
+        &confined,
+        "evals.grade",
+        "confined-replay",
+        confined_body.clone(),
+    ));
+    let prior_revision = fx
+        .read(|read| read.authority().principal(&actor("agent-p")))
+        .unwrap()
+        .revision;
+    let by = fx.user();
+    fx.write(move |tx| {
+        auth::bind_principal(
+            tx,
+            &by,
+            NewPrincipalBinding {
+                actor: actor("agent-p"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::Worker),
+                project_id: Some(project("project-b")),
+                tool_families: None,
+                bound_by: actor("user-a"),
+            },
+            Some(prior_revision),
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    // Current stored authority must govern a receipt replay, even when the caller retains
+    // its formerly valid invocation context and request key.
+    let denied_replay =
+        fx.command_keyed(&confined, "evals.grade", "confined-replay", confined_body);
+    assert_eq!(rejected(denied_replay), Rejection::PermissionDenied);
+    let foreign = fx.ctx("agent-b", PrincipalKind::Agent, Some("project-b"));
     assert_eq!(
         fault(results(&fx, &foreign, "session-a", None)).code,
         DomainErrorCode::NotFound
@@ -319,6 +367,25 @@ fn recorded_nonbinary_outcomes_stay_out_of_the_pass_rate_and_incomplete_never_pa
         &suite(vec![contains("interrupted", "AssistantAttempt", "ok")]),
     );
     assert!(!matches!(interrupted.outcome, EvalOutcome::Passed));
+    let incomplete = fixture();
+    append_values(
+        &incomplete,
+        "partial",
+        vec![assistant("ok", false), assistant("ok", true)],
+        vec![],
+    );
+    let partial = grade(
+        &incomplete,
+        &suite(vec![contains("partial", "AssistantAttempt", "ok")]),
+    );
+    assert_eq!(partial.coverage.passed.get(), 1);
+    assert_eq!(partial.coverage.failed.get(), 0);
+    assert_eq!(partial.coverage.ungraded.get(), 1);
+    assert_eq!(
+        serde_json::to_value(partial.coverage.pass_rate).unwrap(),
+        json!(1.0)
+    );
+    assert!(!matches!(partial.outcome, EvalOutcome::Passed));
 }
 
 #[test]
