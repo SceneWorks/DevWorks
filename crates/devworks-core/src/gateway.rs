@@ -1297,6 +1297,12 @@ impl ArtifactRead for HandlerTx<'_> {
     fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
         self.inner.borrow_mut().artifacts().shares(artifact)
     }
+    fn repository_text_readers(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .repository_text_readers(artifact)
+    }
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         self.inner.borrow_mut().artifacts().links(artifact)
     }
@@ -1699,6 +1705,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn projects(&mut self) -> &mut dyn crate::ports::storage::ProjectRepository {
         self.inner.get_mut().projects()
+    }
+    fn indexing(&mut self) -> &mut dyn crate::ports::storage::IndexRepository {
+        self.inner.get_mut().indexing()
     }
     fn knowledge(&mut self) -> &mut dyn crate::ports::storage::KnowledgeRepository {
         self.inner.get_mut().knowledge()

@@ -4509,303 +4509,6 @@ impl Revisioned for RouteModel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum OpenRouterDataCollection {
-    #[serde(rename = "allow")]
-    Allow,
-    #[serde(rename = "deny")]
-    Deny,
-}
-impl Check for OpenRouterDataCollection {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum OpenRouterQuantization {
-    #[serde(rename = "int4")]
-    Int4,
-    #[serde(rename = "int8")]
-    Int8,
-    #[serde(rename = "fp4")]
-    Fp4,
-    #[serde(rename = "mxfp4")]
-    Mxfp4,
-    #[serde(rename = "nvfp4")]
-    Nvfp4,
-    #[serde(rename = "fp6")]
-    Fp6,
-    #[serde(rename = "fp8")]
-    Fp8,
-    #[serde(rename = "mxfp8")]
-    Mxfp8,
-    #[serde(rename = "fp16")]
-    Fp16,
-    #[serde(rename = "bf16")]
-    Bf16,
-    #[serde(rename = "fp32")]
-    Fp32,
-    #[serde(rename = "unknown")]
-    Unknown,
-}
-impl Check for OpenRouterQuantization {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum OpenRouterSortBy {
-    #[serde(rename = "price")]
-    Price,
-    #[serde(rename = "throughput")]
-    Throughput,
-    #[serde(rename = "latency")]
-    Latency,
-}
-impl Check for OpenRouterSortBy {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum OpenRouterPartition {
-    #[serde(rename = "model")]
-    Model,
-    #[serde(rename = "none")]
-    None,
-}
-impl Check for OpenRouterPartition {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum OpenRouterCostTier {
-    #[serde(rename = "low")]
-    Low,
-    #[serde(rename = "medium")]
-    Medium,
-    #[serde(rename = "high")]
-    High,
-    #[serde(rename = "xhigh")]
-    Xhigh,
-    #[serde(rename = "max")]
-    Max,
-}
-impl Check for OpenRouterCostTier {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenRouterSort {
-    pub by: OpenRouterSortBy,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partition: Option<OpenRouterPartition>,
-}
-impl Check for OpenRouterSort {
-    fn check(&self) -> Result<(), String> {
-        self.by.check()?;
-        self.partition.check()?;
-        crate::protocol::rules::record(
-            "OpenRouterSort",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenRouterPercentiles {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub p50: Option<Finite>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub p75: Option<Finite>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub p90: Option<Finite>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub p99: Option<Finite>,
-}
-impl Check for OpenRouterPercentiles {
-    fn check(&self) -> Result<(), String> {
-        self.p50.check()?;
-        self.p75.check()?;
-        self.p90.check()?;
-        self.p99.check()?;
-        crate::protocol::rules::record(
-            "OpenRouterPercentiles",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenRouterMaxPrice {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<Money>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion: Option<Money>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request: Option<Money>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<Money>,
-}
-impl Check for OpenRouterMaxPrice {
-    fn check(&self) -> Result<(), String> {
-        self.prompt.check()?;
-        self.completion.check()?;
-        self.request.check()?;
-        self.image.check()?;
-        crate::protocol::rules::record(
-            "OpenRouterMaxPrice",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenRouterProviderRouting {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub order: Option<Items<Label>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_fallbacks: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_parameters: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_collection: Option<OpenRouterDataCollection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zdr: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enforce_distillable_text: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub only: Option<Items<Label>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ignore: Option<Items<Label>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quantizations: Option<Items<OpenRouterQuantization>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sort: Option<OpenRouterSort>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preferred_min_throughput: Option<OpenRouterPercentiles>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preferred_max_latency: Option<OpenRouterPercentiles>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_price: Option<OpenRouterMaxPrice>,
-}
-impl Check for OpenRouterProviderRouting {
-    fn check(&self) -> Result<(), String> {
-        self.order.check()?;
-        self.allow_fallbacks.check()?;
-        self.require_parameters.check()?;
-        self.data_collection.check()?;
-        self.zdr.check()?;
-        self.enforce_distillable_text.check()?;
-        self.only.check()?;
-        self.ignore.check()?;
-        self.quantizations.check()?;
-        self.sort.check()?;
-        self.preferred_min_throughput.check()?;
-        self.preferred_max_latency.check()?;
-        self.max_price.check()?;
-        crate::protocol::rules::record(
-            "OpenRouterProviderRouting",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenRouterConstraints {
-    pub allowed_models: Items<Text>,
-    pub excluded_models: Items<Text>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_tier: Option<OpenRouterCostTier>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<OpenRouterProviderRouting>,
-}
-impl Check for OpenRouterConstraints {
-    fn check(&self) -> Result<(), String> {
-        self.allowed_models.check()?;
-        self.excluded_models.check()?;
-        self.cost_tier.check()?;
-        self.provider.check()?;
-        crate::protocol::rules::record(
-            "OpenRouterConstraints",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum ConnectionLifecycle {
-    Disconnected,
-    Authorizing,
-    Connected,
-    Refreshing,
-    ReauthenticationRequired,
-    Unavailable,
-    Disabled,
-}
-impl Check for ConnectionLifecycle {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum SignInMethod {
-    DeviceCode,
-    AuthorizationCode,
-}
-impl Check for SignInMethod {
-    fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SignInChallenge {
-    pub flow_id: Id,
-    pub method: SignInMethod,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_code: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verification_url: Option<Url>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authorize_url: Option<Url>,
-    pub expires_at_ms: Counter,
-}
-impl Check for SignInChallenge {
-    fn check(&self) -> Result<(), String> {
-        self.flow_id.check()?;
-        self.method.check()?;
-        self.user_code.check()?;
-        self.verification_url.check()?;
-        self.authorize_url.check()?;
-        self.expires_at_ms.check()?;
-        crate::protocol::rules::record(
-            "SignInChallenge",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectionRecord {
     pub id: Id,
@@ -6635,6 +6338,34 @@ pub struct RepositoryIndexStatus {
     pub coverage: Coverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<IndexRunRecord>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "IndexFreshness", extend("x-since" = 2))]
+    pub freshness: Option<IndexFreshness>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<LanguageCoverage>", extend("x-since" = 2))]
+    pub languages: Option<Items<LanguageCoverage>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<SemanticPackStatus>", extend("x-since" = 2))]
+    pub semantic_packs: Option<Items<SemanticPackStatus>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<OverlayStatus>", extend("x-since" = 2))]
+    pub overlays: Option<Items<OverlayStatus>>,
 }
 impl Check for RepositoryIndexStatus {
     fn check(&self) -> Result<(), String> {
@@ -6642,11 +6373,32 @@ impl Check for RepositoryIndexStatus {
         self.current_view_ids.check()?;
         self.coverage.check()?;
         self.last_run.check()?;
+        self.freshness.check()?;
+        self.languages.check()?;
+        self.semantic_packs.check()?;
+        self.overlays.check()?;
         crate::protocol::rules::record(
             "RepositoryIndexStatus",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RepositoryIndexStatus {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.freshness = None;
+        }
+        if revision < 2 {
+            self.languages = None;
+        }
+        if revision < 2 {
+            self.semantic_packs = None;
+        }
+        if revision < 2 {
+            self.overlays = None;
+        }
     }
 }
 
@@ -7841,6 +7593,527 @@ impl Check for ReviewSourceEvidence {
         self.evidence.check()?;
         crate::protocol::rules::record(
             "ReviewSourceEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexFreshnessState {
+    Current,
+    Stale,
+    Indexing,
+    NotIndexed,
+    Failed,
+}
+impl Check for IndexFreshnessState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexFreshness {
+    pub state: IndexFreshnessState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<Counter>,
+    pub configuration_current: bool,
+    pub reasons: Items<Label>,
+}
+impl Check for IndexFreshness {
+    fn check(&self) -> Result<(), String> {
+        self.state.check()?;
+        self.indexed_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.indexed_at_ms.check()?;
+        self.observed_at_ms.check()?;
+        self.configuration_current.check()?;
+        self.reasons.check()?;
+        crate::protocol::rules::record(
+            "IndexFreshness",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum LanguageCoverageMode {
+    Structural,
+    TextFallback,
+    NotSelected,
+}
+impl Check for LanguageCoverageMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanguageCoverage {
+    pub language_id: Label,
+    pub name: Label,
+    pub mode: LanguageCoverageMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammar: Option<Label>,
+    pub files: Counter,
+    pub structural_files: Counter,
+    pub text_files: Counter,
+    pub parse_error_files: Counter,
+    pub skipped_files: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for LanguageCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.language_id.check()?;
+        self.name.check()?;
+        self.mode.check()?;
+        self.grammar.check()?;
+        self.files.check()?;
+        self.structural_files.check()?;
+        self.text_files.check()?;
+        self.parse_error_files.check()?;
+        self.skipped_files.check()?;
+        self.note.check()?;
+        crate::protocol::rules::record(
+            "LanguageCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SemanticPackState {
+    NotInstalled,
+    Unavailable,
+    Enabled,
+    Applied,
+    Disabled,
+}
+impl Check for SemanticPackState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticPackStatus {
+    pub pack_id: Id,
+    pub state: SemanticPackState,
+    pub languages: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Content>,
+}
+impl Check for SemanticPackStatus {
+    fn check(&self) -> Result<(), String> {
+        self.pack_id.check()?;
+        self.state.check()?;
+        self.languages.check()?;
+        self.note.check()?;
+        crate::protocol::rules::record(
+            "SemanticPackStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OverlayState {
+    Queued,
+    Indexing,
+    Ready,
+    Failed,
+    Stale,
+    Expired,
+    Unavailable,
+}
+impl Check for OverlayState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OverlayStatus {
+    pub overlay_id: Id,
+    pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<Id>,
+    pub state: OverlayState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_digest: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub updated_at_ms: Counter,
+    pub expires_at_ms: Counter,
+}
+impl Check for OverlayStatus {
+    fn check(&self) -> Result<(), String> {
+        self.overlay_id.check()?;
+        self.revision.check()?;
+        self.worktree_id.check()?;
+        self.state.check()?;
+        self.view_id.check()?;
+        self.base_commit.check()?;
+        self.head_commit.check()?;
+        self.head_ref.check()?;
+        self.capture_digest.check()?;
+        self.run_id.check()?;
+        self.reason.check()?;
+        self.updated_at_ms.check()?;
+        self.expires_at_ms.check()?;
+        crate::protocol::rules::record(
+            "OverlayStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunState {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+impl Check for IndexRunState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum IndexRunKind {
+    Index,
+    Reindex,
+    Overlay,
+}
+impl Check for IndexRunKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterDataCollection {
+    #[serde(rename = "allow")]
+    Allow,
+    #[serde(rename = "deny")]
+    Deny,
+}
+impl Check for OpenRouterDataCollection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterQuantization {
+    #[serde(rename = "int4")]
+    Int4,
+    #[serde(rename = "int8")]
+    Int8,
+    #[serde(rename = "fp4")]
+    Fp4,
+    #[serde(rename = "mxfp4")]
+    Mxfp4,
+    #[serde(rename = "nvfp4")]
+    Nvfp4,
+    #[serde(rename = "fp6")]
+    Fp6,
+    #[serde(rename = "fp8")]
+    Fp8,
+    #[serde(rename = "mxfp8")]
+    Mxfp8,
+    #[serde(rename = "fp16")]
+    Fp16,
+    #[serde(rename = "bf16")]
+    Bf16,
+    #[serde(rename = "fp32")]
+    Fp32,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+impl Check for OpenRouterQuantization {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterSortBy {
+    #[serde(rename = "price")]
+    Price,
+    #[serde(rename = "throughput")]
+    Throughput,
+    #[serde(rename = "latency")]
+    Latency,
+}
+impl Check for OpenRouterSortBy {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterPartition {
+    #[serde(rename = "model")]
+    Model,
+    #[serde(rename = "none")]
+    None,
+}
+impl Check for OpenRouterPartition {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum OpenRouterCostTier {
+    #[serde(rename = "low")]
+    Low,
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+    #[serde(rename = "xhigh")]
+    Xhigh,
+    #[serde(rename = "max")]
+    Max,
+}
+impl Check for OpenRouterCostTier {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterSort {
+    pub by: OpenRouterSortBy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<OpenRouterPartition>,
+}
+impl Check for OpenRouterSort {
+    fn check(&self) -> Result<(), String> {
+        self.by.check()?;
+        self.partition.check()?;
+        crate::protocol::rules::record(
+            "OpenRouterSort",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterPercentiles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p50: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p75: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p90: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p99: Option<Finite>,
+}
+impl Check for OpenRouterPercentiles {
+    fn check(&self) -> Result<(), String> {
+        self.p50.check()?;
+        self.p75.check()?;
+        self.p90.check()?;
+        self.p99.check()?;
+        crate::protocol::rules::record(
+            "OpenRouterPercentiles",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterMaxPrice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<Money>,
+}
+impl Check for OpenRouterMaxPrice {
+    fn check(&self) -> Result<(), String> {
+        self.prompt.check()?;
+        self.completion.check()?;
+        self.request.check()?;
+        self.image.check()?;
+        crate::protocol::rules::record(
+            "OpenRouterMaxPrice",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterProviderRouting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_fallbacks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_parameters: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_collection: Option<OpenRouterDataCollection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zdr: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce_distillable_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<Items<Label>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantizations: Option<Items<OpenRouterQuantization>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<OpenRouterSort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_min_throughput: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_max_latency: Option<OpenRouterPercentiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_price: Option<OpenRouterMaxPrice>,
+}
+impl Check for OpenRouterProviderRouting {
+    fn check(&self) -> Result<(), String> {
+        self.order.check()?;
+        self.allow_fallbacks.check()?;
+        self.require_parameters.check()?;
+        self.data_collection.check()?;
+        self.zdr.check()?;
+        self.enforce_distillable_text.check()?;
+        self.only.check()?;
+        self.ignore.check()?;
+        self.quantizations.check()?;
+        self.sort.check()?;
+        self.preferred_min_throughput.check()?;
+        self.preferred_max_latency.check()?;
+        self.max_price.check()?;
+        crate::protocol::rules::record(
+            "OpenRouterProviderRouting",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenRouterConstraints {
+    pub allowed_models: Items<Text>,
+    pub excluded_models: Items<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_tier: Option<OpenRouterCostTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OpenRouterProviderRouting>,
+}
+impl Check for OpenRouterConstraints {
+    fn check(&self) -> Result<(), String> {
+        self.allowed_models.check()?;
+        self.excluded_models.check()?;
+        self.cost_tier.check()?;
+        self.provider.check()?;
+        crate::protocol::rules::record(
+            "OpenRouterConstraints",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConnectionLifecycle {
+    Disconnected,
+    Authorizing,
+    Connected,
+    Refreshing,
+    ReauthenticationRequired,
+    Unavailable,
+    Disabled,
+}
+impl Check for ConnectionLifecycle {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SignInMethod {
+    DeviceCode,
+    AuthorizationCode,
+}
+impl Check for SignInMethod {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignInChallenge {
+    pub flow_id: Id,
+    pub method: SignInMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<Url>,
+    pub expires_at_ms: Counter,
+}
+impl Check for SignInChallenge {
+    fn check(&self) -> Result<(), String> {
+        self.flow_id.check()?;
+        self.method.check()?;
+        self.user_code.check()?;
+        self.verification_url.check()?;
+        self.authorize_url.check()?;
+        self.expires_at_ms.check()?;
+        crate::protocol::rules::record(
+            "SignInChallenge",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

@@ -190,11 +190,11 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `indexing.discover` | **Query**<br>`scope`: `DataScope`<br>`roots`: `Items<Id>`<br>`page`: `PageRequest` | `Page<RepositoryRecord>` |
 | `indexing.index` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
 | `indexing.reindex` | **Command**<br>`scope`: `DataScope`<br>`repositoryIds`: `NonEmpty<Id>`<br>`expectedSourceRevision`: `Revision`<br>`views`: `ViewSelection` | `IndexRunRecord` |
-| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'} | `IndexRunRecord` |
+| `indexing.refresh_overlay` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RefreshOverlay'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/index-command-request.r2.schema.json)) | `IndexRunRecord` |
 | `indexing.retire_view` | **Command**<br>`viewId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
 | `indexing.cancel` | **Command**<br>[Existing input schema](contracts/index-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Cancel'} | `IndexRunRecord` |
-| `indexing.status` | **Query**<br>`repositoryId`: `Id` | `RepositoryIndexStatus` |
-| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`page`: `PageRequest` | `Page<IndexRunRecord>` |
+| `indexing.status` | **Query**<br>`repositoryId`: `?Id`<br>`overlayId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `RepositoryIndexStatus` |
+| `indexing.runs` | **Query**<br>`scope`: `DataScope`<br>`repositoryId`: `?Id`<br>`states`: `?NonEmpty<IndexRunState>`<br>`kinds`: `?NonEmpty<IndexRunKind>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<IndexRunRecord>` |
 | `indexing.configure_sources` | **Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `IndexSourceConfig` | `MutationSummary` |
 
 ### Analysis
@@ -2028,97 +2028,6 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `contextTokens` | `?PositiveCounter` · *revision 2+* |
 | `connectionId` | `?Id` · *revision 2+* |
 
-### OpenRouterDataCollection
-
-`allow`, `deny`.
-
-### OpenRouterQuantization
-
-`int4`, `int8`, `fp4`, `mxfp4`, `nvfp4`, `fp6`, `fp8`, `mxfp8`, `fp16`, `bf16`, `fp32`, `unknown`.
-
-### OpenRouterSortBy
-
-`price`, `throughput`, `latency`.
-
-### OpenRouterPartition
-
-`model`, `none`.
-
-### OpenRouterCostTier
-
-`low`, `medium`, `high`, `xhigh`, `max`.
-
-### OpenRouterSort
-
-| Field | Type |
-| --- | --- |
-| `by` | `OpenRouterSortBy` |
-| `partition` | `?OpenRouterPartition` |
-
-### OpenRouterPercentiles
-
-| Field | Type |
-| --- | --- |
-| `p50` | `?Finite` |
-| `p75` | `?Finite` |
-| `p90` | `?Finite` |
-| `p99` | `?Finite` |
-
-### OpenRouterMaxPrice
-
-| Field | Type |
-| --- | --- |
-| `prompt` | `?Money` |
-| `completion` | `?Money` |
-| `request` | `?Money` |
-| `image` | `?Money` |
-
-### OpenRouterProviderRouting
-
-| Field | Type |
-| --- | --- |
-| `order` | `?Items<Label>` |
-| `allowFallbacks` | `?bool` |
-| `requireParameters` | `?bool` |
-| `dataCollection` | `?OpenRouterDataCollection` |
-| `zdr` | `?bool` |
-| `enforceDistillableText` | `?bool` |
-| `only` | `?Items<Label>` |
-| `ignore` | `?Items<Label>` |
-| `quantizations` | `?Items<OpenRouterQuantization>` |
-| `sort` | `?OpenRouterSort` |
-| `preferredMinThroughput` | `?OpenRouterPercentiles` |
-| `preferredMaxLatency` | `?OpenRouterPercentiles` |
-| `maxPrice` | `?OpenRouterMaxPrice` |
-
-### OpenRouterConstraints
-
-| Field | Type |
-| --- | --- |
-| `allowedModels` | `Items<Text>` |
-| `excludedModels` | `Items<Text>` |
-| `costTier` | `?OpenRouterCostTier` |
-| `provider` | `?OpenRouterProviderRouting` |
-
-### ConnectionLifecycle
-
-`Disconnected`, `Authorizing`, `Connected`, `Refreshing`, `ReauthenticationRequired`, `Unavailable`, `Disabled`.
-
-### SignInMethod
-
-`DeviceCode`, `AuthorizationCode`.
-
-### SignInChallenge
-
-| Field | Type |
-| --- | --- |
-| `flowId` | `Id` |
-| `method` | `SignInMethod` |
-| `userCode` | `?Label` |
-| `verificationUrl` | `?Url` |
-| `authorizeUrl` | `?Url` |
-| `expiresAtMs` | `Counter` |
-
 ### ConnectionRecord
 
 | Field | Type |
@@ -2615,6 +2524,10 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `currentViewIds` | `Items<Id>` |
 | `coverage` | `Coverage` |
 | `lastRun` | `?IndexRunRecord` |
+| `freshness` | `?IndexFreshness` · *revision 2+* |
+| `languages` | `?Items<LanguageCoverage>` · *revision 2+* |
+| `semanticPacks` | `?Items<SemanticPackStatus>` · *revision 2+* |
+| `overlays` | `?Items<OverlayStatus>` · *revision 2+* |
 
 ### ConsumerStatus
 
@@ -3010,6 +2923,176 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `zeroFindingsConfirmed` | `bool` |
 | `findingsCoverage` | `Coverage` |
 | `evidence` | `Items<ArtifactRef>` |
+
+### IndexFreshnessState
+
+`Current`, `Stale`, `Indexing`, `NotIndexed`, `Failed`.
+
+### IndexFreshness
+
+| Field | Type |
+| --- | --- |
+| `state` | `IndexFreshnessState` |
+| `indexedCommit` | `?Label` |
+| `headCommit` | `?Label` |
+| `headRef` | `?Label` |
+| `indexedAtMs` | `?Counter` |
+| `observedAtMs` | `?Counter` |
+| `configurationCurrent` | `bool` |
+| `reasons` | `Items<Label>` |
+
+### LanguageCoverageMode
+
+`Structural`, `TextFallback`, `NotSelected`.
+
+### LanguageCoverage
+
+| Field | Type |
+| --- | --- |
+| `languageId` | `Label` |
+| `name` | `Label` |
+| `mode` | `LanguageCoverageMode` |
+| `grammar` | `?Label` |
+| `files` | `Counter` |
+| `structuralFiles` | `Counter` |
+| `textFiles` | `Counter` |
+| `parseErrorFiles` | `Counter` |
+| `skippedFiles` | `Counter` |
+| `note` | `?Content` |
+
+### SemanticPackState
+
+`NotInstalled`, `Unavailable`, `Enabled`, `Applied`, `Disabled`.
+
+### SemanticPackStatus
+
+| Field | Type |
+| --- | --- |
+| `packId` | `Id` |
+| `state` | `SemanticPackState` |
+| `languages` | `Items<Label>` |
+| `note` | `?Content` |
+
+### OverlayState
+
+`Queued`, `Indexing`, `Ready`, `Failed`, `Stale`, `Expired`, `Unavailable`.
+
+### OverlayStatus
+
+| Field | Type |
+| --- | --- |
+| `overlayId` | `Id` |
+| `revision` | `Revision` |
+| `worktreeId` | `?Id` |
+| `state` | `OverlayState` |
+| `viewId` | `?Id` |
+| `baseCommit` | `?Label` |
+| `headCommit` | `?Label` |
+| `headRef` | `?Label` |
+| `captureDigest` | `?Label` |
+| `runId` | `?Id` |
+| `reason` | `?Content` |
+| `updatedAtMs` | `Counter` |
+| `expiresAtMs` | `Counter` |
+
+### IndexRunState
+
+`Queued`, `Running`, `Succeeded`, `Failed`, `Cancelled`.
+
+### IndexRunKind
+
+`Index`, `Reindex`, `Overlay`.
+
+### OpenRouterDataCollection
+
+`allow`, `deny`.
+
+### OpenRouterQuantization
+
+`int4`, `int8`, `fp4`, `mxfp4`, `nvfp4`, `fp6`, `fp8`, `mxfp8`, `fp16`, `bf16`, `fp32`, `unknown`.
+
+### OpenRouterSortBy
+
+`price`, `throughput`, `latency`.
+
+### OpenRouterPartition
+
+`model`, `none`.
+
+### OpenRouterCostTier
+
+`low`, `medium`, `high`, `xhigh`, `max`.
+
+### OpenRouterSort
+
+| Field | Type |
+| --- | --- |
+| `by` | `OpenRouterSortBy` |
+| `partition` | `?OpenRouterPartition` |
+
+### OpenRouterPercentiles
+
+| Field | Type |
+| --- | --- |
+| `p50` | `?Finite` |
+| `p75` | `?Finite` |
+| `p90` | `?Finite` |
+| `p99` | `?Finite` |
+
+### OpenRouterMaxPrice
+
+| Field | Type |
+| --- | --- |
+| `prompt` | `?Money` |
+| `completion` | `?Money` |
+| `request` | `?Money` |
+| `image` | `?Money` |
+
+### OpenRouterProviderRouting
+
+| Field | Type |
+| --- | --- |
+| `order` | `?Items<Label>` |
+| `allowFallbacks` | `?bool` |
+| `requireParameters` | `?bool` |
+| `dataCollection` | `?OpenRouterDataCollection` |
+| `zdr` | `?bool` |
+| `enforceDistillableText` | `?bool` |
+| `only` | `?Items<Label>` |
+| `ignore` | `?Items<Label>` |
+| `quantizations` | `?Items<OpenRouterQuantization>` |
+| `sort` | `?OpenRouterSort` |
+| `preferredMinThroughput` | `?OpenRouterPercentiles` |
+| `preferredMaxLatency` | `?OpenRouterPercentiles` |
+| `maxPrice` | `?OpenRouterMaxPrice` |
+
+### OpenRouterConstraints
+
+| Field | Type |
+| --- | --- |
+| `allowedModels` | `Items<Text>` |
+| `excludedModels` | `Items<Text>` |
+| `costTier` | `?OpenRouterCostTier` |
+| `provider` | `?OpenRouterProviderRouting` |
+
+### ConnectionLifecycle
+
+`Disconnected`, `Authorizing`, `Connected`, `Refreshing`, `ReauthenticationRequired`, `Unavailable`, `Disabled`.
+
+### SignInMethod
+
+`DeviceCode`, `AuthorizationCode`.
+
+### SignInChallenge
+
+| Field | Type |
+| --- | --- |
+| `flowId` | `Id` |
+| `method` | `SignInMethod` |
+| `userCode` | `?Label` |
+| `verificationUrl` | `?Url` |
+| `authorizeUrl` | `?Url` |
+| `expiresAtMs` | `Counter` |
 
 ### KnowledgeEntryKind
 

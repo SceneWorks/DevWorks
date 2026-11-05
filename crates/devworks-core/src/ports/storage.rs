@@ -52,8 +52,8 @@
 //! artifact store records ([`ArtifactRepository`]), the session, transcript and lineage
 //! records ([`SessionRepository`]), the resource reservation and owned-process records
 //! ([`ResourceRepository`]), the run root control records ([`RunRepository`]) and the retained
-//! diagnostic log ([`DiagnosticRepository`]) and the project and repository registration
-//! records ([`ProjectRepository`]).
+//! diagnostic log ([`DiagnosticRepository`]), the project and repository registration
+//! records ([`ProjectRepository`]) and the repository indexing records ([`IndexRepository`]).
 use crate::authority::AuthorityCapability;
 use crate::context::{PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::Fingerprint;
@@ -73,6 +73,7 @@ mod artifacts;
 mod authority;
 mod configuration;
 mod diagnostics;
+mod indexing;
 mod jobs;
 mod knowledge;
 mod projects;
@@ -85,6 +86,7 @@ pub use artifacts::*;
 pub use authority::*;
 pub use configuration::*;
 pub use diagnostics::*;
+pub use indexing::*;
 pub use jobs::*;
 pub use knowledge::*;
 pub use projects::*;
@@ -485,6 +487,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
+    fn indexing(&mut self) -> &mut dyn IndexRepository;
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
@@ -530,6 +533,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
+    fn indexing(&self) -> &dyn IndexRead;
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;

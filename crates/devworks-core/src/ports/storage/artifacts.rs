@@ -336,6 +336,10 @@ pub trait ArtifactRead {
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError>;
     /// Projects the artifact is shared with (its owner is not listed), in ID order.
     fn shares(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError>;
+    /// Projects that read the artifact through repository membership: those with a member
+    /// repository (not deleted) one of whose published views binds the artifact as its README
+    /// or structural summary text, in ID order.
+    fn repository_text_readers(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError>;
     /// Links of every version of `artifact`.
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError>;
     /// Links pointing at `subject` (navigation from work to its artifacts), at most 500.

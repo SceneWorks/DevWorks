@@ -2,6 +2,7 @@
 pub mod diagnostics;
 pub mod fs;
 pub mod http;
+pub mod index;
 pub mod paths;
 pub mod power;
 pub mod process;

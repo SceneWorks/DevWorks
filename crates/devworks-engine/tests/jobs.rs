@@ -310,6 +310,7 @@ fn boot_over(
         ),
         use_cases,
         consumers: Vec::new(),
+        indexing: None,
         config,
     };
     let runtime = rt

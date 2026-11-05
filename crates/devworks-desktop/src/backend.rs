@@ -54,6 +54,14 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// The index source configuration of the workspace (or a project) section, read for the
+    /// form that edits it through `indexing.configure_sources` (none without indexing).
+    fn index_sources(
+        &self,
+        _project: Option<&str>,
+    ) -> Result<devworks_core::ports::storage::StoredSourceConfig, String> {
+        Err("repository indexing is not available".into())
+    }
     /// The native maintenance capabilities a scheduled job may run in this build (only those
     /// with a registered use case; none are advertised otherwise).
     fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
@@ -159,6 +167,20 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// A repository's index status (repository ID).
+    IndexStatus(String),
+    /// Index runs (repository ID, or `*` for the selected scope).
+    IndexRuns(String),
+    /// An index, rebuild or overlay command of one repository (repository ID).
+    IndexCommand(String),
+    /// A run cancellation (run ID).
+    IndexCancel(String),
+    /// An overlay retirement (overlay ID).
+    IndexRetire(String),
+    /// The section configuration save.
+    IndexSourcesSave,
+    /// A discovery scan.
+    IndexDiscover,
     /// A Knowledge listing page (its request generation).
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
@@ -239,7 +261,7 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
-    /// An attachment's prepared `artifacts.save` frame, not admitted yet.
+    /// A prepared command frame (attachment or provider configuration), not admitted yet.
     Prepared { frame: Vec<u8> },
     /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
     /// outcome is confirmed by resubmitting that frame, never a new one).
@@ -292,6 +314,7 @@ pub const COMMANDS: &[&str] = &[
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "router.configure",
     "router.pin",
     "router.route",
     "projects.create",
@@ -301,6 +324,12 @@ pub const COMMANDS: &[&str] = &[
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "indexing.index",
+    "indexing.reindex",
+    "indexing.cancel",
+    "indexing.refresh_overlay",
+    "indexing.retire_view",
+    "indexing.configure_sources",
     "knowledge.record",
     "knowledge.revise",
     "knowledge.tag",
@@ -752,6 +781,70 @@ impl Drop for Client {
         } else {
             // A stuck worker is detached; it holds its backend until the process exits.
             self.workers.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command operation the shell builds a frame for survives a relaunch: an operation
+    /// left out of [`COMMANDS`] would be dropped from the unresolved list it was kept in.
+    #[test]
+    fn every_command_the_shell_sends_is_restorable() {
+        let sources = [
+            include_str!("shell.rs"),
+            include_str!("shell/projects.rs"),
+            include_str!("shell/indexing.rs"),
+            include_str!("ops.rs"),
+        ];
+        let mut found = std::collections::BTreeSet::new();
+        for text in sources {
+            for (i, _) in text.match_indices('"') {
+                let rest = &text[i + 1..];
+                let Some(end) = rest.find('"') else { continue };
+                let name = &rest[..end];
+                let shaped = name.split_once('.').is_some_and(|(f, o)| {
+                    !f.is_empty()
+                        && !o.is_empty()
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
+                });
+                if !shaped {
+                    continue;
+                }
+                if let Some(d) = devworks_core::registry::find(name)
+                    && d.modes
+                        .iter()
+                        .all(|m| m.mode == devworks_core::registry::Mode::Command)
+                {
+                    found.insert(name.to_owned());
+                }
+            }
+        }
+        for indexing in [
+            "indexing.index",
+            "indexing.reindex",
+            "indexing.cancel",
+            "indexing.refresh_overlay",
+            "indexing.retire_view",
+            "indexing.configure_sources",
+        ] {
+            assert!(found.contains(indexing), "{indexing} is sent by the shell");
+        }
+        // Kept across a relaunch by its own record (an attachment's exact frame in the pending
+        // memory, see `memory.rs`), not by the unresolved-command list.
+        let own_restore = ["artifacts.save"];
+        for op in found
+            .iter()
+            .filter(|op| !own_restore.contains(&op.as_str()))
+        {
+            assert!(
+                Unresolved::restored(Slot::SettingsSave, "l".into(), op, Vec::new()).is_some(),
+                "{op} is sent by the shell but would be dropped at relaunch"
+            );
         }
     }
 }

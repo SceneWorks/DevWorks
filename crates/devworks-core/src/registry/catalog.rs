@@ -2214,7 +2214,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "indexing.retire_view",
@@ -2282,7 +2282,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "RepositoryIndexStatus",
         result_schema: schema_of::<RepositoryIndexStatus>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "indexing.runs",
@@ -2304,7 +2304,7 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         result_type: "Page<IndexRunRecord>",
         result_schema: schema_of::<Page<IndexRunRecord>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
     },
     OperationDescriptor {
         name: "indexing.configure_sources",

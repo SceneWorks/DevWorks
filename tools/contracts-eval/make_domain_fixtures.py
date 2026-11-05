@@ -468,6 +468,20 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (indexing status): freshness, per-language coverage, semantic pack state and
+# every overlay with its lifecycle state and snapshot provenance.
+oid='0123456789abcdef0123456789abcdef01234567'
+freshness={'state':'Stale','indexedCommit':oid,'headCommit':oid,'headRef':'refs/heads/main','indexedAtMs':'1','observedAtMs':'2','configurationCurrent':True,'reasons':['head-moved']}
+language={'languageId':'rust','name':'Rust','mode':'Structural','grammar':'tree-sitter-rust 0.24.2','files':'3','structuralFiles':'2','textFiles':'0','parseErrorFiles':'1','skippedFiles':'0'}
+pack={'packId':'rust','state':'NotInstalled','languages':['rust'],'note':'the managed Rust pack is not installed'}
+overlay={'overlayId':'overlay-a','revision':'3','worktreeId':'worktree-a','state':'Ready','viewId':'view-a','baseCommit':oid,'headCommit':oid,'headRef':'refs/heads/topic','captureDigest':'a'*64,'runId':'operation-a','updatedAtMs':'3','expiresAtMs':'4'}
+status_r2={**sample('RepositoryIndexStatus'),'freshness':freshness,'languages':[language],'semanticPacks':[pack],'overlays':[overlay]}
+case('r2-input-indexing.status','domain-request.r2',domain('indexing.status'))
+case('r2-result-indexing.status','operation-result.r2',{'kind':'indexing.status','value':status_r2})
+case('r2-result-indexing.status-plain','operation-result.r2',{'kind':'indexing.status','value':sample('RepositoryIndexStatus')})
+case('reject-r1-result-indexing-status-freshness','operation-result',{'kind':'indexing.status','value':status_r2},False,False)
+case('reject-r2-result-overlay-unknown-state','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'overlays':[{**overlay,'state':'Warm'}]}},False,False)
+case('reject-r2-result-language-unknown-mode','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'languages':[{**language,'mode':'Semantic'}]}},False,False)
 # Schema revision 2 (unified Knowledge, DW-30): entry kinds, lifecycle, provenance, verification
 # and lesson state on claims; lesson drafts, origin and source revisions on writes; filters,
 # previews, challenge resolution and promote actions on inputs.
@@ -641,6 +655,52 @@ case('reject-r1-result-web-document-provenance','operation-result',{'kind':'web.
 case('reject-r2-result-web-document-not-2xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'status':404}},False,True)
 case('reject-r2-result-web-redirect-not-3xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'redirects':[{'url':'https://fixture.invalid/old','status':200}]}},False,True)
 case('reject-r2-result-web-document-unknown-trust','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'trust':'Verified'}},False,False)
+# Schema revision 2 (indexing): a ref-only overlay (a branch, tag or full commit instead of a
+# worktree), indexing.status of one overlay, and indexing.runs filtered by run state and kind.
+refresh=recorded('index-RefreshOverlay')
+def ref_overlay(revision=2,ref='factory/feature-x',worktree=DELETE):
+ obj=copy.deepcopy(refresh)
+ if revision is not None:obj['schemaRevision']=revision
+ if worktree is DELETE:obj['command'].pop('worktreeId')
+ else:obj['command']['worktreeId']=worktree
+ if ref is not DELETE:obj['command']['ref']=ref
+ return obj
+case('r2-input-indexing.refresh_overlay-ref','index-command-request.r2',ref_overlay())
+case('r2-input-indexing.refresh_overlay-tag','index-command-request.r2',ref_overlay(ref='refs/tags/v1.2.0'))
+case('r2-input-indexing.refresh_overlay-sha','index-command-request.r2',ref_overlay(ref=oid))
+case('r2-input-indexing.refresh_overlay-worktree','index-command-request.r2',ref_overlay(ref=DELETE,worktree='work-a'))
+case('r1-input-indexing.refresh_overlay-explicit','index-command-request',ref_overlay(1,DELETE,'work-a'))
+case('reject-r1-refresh-overlay-ref','index-command-request',ref_overlay(None),False,False)
+case('reject-r1-explicit-refresh-overlay-ref','index-command-request',ref_overlay(1),False,False)
+case('reject-r2-refresh-overlay-not-negotiated','index-command-request.r2',ref_overlay(None),False,False)
+case('reject-r2-refresh-overlay-worktree-and-ref','index-command-request.r2',ref_overlay(worktree='work-a'),False,False)
+case('reject-r2-refresh-overlay-no-source','index-command-request.r2',ref_overlay(ref=DELETE),False,False)
+case('reject-r2-refresh-overlay-null-ref','index-command-request.r2',ref_overlay(ref=None),False,False)
+case('reject-r2-refresh-overlay-empty-ref','index-command-request.r2',ref_overlay(ref=''),False,False)
+# Option and revision spellings fit the length bound; the typed reader refuses them.
+for i,bad in enumerate(['--upload-pack=touch','main~1','topic^{tree}','HEAD@{1}','a..b','topic.lock','.hidden/x','x y','a\\b','topic/','@']):
+ case(f'reject-r2-refresh-overlay-ref-syntax-{i}','index-command-request.r2',ref_overlay(ref=bad),False,True)
+def overlay_target(revision=2,**kw):
+ obj=domain('indexing.status',revision,**kw);obj['body'].pop('repositoryId');return obj
+case('r2-input-indexing.status-overlay','domain-request.r2',overlay_target(overlayId='overlay-a'))
+case('reject-r1-status-overlay','domain-request',overlay_target(None,overlayId='overlay-a'),False,False)
+case('reject-r2-status-repository-and-overlay','domain-request.r2',domain('indexing.status',overlayId='overlay-a'),False,False)
+case('reject-r2-status-no-target','domain-request.r2',overlay_target(),False,False)
+case('reject-r2-status-null-overlay','domain-request.r2',overlay_target(overlayId=None),False,False)
+ref_status={**{k:v for k,v in overlay.items() if k not in ('worktreeId','captureDigest')},'overlayId':'overlay-b','headRef':'refs/heads/factory/feature-x'}
+case('r2-result-indexing.status-ref-overlay','operation-result.r2',{'kind':'indexing.status','value':{**status_r2,'overlays':[ref_status]}})
+case('r2-input-indexing.runs','domain-request.r2',domain('indexing.runs'))
+case('r2-input-indexing.runs-filters','domain-request.r2',domain('indexing.runs',states=['Queued','Failed'],kinds=['Overlay','Reindex']))
+case('reject-r1-runs-states','domain-request',domain('indexing.runs',None,states=['Queued']),False,False)
+case('reject-r1-explicit-runs-kinds','domain-request',domain('indexing.runs',1,kinds=['Index']),False,False)
+case('reject-r2-runs-unknown-state','domain-request.r2',domain('indexing.runs',states=['Paused']),False,False)
+case('reject-r2-runs-unknown-kind','domain-request.r2',domain('indexing.runs',kinds=['BranchOverlay']),False,False)
+case('reject-r2-runs-empty-states','domain-request.r2',domain('indexing.runs',states=[]),False,False)
+case('reject-r2-runs-null-kinds','domain-request.r2',domain('indexing.runs',kinds=None),False,False)
+case('reject-r2-runs-duplicate-states','domain-request.r2',domain('indexing.runs',states=['Queued','Queued']),False,True)
+# Their results are unchanged at revision 2.
+case('r2-result-indexing.refresh_overlay','operation-result.r2',{'kind':'indexing.refresh_overlay','value':sample('IndexRunRecord')})
+case('r2-result-indexing.runs','operation-result.r2',{'kind':'indexing.runs','value':{'items':[sample('IndexRunRecord')],'hasMore':True,'nextCursor':'cursor-a'}})
 # Revision 3 preserves earlier contracts and exposes disputes on every claim.
 for name in ['knowledge.search','knowledge.read','knowledge.subgraph','knowledge.entity_bundle',
              'knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier',

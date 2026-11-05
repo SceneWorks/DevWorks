@@ -759,6 +759,8 @@ impl ProjectRepository for Unit<'_> {
         Ok(n == 1)
     }
     fn remove_index(&mut self, repository: &Id) -> Result<u64, StorageError> {
+        // The graph views, pointer and generations of DW-023 go with the registry rows.
+        super::indexing::remove_repository_index(self.conn, repository)?;
         db(db(self
             .conn
             .prepare_cached("DELETE FROM repository_texts WHERE repository_id=?1"))?

@@ -118,6 +118,8 @@ pub struct ProjectsUi {
     pub message: Option<(Tone, String)>,
     pub base: BTreeMap<String, BaseDirectory>,
     pub texts: BTreeMap<(String, bool), TextState>,
+    /// Index status, runs and the section's indexing sources (DW-23).
+    pub indexing: super::indexing::IndexingUi,
     /// Applied project mutations; a list query started before the latest is re-queried.
     pub mutations: u64,
     pub list_at: u64,
@@ -138,6 +140,7 @@ enum Action {
     InheritBase(String),
     LoadTexts(String),
     RemoveIndex(RepositoryRecord),
+    Index(super::indexing::IndexAction),
     /// Scheduled jobs scoped to the project.
     OpenJobs(String),
 }
@@ -404,7 +407,11 @@ impl Shell {
                         );
                     }
                 }
-                Action::LoadTexts(r) => self.load_texts(&r),
+                Action::LoadTexts(r) => {
+                    self.load_texts(&r);
+                    self.index_act(vec![super::indexing::IndexAction::Status(r)]);
+                }
+                Action::Index(a) => self.index_act(vec![a]),
                 Action::OpenJobs(p) => {
                     self.jobs.set_scope(Some(p));
                     self.navigate(Route::Jobs);
@@ -1268,7 +1275,8 @@ impl Shell {
                                     what: "repositories",
                                     empty_title: "No repositories",
                                     empty_body: "Registered repositories appear here once \
-                                                 repository discovery registers them (DW-23).",
+                                                 discovery finds them under the repository base \
+                                                 directory (Indexing logs › Discover repositories).",
                                     id_salt: "repositories-list",
                                 },
                                 reload,
@@ -1331,14 +1339,24 @@ impl Shell {
                                 egui::ScrollArea::vertical()
                                     .id_salt("repository-detail")
                                     .show(ui, |ui| {
+                                        let enabled =
+                                            online.is_ok() && !removing.contains(r.id.as_str());
                                         repository_detail(
-                                            ui,
-                                            projects,
-                                            r,
-                                            &names,
-                                            online.is_ok() && !removing.contains(r.id.as_str()),
-                                            actions,
+                                            ui, projects, r, &names, enabled, actions,
                                         );
+                                        let mut index_actions = Vec::new();
+                                        if let Some((tone, text)) = &projects.indexing.message {
+                                            chip(ui, text.clone(), *tone);
+                                        }
+                                        super::indexing::index_block(
+                                            ui,
+                                            &projects.indexing,
+                                            r,
+                                            enabled,
+                                            &mut index_actions,
+                                        );
+                                        actions
+                                            .extend(index_actions.into_iter().map(Action::Index));
                                     });
                             }
                         }

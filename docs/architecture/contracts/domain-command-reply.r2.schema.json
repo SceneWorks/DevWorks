@@ -3503,6 +3503,86 @@
       ],
       "type": "object"
     },
+    "IndexFreshness": {
+      "additionalProperties": false,
+      "properties": {
+        "configurationCurrent": {
+          "type": "boolean"
+        },
+        "headCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasons": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "state": {
+          "$ref": "#/$defs/IndexFreshnessState"
+        }
+      },
+      "required": [
+        "state",
+        "configurationCurrent",
+        "reasons"
+      ],
+      "type": "object"
+    },
+    "IndexFreshnessState": {
+      "enum": [
+        "Current",
+        "Stale",
+        "Indexing",
+        "NotIndexed",
+        "Failed"
+      ],
+      "type": "string"
+    },
     "IndexRunRecord": {
       "additionalProperties": false,
       "properties": {
@@ -4433,6 +4513,74 @@
       ],
       "type": "object"
     },
+    "LanguageCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "$ref": "#/$defs/Counter"
+        },
+        "grammar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageId": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "mode": {
+          "$ref": "#/$defs/LanguageCoverageMode"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parseErrorFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "skippedFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "structuralFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "textFiles": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "languageId",
+        "name",
+        "mode",
+        "files",
+        "structuralFiles",
+        "textFiles",
+        "parseErrorFiles",
+        "skippedFiles"
+      ],
+      "type": "object"
+    },
+    "LanguageCoverageMode": {
+      "enum": [
+        "Structural",
+        "TextFallback",
+        "NotSelected"
+      ],
+      "type": "string"
+    },
     "LayerRef": {
       "additionalProperties": false,
       "properties": {
@@ -5173,6 +5321,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_LanguageCoverage_0_128": {
+      "items": {
+        "$ref": "#/$defs/LanguageCoverage"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_LeaseRecord_0_500": {
       "items": {
         "$ref": "#/$defs/LeaseRecord"
@@ -5280,6 +5436,14 @@
     "List_OpenRouterQuantization_0_128": {
       "items": {
         "$ref": "#/$defs/OpenRouterQuantization"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_OverlayStatus_0_128": {
+      "items": {
+        "$ref": "#/$defs/OverlayStatus"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -5442,6 +5606,14 @@
         "$ref": "#/$defs/SchemaRelation"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_SemanticPackStatus_0_128": {
+      "items": {
+        "$ref": "#/$defs/SemanticPackStatus"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -12694,6 +12866,126 @@
       ],
       "type": "string"
     },
+    "OverlayState": {
+      "enum": [
+        "Queued",
+        "Indexing",
+        "Ready",
+        "Failed",
+        "Stale",
+        "Expired",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "OverlayStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "baseCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captureDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "headCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overlayId": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/OverlayState"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "viewId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "overlayId",
+        "revision",
+        "state",
+        "updatedAtMs",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
     "PackageRecord": {
       "additionalProperties": false,
       "properties": {
@@ -15116,6 +15408,14 @@
         "currentViewIds": {
           "$ref": "#/$defs/List_Id_0_128"
         },
+        "freshness": {
+          "$ref": "#/$defs/IndexFreshness",
+          "x-since": 2
+        },
+        "languages": {
+          "$ref": "#/$defs/List_LanguageCoverage_0_128",
+          "x-since": 2
+        },
         "lastRun": {
           "anyOf": [
             {
@@ -15126,8 +15426,16 @@
             }
           ]
         },
+        "overlays": {
+          "$ref": "#/$defs/List_OverlayStatus_0_128",
+          "x-since": 2
+        },
         "repositoryId": {
           "$ref": "#/$defs/Id"
+        },
+        "semanticPacks": {
+          "$ref": "#/$defs/List_SemanticPackStatus_0_128",
+          "x-since": 2
         }
       },
       "required": [
@@ -16414,6 +16722,46 @@
         "selectedIds",
         "helpTopicId",
         "revision"
+      ],
+      "type": "object"
+    },
+    "SemanticPackState": {
+      "enum": [
+        "NotInstalled",
+        "Unavailable",
+        "Enabled",
+        "Applied",
+        "Disabled"
+      ],
+      "type": "string"
+    },
+    "SemanticPackStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "languages": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "packId": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "$ref": "#/$defs/SemanticPackState"
+        }
+      },
+      "required": [
+        "packId",
+        "state",
+        "languages"
       ],
       "type": "object"
     },

@@ -75,3 +75,14 @@ impl ProcessHost for NativeProcessHost {
         }
     }
 }
+
+/// Writes the spec's stdin bytes on a thread and closes the pipe, so a child reading requests
+/// never blocks the launcher and a child that exits early only ends the write (broken pipe).
+fn feed_stdin(child: &mut std::process::Child, spec: &ProcessSpec) {
+    if let (Some(bytes), Some(mut pipe)) = (spec.stdin.clone(), child.stdin.take()) {
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = pipe.write_all(&bytes);
+        });
+    }
+}

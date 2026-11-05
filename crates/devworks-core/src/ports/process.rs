@@ -25,6 +25,9 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
+    /// Bytes written to the child's stdin and then closed (a request list such as
+    /// `git cat-file --batch` reads); `None` gives the child no stdin.
+    pub stdin: Option<Vec<u8>>,
 }
 impl ProcessSpec {
     pub fn new(argv: &[String]) -> Option<Self> {
@@ -36,6 +39,7 @@ impl ProcessSpec {
             env: Vec::new(),
             clear_env: false,
             capture_output: false,
+            stdin: None,
         })
     }
     /// The program followed by its arguments.

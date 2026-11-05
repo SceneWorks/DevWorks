@@ -498,7 +498,8 @@ pub struct Retention {
     pub days: i64,
     pub max_records: i64,
 }
-fn setting(read: &dyn ConfigurationRead, key: &str) -> Result<i64, StorageError> {
+/// The effective workspace value of an integer catalog setting (its default when unset).
+pub(crate) fn setting(read: &dyn ConfigurationRead, key: &str) -> Result<i64, StorageError> {
     let d = descriptor(key).expect("catalog setting");
     let layers = current_chain(read, &ConfigScope::Workspace)?;
     let entries = chain(d, &layers).map_err(|m| {

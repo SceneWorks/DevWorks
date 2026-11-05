@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod cursor;
 pub mod diagnostics;
 pub mod history;
+pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
 pub mod power;
@@ -212,6 +213,14 @@ impl UseCases {
     /// Registers the repository registration operations (`RepositoryService`).
     pub fn with_repositories(mut self, service: Arc<projects::RepositoryService>) -> Self {
         for op in projects::REPOSITORY_OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the indexing family (`IndexCoordinator`).
+    pub fn with_indexing(mut self, service: Arc<indexing::IndexCoordinator>) -> Self {
+        for op in indexing::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

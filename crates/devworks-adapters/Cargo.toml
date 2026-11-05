@@ -26,6 +26,37 @@ webpki-roots = "=1.0.11"
 # The provider endpoint and query string are built with the same WHATWG URL type core decides on.
 url = "=2.5.8"
 tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
+# Structural indexing (DW-23, CODE-01/02): the tree-sitter runtime and one grammar crate per
+# language the retained CodeGraph LanguageSpecs and frozen adapter surface cover. Every grammar
+# crate depends only on `tree-sitter-language` (the ABI shim), so the runtime and the grammars
+# version independently; each compiles its generated C parser with `cc`. Pinned exactly.
+tree-sitter = "=0.27.1"
+tree-sitter-bash = "=0.25.1"
+tree-sitter-c = "=0.24.2"
+tree-sitter-c-sharp = "=0.23.5"
+tree-sitter-cfml = "=0.26.44"
+tree-sitter-cpp = "=0.23.4"
+tree-sitter-go = "=0.25.0"
+tree-sitter-hcl = "=1.1.0"
+tree-sitter-java = "=0.23.5"
+tree-sitter-javascript = "=0.25.0"
+tree-sitter-php = "=0.25.1"
+tree-sitter-python = "=0.25.0"
+tree-sitter-ruby = "=0.23.1"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-sequel = "=0.3.11"
+tree-sitter-swift = "=0.7.4"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-yaml = "=0.7.2"
+# Package identities from manifests (Cargo.toml, .csproj). Both are already in the lockfile
+# (through the desktop's dependency tree), so they add no package. Pinned exactly. TOML is read
+# only (no writer) and keeps table order, as the retained Tomlyn reader does.
+quick-xml = "=0.41.0"
+toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "preserve_order"] }
+# The retained Terraform, ColdFusion and SQL-normalization extractors are regular-expression
+# scanners; their expressions are ported as written (leftmost-first semantics, as .NET's). Already
+# in the lockfile (with all its dependencies), so it adds no package. Pinned exactly.
+regex = "=1.13.1"
 # Outbound HTTP for provider sign-in, model discovery and connection tests (the core
 # `HttpTransport` port; DW-18). ureq is a small blocking client; 3.4.2 is the newest release more
 # than two weeks old. Only rustls with the ring provider and the bundled Mozilla roots

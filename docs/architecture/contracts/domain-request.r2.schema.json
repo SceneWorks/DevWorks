@@ -6912,18 +6912,36 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "repositoryId"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "overlayId"
+              ],
+              "x-since": 2
+            }
+          ],
           "properties": {
             "kind": {
               "const": "indexing.status",
               "type": "string"
+            },
+            "overlayId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
             },
             "repositoryId": {
               "$ref": "#/$defs/Id"
             }
           },
           "required": [
-            "kind",
-            "repositoryId"
+            "kind"
           ],
           "type": "object"
         },
@@ -6933,6 +6951,10 @@
             "kind": {
               "const": "indexing.runs",
               "type": "string"
+            },
+            "kinds": {
+              "$ref": "#/$defs/List_IndexRunKind_1_128",
+              "x-since": 2
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
@@ -6949,6 +6971,10 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "states": {
+              "$ref": "#/$defs/List_IndexRunState_1_128",
+              "x-since": 2
             }
           },
           "required": [
@@ -10297,6 +10323,24 @@
       ],
       "type": "object"
     },
+    "IndexRunKind": {
+      "enum": [
+        "Index",
+        "Reindex",
+        "Overlay"
+      ],
+      "type": "string"
+    },
+    "IndexRunState": {
+      "enum": [
+        "Queued",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ],
+      "type": "string"
+    },
     "IndexSourceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -10986,6 +11030,22 @@
     "List_Id_1_128": {
       "items": {
         "$ref": "#/$defs/Id"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "List_IndexRunKind_1_128": {
+      "items": {
+        "$ref": "#/$defs/IndexRunKind"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "List_IndexRunState_1_128": {
+      "items": {
+        "$ref": "#/$defs/IndexRunState"
       },
       "maxItems": 128,
       "minItems": 1,

@@ -57,6 +57,8 @@ pub fn config(root: &Path) -> DesktopConfig {
     let mut c = DesktopConfig::new(root);
     c.user_name = "Test user".into();
     c.shutdown_bound = Duration::from_secs(5);
+    // Tests never scan the user's real repository base directory.
+    c.indexing.discover_at_boot = false;
     // Never the real OS secret store or the network.
     c.secrets = Some(Arc::new(
         devworks_core::ports::secrets::SessionSecrets::new(),
@@ -307,6 +309,15 @@ impl Backend for Gated {
         }
         out
     }
+    fn stage_api_key(
+        &self,
+        key: devworks_core::ports::secrets::Secret,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.stage_api_key(key)
+    }
+    fn secret_store(&self) -> devworks_desktop::backend::SecretStoreStatus {
+        self.inner.secret_store()
+    }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)
     }
@@ -415,6 +426,15 @@ impl Backend for LoseAcks {
             "protocol": "1.0-draft.1", "requestKey": "lost", "correlationId": "lost"}))
             .unwrap(),
         )
+    }
+    fn stage_api_key(
+        &self,
+        key: devworks_core::ports::secrets::Secret,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.stage_api_key(key)
+    }
+    fn secret_store(&self) -> devworks_desktop::backend::SecretStoreStatus {
+        self.inner.secret_store()
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<devworks_core::protocol::Id, String> {
         self.inner.mint_workspace_upload(file)

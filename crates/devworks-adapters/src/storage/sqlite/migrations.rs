@@ -271,6 +271,22 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0018_knowledge.sql"),
         rebuilds_tables: false,
     },
+    // Additive (DW-023): index source configuration, observed source identity, worktrees, index
+    // runs and overlays (five tables), defaulted payload columns on the migration 1 unit and edge
+    // tables, and six indexes. The writer floor rises to 19 (above every earlier
+    // floor): an earlier writer's `repositories.remove_index` removes only the migration 14
+    // registry rows, so it would leave this build's published pointer, views and graph payload
+    // describing an index the registry no longer lists (a removed index that still reads as
+    // current). The reader floor stays at 8: no earlier build reads the new tables or columns,
+    // and every query an earlier reader makes returns the same rows (the added columns are
+    // defaulted). Both are at least every earlier floor.
+    Migration {
+        version: 19,
+        minimum_reader: 8,
+        minimum_writer: 19,
+        sql: include_str!("migrations/0019_indexing.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -282,6 +298,10 @@ pub const MIGRATION_0016_SHA256: &str =
 /// Recorded checksum of migration 18; a test fails if the shipped text changes.
 pub const MIGRATION_0018_SHA256: &str =
     "0461f125bd4b1f5889d535749f33214d379cf7965dd5fb701d13e09648853127";
+
+/// Recorded checksum of migration 19; a test fails if the shipped text changes.
+pub const MIGRATION_0019_SHA256: &str =
+    "ed77284397dee952eb7feccf17843669545a61f0c0f35797b0fc350f4a32121f";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";

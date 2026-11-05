@@ -8,6 +8,7 @@
 pub mod diagnostics;
 pub mod files;
 pub mod http;
+pub mod indexing;
 pub mod process;
 pub mod retrieval;
 pub mod router;
@@ -61,6 +62,14 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Repository registrations (discovery).
+    Repository,
+    /// Index graph generations.
+    Generation,
+    /// Immutable index views.
+    View,
+    /// Worktree overlays.
+    Overlay,
     /// Knowledge entities, claims, evidence, relations, challenges and writes.
     KnowledgeEntity,
     KnowledgeClaim,

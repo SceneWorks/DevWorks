@@ -618,7 +618,7 @@
 </tr>
 <tr>
 <td><code>indexing.refresh_overlay</code></td>
-<td><strong>Command</strong><br><a href="contracts/index-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;RefreshOverlay&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/index-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;RefreshOverlay&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/index-command-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>IndexRunRecord</code></td>
 </tr>
 <tr>
@@ -633,12 +633,12 @@
 </tr>
 <tr>
 <td><code>indexing.status</code></td>
-<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code></td>
+<td><strong>Query</strong><br><code>repositoryId</code>: <code>?Id</code><br><code>overlayId</code>: <code>?Id</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>RepositoryIndexStatus</code></td>
 </tr>
 <tr>
 <td><code>indexing.runs</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>repositoryId</code>: <code>?Id</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>repositoryId</code>: <code>?Id</code><br><code>states</code>: <code>?NonEmpty&lt;IndexRunState&gt;</code><br><code>kinds</code>: <code>?NonEmpty&lt;IndexRunKind&gt;</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>Page&lt;IndexRunRecord&gt;</code></td>
 </tr>
 <tr>
@@ -5950,206 +5950,6 @@
 <td><code>?Id</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
-<h3 id="openrouterdatacollection">OpenRouterDataCollection</h3>
-<p><code>allow</code>, <code>deny</code>.</p>
-<h3 id="openrouterquantization">OpenRouterQuantization</h3>
-<p><code>int4</code>, <code>int8</code>, <code>fp4</code>, <code>mxfp4</code>, <code>nvfp4</code>, <code>fp6</code>, <code>fp8</code>, <code>mxfp8</code>, <code>fp16</code>, <code>bf16</code>, <code>fp32</code>, <code>unknown</code>.</p>
-<h3 id="openroutersortby">OpenRouterSortBy</h3>
-<p><code>price</code>, <code>throughput</code>, <code>latency</code>.</p>
-<h3 id="openrouterpartition">OpenRouterPartition</h3>
-<p><code>model</code>, <code>none</code>.</p>
-<h3 id="openroutercosttier">OpenRouterCostTier</h3>
-<p><code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>.</p>
-<h3 id="openroutersort">OpenRouterSort</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>by</code></td>
-<td><code>OpenRouterSortBy</code></td>
-</tr>
-<tr>
-<td><code>partition</code></td>
-<td><code>?OpenRouterPartition</code></td>
-</tr>
-</tbody></table>
-<h3 id="openrouterpercentiles">OpenRouterPercentiles</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>p50</code></td>
-<td><code>?Finite</code></td>
-</tr>
-<tr>
-<td><code>p75</code></td>
-<td><code>?Finite</code></td>
-</tr>
-<tr>
-<td><code>p90</code></td>
-<td><code>?Finite</code></td>
-</tr>
-<tr>
-<td><code>p99</code></td>
-<td><code>?Finite</code></td>
-</tr>
-</tbody></table>
-<h3 id="openroutermaxprice">OpenRouterMaxPrice</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>prompt</code></td>
-<td><code>?Money</code></td>
-</tr>
-<tr>
-<td><code>completion</code></td>
-<td><code>?Money</code></td>
-</tr>
-<tr>
-<td><code>request</code></td>
-<td><code>?Money</code></td>
-</tr>
-<tr>
-<td><code>image</code></td>
-<td><code>?Money</code></td>
-</tr>
-</tbody></table>
-<h3 id="openrouterproviderrouting">OpenRouterProviderRouting</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>order</code></td>
-<td><code>?Items&lt;Label&gt;</code></td>
-</tr>
-<tr>
-<td><code>allowFallbacks</code></td>
-<td><code>?bool</code></td>
-</tr>
-<tr>
-<td><code>requireParameters</code></td>
-<td><code>?bool</code></td>
-</tr>
-<tr>
-<td><code>dataCollection</code></td>
-<td><code>?OpenRouterDataCollection</code></td>
-</tr>
-<tr>
-<td><code>zdr</code></td>
-<td><code>?bool</code></td>
-</tr>
-<tr>
-<td><code>enforceDistillableText</code></td>
-<td><code>?bool</code></td>
-</tr>
-<tr>
-<td><code>only</code></td>
-<td><code>?Items&lt;Label&gt;</code></td>
-</tr>
-<tr>
-<td><code>ignore</code></td>
-<td><code>?Items&lt;Label&gt;</code></td>
-</tr>
-<tr>
-<td><code>quantizations</code></td>
-<td><code>?Items&lt;OpenRouterQuantization&gt;</code></td>
-</tr>
-<tr>
-<td><code>sort</code></td>
-<td><code>?OpenRouterSort</code></td>
-</tr>
-<tr>
-<td><code>preferredMinThroughput</code></td>
-<td><code>?OpenRouterPercentiles</code></td>
-</tr>
-<tr>
-<td><code>preferredMaxLatency</code></td>
-<td><code>?OpenRouterPercentiles</code></td>
-</tr>
-<tr>
-<td><code>maxPrice</code></td>
-<td><code>?OpenRouterMaxPrice</code></td>
-</tr>
-</tbody></table>
-<h3 id="openrouterconstraints">OpenRouterConstraints</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>allowedModels</code></td>
-<td><code>Items&lt;Text&gt;</code></td>
-</tr>
-<tr>
-<td><code>excludedModels</code></td>
-<td><code>Items&lt;Text&gt;</code></td>
-</tr>
-<tr>
-<td><code>costTier</code></td>
-<td><code>?OpenRouterCostTier</code></td>
-</tr>
-<tr>
-<td><code>provider</code></td>
-<td><code>?OpenRouterProviderRouting</code></td>
-</tr>
-</tbody></table>
-<h3 id="connectionlifecycle">ConnectionLifecycle</h3>
-<p><code>Disconnected</code>, <code>Authorizing</code>, <code>Connected</code>, <code>Refreshing</code>, <code>ReauthenticationRequired</code>, <code>Unavailable</code>, <code>Disabled</code>.</p>
-<h3 id="signinmethod">SignInMethod</h3>
-<p><code>DeviceCode</code>, <code>AuthorizationCode</code>.</p>
-<h3 id="signinchallenge">SignInChallenge</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>flowId</code></td>
-<td><code>Id</code></td>
-</tr>
-<tr>
-<td><code>method</code></td>
-<td><code>SignInMethod</code></td>
-</tr>
-<tr>
-<td><code>userCode</code></td>
-<td><code>?Label</code></td>
-</tr>
-<tr>
-<td><code>verificationUrl</code></td>
-<td><code>?Url</code></td>
-</tr>
-<tr>
-<td><code>authorizeUrl</code></td>
-<td><code>?Url</code></td>
-</tr>
-<tr>
-<td><code>expiresAtMs</code></td>
-<td><code>Counter</code></td>
-</tr>
-</tbody></table>
 <h3 id="connectionrecord">ConnectionRecord</h3>
 <table>
 <thead>
@@ -7644,6 +7444,22 @@
 <td><code>lastRun</code></td>
 <td><code>?IndexRunRecord</code></td>
 </tr>
+<tr>
+<td><code>freshness</code></td>
+<td><code>?IndexFreshness</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>?Items&lt;LanguageCoverage&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>semanticPacks</code></td>
+<td><code>?Items&lt;SemanticPackStatus&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>overlays</code></td>
+<td><code>?Items&lt;OverlayStatus&gt;</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="consumerstatus">ConsumerStatus</h3>
 <table>
@@ -8723,6 +8539,394 @@
 <tr>
 <td><code>evidence</code></td>
 <td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="indexfreshnessstate">IndexFreshnessState</h3>
+<p><code>Current</code>, <code>Stale</code>, <code>Indexing</code>, <code>NotIndexed</code>, <code>Failed</code>.</p>
+<h3 id="indexfreshness">IndexFreshness</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>state</code></td>
+<td><code>IndexFreshnessState</code></td>
+</tr>
+<tr>
+<td><code>indexedCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headRef</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>indexedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>observedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>configurationCurrent</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>reasons</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="languagecoveragemode">LanguageCoverageMode</h3>
+<p><code>Structural</code>, <code>TextFallback</code>, <code>NotSelected</code>.</p>
+<h3 id="languagecoverage">LanguageCoverage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>languageId</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>LanguageCoverageMode</code></td>
+</tr>
+<tr>
+<td><code>grammar</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>files</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>structuralFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>textFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>parseErrorFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>skippedFiles</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="semanticpackstate">SemanticPackState</h3>
+<p><code>NotInstalled</code>, <code>Unavailable</code>, <code>Enabled</code>, <code>Applied</code>, <code>Disabled</code>.</p>
+<h3 id="semanticpackstatus">SemanticPackStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>packId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>SemanticPackState</code></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="overlaystate">OverlayState</h3>
+<p><code>Queued</code>, <code>Indexing</code>, <code>Ready</code>, <code>Failed</code>, <code>Stale</code>, <code>Expired</code>, <code>Unavailable</code>.</p>
+<h3 id="overlaystatus">OverlayStatus</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>overlayId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>worktreeId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>OverlayState</code></td>
+</tr>
+<tr>
+<td><code>viewId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>baseCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headCommit</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>headRef</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>captureDigest</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>runId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>expiresAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="indexrunstate">IndexRunState</h3>
+<p><code>Queued</code>, <code>Running</code>, <code>Succeeded</code>, <code>Failed</code>, <code>Cancelled</code>.</p>
+<h3 id="indexrunkind">IndexRunKind</h3>
+<p><code>Index</code>, <code>Reindex</code>, <code>Overlay</code>.</p>
+<h3 id="openrouterdatacollection">OpenRouterDataCollection</h3>
+<p><code>allow</code>, <code>deny</code>.</p>
+<h3 id="openrouterquantization">OpenRouterQuantization</h3>
+<p><code>int4</code>, <code>int8</code>, <code>fp4</code>, <code>mxfp4</code>, <code>nvfp4</code>, <code>fp6</code>, <code>fp8</code>, <code>mxfp8</code>, <code>fp16</code>, <code>bf16</code>, <code>fp32</code>, <code>unknown</code>.</p>
+<h3 id="openroutersortby">OpenRouterSortBy</h3>
+<p><code>price</code>, <code>throughput</code>, <code>latency</code>.</p>
+<h3 id="openrouterpartition">OpenRouterPartition</h3>
+<p><code>model</code>, <code>none</code>.</p>
+<h3 id="openroutercosttier">OpenRouterCostTier</h3>
+<p><code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code>.</p>
+<h3 id="openroutersort">OpenRouterSort</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>by</code></td>
+<td><code>OpenRouterSortBy</code></td>
+</tr>
+<tr>
+<td><code>partition</code></td>
+<td><code>?OpenRouterPartition</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterpercentiles">OpenRouterPercentiles</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>p50</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p75</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p90</code></td>
+<td><code>?Finite</code></td>
+</tr>
+<tr>
+<td><code>p99</code></td>
+<td><code>?Finite</code></td>
+</tr>
+</tbody></table>
+<h3 id="openroutermaxprice">OpenRouterMaxPrice</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>prompt</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>completion</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>request</code></td>
+<td><code>?Money</code></td>
+</tr>
+<tr>
+<td><code>image</code></td>
+<td><code>?Money</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterproviderrouting">OpenRouterProviderRouting</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>order</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>allowFallbacks</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>requireParameters</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>dataCollection</code></td>
+<td><code>?OpenRouterDataCollection</code></td>
+</tr>
+<tr>
+<td><code>zdr</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>enforceDistillableText</code></td>
+<td><code>?bool</code></td>
+</tr>
+<tr>
+<td><code>only</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>ignore</code></td>
+<td><code>?Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>quantizations</code></td>
+<td><code>?Items&lt;OpenRouterQuantization&gt;</code></td>
+</tr>
+<tr>
+<td><code>sort</code></td>
+<td><code>?OpenRouterSort</code></td>
+</tr>
+<tr>
+<td><code>preferredMinThroughput</code></td>
+<td><code>?OpenRouterPercentiles</code></td>
+</tr>
+<tr>
+<td><code>preferredMaxLatency</code></td>
+<td><code>?OpenRouterPercentiles</code></td>
+</tr>
+<tr>
+<td><code>maxPrice</code></td>
+<td><code>?OpenRouterMaxPrice</code></td>
+</tr>
+</tbody></table>
+<h3 id="openrouterconstraints">OpenRouterConstraints</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>allowedModels</code></td>
+<td><code>Items&lt;Text&gt;</code></td>
+</tr>
+<tr>
+<td><code>excludedModels</code></td>
+<td><code>Items&lt;Text&gt;</code></td>
+</tr>
+<tr>
+<td><code>costTier</code></td>
+<td><code>?OpenRouterCostTier</code></td>
+</tr>
+<tr>
+<td><code>provider</code></td>
+<td><code>?OpenRouterProviderRouting</code></td>
+</tr>
+</tbody></table>
+<h3 id="connectionlifecycle">ConnectionLifecycle</h3>
+<p><code>Disconnected</code>, <code>Authorizing</code>, <code>Connected</code>, <code>Refreshing</code>, <code>ReauthenticationRequired</code>, <code>Unavailable</code>, <code>Disabled</code>.</p>
+<h3 id="signinmethod">SignInMethod</h3>
+<p><code>DeviceCode</code>, <code>AuthorizationCode</code>.</p>
+<h3 id="signinchallenge">SignInChallenge</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>flowId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>method</code></td>
+<td><code>SignInMethod</code></td>
+</tr>
+<tr>
+<td><code>userCode</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>verificationUrl</code></td>
+<td><code>?Url</code></td>
+</tr>
+<tr>
+<td><code>authorizeUrl</code></td>
+<td><code>?Url</code></td>
+</tr>
+<tr>
+<td><code>expiresAtMs</code></td>
+<td><code>Counter</code></td>
 </tr>
 </tbody></table>
 <h3 id="knowledgeentrykind">KnowledgeEntryKind</h3>

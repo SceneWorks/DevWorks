@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod indexing;
 pub mod jobs;
 pub mod projects;
 pub mod work;
@@ -425,6 +426,15 @@ impl Shell {
             Route::Repositories => {
                 self.load_projects();
                 self.load_repositories();
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+            }
+            Route::Indexing => {
+                if self.projects.indexing.sources.is_none() {
+                    self.load_index_sources();
+                }
+                self.index_act(vec![indexing::IndexAction::Runs]);
             }
             Route::Knowledge => {
                 // Scope choices are the projects the user can see.
@@ -1363,6 +1373,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_indexing(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_jobs(slot, reply) else {
             return;
         };
@@ -2003,6 +2016,40 @@ impl Shell {
                     Err(e) => self.settings.connections.catalog_error = Some(e.describe()),
                 }
             }
+            (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                let label = self
+                    .settings
+                    .connections
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_else(|| "Configuring provider".into());
+                // Preparation has no router effects. The client owns the exact frame before
+                // admission, including when a close has already stopped new requests.
+                if let Some(client) = &mut self.client {
+                    client.command(Slot::Configure(n), &label, "router.configure", frame);
+                }
+            }
+            (Slot::Configure(n), Reply::Command(outcome)) => {
+                let p = &mut self.settings.connections;
+                let label = p
+                    .busy
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_default();
+                if !is_unknown(&outcome) {
+                    p.busy.retain(|(k, _)| *k != n);
+                }
+                p.message = Some(match ops::configured(outcome) {
+                    Ok(true) => (Tone::Good, format!("{label}: done.")),
+                    Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
+                    Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                });
+                self.load_connections();
+                self.invalidate_routing();
+            }
             (Slot::Configure(n), Reply::Task(t)) => {
                 let p = &mut self.settings.connections;
                 let label = p
@@ -2011,18 +2058,13 @@ impl Shell {
                     .position(|(k, _)| *k == n)
                     .map(|i| p.busy.remove(i).1)
                     .unwrap_or_default();
-                p.message = Some(match t {
-                    Ok(TaskOutput::Stored { outcome, .. }) => match ops::configured(outcome) {
-                        Ok(true) => (Tone::Good, format!("{label}: done.")),
-                        Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
-                        Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
+                p.message = Some((
+                    Tone::Bad,
+                    match t {
+                        Err(e) => format!("{label}: {e}"),
+                        Ok(_) => format!("{label}: unexpected reply."),
                     },
-                    Ok(_) => (Tone::Bad, format!("{label}: unexpected reply.")),
-                    Err(e) => (Tone::Bad, format!("{label}: {e}")),
-                });
-                // Connections and the catalog changed: reload them, and what the composer shows.
-                self.load_connections();
-                self.invalidate_routing();
+                ));
             }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
@@ -2403,10 +2445,9 @@ impl Shell {
                         if let Some((flow, pasted)) = code {
                             b.submit_sign_in_code(&flow, pasted)?;
                         }
-                        let frame = ops::router_configure(b, action);
-                        let outcome =
-                            crate::backend::resolve_command(b, "router.configure", &frame);
-                        Ok(TaskOutput::Stored { outcome, frame })
+                        Ok(TaskOutput::Prepared {
+                            frame: ops::router_configure(b, action),
+                        })
                     })
                 });
                 if submitted {
@@ -2696,6 +2737,11 @@ impl Shell {
                             .filter_map(|r| serde_json::from_value(r.clone()).ok())
                             .collect();
                     }
+                }
+                Slot::Configure(n) => {
+                    let p = &mut self.settings.connections;
+                    p.sequence = p.sequence.max(*n);
+                    p.busy.push((*n, u.label.clone()));
                 }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
@@ -3373,15 +3419,41 @@ impl Shell {
             Route::Settings => {
                 let online = self.online();
                 let mut actions = Vec::new();
+                // Repository indexing sources sit with the repository paths (General).
+                let mut index_actions = Vec::new();
+                let up = online.is_ok();
+                let indexing = &mut self.projects.indexing;
+                let mut general = |ui: &mut Ui| {
+                    ui.add_space(8.0);
+                    indexing::sources_panel(ui, indexing, up, &mut index_actions);
+                    if widgets::secondary_button(ui, "Open indexing runs").clicked() {
+                        index_actions.push(indexing::IndexAction::Runs);
+                    }
+                };
                 self.settings.ui(
                     ui,
                     online.as_ref().map(|_| ()).map_err(String::as_str),
                     &mut actions,
+                    &mut general,
                 );
                 self.settings_actions(actions);
+                if index_actions
+                    .iter()
+                    .any(|a| matches!(a, indexing::IndexAction::Runs))
+                {
+                    self.route = Route::Indexing;
+                }
+                if self.projects.indexing.sources.is_none()
+                    && self.projects.indexing.sources_error.is_none()
+                    && online.is_ok()
+                {
+                    self.load_index_sources();
+                }
+                self.index_act(index_actions);
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
             }
+            Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
             Route::Portfolio => self.portfolio_screen(ui),

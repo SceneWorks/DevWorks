@@ -439,6 +439,7 @@ mod tests {
             resources: Default::default(),
             runs,
             keep_awake: KeepAwakeStatus::Off,
+            index_runs_resumed: 0,
         }
     }
 

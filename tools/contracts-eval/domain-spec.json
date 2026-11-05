@@ -1744,137 +1744,6 @@
         "connection_id": 2
       }
     },
-    "OpenRouterDataCollection": {
-      "kind": "enum",
-      "values": [
-        "allow",
-        "deny"
-      ]
-    },
-    "OpenRouterQuantization": {
-      "kind": "enum",
-      "values": [
-        "int4",
-        "int8",
-        "fp4",
-        "mxfp4",
-        "nvfp4",
-        "fp6",
-        "fp8",
-        "mxfp8",
-        "fp16",
-        "bf16",
-        "fp32",
-        "unknown"
-      ]
-    },
-    "OpenRouterSortBy": {
-      "kind": "enum",
-      "values": [
-        "price",
-        "throughput",
-        "latency"
-      ]
-    },
-    "OpenRouterPartition": {
-      "kind": "enum",
-      "values": [
-        "model",
-        "none"
-      ]
-    },
-    "OpenRouterCostTier": {
-      "kind": "enum",
-      "values": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    "OpenRouterSort": {
-      "kind": "record",
-      "fields": {
-        "by": "OpenRouterSortBy",
-        "partition": "?OpenRouterPartition"
-      }
-    },
-    "OpenRouterPercentiles": {
-      "kind": "record",
-      "fields": {
-        "p50": "?Finite",
-        "p75": "?Finite",
-        "p90": "?Finite",
-        "p99": "?Finite"
-      }
-    },
-    "OpenRouterMaxPrice": {
-      "kind": "record",
-      "fields": {
-        "prompt": "?Money",
-        "completion": "?Money",
-        "request": "?Money",
-        "image": "?Money"
-      }
-    },
-    "OpenRouterProviderRouting": {
-      "kind": "record",
-      "fields": {
-        "order": "?Items<Label>",
-        "allow_fallbacks": "?bool",
-        "require_parameters": "?bool",
-        "data_collection": "?OpenRouterDataCollection",
-        "zdr": "?bool",
-        "enforce_distillable_text": "?bool",
-        "only": "?Items<Label>",
-        "ignore": "?Items<Label>",
-        "quantizations": "?Items<OpenRouterQuantization>",
-        "sort": "?OpenRouterSort",
-        "preferred_min_throughput": "?OpenRouterPercentiles",
-        "preferred_max_latency": "?OpenRouterPercentiles",
-        "max_price": "?OpenRouterMaxPrice"
-      }
-    },
-    "OpenRouterConstraints": {
-      "kind": "record",
-      "fields": {
-        "allowed_models": "Items<Text>",
-        "excluded_models": "Items<Text>",
-        "cost_tier": "?OpenRouterCostTier",
-        "provider": "?OpenRouterProviderRouting"
-      }
-    },
-    "ConnectionLifecycle": {
-      "kind": "enum",
-      "values": [
-        "Disconnected",
-        "Authorizing",
-        "Connected",
-        "Refreshing",
-        "ReauthenticationRequired",
-        "Unavailable",
-        "Disabled"
-      ]
-    },
-    "SignInMethod": {
-      "kind": "enum",
-      "values": [
-        "DeviceCode",
-        "AuthorizationCode"
-      ]
-    },
-    "SignInChallenge": {
-      "kind": "record",
-      "fields": {
-        "flow_id": "Id",
-        "method": "SignInMethod",
-        "user_code": "?Label",
-        "verification_url": "?Url",
-        "authorize_url": "?Url",
-        "expires_at_ms": "Counter"
-      }
-    },
     "ConnectionRecord": {
       "kind": "record",
       "fields": {
@@ -2505,7 +2374,17 @@
         "repository_id": "Id",
         "current_view_ids": "Items<Id>",
         "coverage": "Coverage",
-        "last_run": "?IndexRunRecord"
+        "last_run": "?IndexRunRecord",
+        "freshness": "?IndexFreshness",
+        "languages": "?Items<LanguageCoverage>",
+        "semantic_packs": "?Items<SemanticPackStatus>",
+        "overlays": "?Items<OverlayStatus>"
+      },
+      "since": {
+        "freshness": 2,
+        "languages": 2,
+        "semantic_packs": 2,
+        "overlays": 2
       }
     },
     "ConsumerStatus": {
@@ -3000,6 +2879,250 @@
         "zero_findings_confirmed": "bool",
         "findings_coverage": "Coverage",
         "evidence": "Items<ArtifactRef>"
+      }
+    },
+    "IndexFreshnessState": {
+      "kind": "enum",
+      "values": [
+        "Current",
+        "Stale",
+        "Indexing",
+        "NotIndexed",
+        "Failed"
+      ]
+    },
+    "IndexFreshness": {
+      "kind": "record",
+      "fields": {
+        "state": "IndexFreshnessState",
+        "indexed_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "indexed_at_ms": "?Counter",
+        "observed_at_ms": "?Counter",
+        "configuration_current": "bool",
+        "reasons": "Items<Label>"
+      }
+    },
+    "LanguageCoverageMode": {
+      "kind": "enum",
+      "values": [
+        "Structural",
+        "TextFallback",
+        "NotSelected"
+      ]
+    },
+    "LanguageCoverage": {
+      "kind": "record",
+      "fields": {
+        "language_id": "Label",
+        "name": "Label",
+        "mode": "LanguageCoverageMode",
+        "grammar": "?Label",
+        "files": "Counter",
+        "structural_files": "Counter",
+        "text_files": "Counter",
+        "parse_error_files": "Counter",
+        "skipped_files": "Counter",
+        "note": "?Content"
+      }
+    },
+    "SemanticPackState": {
+      "kind": "enum",
+      "values": [
+        "NotInstalled",
+        "Unavailable",
+        "Enabled",
+        "Applied",
+        "Disabled"
+      ]
+    },
+    "SemanticPackStatus": {
+      "kind": "record",
+      "fields": {
+        "pack_id": "Id",
+        "state": "SemanticPackState",
+        "languages": "Items<Label>",
+        "note": "?Content"
+      }
+    },
+    "OverlayState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Indexing",
+        "Ready",
+        "Failed",
+        "Stale",
+        "Expired",
+        "Unavailable"
+      ]
+    },
+    "OverlayStatus": {
+      "kind": "record",
+      "fields": {
+        "overlay_id": "Id",
+        "revision": "Revision",
+        "worktree_id": "?Id",
+        "state": "OverlayState",
+        "view_id": "?Id",
+        "base_commit": "?Label",
+        "head_commit": "?Label",
+        "head_ref": "?Label",
+        "capture_digest": "?Label",
+        "run_id": "?Id",
+        "reason": "?Content",
+        "updated_at_ms": "Counter",
+        "expires_at_ms": "Counter"
+      }
+    },
+    "IndexRunState": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Running",
+        "Succeeded",
+        "Failed",
+        "Cancelled"
+      ]
+    },
+    "IndexRunKind": {
+      "kind": "enum",
+      "values": [
+        "Index",
+        "Reindex",
+        "Overlay"
+      ]
+    },
+    "OpenRouterDataCollection": {
+      "kind": "enum",
+      "values": [
+        "allow",
+        "deny"
+      ]
+    },
+    "OpenRouterQuantization": {
+      "kind": "enum",
+      "values": [
+        "int4",
+        "int8",
+        "fp4",
+        "mxfp4",
+        "nvfp4",
+        "fp6",
+        "fp8",
+        "mxfp8",
+        "fp16",
+        "bf16",
+        "fp32",
+        "unknown"
+      ]
+    },
+    "OpenRouterSortBy": {
+      "kind": "enum",
+      "values": [
+        "price",
+        "throughput",
+        "latency"
+      ]
+    },
+    "OpenRouterPartition": {
+      "kind": "enum",
+      "values": [
+        "model",
+        "none"
+      ]
+    },
+    "OpenRouterCostTier": {
+      "kind": "enum",
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "OpenRouterSort": {
+      "kind": "record",
+      "fields": {
+        "by": "OpenRouterSortBy",
+        "partition": "?OpenRouterPartition"
+      }
+    },
+    "OpenRouterPercentiles": {
+      "kind": "record",
+      "fields": {
+        "p50": "?Finite",
+        "p75": "?Finite",
+        "p90": "?Finite",
+        "p99": "?Finite"
+      }
+    },
+    "OpenRouterMaxPrice": {
+      "kind": "record",
+      "fields": {
+        "prompt": "?Money",
+        "completion": "?Money",
+        "request": "?Money",
+        "image": "?Money"
+      }
+    },
+    "OpenRouterProviderRouting": {
+      "kind": "record",
+      "fields": {
+        "order": "?Items<Label>",
+        "allow_fallbacks": "?bool",
+        "require_parameters": "?bool",
+        "data_collection": "?OpenRouterDataCollection",
+        "zdr": "?bool",
+        "enforce_distillable_text": "?bool",
+        "only": "?Items<Label>",
+        "ignore": "?Items<Label>",
+        "quantizations": "?Items<OpenRouterQuantization>",
+        "sort": "?OpenRouterSort",
+        "preferred_min_throughput": "?OpenRouterPercentiles",
+        "preferred_max_latency": "?OpenRouterPercentiles",
+        "max_price": "?OpenRouterMaxPrice"
+      }
+    },
+    "OpenRouterConstraints": {
+      "kind": "record",
+      "fields": {
+        "allowed_models": "Items<Text>",
+        "excluded_models": "Items<Text>",
+        "cost_tier": "?OpenRouterCostTier",
+        "provider": "?OpenRouterProviderRouting"
+      }
+    },
+    "ConnectionLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Disconnected",
+        "Authorizing",
+        "Connected",
+        "Refreshing",
+        "ReauthenticationRequired",
+        "Unavailable",
+        "Disabled"
+      ]
+    },
+    "SignInMethod": {
+      "kind": "enum",
+      "values": [
+        "DeviceCode",
+        "AuthorizationCode"
+      ]
+    },
+    "SignInChallenge": {
+      "kind": "record",
+      "fields": {
+        "flow_id": "Id",
+        "method": "SignInMethod",
+        "user_code": "?Label",
+        "verification_url": "?Url",
+        "authorize_url": "?Url",
+        "expires_at_ms": "Counter"
       }
     },
     "KnowledgeEntryKind": {
@@ -4223,12 +4346,20 @@
       "operation": "indexing.status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "?Id",
+        "overlay_id": "?Id"
       },
       "result": "RepositoryIndexStatus",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one of repositoryId and overlayId (revision 2). Schema revision 2: freshness (the indexed and observed HEAD commits, configuration currency and stale reasons), per-language structural/text coverage with grammar identity, semantic pack state, and every overlay of the repository with its lifecycle state (Queued, Indexing, Ready, Failed, Stale, Expired, Unavailable) and snapshot provenance. With overlayId (an overlay of a repository the caller may see), the result is that repository's status whose overlays member holds exactly that overlay. An overlay requested by ref has no worktreeId.",
+      "since": {
+        "overlay_id": 2
+      },
+      "exactlyOne": [
+        "repository_id",
+        "overlay_id"
+      ]
     },
     "indexing.runs": {
       "operation": "indexing.runs",
@@ -4236,12 +4367,18 @@
       "fields": {
         "scope": "DataScope",
         "repository_id": "?Id",
+        "states": "?NonEmpty<IndexRunState>",
+        "kinds": "?NonEmpty<IndexRunKind>",
         "page": "PageRequest"
       },
       "result": "Page<IndexRunRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema revision 2: states keeps only runs in one of the listed run states (Queued, Running, Succeeded, Failed, Cancelled; a record reports Queued as IntentRecorded or RetryPending, Running as Dispatching, Succeeded as ObservedComplete and Cancelled as CancelledBeforeDispatch) and kinds only runs of one of the listed kinds (Index, Reindex, Overlay); both are optional and combine, and a continuation cursor is bound to them.",
+      "since": {
+        "states": 2,
+        "kinds": 2
+      }
     },
     "indexing.configure_sources": {
       "operation": "indexing.configure_sources",
@@ -7577,6 +7714,26 @@
       1,
       2
     ],
+    "web.search": [
+      1,
+      2
+    ],
+    "web.fetch": [
+      1,
+      2
+    ],
+    "indexing.status": [
+      1,
+      2
+    ],
+    "indexing.runs": [
+      1,
+      2
+    ],
+    "indexing.refresh_overlay": [
+      1,
+      2
+    ],
     "router.catalog": [
       1,
       2
@@ -7586,14 +7743,6 @@
       2
     ],
     "router.configure": [
-      1,
-      2
-    ],
-    "web.search": [
-      1,
-      2
-    ],
-    "web.fetch": [
       1,
       2
     ],

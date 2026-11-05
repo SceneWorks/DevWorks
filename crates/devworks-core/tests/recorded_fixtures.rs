@@ -142,7 +142,7 @@ fn envelope_dto(case: &Fixture) -> Result<(), String> {
         "artifact-query-request" => dto::<ArtifactQueryRequest>(raw, |v| s(v.validate())),
         "graph-read-request" => dto::<GraphReadRequest>(raw, |v| s(v.validate())),
         "git-command-request" => dto::<GitCommandRequest>(raw, |v| s(v.validate())),
-        "index-command-request" => dto::<IndexCommandRequest>(raw, ok),
+        "index-command-request" => dto::<IndexCommandRequest>(raw, |v| s(v.validate())),
         "release-command-request" => dto::<ReleaseCommandRequest>(raw, |v| s(v.validate())),
         "addon-command-request" => dto::<addons::AddonCommandRequest>(raw, |v| s(v.validate())),
         "command-request" => dto::<CommandRequest>(raw, |v| s(v.validate())),
@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1168), 1168);
+    assert_eq!(run("domain-fixtures.json", 1214), 1214);
 }
 
 #[test]
@@ -383,7 +383,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // revision 3 of artifacts.save and artifacts.list and eleven Knowledge operations,
     // revision 2 of the twenty operations returning a work record (feature
     // readiness) and of the three prioritizations (placement).
-    assert_eq!(admitted.len(), 454);
+    assert_eq!(admitted.len(), 457);
+    // Indexing status/runs/overlay also retain revision 2.
 }
 
 #[test]
@@ -512,6 +513,7 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-command-request/workspace",
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
+            "index-command-request/ref",
             "query-request/projectId"
         ]
     );

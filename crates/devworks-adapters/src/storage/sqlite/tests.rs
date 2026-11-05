@@ -109,6 +109,7 @@ mod artifacts;
 mod authority;
 mod connections;
 mod diagnostics;
+mod indexing;
 mod jobs;
 mod knowledge;
 mod projects;

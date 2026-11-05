@@ -53,7 +53,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'tasks.edit', 'tasks.move', 'tasks.assign', 'tasks.dependency_links',
             'tasks.acceptance_evidence', 'tasks.sync_plan', 'tasks.set_feature',
             # A prioritization's bounded placement (one move, any bucket size).
-            'features.prioritize', 'issues.prioritize', 'tasks.prioritize'})
+            'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
+            'indexing.status', 'indexing.runs', 'indexing.refresh_overlay'})
         self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2})
@@ -67,6 +68,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
         self.assertEqual(carried['web.fetch'], {2})
+        self.assertEqual(carried['indexing.runs'], {2})
+        self.assertEqual(carried['indexing.refresh_overlay'], {2})
         self.assertEqual(carried['artifacts.save'], {2, 3})
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
