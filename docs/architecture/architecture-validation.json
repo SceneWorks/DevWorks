@@ -1,10 +1,10 @@
 {
   "status": "Architecture baseline 1.1; structural validation only, production acceptance not performed",
   "date": "2026-11-02",
-  "requirements": 370,
+  "requirements": 374,
   "diagrams": 44,
   "capabilityFamilies": 48,
-  "requirementsInputSha256": "08dea1368c83beb52ace96a1aacb60c0b27163186ad8f5d4d4bda1b177e39c3a",
+  "requirementsInputSha256": "6439805c7461819576e920416c0e289e21e05a3991d705ff2a87d8477b7eb28c",
   "unmapped": 0,
   "missingAnchors": 0,
   "missingAssets": 0,

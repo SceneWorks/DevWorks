@@ -79,7 +79,11 @@ reqowners = {
  'VIS':'shell graph schema_sources', 'WORK':'work workflow controls delegation'
 }
 overrides = {**{f'MCP-{n:02}':'mcp_server mcp_server_access authority graph work knowledge' for n in range(7,12)}, 'ROUTE-18':'systemone router credentials usage',
- 'ROUTE-19':'router chat settings', 'ROUTE-20':'router chat transports',
+ 'ROUTE-19':'session_auto_routing router chat settings', 'ROUTE-20':'router chat transports',
+ 'ROUTE-21':'systemone router credentials usage',
+ 'ROUTE-22':'session_auto_routing systemone router chat settings delegation',
+ 'ROUTE-23':'session_auto_routing systemone transports usage authority',
+ 'ROUTE-24':'session_auto_routing router sessions tool_turn chat delegation',
  'ROUTE-16':'usage router', 'ROUTE-17':'usage router',
  **{r:'delegation work workflow controls approvals' for r in ['AGENT-12','AGENT-18','AGENT-19','AGENT-20']},
  'UI-10':'chat router systemone settings',

@@ -1,10 +1,10 @@
 # Local implementation plan
 
-Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 223 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
+Status: architecture baseline 1.1. This is the complete ownership and dependency breakdown of the captured scope, not implementation authorization or a frozen public API. Requirements remain 227 Confirmed and 147 Proposed; a planned slice does not approve a Proposed requirement. CodeGraph remains the operational source of truth.
 
 ## Success and remaining commitments
 
-The register assigns all 370 requirements, 354 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 75 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 374 requirements, 354 operations across 48 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 76 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -18,13 +18,13 @@ The dependency order is a valid topological order, not a timeline or resource es
 
 Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.
 
-DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 75 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.
+DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 76 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.
 
 ![Coverage and qualification gates](architecture-diagrams/41-implementation-coverage.svg)
 
 ## Dependency order
 
-DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082
+DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-107 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082
 
 ## Slice register
 
@@ -90,7 +90,7 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-059](#dw-059) | Discover and install approved signed app updates | DW-058, DW-044, DW-014 | G10 |
 | [DW-060](#dw-060) | Qualify native target installers and optional assets | DW-010, DW-018, DW-047, DW-048, DW-050, DW-058, DW-059 | G02, G04, G08, G09, G10 |
 | [DW-061](#dw-061) | Measure all representative workloads without inference | DW-060, DW-057 | G12 |
-| [DW-062](#dw-062) | Reconcile full retained behavior and release readiness | DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064 | G11 |
+| [DW-062](#dw-062) | Reconcile full retained behavior and release readiness | DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064, DW-107 | G11 |
 | [DW-063](#dw-063) | Expose indexed code, planned work and Knowledge to MCP clients | DW-001, DW-028, DW-029, DW-012, DW-013, DW-030, DW-033, DW-035, DW-007, DW-008, DW-064 | G04, G06, G10, G11 |
 | [DW-064](#dw-064) | Authorize external MCP clients and selected work or Knowledge commands | DW-005, DW-018, DW-004, DW-010, DW-009, DW-014 | G04, G10, G11 |
 | [DW-071](#dw-071) | Grade recorded work end to end | None | G11 |
@@ -105,6 +105,7 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-080](#dw-080) | Accept suites contributed by packages | DW-045, DW-072 | G11 |
 | [DW-081](#dw-081) | Grade external MCP client activity | DW-064, DW-071 | G11 |
 | [DW-082](#dw-082) | Integrate and accept DW-F13 | DW-071, DW-072, DW-073, DW-074, DW-075, DW-076, DW-077, DW-078, DW-079, DW-080, DW-081 | G11 |
+| [DW-107](#dw-107) | Choose and pin DevWorks Auto once per new session | DW-016, DW-020, DW-022 | G03, G11 |
 
 ## Concrete outcomes and acceptance
 
@@ -168,7 +169,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-SET-01, AT-SET-02, AT-SET-03, AT-SET-04, AT-SET-05, AT-SET-06, AT-SET-07, AT-SET-08
 
-**Supporting requirements:** ROUTE-19, UI-01, UI-02, UI-03, UI-04, UI-05, UI-14, UI-15, UI-06, UI-07, UI-08, UI-09, UI-10, UI-11, UI-12, UI-13
+**Supporting requirements:** ROUTE-19, ROUTE-22, UI-01, UI-02, UI-03, UI-04, UI-05, UI-14, UI-15, UI-06, UI-07, UI-08, UI-09, UI-10, UI-11, UI-12, UI-13
 
 **Behavior/workload obligations:** CAP-SETTINGS. Frozen source entries bound: 13. Pending input schemas: 0.
 
@@ -184,7 +185,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-SEC-01, AT-SEC-02, AT-SEC-03, AT-SEC-04, AT-SEC-05
 
-**Supporting requirements:** ADDON-01, ADDON-02, ADDON-03, ADDON-04, ART-01, ART-02, ART-03, ART-04, ART-05, CONTAINER-01, CONTAINER-02, CONTAINER-03, CONTAINER-04, MCP-01, MCP-02, MCP-03, MCP-04, MCP-05, MCP-06, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06, SKILL-07, SKILL-08, SKILL-09, OP-01, OP-02, OP-03
+**Supporting requirements:** ADDON-01, ADDON-02, ADDON-03, ADDON-04, ROUTE-23, ART-01, ART-02, ART-03, ART-04, ART-05, CONTAINER-01, CONTAINER-02, CONTAINER-03, CONTAINER-04, MCP-01, MCP-02, MCP-03, MCP-04, MCP-05, MCP-06, MCP-07, MCP-08, MCP-09, MCP-10, MCP-11, SKILL-01, SKILL-02, SKILL-03, SKILL-04, SKILL-05, SKILL-06, SKILL-07, SKILL-08, SKILL-09, OP-01, OP-02, OP-03
 
 **Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
 
@@ -232,7 +233,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-HISTORY-01, AT-HISTORY-02
 
-**Supporting requirements:** CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06
+**Supporting requirements:** CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-24, CONTEXT-01, CONTEXT-02, CONTEXT-03, CONTEXT-04, CONTEXT-05, CONTEXT-06
 
 **Behavior/workload obligations:** CAP-SESSIONS, CAP-HISTORY, W02. Frozen source entries bound: 37. Pending input schemas: 0.
 
@@ -354,7 +355,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-COORD-01, AT-COORD-02, AT-COORD-03, AT-COORD-04, AT-COORD-05, AT-COORD-06, AT-COORD-07, AT-COORD-08, AT-AGENT-01, AT-AGENT-02, AT-AGENT-03, AT-AGENT-04, AT-AGENT-05, AT-AGENT-06, AT-AGENT-07, AT-AGENT-08, AT-AGENT-09, AT-AGENT-10, AT-AGENT-11, AT-AGENT-12, AT-AGENT-13, AT-AGENT-14, AT-AGENT-15, AT-AGENT-16, AT-AGENT-17, AT-AGENT-18, AT-AGENT-19, AT-AGENT-20, AT-COORD-09, AT-COORD-10
 
-**Supporting requirements:** CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17
+**Supporting requirements:** CONTROL-01, CONTROL-02, CONTROL-03, CONTROL-04, CONTROL-05, CONTROL-06, CONTROL-07, CONTROL-08, CONTROL-09, CONTROL-10, CONTROL-11, CONTROL-12, CONTROL-13, ROUTE-22, ROUTE-24, WORK-01, WORK-02, WORK-03, WORK-04, WORK-05, WORK-06, WORK-07, WORK-08, WORK-09, WORK-10, WORK-11, WORK-12, WORK-13, WORK-14, WORK-15, WORK-16, WORK-17
 
 **Behavior/workload obligations:** CAP-WORK. Frozen source entries bound: 8. Pending input schemas: 0.
 
@@ -370,7 +371,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-UI-10
 
-**Supporting requirements:** ROUTE-19, ROUTE-20, UI-01, UI-02, UI-03, UI-04, UI-05, UI-14, UI-15, UI-06, UI-07, UI-08, UI-09, UI-11, UI-12, UI-13
+**Supporting requirements:** ROUTE-19, ROUTE-20, ROUTE-22, ROUTE-24, UI-01, UI-02, UI-03, UI-04, UI-05, UI-14, UI-15, UI-06, UI-07, UI-08, UI-09, UI-11, UI-12, UI-13
 
 **Behavior/workload obligations:** CAP-SESSIONS, CAP-NAVIGATION, W03. Frozen source entries bound: 4. Pending input schemas: 0.
 
@@ -384,9 +385,9 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Operations:** `router.catalog`, `router.route`, `router.pin`, `router.availability`, `router.request_status`
 
-**Primary requirement cases:** AT-ROUTE-01, AT-ROUTE-02, AT-ROUTE-03, AT-ROUTE-04, AT-ROUTE-05, AT-ROUTE-06, AT-ROUTE-07, AT-ROUTE-08, AT-ROUTE-11, AT-ROUTE-12, AT-ROUTE-13, AT-ROUTE-14, AT-ROUTE-15, AT-ROUTE-09, AT-ROUTE-10, AT-ROUTE-19, AT-ROUTE-20
+**Primary requirement cases:** AT-ROUTE-01, AT-ROUTE-02, AT-ROUTE-03, AT-ROUTE-04, AT-ROUTE-05, AT-ROUTE-06, AT-ROUTE-07, AT-ROUTE-08, AT-ROUTE-11, AT-ROUTE-12, AT-ROUTE-13, AT-ROUTE-14, AT-ROUTE-15, AT-ROUTE-09, AT-ROUTE-10, AT-ROUTE-20
 
-**Supporting requirements:** ROUTE-16, ROUTE-17, ROUTE-18, UI-10
+**Supporting requirements:** ROUTE-16, ROUTE-17, ROUTE-18, ROUTE-19, ROUTE-21, ROUTE-22, ROUTE-24, UI-10
 
 **Behavior/workload obligations:** CAP-ROUTER, W09. Frozen source entries bound: 9. Pending input schemas: 0.
 
@@ -402,7 +403,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** See supporting and integration obligations.
 
-**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, ROUTE-18, SEC-01, SEC-02, SEC-03, SEC-04, SEC-05
+**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, ROUTE-18, ROUTE-21, SEC-01, SEC-02, SEC-03, SEC-04, SEC-05
 
 **Behavior/workload obligations:** CAP-ROUTER. Frozen source entries bound: 11. Pending input schemas: 0.
 
@@ -418,7 +419,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** See supporting and integration obligations.
 
-**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-20, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13
+**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-20, ROUTE-23, RAG-01, RAG-02, RAG-03, RAG-09, RAG-10, RAG-04, RAG-05, RAG-06, RAG-07, RAG-08, RAG-11, RAG-12, RAG-13
 
 **Behavior/workload obligations:** CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.
 
@@ -434,7 +435,7 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-CACHE-01, AT-CACHE-02, AT-CACHE-03, AT-CACHE-04, AT-CACHE-05, AT-CACHE-06, AT-CONTEXT-01, AT-CONTEXT-02, AT-CONTEXT-03, AT-CONTEXT-04, AT-CONTEXT-05, AT-CONTEXT-06, AT-TOOL-01, AT-TOOL-02, AT-TOOL-03, AT-TOOL-04, AT-TOOL-05, AT-TOOL-06, AT-TOOL-07, AT-TOOL-08, AT-TOOL-09
 
-**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, COORD-09, COORD-10
+**Supporting requirements:** COORD-01, COORD-02, COORD-03, COORD-04, COORD-05, COORD-06, COORD-07, COORD-08, AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08, AGENT-09, AGENT-10, AGENT-11, AGENT-13, AGENT-14, AGENT-15, AGENT-16, AGENT-17, ROUTE-24, COORD-09, COORD-10
 
 **Behavior/workload obligations:** CAP-SESSIONS. Frozen source entries bound: 0. Pending input schemas: 0.
 
@@ -450,23 +451,25 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 
 **Primary requirement cases:** AT-ROUTE-16, AT-ROUTE-17
 
-**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-18, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, LOG-01, LOG-02, LOG-03
+**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, CACHE-01, CACHE-02, CACHE-03, CACHE-04, CACHE-05, CACHE-06, ROUTE-18, ROUTE-21, ROUTE-23, JOB-01, JOB-02, JOB-03, JOB-04, JOB-05, JOB-06, JOB-07, JOB-08, JOB-09, LOG-01, LOG-02, LOG-03
 
 **Behavior/workload obligations:** CAP-USAGE. Frozen source entries bound: 9. Pending input schemas: 0.
 
 ### DW-022
 
-**Retain native SystemOne model discovery and decisions** · Feature · Planned; implementation not authorized or started.
+**Retain native SystemOne model discovery and decisions** · Feature · Approved plan; native implementation pending.
 
-Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility.
+Complete native decision DTO/profile/capability/error schemas, explicit Jev/upstream identity, choice/noul/score/box and supported media. Preserve structured output and raw usage as untrusted observations; no chat-tier membership or execution authority. Controlled HTTP fixtures precede separately authorized live compatibility. Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported.
+
+**Tracked work:** DW-22 in DW-F6.
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
 **Operations:** `router.decision_models`, `router.decide`
 
-**Primary requirement cases:** AT-ROUTE-18
+**Primary requirement cases:** AT-ROUTE-18, AT-ROUTE-21
 
-**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, UI-10
+**Supporting requirements:** ROUTE-01, ROUTE-02, ROUTE-03, ROUTE-04, ROUTE-05, ROUTE-06, ROUTE-07, ROUTE-08, ROUTE-11, ROUTE-12, ROUTE-13, ROUTE-14, ROUTE-15, ROUTE-09, ROUTE-10, ROUTE-22, ROUTE-23, UI-10
 
 **Behavior/workload obligations:** CAP-DECISIONS, CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.
 
@@ -1339,6 +1342,24 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 **Primary requirement cases:** See supporting and integration obligations.
 
 **Supporting requirements:** EVAL-01, EVAL-02, EVAL-03, EVAL-04, EVAL-05, EVAL-06, EVAL-07, EVAL-08, EVAL-09, EVAL-10, EVAL-11, EVAL-12, EVAL-13, EVAL-14
+
+**Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-107
+
+**Choose and pin DevWorks Auto once per new session** · Feature · Approved plan; native implementation pending.
+
+AC1: New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated. AC2: The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing. AC3: SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance.
+
+**Tracked work:** DW-107 in DW-F6.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** Cross-cutting implementation/qualification; no separate public operation.
+
+**Primary requirement cases:** AT-ROUTE-19, AT-ROUTE-22, AT-ROUTE-23, AT-ROUTE-24
+
+**Supporting requirements:** None assigned.
 
 **Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
 

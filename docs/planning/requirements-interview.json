@@ -1142,6 +1142,24 @@
       "source": "User found that many CodeGraph review-queue approvals did not need them, including a UI change they had approved in chat that came back as an agent decision to acknowledge, and chose the origin-based policy (\"Yes, by origin\") on 3 November 2026. They then chose automatic promotion of recurring agent lessons: \"The less I have to interact and approve the better ... Autonomy is the goal.\"",
       "status": "Requirement decision recorded in KNOW-03 and KNOW-05; native behavior unimplemented",
       "decision": "No rule asks the user for approval. A rule from the user's own instruction or review, direct or relayed with the user's words attached, takes effect immediately; a lesson inferred by an agent, subagent or automated reviewer takes effect automatically once it recurs across a configured number of distinct source events. Both are monitored under EVAL-07, and the user may promote, challenge or retire any rule. Decisions record who made them: one the user made or approved in chat names the user as origin, only an agent's own decision is autonomous, and autonomous decisions are readable without asking for acknowledgment."
+    },
+    {
+      "id": "first_session_auto_routing_20261105",
+      "source": "User-approved routing refinement and exact implementation plan",
+      "decision": "DevWorks Auto classifies once before first generation, preferring a pinless round-robin SystemOne pool and using a bounded direct Low fallback. Persist the tier and eligible model pin across ordinary continuations. Explicit named/tier and upstream Auto/Auto Beta choices bypass classification. Manual changes and explained same-tier availability replacements remain allowed.",
+      "requirements": [
+        "ROUTE-19",
+        "ROUTE-21",
+        "ROUTE-22",
+        "ROUTE-23",
+        "ROUTE-24"
+      ],
+      "codegraph_feature": "DW-F6",
+      "items": [
+        "DW-22",
+        "DW-107"
+      ],
+      "evidence_boundary": "Approved product/plan decision; native behavior and provider cache savings are not established by the planning or classifier pilot."
     }
   ],
   "open_next": "Execute native work from CodeGraph items after revalidation; all native items remain backlog. DW-64 tracks the current commit/push closeout.",
