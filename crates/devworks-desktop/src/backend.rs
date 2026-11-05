@@ -159,6 +159,22 @@ pub enum Slot {
     /// The artifact content of a repository's README (`true`) or summary.
     RepositoryContent(String, bool),
     RemoveIndex(String),
+    /// A Knowledge listing page (its request generation).
+    KnowledgeList(u64),
+    /// One Knowledge entry with its evidence and history (claim ID).
+    KnowledgeRead(String),
+    /// Knowledge counts and retrieval mode.
+    KnowledgeDiagnostics,
+    /// The preview of a delete by source (the source).
+    KnowledgePreview(String),
+    /// Storing an import file as the user's artifact.
+    KnowledgeImportSave,
+    /// The exact preview of an import.
+    KnowledgeImportPreview,
+    /// The confirmed import.
+    KnowledgeImport,
+    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
+    KnowledgeWrite,
     /// The jobs of the selected scope, and a further page of them.
     JobsList,
     /// A further page of the shown jobs list (that list's generation).
@@ -285,6 +301,18 @@ pub const COMMANDS: &[&str] = &[
     "projects.restore",
     "projects.delete",
     "repositories.remove_index",
+    "knowledge.record",
+    "knowledge.revise",
+    "knowledge.tag",
+    "knowledge.verify",
+    "knowledge.retract",
+    "knowledge.challenge",
+    "knowledge.promote",
+    "knowledge.scope",
+    "knowledge.delete_selected",
+    "knowledge.relate",
+    "knowledge.delete_by_source",
+    "knowledge.import_user_data",
     "jobs.create",
     "jobs.edit",
     "jobs.enable",
@@ -550,6 +578,11 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
+        // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
+        // that exact frame: a new request would replace it, and could commit a second time.
+        if self.unresolved.iter().any(|u| u.slot == slot) {
+            return false;
+        }
         let kept = frame.clone();
         let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
         if self

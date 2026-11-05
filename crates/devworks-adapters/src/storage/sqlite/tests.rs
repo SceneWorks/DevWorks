@@ -110,6 +110,7 @@ mod authority;
 mod connections;
 mod diagnostics;
 mod jobs;
+mod knowledge;
 mod projects;
 mod replies;
 mod resources;

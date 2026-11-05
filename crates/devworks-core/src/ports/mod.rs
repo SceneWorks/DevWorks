@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod files;
 pub mod http;
 pub mod process;
+pub mod retrieval;
 pub mod router;
 pub mod secrets;
 pub mod storage;
@@ -60,6 +61,13 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Knowledge entities, claims, evidence, relations, challenges and writes.
+    KnowledgeEntity,
+    KnowledgeClaim,
+    KnowledgeEvidence,
+    KnowledgeRelation,
+    KnowledgeChallenge,
+    KnowledgeWrite,
     /// Schedules (jobs) and their runs.
     Job,
     JobRun,

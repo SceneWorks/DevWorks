@@ -832,57 +832,57 @@
 </thead>
 <tbody><tr>
 <td><code>knowledge.search</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>text</code>: <code>Text</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code><br><code>kinds</code>: <code>Items&lt;KnowledgeKind&gt;</code><br><code>page</code>: <code>PageRequest</code><br><code>entityLimit</code>: <code>Limit</code><br><code>claimLimit</code>: <code>Limit</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>text</code>: <code>Text</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code><br><code>kinds</code>: <code>Items&lt;KnowledgeKind&gt;</code><br><code>page</code>: <code>PageRequest</code><br><code>entityLimit</code>: <code>Limit</code><br><code>claimLimit</code>: <code>Limit</code><br><code>states</code>: <code>?Items&lt;KnowledgeLifecycle&gt;</code><br><code>entryKinds</code>: <code>?Items&lt;KnowledgeEntryKind&gt;</code><br><code>source</code>: <code>?Label</code><br><code>stale</code>: <code>?bool</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;KnowledgeClaim&gt;</code></td>
 </tr>
 <tr>
 <td><code>knowledge.read</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>revision</code>: <code>?Revision</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>revision</code>: <code>?Revision</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.record</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>batch</code>: <code>KnowledgeBatch</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>batch</code>: <code>KnowledgeBatch</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.revise</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>ClaimDraft</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>replacement</code>: <code>ClaimDraft</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.relate</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>subjectId</code>: <code>Id</code><br><code>predicate</code>: <code>Label</code><br><code>objectId</code>: <code>Id</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>subjectId</code>: <code>Id</code><br><code>predicate</code>: <code>Label</code><br><code>objectId</code>: <code>Id</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.tag</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimIds</code>: <code>NonEmpty&lt;Id&gt;</code><br><code>expectedRevisions</code>: <code>NonEmpty&lt;RevisionedRef&gt;</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimIds</code>: <code>NonEmpty&lt;Id&gt;</code><br><code>expectedRevisions</code>: <code>NonEmpty&lt;RevisionedRef&gt;</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.verify</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code><br><code>sourceRevision</code>: <code>?Text</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.retract</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.scope</code></td>
-<td><strong>Command</strong><br><code>claimIds</code>: <code>NonEmpty&lt;RevisionedRef&gt;</code><br><code>destination</code>: <code>DataScope</code></td>
+<td><strong>Command</strong><br><code>claimIds</code>: <code>NonEmpty&lt;RevisionedRef&gt;</code><br><code>destination</code>: <code>DataScope</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.diagnostics</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>sourceId</code>: <code>?Id</code><br><code>importSource</code>: <code>?ArtifactRef</code><br><code>importSchema</code>: <code>?SchemaRef</code><br><code>sourceLabel</code>: <code>?Label</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;Diagnostic&gt;</code></td>
 </tr>
 <tr>
 <td><code>knowledge.delete_by_source</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>sourceId</code>: <code>Id</code><br><code>expectedScopeRevision</code>: <code>Revision</code><br><code>previewDigest</code>: <code>Digest</code><br><code>proposalId</code>: <code>?Id</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>sourceId</code>: <code>?Id</code><br><code>expectedScopeRevision</code>: <code>Revision</code><br><code>previewDigest</code>: <code>Digest</code><br><code>proposalId</code>: <code>?Id</code><br><code>sourceLabel</code>: <code>?Label</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>MutationSummary</code></td>
 </tr>
 <tr>
@@ -892,32 +892,32 @@
 </tr>
 <tr>
 <td><code>knowledge.write_status</code></td>
-<td><strong>Query</strong><br><code>writeId</code>: <code>Id</code></td>
+<td><strong>Query</strong><br><code>writeId</code>: <code>Id</code><br><code>cursor</code>: <code>?Cursor</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.subgraph</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.entity_bundle</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.entity_graph</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.claim_bundle</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.expand_frontier</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
@@ -927,27 +927,27 @@
 </tr>
 <tr>
 <td><code>knowledge.query</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>query</code>: <code>KnowledgeQuery</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>KnowledgeBundle</code></td>
 </tr>
 <tr>
 <td><code>knowledge.import_user_data</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>source</code>: <code>ArtifactRef</code><br><code>schema</code>: <code>SchemaRef</code><br><code>previewDigest</code>: <code>Digest</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>source</code>: <code>ArtifactRef</code><br><code>schema</code>: <code>SchemaRef</code><br><code>previewDigest</code>: <code>Digest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.promote</code></td>
-<td><strong>Command</strong><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>destination</code>: <code>DataScope</code><br><code>proposalId</code>: <code>?Id</code></td>
+<td><strong>Command</strong><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>destination</code>: <code>DataScope</code><br><code>proposalId</code>: <code>?Id</code><br><code>action</code>: <code>?PromoteAction</code><br><code>address</code>: <code>?LessonAddress</code><br><code>reason</code>: <code>?Content</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.challenge</code></td>
-<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code></td>
+<td><strong>Command</strong><br><code>scope</code>: <code>DataScope</code><br><code>claimId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>reason</code>: <code>Content</code><br><code>evidenceIds</code>: <code>Items&lt;Id&gt;</code><br><code>resolveChallengeId</code>: <code>?Id</code><br><code>outcome</code>: <code>?ChallengeOutcome</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
 <td><code>knowledge.tagged_lessons</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>tags</code>: <code>NonEmpty&lt;Label&gt;</code><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>tags</code>: <code>NonEmpty&lt;Label&gt;</code><br><code>page</code>: <code>PageRequest</code><br><code>ruleStates</code>: <code>?Items&lt;RuleState&gt;</code><br><code>activity</code>: <code>?Label</code><br><code>view</code>: <code>?LessonView</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;KnowledgeClaim&gt;</code></td>
 </tr>
 </tbody></table>
@@ -993,7 +993,7 @@
 </tr>
 <tr>
 <td><code>dreaming.revert</code></td>
-<td><strong>Command</strong><br><code>runId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>proposalId</code>: <code>Id</code><br><code>expectedChangeDigest</code>: <code>Digest</code></td>
+<td><strong>Command</strong><br><code>runId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>proposalId</code>: <code>Id</code><br><code>expectedChangeDigest</code>: <code>Digest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
 <td><code>KnowledgeWriteReceipt</code></td>
 </tr>
 <tr>
@@ -2340,12 +2340,6 @@
 <p><code>Sqlite</code>, <code>MariaDb</code>, <code>MySql</code>, <code>Postgres</code>, <code>SqlServer</code>.</p>
 <h3 id="jobkind">JobKind</h3>
 <p><code>Native</code>, <code>Inference</code>.</p>
-<h3 id="jobrunstatus">JobRunStatus</h3>
-<p><code>Queued</code>, <code>Running</code>, <code>Holding</code>, <code>Succeeded</code>, <code>Failed</code>, <code>Skipped</code>, <code>Cancelled</code>, <code>OutcomeUnknown</code>.</p>
-<h3 id="jobtrigger">JobTrigger</h3>
-<p><code>Scheduled</code>, <code>Manual</code>.</p>
-<h3 id="jobhold">JobHold</h3>
-<p><code>ReactivationRequired</code>, <code>AuthorizationRequired</code>, <code>ProjectClosed</code>.</p>
 <h3 id="proposaldecision">ProposalDecision</h3>
 <p><code>Approve</code>, <code>Reject</code>.</p>
 <h3 id="gitactionkind">GitActionKind</h3>
@@ -2723,189 +2717,6 @@
 <tr>
 <td><code>pendingReadiness</code></td>
 <td><code>?ReadinessAssessment</code> · <em>revision 2+</em></td>
-</tr>
-</tbody></table>
-<h3 id="readinessdisposition">ReadinessDisposition</h3>
-<p><code>ResolvedDecision</code>, <code>BoundedInvestigation</code>, <code>NeedsUserDecision</code>.</p>
-<h3 id="findingstate">FindingState</h3>
-<p><code>Open</code>, <code>Resolved</code>, <code>RiskAccepted</code>.</p>
-<h3 id="confidencelevel">ConfidenceLevel</h3>
-<p><code>High</code>, <code>Medium</code>, <code>Low</code>.</p>
-<h3 id="readinessfreshness">ReadinessFreshness</h3>
-<p><code>Current</code>, <code>Stale</code>.</p>
-<h3 id="readinessfinding">ReadinessFinding</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>id</code></td>
-<td><code>Id</code></td>
-</tr>
-<tr>
-<td><code>disposition</code></td>
-<td><code>ReadinessDisposition</code></td>
-</tr>
-<tr>
-<td><code>blocking</code></td>
-<td><code>bool</code></td>
-</tr>
-<tr>
-<td><code>prerequisite</code></td>
-<td><code>bool</code></td>
-</tr>
-<tr>
-<td><code>state</code></td>
-<td><code>FindingState</code></td>
-</tr>
-<tr>
-<td><code>requirementIds</code></td>
-<td><code>Items&lt;Id&gt;</code></td>
-</tr>
-<tr>
-<td><code>scopeKey</code></td>
-<td><code>?Id</code></td>
-</tr>
-<tr>
-<td><code>affectedWorkIds</code></td>
-<td><code>Items&lt;Id&gt;</code></td>
-</tr>
-<tr>
-<td><code>summary</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>missing</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>consequence</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>attempts</code></td>
-<td><code>Items&lt;Content&gt;</code></td>
-</tr>
-<tr>
-<td><code>insufficiency</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>closureCondition</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>decision</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>confidence</code></td>
-<td><code>?ConfidenceLevel</code></td>
-</tr>
-<tr>
-<td><code>evidence</code></td>
-<td><code>Items&lt;ArtifactRef&gt;</code></td>
-</tr>
-<tr>
-<td><code>objective</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>limits</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>question</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>recommendation</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>closureNote</code></td>
-<td><code>?Content</code></td>
-</tr>
-<tr>
-<td><code>closureEvidence</code></td>
-<td><code>Items&lt;ArtifactRef&gt;</code></td>
-</tr>
-</tbody></table>
-<h3 id="readinessassessment">ReadinessAssessment</h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>id</code></td>
-<td><code>Id</code></td>
-</tr>
-<tr>
-<td><code>revision</code></td>
-<td><code>Revision</code></td>
-</tr>
-<tr>
-<td><code>planRevision</code></td>
-<td><code>Revision</code></td>
-</tr>
-<tr>
-<td><code>planDigest</code></td>
-<td><code>Digest</code></td>
-</tr>
-<tr>
-<td><code>reviewedPending</code></td>
-<td><code>bool</code></td>
-</tr>
-<tr>
-<td><code>freshness</code></td>
-<td><code>ReadinessFreshness</code></td>
-</tr>
-<tr>
-<td><code>staleScopeKeys</code></td>
-<td><code>Items&lt;Id&gt;</code></td>
-</tr>
-<tr>
-<td><code>ready</code></td>
-<td><code>bool</code></td>
-</tr>
-<tr>
-<td><code>summary</code></td>
-<td><code>Content</code></td>
-</tr>
-<tr>
-<td><code>findings</code></td>
-<td><code>Items&lt;ReadinessFinding&gt;</code></td>
-</tr>
-<tr>
-<td><code>assessedBy</code></td>
-<td><code>ActorId</code></td>
-</tr>
-<tr>
-<td><code>assessedAtMs</code></td>
-<td><code>Counter</code></td>
-</tr>
-</tbody></table>
-<h3 id="readinesschange">ReadinessChange</h3>
-<table>
-<thead>
-<tr>
-<th>Kind</th>
-<th>Fields</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>Assess</code></td>
-<td><code>expectedAssessmentRevision</code>: <code>?Revision</code><br><code>planRevision</code>: <code>Revision</code><br><code>planDigest</code>: <code>Digest</code><br><code>summary</code>: <code>Content</code><br><code>findings</code>: <code>Items&lt;ReadinessFinding&gt;</code></td>
-</tr>
-<tr>
-<td><code>CloseFinding</code></td>
-<td><code>expectedAssessmentRevision</code>: <code>Revision</code><br><code>findingId</code>: <code>Id</code><br><code>note</code>: <code>Content</code><br><code>evidence</code>: <code>Items&lt;ArtifactRef&gt;</code></td>
 </tr>
 </tbody></table>
 <h3 id="plandraft">PlanDraft</h3>
@@ -3940,6 +3751,10 @@
 <td><code>metadata</code></td>
 <td><code>?SchemaValue</code></td>
 </tr>
+<tr>
+<td><code>sourceRevision</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
 </tbody></table>
 <h3 id="knowledgeentity">KnowledgeEntity</h3>
 <table>
@@ -3972,6 +3787,34 @@
 <tr>
 <td><code>scope</code></td>
 <td><code>DataScope</code></td>
+</tr>
+<tr>
+<td><code>canonicalName</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>externalId</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>authorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>createdAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>deleted</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="knowledgeclaim">KnowledgeClaim</h3>
@@ -4050,6 +3893,66 @@
 <td><code>source</code></td>
 <td><code>?Label</code></td>
 </tr>
+<tr>
+<td><code>entryKind</code></td>
+<td><code>?KnowledgeEntryKind</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lifecycle</code></td>
+<td><code>?KnowledgeLifecycle</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>origin</code></td>
+<td><code>?KnowledgeOrigin</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>originRef</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>autonomous</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>authorId</code></td>
+<td><code>?ActorId</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sessionId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>createdAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>verifiedAtMs</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>verifiedSourceRevision</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>stale</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>supersededBy</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lesson</code></td>
+<td><code>?LessonRecord</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>challenges</code></td>
+<td><code>?Items&lt;LessonChallenge&gt;</code> · <em>revision 3+</em></td>
+</tr>
 </tbody></table>
 <h3 id="claimdraft">ClaimDraft</h3>
 <table>
@@ -4110,6 +4013,26 @@
 <tr>
 <td><code>source</code></td>
 <td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>entryKind</code></td>
+<td><code>?KnowledgeEntryKind</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>origin</code></td>
+<td><code>?KnowledgeOrigin</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>originRef</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>lesson</code></td>
+<td><code>?LessonDraft</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>sourceRevision</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="knowledgebatch">KnowledgeBatch</h3>
@@ -4213,6 +4136,18 @@
 <tr>
 <td><code>summary</code></td>
 <td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>relations</code></td>
+<td><code>?Rows&lt;KnowledgeRelation&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>revisions</code></td>
+<td><code>?Rows&lt;KnowledgeRevisionEntry&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>scopeRevision</code></td>
+<td><code>?Revision</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="knowledgequery">KnowledgeQuery</h3>
@@ -4323,6 +4258,18 @@
 <tr>
 <td><code>diagnostics</code></td>
 <td><code>Items&lt;Diagnostic&gt;</code></td>
+</tr>
+<tr>
+<td><code>entityCount</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>claimCount</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code> · <em>revision 2+</em></td>
 </tr>
 </tbody></table>
 <h3 id="dreamrun">DreamRun</h3>
@@ -8776,6 +8723,476 @@
 <tr>
 <td><code>evidence</code></td>
 <td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="knowledgeentrykind">KnowledgeEntryKind</h3>
+<p><code>Goal</code>, <code>Decision</code>, <code>Constraint</code>, <code>Fact</code>, <code>Gotcha</code>, <code>Attempt</code>, <code>Architecture</code>, <code>Lesson</code>, <code>Finding</code>, <code>Proposal</code>.</p>
+<h3 id="knowledgelifecycle">KnowledgeLifecycle</h3>
+<p><code>Active</code>, <code>Superseded</code>, <code>Retracted</code>, <code>Deleted</code>.</p>
+<h3 id="knowledgeorigin">KnowledgeOrigin</h3>
+<p><code>User</code>, <code>Agent</code>.</p>
+<h3 id="lessonsource">LessonSource</h3>
+<p><code>Prompt</code>, <code>Review</code>, <code>RelayedPrompt</code>, <code>RelayedReview</code>, <code>Agent</code>, <code>Subagent</code>, <code>BotReview</code>.</p>
+<h3 id="rulestate">RuleState</h3>
+<p><code>Candidate</code>, <code>Proposed</code>, <code>Effective</code>, <code>Rejected</code>, <code>Retired</code>.</p>
+<h3 id="ruleeffect">RuleEffect</h3>
+<p><code>UserInstruction</code>, <code>Recurrence</code>, <code>Promoted</code>.</p>
+<h3 id="lessonaddresskind">LessonAddressKind</h3>
+<p><code>Code</code>, <code>Instruction</code>, <code>Skill</code>, <code>Documentation</code>, <code>Test</code>.</p>
+<h3 id="challengeoutcome">ChallengeOutcome</h3>
+<p><code>Uphold</code>, <code>Retire</code>.</p>
+<h3 id="challengestate">ChallengeState</h3>
+<p><code>Open</code>, <code>Upheld</code>, <code>Retired</code>.</p>
+<h3 id="promoteaction">PromoteAction</h3>
+<p><code>Effective</code>, <code>Propose</code>, <code>Reject</code>, <code>Address</code>.</p>
+<h3 id="lessonview">LessonView</h3>
+<p><code>All</code>, <code>RecentlyLearned</code>, <code>Recurring</code>, <code>Unaddressed</code>, <code>Undelivered</code>.</p>
+<h3 id="applicability">Applicability</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>activities</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>paths</code></td>
+<td><code>Items&lt;RelativePath&gt;</code></td>
+</tr>
+<tr>
+<td><code>tools</code></td>
+<td><code>Items&lt;Label&gt;</code></td>
+</tr>
+<tr>
+<td><code>harness</code></td>
+<td><code>?Label</code></td>
+</tr>
+<tr>
+<td><code>repositoryIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="lessondraft">LessonDraft</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>source</code></td>
+<td><code>LessonSource</code></td>
+</tr>
+<tr>
+<td><code>sourceRef</code></td>
+<td><code>?Text</code></td>
+</tr>
+<tr>
+<td><code>quotedWords</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>applicability</code></td>
+<td><code>Applicability</code></td>
+</tr>
+<tr>
+<td><code>sameAs</code></td>
+<td><code>?Id</code></td>
+</tr>
+</tbody></table>
+<h3 id="lessonaddress">LessonAddress</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>kind</code></td>
+<td><code>LessonAddressKind</code></td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>reference</code></td>
+<td><code>?Text</code></td>
+</tr>
+</tbody></table>
+<h3 id="lessonchallenge">LessonChallenge</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>ChallengeState</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>evidenceIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>authorId</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>openedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>resolvedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>resolution</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="lessonrecord">LessonRecord</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ruleState</code></td>
+<td><code>RuleState</code></td>
+</tr>
+<tr>
+<td><code>effect</code></td>
+<td><code>?RuleEffect</code></td>
+</tr>
+<tr>
+<td><code>effectiveAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td><code>LessonSource</code></td>
+</tr>
+<tr>
+<td><code>sourceRef</code></td>
+<td><code>?Text</code></td>
+</tr>
+<tr>
+<td><code>quotedWords</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>applicability</code></td>
+<td><code>Applicability</code></td>
+</tr>
+<tr>
+<td><code>recurrence</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>recurrenceThreshold</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>challenges</code></td>
+<td><code>Items&lt;LessonChallenge&gt;</code></td>
+</tr>
+<tr>
+<td><code>addressedBy</code></td>
+<td><code>Items&lt;LessonAddress&gt;</code></td>
+</tr>
+<tr>
+<td><code>deliveredSessions</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>lastDeliveredAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="knowledgerelation">KnowledgeRelation</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>subjectId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>predicate</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>objectId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>evidenceIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>authorId</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>createdAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="knowledgerevisionentry">KnowledgeRevisionEntry</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>change</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>authorId</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>atMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>lifecycle</code></td>
+<td><code>KnowledgeLifecycle</code></td>
+</tr>
+<tr>
+<td><code>writeId</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="jobrunstatus">JobRunStatus</h3>
+<p><code>Queued</code>, <code>Running</code>, <code>Holding</code>, <code>Succeeded</code>, <code>Failed</code>, <code>Skipped</code>, <code>Cancelled</code>, <code>OutcomeUnknown</code>.</p>
+<h3 id="jobtrigger">JobTrigger</h3>
+<p><code>Scheduled</code>, <code>Manual</code>.</p>
+<h3 id="jobhold">JobHold</h3>
+<p><code>ReactivationRequired</code>, <code>AuthorizationRequired</code>, <code>ProjectClosed</code>.</p>
+<h3 id="readinessdisposition">ReadinessDisposition</h3>
+<p><code>ResolvedDecision</code>, <code>BoundedInvestigation</code>, <code>NeedsUserDecision</code>.</p>
+<h3 id="findingstate">FindingState</h3>
+<p><code>Open</code>, <code>Resolved</code>, <code>RiskAccepted</code>.</p>
+<h3 id="confidencelevel">ConfidenceLevel</h3>
+<p><code>High</code>, <code>Medium</code>, <code>Low</code>.</p>
+<h3 id="readinessfreshness">ReadinessFreshness</h3>
+<p><code>Current</code>, <code>Stale</code>.</p>
+<h3 id="readinessfinding">ReadinessFinding</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>disposition</code></td>
+<td><code>ReadinessDisposition</code></td>
+</tr>
+<tr>
+<td><code>blocking</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>prerequisite</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>FindingState</code></td>
+</tr>
+<tr>
+<td><code>requirementIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>scopeKey</code></td>
+<td><code>?Id</code></td>
+</tr>
+<tr>
+<td><code>affectedWorkIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>missing</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>consequence</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>attempts</code></td>
+<td><code>Items&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>insufficiency</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>closureCondition</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>decision</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>?ConfidenceLevel</code></td>
+</tr>
+<tr>
+<td><code>evidence</code></td>
+<td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+<tr>
+<td><code>objective</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>limits</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>question</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>recommendation</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>closureNote</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>closureEvidence</code></td>
+<td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="readinessassessment">ReadinessAssessment</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>planRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>planDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>reviewedPending</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>freshness</code></td>
+<td><code>ReadinessFreshness</code></td>
+</tr>
+<tr>
+<td><code>staleScopeKeys</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>ready</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>findings</code></td>
+<td><code>Items&lt;ReadinessFinding&gt;</code></td>
+</tr>
+<tr>
+<td><code>assessedBy</code></td>
+<td><code>ActorId</code></td>
+</tr>
+<tr>
+<td><code>assessedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="readinesschange">ReadinessChange</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Assess</code></td>
+<td><code>expectedAssessmentRevision</code>: <code>?Revision</code><br><code>planRevision</code>: <code>Revision</code><br><code>planDigest</code>: <code>Digest</code><br><code>summary</code>: <code>Content</code><br><code>findings</code>: <code>Items&lt;ReadinessFinding&gt;</code></td>
+</tr>
+<tr>
+<td><code>CloseFinding</code></td>
+<td><code>expectedAssessmentRevision</code>: <code>Revision</code><br><code>findingId</code>: <code>Id</code><br><code>note</code>: <code>Content</code><br><code>evidence</code>: <code>Items&lt;ArtifactRef&gt;</code></td>
 </tr>
 </tbody></table>
 <h3 id="queueplacement">QueuePlacement</h3>

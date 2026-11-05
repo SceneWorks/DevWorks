@@ -256,6 +256,21 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0017_jobs.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the unified Knowledge tables, their indexes and two FTS5 projections, referencing
+    // only actors, projects and sessions (migration 1/7 tables, unchanged).
+    // The writer floor stays at 16 (the highest so far): applying a migration overwrites the
+    // store's floors, so a lower value would re-admit the writers migrations 14 and 16 refuse. It
+    // need not rise: no earlier build writes these tables, so none can break their
+    // compare-and-set revisions, scope revisions or lexical rows, and every record an earlier
+    // writer writes is unchanged here. The reader floor stays at 8: no earlier build reads these
+    // tables, and every query an earlier reader makes returns the same results.
+    Migration {
+        version: 18,
+        minimum_reader: 8,
+        minimum_writer: 16,
+        sql: include_str!("migrations/0018_knowledge.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -263,6 +278,10 @@ pub const MIGRATION_0017_SHA256: &str =
 /// Recorded checksum of migration 16; a test fails if the shipped text changes.
 pub const MIGRATION_0016_SHA256: &str =
     "4868dd86ca4af8c5d4e77aa54061dcd0b1e17aac0bf5f5506fdbe231305f847c";
+
+/// Recorded checksum of migration 18; a test fails if the shipped text changes.
+pub const MIGRATION_0018_SHA256: &str =
+    "0461f125bd4b1f5889d535749f33214d379cf7965dd5fb701d13e09648853127";
 /// Recorded checksum of migration 14; a test fails if the shipped text changes.
 pub const MIGRATION_0014_SHA256: &str =
     "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534";

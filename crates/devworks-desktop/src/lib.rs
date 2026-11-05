@@ -39,6 +39,7 @@ pub mod chat;
 pub mod connections_screen;
 pub mod files;
 pub mod host;
+pub mod knowledge_screen;
 pub mod memory;
 pub mod notifications;
 pub mod ops;

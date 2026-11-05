@@ -468,6 +468,53 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Schema revision 2 (unified Knowledge, DW-30): entry kinds, lifecycle, provenance, verification
+# and lesson state on claims; lesson drafts, origin and source revisions on writes; filters,
+# previews, challenge resolution and promote actions on inputs.
+for name in ['knowledge.search','knowledge.read','knowledge.diagnostics','knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier','knowledge.query','knowledge.tagged_lessons']:
+ case('r2-input-'+name,'domain-request.r2',domain(name))
+for name in ['knowledge.record','knowledge.revise','knowledge.verify','knowledge.challenge','knowledge.promote']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-knowledge.search-filters','domain-request.r2',domain('knowledge.search',states=['Active','Retracted'],entryKinds=['Gotcha'],source='session-a',stale=True))
+case('r2-input-knowledge.tagged_lessons-views','domain-request.r2',domain('knowledge.tagged_lessons',ruleStates=['Effective'],activity='reviewing',view='Undelivered'))
+case('r2-input-knowledge.diagnostics-preview','domain-request.r2',domain('knowledge.diagnostics',sourceId='source-a'))
+case('r2-input-knowledge.diagnostics-import','domain-request.r2',domain('knowledge.diagnostics',importSource=ART,importSchema=BASE['SchemaRef']))
+lesson_draft={'source':'RelayedReview','sourceRef':'review-1','quotedWords':'Always run fmt','applicability':{'activities':['implementing'],'paths':['src/lib.rs'],'tools':[],'repositoryIds':[]}}
+r2_claim={**sample('ClaimDraft'),'kind':'Lesson','entryKind':'Lesson','origin':'User','originRef':'message-a','lesson':lesson_draft,'sourceRevision':'commit-a'}
+case('r2-input-knowledge.record-lesson','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[r2_claim],'evidence':[{**sample('SourceEvidence'),'sourceRevision':'commit-a'}]}))
+case('r2-input-knowledge.verify-revision','domain-request.r2',command_at('knowledge.verify',sourceRevision='commit-b'))
+case('r2-input-knowledge.challenge-resolve','domain-request.r2',command_at('knowledge.challenge',resolveChallengeId='challenge-a',outcome='Retire'))
+case('r2-input-knowledge.promote-address','domain-request.r2',command_at('knowledge.promote',action='Address',address={'kind':'Test','name':'fmt_check','reference':'ci.yml'}))
+case('reject-r1-knowledge.search-states','domain-request',domain('knowledge.search',None,states=['Active']),False,False)
+case('reject-r1-knowledge.record-lesson','domain-request',command_at('knowledge.record',None,batch={'entities':[],'claims':[r2_claim],'evidence':[]}),False,False)
+case('reject-r2-knowledge.search-unknown-state','domain-request.r2',domain('knowledge.search',states=['Archived']),False,False)
+case('reject-r2-knowledge.promote-unknown-action','domain-request.r2',command_at('knowledge.promote',action='Approve'),False,False)
+case('reject-r2-knowledge.lesson-unknown-source','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[{**r2_claim,'lesson':{**lesson_draft,'source':'Human'}}],'evidence':[]}),False,False)
+case('reject-r2-knowledge.lesson-absolute-path','domain-request.r2',command_at('knowledge.record',batch={'entities':[],'claims':[{**r2_claim,'lesson':{**lesson_draft,'applicability':{**lesson_draft['applicability'],'paths':['/etc/passwd']}}}],'evidence':[]}),False,False)
+lesson_record={'ruleState':'Effective','effect':'UserInstruction','effectiveAtMs':'5','source':'RelayedReview','sourceRef':'review-1','quotedWords':'Always run fmt','applicability':lesson_draft['applicability'],'recurrence':'1','recurrenceThreshold':'3','challenges':[{'id':'challenge-a','state':'Open','reason':'Breaks CI','evidenceIds':[],'authorId':'actor-a','openedAtMs':'6'}],'addressedBy':[{'kind':'Test','name':'fmt_check'}],'deliveredSessions':'2','lastDeliveredAtMs':'7'}
+claim_r2={**sample('KnowledgeClaim'),'kind':'Lesson','entryKind':'Lesson','lifecycle':'Active','origin':'User','autonomous':False,'authorId':'actor-a','createdAtMs':'1','updatedAtMs':'2','stale':False,'lesson':lesson_record}
+case('r2-result-knowledge.search','operation-result.r2',{'kind':'knowledge.search','value':{'items':[claim_r2],'hasMore':False}})
+case('r2-result-knowledge.tagged_lessons','operation-result.r2',{'kind':'knowledge.tagged_lessons','value':{'items':[claim_r2],'hasMore':False}})
+bundle_r2={**sample('KnowledgeBundle'),'claims':[claim_r2],'relations':[{'id':'relation-a','subjectId':'claim-a','predicate':'contradicts','objectId':'claim-b','evidenceIds':[],'authorId':'actor-a','createdAtMs':'3'}],'revisions':[{'revision':'1','change':'Recorded','authorId':'actor-a','atMs':'1','lifecycle':'Active','writeId':'write-a','value':'A retained fact'}],'scopeRevision':'4'}
+case('r2-result-knowledge.read','operation-result.r2',{'kind':'knowledge.read','value':bundle_r2})
+for name in ['knowledge.record','knowledge.revise','knowledge.verify','knowledge.challenge','knowledge.promote','knowledge.diagnostics']:
+ case('r2-result-'+name,'operation-result.r2',result(name,OPS[name]['result']))
+for name in ['knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier','knowledge.query']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':bundle_r2})
+case('reject-r1-result-knowledge.claim-lesson','operation-result',{'kind':'knowledge.search','value':{'items':[claim_r2],'hasMore':False}},False,False)
+case('reject-r2-result-knowledge.unknown-rule-state','operation-result.r2',{'kind':'knowledge.search','value':{'items':[{**claim_r2,'lesson':{**lesson_record,'ruleState':'Approved'}}],'hasMore':False}},False,False)
+# Schema revision 2 (DW-30 review): a receipt of a bulk write carries its totals and a cursor
+# that write_status continues, so a write past 128 IDs is named completely.
+receipt_r2={**sample('KnowledgeWriteReceipt'),'entityCount':'300','claimCount':'10000','nextCursor':'cursor-a'}
+for name in ['knowledge.relate','knowledge.tag','knowledge.retract','knowledge.scope','knowledge.import_user_data','dreaming.revert']:
+ case('r2-input-'+name,'domain-request.r2',command_at(name))
+case('r2-input-knowledge.write_status','domain-request.r2',domain('knowledge.write_status'))
+case('r2-input-knowledge.write_status-cursor','domain-request.r2',domain('knowledge.write_status',cursor='cursor-a'))
+case('reject-r1-knowledge.write_status-cursor','domain-request',domain('knowledge.write_status',None,cursor='cursor-a'),False,False)
+for name in ['knowledge.record','knowledge.revise','knowledge.relate','knowledge.tag','knowledge.verify','knowledge.retract','knowledge.scope','knowledge.write_status','knowledge.import_user_data','knowledge.promote','knowledge.challenge','dreaming.revert']:
+ case('r2-result-'+name+'-totals','operation-result.r2',{'kind':name,'value':receipt_r2})
+case('reject-r1-result-knowledge.receipt-totals','operation-result',{'kind':'knowledge.record','value':receipt_r2},False,False)
+case('reject-r2-result-knowledge.receipt-negative-total','operation-result.r2',{'kind':'knowledge.record','value':{**receipt_r2,'claimCount':'-1'}},False,False)
 # Schema revision 2 (feature readiness, AGENT-12/18-20): every operation returning a work record
 # negotiates revision 2, whose WorkRecord carries the feature's readiness assessment; features.edit
 # records an assessment of the active or pending plan, or closes one finding.
@@ -594,5 +641,30 @@ case('reject-r1-result-web-document-provenance','operation-result',{'kind':'web.
 case('reject-r2-result-web-document-not-2xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'status':404}},False,True)
 case('reject-r2-result-web-redirect-not-3xx','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'redirects':[{'url':'https://fixture.invalid/old','status':200}]}},False,True)
 case('reject-r2-result-web-document-unknown-trust','operation-result.r2',{'kind':'web.fetch','value':{**web_doc_r2,'trust':'Verified'}},False,False)
+# Revision 3 preserves earlier contracts and exposes disputes on every claim.
+for name in ['knowledge.search','knowledge.read','knowledge.subgraph','knowledge.entity_bundle',
+             'knowledge.entity_graph','knowledge.claim_bundle','knowledge.expand_frontier',
+             'knowledge.query','knowledge.tagged_lessons']:
+ case('r3-input-'+name,'domain-request.r3',domain(name,revision=3))
+for label in ['test-run.json',' résumé source ','長'*256]:
+ tag=str(len(label))+'-'+str(len(CASES))
+ preview=domain('knowledge.diagnostics',revision=3,sourceLabel=label)
+ cleanup=command_at('knowledge.delete_by_source',revision=3,sourceLabel=label)
+ cleanup['body'].pop('sourceId',None)
+ case('r3-preview-source-'+tag,'domain-request.r3',preview)
+ case('r3-delete-source-'+tag,'domain-request.r3',cleanup)
+case('reject-r2-source-label','domain-request.r2',domain('knowledge.diagnostics',sourceLabel='test.json'),False,False)
+both=command_at('knowledge.delete_by_source',revision=3,sourceId='source-a',sourceLabel='source.json')
+case('reject-r3-two-source-selectors','domain-request.r3',both,False,False)
+claim3={**sample('KnowledgeClaim'),'challenges':[{**sample('LessonChallenge'),'reason':'A disputed fact','evidenceIds':['evidence-a']}]}
+case('r3-result-nonlesson-challenge','operation-result.r3',{'kind':'knowledge.search','value':{'items':[claim3],'hasMore':False}})
+case('reject-r2-independent-challenges','operation-result.r2',{'kind':'knowledge.search','value':{'items':[claim3],'hasMore':False}},False,False)
+for name in ['knowledge.search','knowledge.read','knowledge.diagnostics','knowledge.delete_by_source',
+             'knowledge.subgraph','knowledge.entity_bundle','knowledge.entity_graph','knowledge.claim_bundle',
+             'knowledge.expand_frontier','knowledge.query','knowledge.tagged_lessons']:
+ case('r3-result-'+name,'operation-result.r3',result(name,OPS[name]['result']))
+# The shared r3 result document also binds the existing artifact r3 operations.
+for name in ['artifacts.save','artifacts.list']:
+ case('r3-result-'+name,'operation-result.r3',result(name,LEGACY_RESULTS[name]))
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

@@ -252,30 +252,30 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit` | `Page<KnowledgeClaim>` |
-| `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision` | `KnowledgeBundle` |
-| `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch` | `KnowledgeWriteReceipt` |
-| `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft` | `KnowledgeWriteReceipt` |
-| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>` | `KnowledgeWriteReceipt` |
-| `knowledge.verify` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope` | `KnowledgeWriteReceipt` |
-| `knowledge.diagnostics` | **Query**<br>`scope`: `DataScope` | `Page<Diagnostic>` |
-| `knowledge.delete_by_source` | **Command**<br>`scope`: `DataScope`<br>`sourceId`: `Id`<br>`expectedScopeRevision`: `Revision`<br>`previewDigest`: `Digest`<br>`proposalId`: `?Id` | `MutationSummary` |
+| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<KnowledgeClaim>` |
+| `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.relate` | **Command**<br>`scope`: `DataScope`<br>`subjectId`: `Id`<br>`predicate`: `Label`<br>`objectId`: `Id`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.tag` | **Command**<br>`scope`: `DataScope`<br>`claimIds`: `NonEmpty<Id>`<br>`expectedRevisions`: `NonEmpty<RevisionedRef>`<br>`tags`: `Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.verify` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`sourceRevision`: `?Text`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.retract` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.scope` | **Command**<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`destination`: `DataScope`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.diagnostics` | **Query**<br>`scope`: `DataScope`<br>`sourceId`: `?Id`<br>`importSource`: `?ArtifactRef`<br>`importSchema`: `?SchemaRef`<br>`sourceLabel`: `?Label`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<Diagnostic>` |
+| `knowledge.delete_by_source` | **Command**<br>`scope`: `DataScope`<br>`sourceId`: `?Id`<br>`expectedScopeRevision`: `Revision`<br>`previewDigest`: `Digest`<br>`proposalId`: `?Id`<br>`sourceLabel`: `?Label`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `MutationSummary` |
 | `knowledge.delete_selected` | **Command**<br>`scope`: `DataScope`<br>`claims`: `NonEmpty<RevisionedRef>`<br>`proposalId`: `?Id` | `MutationSummary` |
-| `knowledge.write_status` | **Query**<br>`writeId`: `Id` | `KnowledgeWriteReceipt` |
-| `knowledge.subgraph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.entity_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.entity_graph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.claim_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.expand_frontier` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
+| `knowledge.write_status` | **Query**<br>`writeId`: `Id`<br>`cursor`: `?Cursor`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.subgraph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.entity_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.entity_graph` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.claim_bundle` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.expand_frontier` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
 | `knowledge.render_summary` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `ArtifactRef` |
-| `knowledge.query` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery` | `KnowledgeBundle` |
-| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest` | `KnowledgeWriteReceipt` |
-| `knowledge.promote` | **Command**<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`proposalId`: `?Id` | `KnowledgeWriteReceipt` |
-| `knowledge.challenge` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>` | `KnowledgeWriteReceipt` |
-| `knowledge.tagged_lessons` | **Query**<br>`scope`: `DataScope`<br>`tags`: `NonEmpty<Label>`<br>`page`: `PageRequest` | `Page<KnowledgeClaim>` |
+| `knowledge.query` | **Query**<br>`scope`: `DataScope`<br>`query`: `KnowledgeQuery`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeBundle` |
+| `knowledge.import_user_data` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`schema`: `SchemaRef`<br>`previewDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.promote` | **Command**<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`destination`: `DataScope`<br>`proposalId`: `?Id`<br>`action`: `?PromoteAction`<br>`address`: `?LessonAddress`<br>`reason`: `?Content`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.challenge` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`reason`: `Content`<br>`evidenceIds`: `Items<Id>`<br>`resolveChallengeId`: `?Id`<br>`outcome`: `?ChallengeOutcome`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
+| `knowledge.tagged_lessons` | **Query**<br>`scope`: `DataScope`<br>`tags`: `NonEmpty<Label>`<br>`page`: `PageRequest`<br>`ruleStates`: `?Items<RuleState>`<br>`activity`: `?Label`<br>`view`: `?LessonView`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<KnowledgeClaim>` |
 
 ### Dreaming
 
@@ -289,7 +289,7 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 | `dreaming.settings` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `DreamConfig` | `DreamSettingsRecord` |
 | `dreaming.instructions` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef` | `Page<InstructionRecord>` |
 | `dreaming.propose` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`content`: `ArtifactRef` | `ProposalRecord` |
-| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest` | `KnowledgeWriteReceipt` |
+| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `dreaming.review` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content` | `ProposalRecord` |
 
 ### Documents
@@ -772,18 +772,6 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 `Native`, `Inference`.
 
-### JobRunStatus
-
-`Queued`, `Running`, `Holding`, `Succeeded`, `Failed`, `Skipped`, `Cancelled`, `OutcomeUnknown`.
-
-### JobTrigger
-
-`Scheduled`, `Manual`.
-
-### JobHold
-
-`ReactivationRequired`, `AuthorizationRequired`, `ProjectClosed`.
-
 ### ProposalDecision
 
 `Approve`, `Reject`.
@@ -976,74 +964,6 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `workflowRevision` | `?Revision` · *revision 2+* |
 | `acceptanceTests` | `?Items<AcceptanceCriterion>` · *revision 2+* |
 | `pendingReadiness` | `?ReadinessAssessment` · *revision 2+* |
-
-### ReadinessDisposition
-
-`ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`.
-
-### FindingState
-
-`Open`, `Resolved`, `RiskAccepted`.
-
-### ConfidenceLevel
-
-`High`, `Medium`, `Low`.
-
-### ReadinessFreshness
-
-`Current`, `Stale`.
-
-### ReadinessFinding
-
-| Field | Type |
-| --- | --- |
-| `id` | `Id` |
-| `disposition` | `ReadinessDisposition` |
-| `blocking` | `bool` |
-| `prerequisite` | `bool` |
-| `state` | `FindingState` |
-| `requirementIds` | `Items<Id>` |
-| `scopeKey` | `?Id` |
-| `affectedWorkIds` | `Items<Id>` |
-| `summary` | `Content` |
-| `missing` | `Content` |
-| `consequence` | `Content` |
-| `attempts` | `Items<Content>` |
-| `insufficiency` | `Content` |
-| `closureCondition` | `Content` |
-| `decision` | `?Content` |
-| `confidence` | `?ConfidenceLevel` |
-| `evidence` | `Items<ArtifactRef>` |
-| `objective` | `?Content` |
-| `limits` | `?Content` |
-| `question` | `?Content` |
-| `recommendation` | `?Content` |
-| `closureNote` | `?Content` |
-| `closureEvidence` | `Items<ArtifactRef>` |
-
-### ReadinessAssessment
-
-| Field | Type |
-| --- | --- |
-| `id` | `Id` |
-| `revision` | `Revision` |
-| `planRevision` | `Revision` |
-| `planDigest` | `Digest` |
-| `reviewedPending` | `bool` |
-| `freshness` | `ReadinessFreshness` |
-| `staleScopeKeys` | `Items<Id>` |
-| `ready` | `bool` |
-| `summary` | `Content` |
-| `findings` | `Items<ReadinessFinding>` |
-| `assessedBy` | `ActorId` |
-| `assessedAtMs` | `Counter` |
-
-### ReadinessChange
-
-| Kind | Fields |
-| --- | --- |
-| `Assess` | `expectedAssessmentRevision`: `?Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest`<br>`summary`: `Content`<br>`findings`: `Items<ReadinessFinding>` |
-| `CloseFinding` | `expectedAssessmentRevision`: `Revision`<br>`findingId`: `Id`<br>`note`: `Content`<br>`evidence`: `Items<ArtifactRef>` |
 
 ### PlanDraft
 
@@ -1393,6 +1313,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `source` | `EvidenceLocator` |
 | `snippet` | `Content` |
 | `metadata` | `?SchemaValue` |
+| `sourceRevision` | `?Text` · *revision 2+* |
 
 ### KnowledgeEntity
 
@@ -1404,6 +1325,13 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `entityType` | `Label` |
 | `aliases` | `Items<Label>` |
 | `scope` | `DataScope` |
+| `canonicalName` | `?Label` · *revision 2+* |
+| `externalId` | `?Text` · *revision 2+* |
+| `source` | `?Label` · *revision 2+* |
+| `authorId` | `?ActorId` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `deleted` | `?bool` · *revision 2+* |
 
 ### KnowledgeClaim
 
@@ -1426,6 +1354,21 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `effectiveAtMs` | `?Counter` |
 | `supersedes` | `?Id` |
 | `source` | `?Label` |
+| `entryKind` | `?KnowledgeEntryKind` · *revision 2+* |
+| `lifecycle` | `?KnowledgeLifecycle` · *revision 2+* |
+| `origin` | `?KnowledgeOrigin` · *revision 2+* |
+| `originRef` | `?Text` · *revision 2+* |
+| `autonomous` | `?bool` · *revision 2+* |
+| `authorId` | `?ActorId` · *revision 2+* |
+| `sessionId` | `?Id` · *revision 2+* |
+| `createdAtMs` | `?Counter` · *revision 2+* |
+| `updatedAtMs` | `?Counter` · *revision 2+* |
+| `verifiedAtMs` | `?Counter` · *revision 2+* |
+| `verifiedSourceRevision` | `?Text` · *revision 2+* |
+| `stale` | `?bool` · *revision 2+* |
+| `supersededBy` | `?Id` · *revision 2+* |
+| `lesson` | `?LessonRecord` · *revision 2+* |
+| `challenges` | `?Items<LessonChallenge>` · *revision 3+* |
 
 ### ClaimDraft
 
@@ -1444,6 +1387,11 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `effectiveAtMs` | `?Counter` |
 | `supersedes` | `?Id` |
 | `source` | `?Label` |
+| `entryKind` | `?KnowledgeEntryKind` · *revision 2+* |
+| `origin` | `?KnowledgeOrigin` · *revision 2+* |
+| `originRef` | `?Text` · *revision 2+* |
+| `lesson` | `?LessonDraft` · *revision 2+* |
+| `sourceRevision` | `?Text` · *revision 2+* |
 
 ### KnowledgeBatch
 
@@ -1478,6 +1426,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `conflicts` | `Rows<KnowledgeConflict>` |
 | `supersessionIds` | `Items<Id>` |
 | `summary` | `?Content` |
+| `relations` | `?Rows<KnowledgeRelation>` · *revision 2+* |
+| `revisions` | `?Rows<KnowledgeRevisionEntry>` · *revision 2+* |
+| `scopeRevision` | `?Revision` · *revision 2+* |
 
 ### KnowledgeQuery
 
@@ -1511,6 +1462,9 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `claimIds` | `Items<Id>` |
 | `revision` | `Revision` |
 | `diagnostics` | `Items<Diagnostic>` |
+| `entityCount` | `?Counter` · *revision 2+* |
+| `claimCount` | `?Counter` · *revision 2+* |
+| `nextCursor` | `?Cursor` · *revision 2+* |
 
 ### DreamRun
 
@@ -3056,6 +3010,214 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `zeroFindingsConfirmed` | `bool` |
 | `findingsCoverage` | `Coverage` |
 | `evidence` | `Items<ArtifactRef>` |
+
+### KnowledgeEntryKind
+
+`Goal`, `Decision`, `Constraint`, `Fact`, `Gotcha`, `Attempt`, `Architecture`, `Lesson`, `Finding`, `Proposal`.
+
+### KnowledgeLifecycle
+
+`Active`, `Superseded`, `Retracted`, `Deleted`.
+
+### KnowledgeOrigin
+
+`User`, `Agent`.
+
+### LessonSource
+
+`Prompt`, `Review`, `RelayedPrompt`, `RelayedReview`, `Agent`, `Subagent`, `BotReview`.
+
+### RuleState
+
+`Candidate`, `Proposed`, `Effective`, `Rejected`, `Retired`.
+
+### RuleEffect
+
+`UserInstruction`, `Recurrence`, `Promoted`.
+
+### LessonAddressKind
+
+`Code`, `Instruction`, `Skill`, `Documentation`, `Test`.
+
+### ChallengeOutcome
+
+`Uphold`, `Retire`.
+
+### ChallengeState
+
+`Open`, `Upheld`, `Retired`.
+
+### PromoteAction
+
+`Effective`, `Propose`, `Reject`, `Address`.
+
+### LessonView
+
+`All`, `RecentlyLearned`, `Recurring`, `Unaddressed`, `Undelivered`.
+
+### Applicability
+
+| Field | Type |
+| --- | --- |
+| `activities` | `Items<Label>` |
+| `paths` | `Items<RelativePath>` |
+| `tools` | `Items<Label>` |
+| `harness` | `?Label` |
+| `repositoryIds` | `Items<Id>` |
+
+### LessonDraft
+
+| Field | Type |
+| --- | --- |
+| `source` | `LessonSource` |
+| `sourceRef` | `?Text` |
+| `quotedWords` | `?Content` |
+| `applicability` | `Applicability` |
+| `sameAs` | `?Id` |
+
+### LessonAddress
+
+| Field | Type |
+| --- | --- |
+| `kind` | `LessonAddressKind` |
+| `name` | `Label` |
+| `reference` | `?Text` |
+
+### LessonChallenge
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `state` | `ChallengeState` |
+| `reason` | `Content` |
+| `evidenceIds` | `Items<Id>` |
+| `authorId` | `ActorId` |
+| `openedAtMs` | `Counter` |
+| `resolvedAtMs` | `?Counter` |
+| `resolution` | `?Content` |
+
+### LessonRecord
+
+| Field | Type |
+| --- | --- |
+| `ruleState` | `RuleState` |
+| `effect` | `?RuleEffect` |
+| `effectiveAtMs` | `?Counter` |
+| `source` | `LessonSource` |
+| `sourceRef` | `?Text` |
+| `quotedWords` | `?Content` |
+| `applicability` | `Applicability` |
+| `recurrence` | `Counter` |
+| `recurrenceThreshold` | `Counter` |
+| `challenges` | `Items<LessonChallenge>` |
+| `addressedBy` | `Items<LessonAddress>` |
+| `deliveredSessions` | `Counter` |
+| `lastDeliveredAtMs` | `?Counter` |
+| `reason` | `?Content` |
+
+### KnowledgeRelation
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `subjectId` | `Id` |
+| `predicate` | `Label` |
+| `objectId` | `Id` |
+| `evidenceIds` | `Items<Id>` |
+| `authorId` | `ActorId` |
+| `createdAtMs` | `Counter` |
+
+### KnowledgeRevisionEntry
+
+| Field | Type |
+| --- | --- |
+| `revision` | `Revision` |
+| `change` | `Label` |
+| `authorId` | `ActorId` |
+| `atMs` | `Counter` |
+| `lifecycle` | `KnowledgeLifecycle` |
+| `writeId` | `?Id` |
+| `value` | `?Content` |
+
+### JobRunStatus
+
+`Queued`, `Running`, `Holding`, `Succeeded`, `Failed`, `Skipped`, `Cancelled`, `OutcomeUnknown`.
+
+### JobTrigger
+
+`Scheduled`, `Manual`.
+
+### JobHold
+
+`ReactivationRequired`, `AuthorizationRequired`, `ProjectClosed`.
+
+### ReadinessDisposition
+
+`ResolvedDecision`, `BoundedInvestigation`, `NeedsUserDecision`.
+
+### FindingState
+
+`Open`, `Resolved`, `RiskAccepted`.
+
+### ConfidenceLevel
+
+`High`, `Medium`, `Low`.
+
+### ReadinessFreshness
+
+`Current`, `Stale`.
+
+### ReadinessFinding
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `disposition` | `ReadinessDisposition` |
+| `blocking` | `bool` |
+| `prerequisite` | `bool` |
+| `state` | `FindingState` |
+| `requirementIds` | `Items<Id>` |
+| `scopeKey` | `?Id` |
+| `affectedWorkIds` | `Items<Id>` |
+| `summary` | `Content` |
+| `missing` | `Content` |
+| `consequence` | `Content` |
+| `attempts` | `Items<Content>` |
+| `insufficiency` | `Content` |
+| `closureCondition` | `Content` |
+| `decision` | `?Content` |
+| `confidence` | `?ConfidenceLevel` |
+| `evidence` | `Items<ArtifactRef>` |
+| `objective` | `?Content` |
+| `limits` | `?Content` |
+| `question` | `?Content` |
+| `recommendation` | `?Content` |
+| `closureNote` | `?Content` |
+| `closureEvidence` | `Items<ArtifactRef>` |
+
+### ReadinessAssessment
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `planRevision` | `Revision` |
+| `planDigest` | `Digest` |
+| `reviewedPending` | `bool` |
+| `freshness` | `ReadinessFreshness` |
+| `staleScopeKeys` | `Items<Id>` |
+| `ready` | `bool` |
+| `summary` | `Content` |
+| `findings` | `Items<ReadinessFinding>` |
+| `assessedBy` | `ActorId` |
+| `assessedAtMs` | `Counter` |
+
+### ReadinessChange
+
+| Kind | Fields |
+| --- | --- |
+| `Assess` | `expectedAssessmentRevision`: `?Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest`<br>`summary`: `Content`<br>`findings`: `Items<ReadinessFinding>` |
+| `CloseFinding` | `expectedAssessmentRevision`: `Revision`<br>`findingId`: `Id`<br>`note`: `Content`<br>`evidence`: `Items<ArtifactRef>` |
 
 ### QueuePlacement
 

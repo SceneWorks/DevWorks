@@ -176,6 +176,7 @@
 pub mod diagnostics;
 pub mod dispatch;
 pub mod jobs;
+pub mod knowledge;
 pub mod package;
 pub mod replies;
 pub mod resources;

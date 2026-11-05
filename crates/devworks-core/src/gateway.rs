@@ -1700,6 +1700,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn projects(&mut self) -> &mut dyn crate::ports::storage::ProjectRepository {
         self.inner.get_mut().projects()
     }
+    fn knowledge(&mut self) -> &mut dyn crate::ports::storage::KnowledgeRepository {
+        self.inner.get_mut().knowledge()
+    }
     fn jobs(&mut self) -> &mut dyn crate::ports::storage::JobRepository {
         self.inner.get_mut().jobs()
     }
