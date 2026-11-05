@@ -436,3 +436,39 @@ fn a_served_page_is_read_only_from_a_staged_file_of_its_session() {
         ));
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn relative_browser_candidates_launch_from_their_profile_directory() {
+    let d = Dir::new();
+    let name = d.0.file_name().unwrap();
+    let local = Dir(std::env::current_dir().unwrap().join(name));
+    std::fs::create_dir(&local.0).unwrap();
+    std::fs::create_dir(local.0.join("bin")).unwrap();
+    let exe = local.0.join("bin/chrome");
+    executable(&exe);
+    std::fs::write(&exe, b"#!/bin/sh\necho discovered\n").unwrap();
+    let relative = PathBuf::from(name).join("bin");
+    let p = NativeBrowserPlatform::with_candidates(
+        &d.0,
+        vec![
+            candidate("configured", vec![relative.join("chrome")], &[]),
+            candidate("path", vec![], &["chrome"]),
+        ],
+        vec![relative],
+    );
+    let profile = p
+        .create_profile(&Id::new("relative-profile").unwrap())
+        .unwrap();
+    for asset in p.assets() {
+        assert_eq!(asset.qualification, Qualification::Present);
+        let spec = p.command(&asset, &profile, &[]);
+        let output = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(spec.cwd.unwrap())
+            .output()
+            .expect("a discovered browser must launch from the profile directory");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"discovered\n");
+    }
+}

@@ -30,6 +30,7 @@ use devworks_core::ports::process::{ControlChannel, ControlPipe, ProcessSpec};
 use devworks_core::protocol::Id;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -41,7 +42,7 @@ pub const MESSAGE_LIMIT: usize = 64 * 1024 * 1024;
 pub struct Candidate {
     pub id: String,
     pub product: String,
-    /// Absolute paths tried in order.
+    /// Paths tried in order; relative paths are resolved during discovery.
     pub paths: Vec<PathBuf>,
     /// Program names searched on `PATH` (Linux).
     pub names: Vec<String>,
@@ -170,7 +171,15 @@ fn qualify(c: &Candidate, search_path: &[PathBuf]) -> BrowserAsset {
         // Discovery follows links (installed browsers are often linked into PATH).
         match std::fs::metadata(&p) {
             Ok(m) if m.is_file() && executable(&m) => {
-                return asset(Some(p), Qualification::Present);
+                return match std::path::absolute(&p) {
+                    Ok(absolute) => asset(Some(absolute), Qualification::Present),
+                    Err(e) => asset(
+                        Some(p),
+                        Qualification::Failed(format!(
+                            "the browser path cannot be made absolute: {e}"
+                        )),
+                    ),
+                };
             }
             Ok(_) => {
                 failed.get_or_insert_with(|| {
@@ -516,6 +525,48 @@ fn create_new(path: &Path) -> Result<std::fs::File, BrowserFault> {
 
 /// Most messages buffered from the browser before the reader waits (the browser then waits too).
 const BUFFERED: usize = 4096;
+/// Aggregate allocated bytes in incoming/outgoing messages, including the active write.
+/// This allows a 64MiB wire message plus allocator headroom. The core event buffer has a
+/// separate 8MiB bound; neither queue can accumulate thousands of large protocol messages.
+pub const BUFFER_BYTE_LIMIT: usize = 128 * 1024 * 1024;
+
+struct ByteBudget {
+    used: AtomicUsize,
+    limit: usize,
+}
+impl ByteBudget {
+    fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self {
+            used: AtomicUsize::new(0),
+            limit,
+        })
+    }
+    fn reserve(self: &Arc<Self>, bytes: usize) -> Option<Reservation> {
+        self.used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes).filter(|total| *total <= self.limit)
+            })
+            .ok()?;
+        Some(Reservation {
+            budget: self.clone(),
+            bytes,
+        })
+    }
+}
+struct Reservation {
+    budget: Arc<ByteBudget>,
+    bytes: usize,
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.budget.used.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
+struct Buffered<T> {
+    value: T,
+    _reservation: Reservation,
+}
+
 /// Most messages queued for the browser; a full queue means it stopped reading.
 const QUEUED: usize = 256;
 /// How long one write to the browser may block before the browser counts as no longer reading
@@ -528,10 +579,11 @@ pub const WRITE_STALL: Duration = Duration::from_secs(5);
 /// reading (a full queue, or one write blocked past the stall bound) closes the transport, and
 /// the session is then torn down through its process owner. Closing never waits for the writer.
 pub struct PipeTransport {
-    outgoing: Option<mpsc::SyncSender<Vec<u8>>>,
+    outgoing: Option<mpsc::SyncSender<Buffered<Vec<u8>>>>,
     writer: Arc<WriterState>,
     stall: Duration,
-    incoming: mpsc::Receiver<Result<String, String>>,
+    incoming: mpsc::Receiver<Result<Buffered<String>, String>>,
+    budget: Arc<ByteBudget>,
     closed: bool,
 }
 
@@ -554,9 +606,11 @@ impl PipeTransport {
         stall: Duration,
     ) -> Self {
         let (tx, incoming) = mpsc::sync_channel(BUFFERED);
+        let budget = ByteBudget::new(BUFFER_BYTE_LIMIT);
+        let reader_budget = budget.clone();
         std::thread::Builder::new()
             .name("devtools-pipe".into())
-            .spawn(move || read_messages(reader, tx))
+            .spawn(move || read_messages(reader, tx, reader_budget))
             .ok();
         let (outgoing, queued) = mpsc::sync_channel(QUEUED);
         let state = Arc::new(WriterState::default());
@@ -572,6 +626,7 @@ impl PipeTransport {
             writer: state,
             stall,
             incoming,
+            budget,
             closed: false,
         }
     }
@@ -602,12 +657,14 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// the host's write end, which tells the browser the session is over.
 fn write_messages(
     mut writer: Box<dyn Write + Send>,
-    queued: mpsc::Receiver<Vec<u8>>,
+    queued: mpsc::Receiver<Buffered<Vec<u8>>>,
     state: &WriterState,
 ) {
     for message in queued {
         *lock(&state.busy_since) = Some(Instant::now());
-        let written = writer.write_all(&message).and_then(|()| writer.flush());
+        let written = writer
+            .write_all(&message.value)
+            .and_then(|()| writer.flush());
         *lock(&state.busy_since) = None;
         if let Err(e) = written {
             *lock(&state.failed) = Some(format!("DevTools pipe: {e}"));
@@ -617,7 +674,11 @@ fn write_messages(
 }
 
 /// Reads NUL-terminated messages until the channel closes or a message exceeds its bound.
-fn read_messages(reader: Box<dyn Read + Send>, tx: mpsc::SyncSender<Result<String, String>>) {
+fn read_messages(
+    reader: Box<dyn Read + Send>,
+    tx: mpsc::SyncSender<Result<Buffered<String>, String>>,
+    budget: Arc<ByteBudget>,
+) {
     let mut reader = BufReader::with_capacity(1 << 16, reader);
     loop {
         let mut message = Vec::new();
@@ -630,11 +691,25 @@ fn read_messages(reader: Box<dyn Read + Send>, tx: mpsc::SyncSender<Result<Strin
             Ok(_) if message.last() == Some(&0) => {
                 message.pop();
                 let text = match String::from_utf8(message) {
-                    Ok(t) => Ok(t),
-                    Err(_) => Err("the browser sent a message that is not UTF-8".to_owned()),
+                    Ok(t) => t,
+                    Err(_) => {
+                        let _ = tx.send(Err("the browser sent a message that is not UTF-8".into()));
+                        return;
+                    }
                 };
-                let failed = text.is_err();
-                if tx.send(text).is_err() || failed {
+                let Some(reservation) = budget.reserve(text.capacity()) else {
+                    let _ = tx.send(Err(
+                        "the DevTools pipe exceeded its aggregate byte budget".into()
+                    ));
+                    return;
+                };
+                if tx
+                    .send(Ok(Buffered {
+                        value: text,
+                        _reservation: reservation,
+                    }))
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -667,11 +742,20 @@ impl CdpTransport for PipeTransport {
         if let Some(why) = self.stalled() {
             return Err(self.fail(why));
         }
+        if message.len() > MESSAGE_LIMIT {
+            return Err(self.fail("a DevTools message exceeded its size bound".into()));
+        }
         let mut bytes = Vec::with_capacity(message.len() + 1);
         bytes.extend_from_slice(message.as_bytes());
         bytes.push(0);
+        let Some(reservation) = self.budget.reserve(bytes.capacity()) else {
+            return Err(self.fail("the DevTools pipe exceeded its aggregate byte budget".into()));
+        };
         let queued = match &self.outgoing {
-            Some(q) => q.try_send(bytes),
+            Some(q) => q.try_send(Buffered {
+                value: bytes,
+                _reservation: reservation,
+            }),
             None => return Err(self.fail("the DevTools pipe is closed".into())),
         };
         match queued {
@@ -697,7 +781,7 @@ impl CdpTransport for PipeTransport {
             return Err(self.fail(why));
         }
         match self.incoming.recv_timeout(timeout) {
-            Ok(Ok(m)) => Ok(Some(m)),
+            Ok(Ok(m)) => Ok(Some(m.value)),
             Ok(Err(why)) => {
                 self.closed = true;
                 Err(BrowserFault::Closed(why))
@@ -716,5 +800,54 @@ impl CdpTransport for PipeTransport {
         // the session is over); a write still blocked ends when the browser's tree is stopped.
         // Nothing here waits for it.
         self.outgoing = None;
+    }
+}
+
+#[cfg(test)]
+mod byte_budget_tests {
+    use super::*;
+    use std::io::Cursor;
+    #[test]
+    fn incoming_and_outgoing_messages_share_a_budget_and_release_reservations() {
+        let budget = ByteBudget::new(1200);
+        let outgoing = budget.reserve(900).unwrap();
+        assert!(budget.reserve(400).is_none());
+        drop(outgoing);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+        let message = format!(
+            "{{\"method\":\"Runtime.consoleAPICalled\",\"params\":{{\"text\":\"{}\"}}}}\0",
+            "x".repeat(600)
+        );
+        let input = message.repeat(4).into_bytes();
+        let (tx, rx) = mpsc::sync_channel(BUFFERED);
+        read_messages(Box::new(Cursor::new(input)), tx, budget.clone());
+        assert!(budget.used.load(Ordering::Relaxed) <= budget.limit);
+        let mut transport = PipeTransport {
+            outgoing: None,
+            writer: Arc::new(WriterState::default()),
+            stall: WRITE_STALL,
+            incoming: rx,
+            budget: budget.clone(),
+            closed: false,
+        };
+        assert!(transport.recv(Duration::ZERO).unwrap().is_some());
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
+        assert!(
+            matches!(transport.recv(Duration::ZERO),Err(BrowserFault::Closed(why)) if why.contains("byte budget"))
+        );
+        assert!(matches!(transport.send("{}"), Err(BrowserFault::Closed(_))));
+        let (outgoing, queued) = mpsc::sync_channel(QUEUED);
+        transport.closed = false;
+        transport.outgoing = Some(outgoing);
+        let incoming = budget.reserve(900).unwrap();
+        assert!(
+            matches!(transport.send(&"x".repeat(400)), Err(BrowserFault::Closed(why)) if why.contains("byte budget"))
+        );
+        assert!(
+            queued.try_recv().is_err(),
+            "no over-budget message is queued"
+        );
+        drop(incoming);
+        assert_eq!(budget.used.load(Ordering::Relaxed), 0);
     }
 }

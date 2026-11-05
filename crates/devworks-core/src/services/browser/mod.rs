@@ -2434,12 +2434,17 @@ impl BrowserService {
         if expected.get() != s.revision {
             return Err(conflict(id, expected, s.revision));
         }
-        // A session already stopping or settled, or still starting with its Close already
-        // requested, has nothing more to accept.
-        if matches!(
-            s.phase,
-            BrowserPhase::Stopping | BrowserPhase::Closed | BrowserPhase::Failed
-        ) || (s.phase == BrowserPhase::Starting && s.close_operation_id.is_some())
+        // A cancelled, undispatched Close did not clean up the browser. Allow another
+        // request to replace it; a still-pending Close retains its ordinary idempotence.
+        let close_pending = match &s.close_operation_id {
+            Some(op) => !matches!(
+                tx.operations().operation(op)?.map(|op| op.state),
+                Some(OperationState::CancelledBeforeDispatch)
+            ),
+            None => false,
+        };
+        if matches!(s.phase, BrowserPhase::Closed | BrowserPhase::Failed)
+            || (matches!(s.phase, BrowserPhase::Stopping | BrowserPhase::Starting) && close_pending)
         {
             return Ok(Decided {
                 decision: DomainDecision::NoChange {

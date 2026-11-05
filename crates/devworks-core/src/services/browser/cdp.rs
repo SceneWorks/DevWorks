@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 /// lifecycle event (see [`lifecycle`]) is dropped only when nothing else is buffered, and that
 /// loss is reported through [`Cdp::take_lifecycle_lost`].
 pub const EVENT_LIMIT: usize = 10_000;
+/// Aggregate wire bytes retained as parsed events (in addition to the transport budget).
+pub const EVENT_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
 /// Whether an event carries target, frame or document lifecycle: attachment, detachment,
 /// creation, destruction and crashes of targets, frame attachment, detachment and navigation,
@@ -91,7 +93,8 @@ pub struct ServedPage {
 pub struct Cdp {
     transport: Box<dyn CdpTransport>,
     next_id: u64,
-    events: VecDeque<CdpEvent>,
+    events: VecDeque<(CdpEvent, usize)>,
+    event_bytes: usize,
     /// Events dropped because the buffer was full (reported as truncation).
     pub dropped: u64,
     /// A lifecycle event was dropped since [`Self::take_lifecycle_lost`] last reported it.
@@ -106,6 +109,7 @@ impl Cdp {
             transport,
             next_id: 0,
             events: VecDeque::new(),
+            event_bytes: 0,
             dropped: 0,
             lifecycle_lost: false,
             closed: false,
@@ -134,20 +138,28 @@ impl Cdp {
 
     /// Buffers `event`. A full buffer gives up its oldest evidence-only event; only when every
     /// buffered event carries lifecycle is the oldest of those given up, and the loss recorded.
-    fn push(&mut self, event: CdpEvent) {
-        if self.events.len() >= EVENT_LIMIT {
-            match self.events.iter().position(|e| !lifecycle(&e.method)) {
-                Some(k) => {
-                    self.events.remove(k);
-                }
+    fn push(&mut self, event: CdpEvent, bytes: usize) {
+        if bytes > EVENT_BYTE_LIMIT {
+            self.dropped += 1;
+            self.lifecycle_lost |= lifecycle(&event.method);
+            return;
+        }
+        while self.events.len() >= EVENT_LIMIT
+            || self.event_bytes.saturating_add(bytes) > EVENT_BYTE_LIMIT
+        {
+            let removed = match self.events.iter().position(|(e, _)| !lifecycle(&e.method)) {
+                Some(k) => self.events.remove(k),
                 None => {
-                    self.events.pop_front();
                     self.lifecycle_lost = true;
+                    self.events.pop_front()
                 }
             }
+            .expect("a full event buffer is nonempty");
+            self.event_bytes -= removed.1;
             self.dropped += 1;
         }
-        self.events.push_back(event);
+        self.events.push_back((event, bytes));
+        self.event_bytes += bytes;
     }
 
     /// Whether a lifecycle event was lost since the last call: the live state then no longer
@@ -156,7 +168,7 @@ impl Cdp {
         std::mem::take(&mut self.lifecycle_lost)
     }
 
-    fn read(&mut self, timeout: Duration) -> Result<Option<Value>, CdpError> {
+    fn read(&mut self, timeout: Duration) -> Result<Option<(Value, usize)>, CdpError> {
         if self.closed {
             return Err(CdpError::Transport(BrowserFault::Closed(
                 "the connection is closed".into(),
@@ -168,8 +180,9 @@ impl Cdp {
                 if text.len() > MESSAGE_LIMIT {
                     return Err(CdpError::Protocol("message exceeds the size bound".into()));
                 }
+                let bytes = text.len();
                 serde_json::from_str::<Value>(&text)
-                    .map(Some)
+                    .map(|value| Some((value, bytes)))
                     .map_err(|e| CdpError::Protocol(format!("unreadable message: {e}")))
             }
             Err(e) => {
@@ -186,7 +199,7 @@ impl Cdp {
     /// request is answered at once too (the navigation awaiting it would otherwise never end):
     /// a served artifact page is fulfilled from its staged bytes; anything else intercepted (a
     /// local scheme, an unknown artifact URL) is refused as blocked by the client.
-    fn file(&mut self, message: Value) {
+    fn file(&mut self, message: Value, bytes: usize) {
         if let Some(method) = message.get("method").and_then(Value::as_str) {
             if method == "Fetch.requestPaused"
                 && let Some(request) = message.pointer("/params/requestId").and_then(Value::as_str)
@@ -248,7 +261,7 @@ impl Cdp {
                 method: method.to_owned(),
                 params: message.get("params").cloned().unwrap_or(Value::Null),
             };
-            self.push(event);
+            self.push(event, bytes);
         }
     }
 
@@ -282,7 +295,7 @@ impl Cdp {
             if left.is_zero() {
                 return Err(CdpError::Timeout(method.to_owned()));
             }
-            let Some(m) = self.read(left)? else {
+            let Some((m, bytes)) = self.read(left)? else {
                 continue;
             };
             if m.get("id").and_then(Value::as_u64) == Some(id) {
@@ -300,7 +313,7 @@ impl Cdp {
                 }
                 return Ok(m.get("result").cloned().unwrap_or(Value::Null));
             }
-            self.file(m);
+            self.file(m, bytes);
         }
     }
 
@@ -314,7 +327,7 @@ impl Cdp {
                 return Ok(());
             }
             match self.read(left.min(quiet))? {
-                Some(m) => self.file(m),
+                Some((m, bytes)) => self.file(m, bytes),
                 None => return Ok(()),
             }
         }
@@ -322,7 +335,8 @@ impl Cdp {
 
     /// The buffered events, oldest first.
     pub fn take_events(&mut self) -> Vec<CdpEvent> {
-        self.events.drain(..).collect()
+        self.event_bytes = 0;
+        self.events.drain(..).map(|(event, _)| event).collect()
     }
 
     pub fn close(&mut self) {
@@ -523,11 +537,14 @@ mod tests {
     fn the_event_buffer_is_bounded_and_counts_drops() {
         let (mut c, _) = cdp(|_| vec![]);
         for i in 0..(EVENT_LIMIT + 5) {
-            c.push(CdpEvent {
-                session: None,
-                method: format!("E.{i}"),
-                params: Value::Null,
-            });
+            c.push(
+                CdpEvent {
+                    session: None,
+                    method: format!("E.{i}"),
+                    params: Value::Null,
+                },
+                1,
+            );
         }
         assert_eq!(c.dropped, 5);
         let events = c.take_events();
@@ -544,11 +561,11 @@ mod tests {
             params: Value::Null,
         };
         let (mut c, _) = cdp(|_| vec![]);
-        c.push(event("Page.frameNavigated"));
+        c.push(event("Page.frameNavigated"), 1);
         for _ in 0..EVENT_LIMIT {
-            c.push(event("Runtime.consoleAPICalled"));
+            c.push(event("Runtime.consoleAPICalled"), 1);
         }
-        c.push(event("Target.detachedFromTarget"));
+        c.push(event("Target.detachedFromTarget"), 1);
         let events = c.take_events();
         assert_eq!(events.len(), EVENT_LIMIT);
         assert_eq!(c.dropped, 2);
@@ -558,7 +575,7 @@ mod tests {
         // Nothing evidence-only left to give up: the oldest lifecycle event goes, and the loss
         // is reported once.
         for _ in 0..=EVENT_LIMIT {
-            c.push(event("DOM.documentUpdated"));
+            c.push(event("DOM.documentUpdated"), 1);
         }
         assert!(c.take_lifecycle_lost());
         assert!(!c.take_lifecycle_lost());
@@ -585,5 +602,43 @@ mod tests {
         ] {
             assert!(!lifecycle(m), "{m}");
         }
+    }
+    #[test]
+    fn large_events_are_bounded_by_bytes_and_lifecycle_loss_invalidates_references() {
+        let (mut c, _) = cdp(|request| {
+            let text = "x".repeat(EVENT_BYTE_LIMIT / 4);
+            let mut events = (0..6)
+                .map(|_| json!({"method":"Runtime.consoleAPICalled","params":{"text":text}}))
+                .collect::<Vec<_>>();
+            events.push(json!({"id":request["id"],"result":{}}));
+            events
+        });
+        c.call(
+            None,
+            "Browser.getVersion",
+            json!({}),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            c.event_bytes <= EVENT_BYTE_LIMIT,
+            "buffered events must fit their byte budget"
+        );
+        assert!(c.dropped >= 3);
+        assert!(!c.take_lifecycle_lost());
+        c.push(
+            CdpEvent {
+                session: None,
+                method: "Page.frameNavigated".into(),
+                params: Value::Null,
+            },
+            EVENT_BYTE_LIMIT + 1,
+        );
+        assert!(
+            c.take_lifecycle_lost(),
+            "an oversized lifecycle event must fence old references"
+        );
+        c.take_events();
+        assert_eq!(c.event_bytes, 0);
     }
 }

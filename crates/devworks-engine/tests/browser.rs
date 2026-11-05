@@ -4896,3 +4896,51 @@ fn hover_cannot_redirect_a_click_to_a_same_document_cover() {
         "hover ran and changed the hit target"
     );
 }
+
+#[test]
+fn cancelling_an_undispatched_close_allows_replacement_cleanup() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let fx = Fx::new();
+    let user = fx.user.clone();
+    let session = fx.create(&user, workspace());
+    let identity = fx.identity(&session);
+    let first = fx.accepted(&user,"browser.sessions",json!({"action":{"kind":"Close","sessionId":session.as_str(),"expectedRevision":fx.session(&session).revision.to_string()}}));
+    let op = first.clone();
+    let delivery = read(&**fx.app().store(), move |s| {
+        s.queue().deliveries(
+            &DeliveryFilter {
+                consumer: None,
+                operation_id: Some(op),
+            },
+            None,
+            10,
+        )
+    })
+    .entries
+    .remove(0);
+    assert_eq!(delivery.state, QueueState::Ready);
+    let reply = fx.command(&user,"queue.resolve",&fx.key(),json!({"deliveryId":delivery.id.as_str(),"expectedRevision":delivery.revision.to_string(),"expectedFence":delivery.generation.to_string(),"resolution":"CancelBeforeDispatch","reason":"cancel queued close"}));
+    assert!(
+        matches!(Fx::decision(&reply), DomainDecision::Applied { .. }),
+        "{reply:?}"
+    );
+    let op = first.clone();
+    assert_eq!(
+        read(&**fx.app().store(), move |s| s.operations().operation(&op))
+            .unwrap()
+            .state,
+        OperationState::CancelledBeforeDispatch
+    );
+    assert_eq!(fx.session(&session).phase, BrowserPhase::Stopping);
+    let reply = fx.command(&user,"browser.sessions",&fx.key(),json!({"action":{"kind":"Close","sessionId":session.as_str(),"expectedRevision":fx.session(&session).revision.to_string()}}));
+    let DomainDecision::Accepted {
+        operation_id: second,
+    } = Fx::decision(&reply)
+    else {
+        panic!("cancelled close must accept replacement cleanup: {reply:?}")
+    };
+    assert_ne!(second, &first);
+    fx.succeeded(&user, second);
+    assert_eq!(fx.session(&session).phase, BrowserPhase::Closed);
+    assert!(matches!(NativeProcessHost.probe(&identity), Probe::Gone));
+}
