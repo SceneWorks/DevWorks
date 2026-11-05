@@ -44,7 +44,7 @@ pub const UNVERIFIED_READ_FAMILIES: [&str; 4] = ["mcp", "addons", "database", "b
 /// Commands that run arbitrary native code with the desktop user's rights. Under Project scope
 /// they need a reviewed native grant, because no confined launcher is qualified; there is no
 /// fallback to Full.
-pub const NATIVE_EXECUTION: [&str; 8] = [
+pub const NATIVE_EXECUTION: [&str; 13] = [
     "process.execute",
     "process.install_project_dependencies",
     "containers.build",
@@ -53,6 +53,11 @@ pub const NATIVE_EXECUTION: [&str; 8] = [
     "containers.start",
     "containers.exec",
     "mcp.connect",
+    "addons.install",
+    "addons.update",
+    "addons.enable",
+    "addons.rollback",
+    "addons.configure",
 ];
 
 /// Commands a non-human principal may run only with an explicit approval for the exact request:

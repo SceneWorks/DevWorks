@@ -108,6 +108,7 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>, git_program: &str)
         ..IndexSettings::default()
     };
     Composition {
+        packages: None,
         store: store.clone(),
         clock: h.clock(),
         ids: h.ids.clone(),

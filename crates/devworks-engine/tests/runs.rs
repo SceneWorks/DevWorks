@@ -2617,6 +2617,7 @@ fn composition_with(
                 None,
             ),
         ),
+        packages: None,
         use_cases: UseCases::new(),
         consumers: Vec::new(),
         indexing: None,

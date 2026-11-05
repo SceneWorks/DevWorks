@@ -1970,32 +1970,32 @@
 </thead>
 <tbody><tr>
 <td><code>addons.catalog</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code></td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;PackageRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>addons.install</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Install&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Install&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.configure</code></td>
-<td><strong>Command</strong><br><code>packageId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>config</code>: <code>SchemaValue</code></td>
+<td><strong>Command</strong><br><code>packageId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>config</code>: <code>SchemaValue</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.enable</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Enable&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Enable&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.disable</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Disable&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Disable&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.update</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Update&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Update&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
@@ -2010,12 +2010,12 @@
 </tr>
 <tr>
 <td><code>addons.rollback</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Rollback&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Rollback&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.uninstall</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Uninstall&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Uninstall&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 </tbody></table>
@@ -6691,6 +6691,118 @@
 <td><code>contributionIds</code></td>
 <td><code>Items&lt;Id&gt;</code></td>
 </tr>
+<tr>
+<td><code>registryRevision</code></td>
+<td><code>?Revision</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>?PackageAvailability</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>availabilityReason</code></td>
+<td><code>?Text</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>packageKind</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>languages</code></td>
+<td><code>?Items&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>targets</code></td>
+<td><code>?Items&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>hostTargetSupported</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>prerequisites</code></td>
+<td><code>?Items&lt;PackagePrerequisite&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>requestedAccess</code></td>
+<td><code>?Items&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>effectiveAccess</code></td>
+<td><code>?Items&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>configurationRevision</code></td>
+<td><code>?Revision</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>configurationSchema</code></td>
+<td><code>?SchemaRef</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>stateGeneration</code></td>
+<td><code>?Counter</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingVersion</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingDigest</code></td>
+<td><code>?Digest</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingWaits</code></td>
+<td><code>?Items&lt;PackageWaitReason&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingProposalId</code></td>
+<td><code>?Id</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>predecessorVersion</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>predecessorDigest</code></td>
+<td><code>?Digest</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>publisherTrusted</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>signerKey</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>failureCode</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>contributions</code></td>
+<td><code>?Rows&lt;Label&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>pendingBundle</code></td>
+<td><code>?ArtifactRef</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>?Items&lt;PackageOffer&gt;</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>installed</code></td>
+<td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>disabledProjects</code></td>
+<td><code>?Items&lt;Id&gt;</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>configuration</code></td>
+<td><code>?SchemaValue</code> · <em>revision 3+</em></td>
+</tr>
 </tbody></table>
 <h3 id="helptopic">HelpTopic</h3>
 <table>
@@ -8539,6 +8651,90 @@
 <tr>
 <td><code>evidence</code></td>
 <td><code>Items&lt;ArtifactRef&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="packageavailability">PackageAvailability</h3>
+<p><code>NotInstalled</code>, <code>Disabled</code>, <code>MissingDependency</code>, <code>Incompatible</code>, <code>Ready</code>, <code>Failed</code>.</p>
+<h3 id="packagewaitreason">PackageWaitReason</h3>
+<p><code>TrustApproval</code>, <code>ExactVersionApproval</code>, <code>AccessApproval</code>, <code>Compatibility</code>, <code>Quiescence</code>.</p>
+<h3 id="packageprerequisite">PackagePrerequisite</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>kind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>id</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>requirement</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>required</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>satisfied</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>?PrerequisiteState</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>detectedVersion</code></td>
+<td><code>?Label</code> · <em>revision 2+</em></td>
+</tr>
+</tbody></table>
+<h3 id="prerequisitestate">PrerequisiteState</h3>
+<p><code>Missing</code>, <code>Incompatible</code>, <code>Ready</code>.</p>
+<h3 id="packageoffer">PackageOffer</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>version</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>manifestDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>bundleDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>bundleBytes</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>publisherId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>hostTargetSupported</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>newer</code></td>
+<td><code>bool</code></td>
 </tr>
 </tbody></table>
 <h3 id="indexfreshnessstate">IndexFreshnessState</h3>

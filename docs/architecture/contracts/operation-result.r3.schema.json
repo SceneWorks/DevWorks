@@ -5270,11 +5270,35 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PackageOffer_0_128": {
+      "items": {
+        "$ref": "#/$defs/PackageOffer"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_PackagePrerequisite_0_128": {
+      "items": {
+        "$ref": "#/$defs/PackagePrerequisite"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_PackageRecord_0_500": {
       "items": {
         "$ref": "#/$defs/PackageRecord"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_PackageWaitReason_0_128": {
+      "items": {
+        "$ref": "#/$defs/PackageWaitReason"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -5483,6 +5507,14 @@
         "$ref": "#/$defs/Text1To256"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Text1To256_0_500": {
+      "items": {
+        "$ref": "#/$defs/Text1To256"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -6785,20 +6817,195 @@
       ],
       "type": "object"
     },
+    "PackageAvailability": {
+      "enum": [
+        "NotInstalled",
+        "Disabled",
+        "MissingDependency",
+        "Incompatible",
+        "Ready",
+        "Failed"
+      ],
+      "type": "string"
+    },
+    "PackageOffer": {
+      "additionalProperties": false,
+      "properties": {
+        "bundleBytes": {
+          "$ref": "#/$defs/Counter"
+        },
+        "bundleDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "hostTargetSupported": {
+          "type": "boolean"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "newer": {
+          "type": "boolean"
+        },
+        "publisherId": {
+          "$ref": "#/$defs/Id"
+        },
+        "source": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "version": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "version",
+        "manifestDigest",
+        "bundleDigest",
+        "bundleBytes",
+        "publisherId",
+        "source",
+        "hostTargetSupported",
+        "newer"
+      ],
+      "type": "object"
+    },
+    "PackagePrerequisite": {
+      "additionalProperties": false,
+      "properties": {
+        "detectedVersion": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "id": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "requirement": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "satisfied": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/PrerequisiteState",
+          "x-since": 2
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "requirement",
+        "required",
+        "satisfied"
+      ],
+      "type": "object"
+    },
     "PackageRecord": {
       "additionalProperties": false,
       "properties": {
+        "availability": {
+          "$ref": "#/$defs/PackageAvailability",
+          "x-since": 2
+        },
+        "availabilityReason": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 2
+        },
+        "available": {
+          "$ref": "#/$defs/List_PackageOffer_0_128",
+          "x-since": 2
+        },
+        "configuration": {
+          "$ref": "#/$defs/SchemaValue",
+          "x-since": 3
+        },
+        "configurationRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
+        },
+        "configurationSchema": {
+          "$ref": "#/$defs/SchemaRef",
+          "x-since": 2
+        },
         "contributionIds": {
           "$ref": "#/$defs/List_Id_0_128"
+        },
+        "contributions": {
+          "$ref": "#/$defs/List_Text1To256_0_500",
+          "x-since": 2
         },
         "digest": {
           "$ref": "#/$defs/Digest"
         },
+        "disabledProjects": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 3
+        },
+        "effectiveAccess": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 2
+        },
         "enabled": {
           "type": "boolean"
         },
+        "failureCode": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "hostTargetSupported": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "installed": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "languages": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 2
+        },
+        "packageKind": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "pendingBundle": {
+          "$ref": "#/$defs/ArtifactRef",
+          "x-since": 2
+        },
+        "pendingDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 2
+        },
+        "pendingProposalId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "pendingVersion": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "pendingWaits": {
+          "$ref": "#/$defs/List_PackageWaitReason_0_128",
+          "x-since": 2
+        },
+        "predecessorDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 2
+        },
+        "predecessorVersion": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "prerequisites": {
+          "$ref": "#/$defs/List_PackagePrerequisite_0_128",
+          "x-since": 2
         },
         "publisherId": {
           "anyOf": [
@@ -6810,8 +7017,32 @@
             }
           ]
         },
+        "publisherTrusted": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "registryRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 2
+        },
+        "requestedAccess": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 2
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
+        },
+        "signerKey": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 2
+        },
+        "stateGeneration": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "targets": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 2
         },
         "trustState": {
           "$ref": "#/$defs/Text1To256"
@@ -6830,6 +7061,16 @@
         "contributionIds"
       ],
       "type": "object"
+    },
+    "PackageWaitReason": {
+      "enum": [
+        "TrustApproval",
+        "ExactVersionApproval",
+        "AccessApproval",
+        "Compatibility",
+        "Quiescence"
+      ],
+      "type": "string"
     },
     "Page": {
       "additionalProperties": false,
@@ -8344,6 +8585,14 @@
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "PrerequisiteState": {
+      "enum": [
+        "Missing",
+        "Incompatible",
+        "Ready"
+      ],
       "type": "string"
     },
     "PriceOrigin": {

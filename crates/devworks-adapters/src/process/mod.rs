@@ -45,6 +45,11 @@ impl ProcessHost for NativeProcessHost {
             .collect()
     }
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
+        if spec.pipe_stdin && spec.stdin.is_some() {
+            return Err(ProcessError::Spawn(
+                "stdin bytes and an interactive stdin pipe are mutually exclusive".into(),
+            ));
+        }
         #[cfg(unix)]
         {
             unix::spawn(spec)
@@ -79,7 +84,9 @@ impl ProcessHost for NativeProcessHost {
 /// Writes the spec's stdin bytes on a thread and closes the pipe, so a child reading requests
 /// never blocks the launcher and a child that exits early only ends the write (broken pipe).
 fn feed_stdin(child: &mut std::process::Child, spec: &ProcessSpec) {
-    if let (Some(bytes), Some(mut pipe)) = (spec.stdin.clone(), child.stdin.take()) {
+    if let Some(bytes) = spec.stdin.clone()
+        && let Some(mut pipe) = child.stdin.take()
+    {
         std::thread::spawn(move || {
             use std::io::Write;
             let _ = pipe.write_all(&bytes);

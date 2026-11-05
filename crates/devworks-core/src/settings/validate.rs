@@ -121,6 +121,37 @@ pub fn check_value(d: &SettingDescriptor, v: &Value) -> Vec<Issue> {
             }
             None => out.push(ty("a list of model IDs")),
         },
+        ValueKind::PackageIndexSources => match v.as_array() {
+            Some(items) if items.len() <= 16 => {
+                for (i, item) in items.iter().enumerate() {
+                    let o = item.as_object().filter(|o| {
+                        o.len() == 2 && o.contains_key("location") && o.contains_key("publicKey")
+                    });
+                    let location = o.and_then(|o| o["location"].as_str()).unwrap_or("");
+                    let public = o.and_then(|o| o["publicKey"].as_str()).unwrap_or("");
+                    let location_ok = !location.is_empty()
+                        && location.len() <= 2048
+                        && (location.starts_with("https://")
+                            || std::path::Path::new(location).is_absolute());
+                    let key_ok = public.len() == 64
+                        && public
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                    if !location_ok || !key_ok {
+                        out.push(Issue::blocking(
+                            key,
+                            codes::TYPE,
+                            format!(
+                                "Source {}: needs an https:// URL or an absolute directory and a 64-digit lowercase hex Ed25519 public key",
+                                i + 1
+                            ),
+                        ));
+                    }
+                }
+            }
+            Some(_) => out.push(ty("at most 16 index sources")),
+            None => out.push(ty("a list of index sources")),
+        },
         ValueKind::SecretRef => {
             let reference = v
                 .as_object()

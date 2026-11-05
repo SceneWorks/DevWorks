@@ -21,5 +21,6 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod codec;
+pub mod frame;
 pub mod package;
 pub mod scalars;

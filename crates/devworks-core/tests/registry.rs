@@ -251,6 +251,14 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
     assert_eq!(
         revisioned,
         BTreeSet::from([
+            "addons.catalog",
+            "addons.configure",
+            "addons.disable",
+            "addons.enable",
+            "addons.install",
+            "addons.rollback",
+            "addons.uninstall",
+            "addons.update",
             "artifacts.list",
             "artifacts.save",
             "dreaming.revert",

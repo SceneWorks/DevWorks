@@ -1244,3 +1244,52 @@ fn launch_preflight_resolves_targets_in_the_childs_environment() {
     let none = fx.read(|r| r.resources().processes(&ProcessFilter::Unsettled, None, 10));
     assert!(none.is_empty());
 }
+
+#[test]
+fn one_shot_and_interactive_stdin_both_reach_the_owned_child() {
+    let _serial = serial();
+    for interactive in [false, true] {
+        let mut spec =
+            ProcessSpec::new(&["git".into(), "hash-object".into(), "--stdin".into()]).unwrap();
+        spec.capture_output = true;
+        spec.pipe_stdin = interactive;
+        spec.stdin = (!interactive).then(|| b"hello\n".to_vec());
+        let mut tree = NativeProcessHost.spawn(&spec).unwrap();
+        if interactive {
+            let mut input = tree
+                .take_input()
+                .expect("interactive stdin remains owned by the tree");
+            std::io::Write::write_all(&mut input, b"hello\n").unwrap();
+            drop(input);
+        } else {
+            assert!(
+                tree.take_input().is_none(),
+                "one-shot writer owns and closes stdin"
+            );
+        }
+        let (mut stdout, _) = tree.take_output().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            let result = std::io::Read::read_to_string(&mut stdout, &mut out).map(|_| out);
+            let _ = sent.send(result);
+        });
+        let output = received.recv_timeout(Duration::from_secs(30));
+        drop(tree); // Stop the owned child even when the read did not finish.
+        assert_eq!(
+            output.expect("stdin reached EOF").unwrap().trim(),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
+    }
+}
+
+#[test]
+fn conflicting_stdin_modes_are_refused_before_spawn() {
+    let _serial = serial();
+    let mut spec = ProcessSpec::new(&["a-program-that-must-never-launch".into()]).unwrap();
+    spec.pipe_stdin = true;
+    spec.stdin = Some(Vec::new());
+    assert!(matches!(NativeProcessHost.spawn(&spec),
+        Err(devworks_core::ports::process::ProcessError::Spawn(message))
+            if message.contains("mutually exclusive")));
+}

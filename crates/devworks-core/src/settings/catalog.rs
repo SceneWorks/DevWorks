@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 6;
+pub const CATALOG_REVISION: i64 = 7;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -131,6 +131,10 @@ pub enum ValueKind {
     Instructions,
     /// Ordered unique model IDs.
     ModelList,
+    /// Signed package index sources: at most 16 `{"location", "publicKey"}` objects, the
+    /// location an `https://` index URL or an absolute local directory, the key 64 hex digits
+    /// of an Ed25519 public key.
+    PackageIndexSources,
     /// A host-minted secret-store reference `{"secretRef": "dwsecret-<opaque id>"}` (see
     /// [`super::validate::is_secret_ref`]); never a credential value.
     SecretRef,
@@ -267,6 +271,14 @@ impl SettingDescriptor {
             ValueKind::ModelList => json!({
                 "type": "array", "maxItems": 32, "uniqueItems": true,
                 "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+            }),
+            ValueKind::PackageIndexSources => json!({
+                "type": "array", "maxItems": 16,
+                "items": {"type": "object", "required": ["location", "publicKey"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "location": {"type": "string", "minLength": 1, "maxLength": 2048},
+                        "publicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
             }),
             ValueKind::SecretRef => json!({
                 "type": "object", "required": ["secretRef"], "additionalProperties": false,
@@ -466,6 +478,16 @@ fn build() -> Vec<SettingDescriptor> {
             WORKSPACE,
             ValueKind::Bool,
             false,
+            NextAdmission
+        ),
+        setting!(
+            PACKAGE_INDEX_SOURCES_KEY,
+            "Package index sources",
+            "Signed publisher indexes the Add-ons screen lists available packs from: an https index URL or a local directory holding devworks-index.json, each with the publisher's Ed25519 public key (hex) the index must be signed with. Only a person applies a change (an agent's change is a proposal). None by default.",
+            Tools,
+            WORKSPACE,
+            ValueKind::PackageIndexSources,
+            Vec::<serde_json::Value>::new(),
             NextAdmission
         ),
         setting!(
@@ -813,6 +835,8 @@ pub const ARTIFACT_RETENTION_KEY: &str = "storage.artifactRetention";
 pub const ARTIFACT_QUOTA_KEY: &str = "storage.artifactQuotaBytes";
 /// Largest single artifact source file.
 pub const ARTIFACT_MAX_FILE_KEY: &str = "storage.artifactMaxFileBytes";
+/// Signed publisher index sources of available packages.
+pub const PACKAGE_INDEX_SOURCES_KEY: &str = "packages.indexSources";
 /// Days a diagnostic log record is retained.
 pub const LOG_RETENTION_DAYS_KEY: &str = "diagnostics.logRetentionDays";
 /// Most diagnostic log records retained.

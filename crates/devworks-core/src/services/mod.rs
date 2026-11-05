@@ -12,6 +12,7 @@ pub mod history;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
+pub mod packages;
 pub mod power;
 pub mod process;
 pub mod projects;
@@ -189,6 +190,14 @@ impl UseCases {
     /// Registers the diagnostics operations of the workspace family (`DiagnosticService`).
     pub fn with_diagnostics(mut self, service: Arc<diagnostics::DiagnosticService>) -> Self {
         for op in diagnostics::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the addons family (`PackageService`).
+    pub fn with_packages(mut self, service: Arc<packages::PackageService>) -> Self {
+        for op in packages::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self

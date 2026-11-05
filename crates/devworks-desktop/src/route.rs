@@ -329,13 +329,10 @@ pub static SCREENS: [Screen; 19] = [
         summary: "Managed executable packages and their access.",
         group: NavGroup::Secondary,
         help_topic: "addons",
-        subviews: &["Installed", "Available"],
+        subviews: &[],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending(
-            "package installation, activation and contributions",
-            "DW-43, DW-44",
-        ),
+        pending: None,
         link: None,
     },
 ];

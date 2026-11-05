@@ -731,6 +731,68 @@ fn self_editor(
                 )
             })
         }
+        ValueKind::PackageIndexSources => {
+            // One row per source with its own location and key fields: a location (a directory
+            // path may contain spaces) is never split from its key by a delimiter.
+            let mut sources: Vec<(String, String)> = shown
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|s| {
+                            (
+                                s["location"].as_str().unwrap_or("").to_owned(),
+                                s["publicKey"].as_str().unwrap_or("").to_owned(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut changed = false;
+            let mut remove = None;
+            let labeled = |r: egui::Response, role: egui::Role, label: String| {
+                r.widget_info(|| egui::WidgetInfo::labeled(role, true, label.clone()));
+                r
+            };
+            for (n, (location, key)) in sources.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(location)
+                            .hint_text("https://… or /absolute/directory")
+                            .desired_width((ui.available_width() - 360.0).max(160.0)),
+                    );
+                    let label = format!("{} {} location", d.label, n + 1);
+                    changed |= labeled(r, egui::Role::TextInput, label).changed();
+                    let r = ui.add(
+                        egui::TextEdit::singleline(key)
+                            .hint_text("Publisher key (64 hex digits)")
+                            .desired_width(240.0),
+                    );
+                    let label = format!("{} {} key", d.label, n + 1);
+                    changed |= labeled(r, egui::Role::TextInput, label).changed();
+                    let label = format!("Remove {} {}", d.label, n + 1);
+                    if labeled(ui.button("Remove"), egui::Role::Button, label).clicked() {
+                        remove = Some(n);
+                    }
+                });
+            }
+            if let Some(n) = remove {
+                sources.remove(n);
+                changed = true;
+            }
+            let label = format!("Add {}", d.label);
+            if labeled(ui.button("Add source"), egui::Role::Button, label).clicked() {
+                sources.push((String::new(), String::new()));
+                changed = true;
+            }
+            changed.then(|| {
+                json!(
+                    sources
+                        .iter()
+                        .map(|(l, k)| json!({"location": l, "publicKey": k}))
+                        .collect::<Vec<_>>()
+                )
+            })
+        }
         ValueKind::SecretRef => {
             let configured = shown.get("secretRef").is_some();
             ui.label(if configured {

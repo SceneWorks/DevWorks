@@ -112,6 +112,7 @@ mod diagnostics;
 mod indexing;
 mod jobs;
 mod knowledge;
+mod packages;
 mod projects;
 mod replies;
 mod resources;

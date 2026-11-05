@@ -308,7 +308,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1214), 1214);
+    assert_eq!(run("domain-fixtures.json", 1256), 1256);
 }
 
 #[test]
@@ -383,8 +383,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // revision 3 of artifacts.save and artifacts.list and eleven Knowledge operations,
     // revision 2 of the twenty operations returning a work record (feature
     // readiness) and of the three prioritizations (placement).
-    assert_eq!(admitted.len(), 457);
-    // Indexing status/runs/overlay also retain revision 2.
+    // Indexing status/runs/overlay and eight package operations also retain revision 2.
+    // Those eight package operations expose saved project overrides at revision 3.
+    assert_eq!(admitted.len(), 473);
 }
 
 #[test]

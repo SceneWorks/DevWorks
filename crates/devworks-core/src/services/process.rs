@@ -456,6 +456,13 @@ impl ProcessSupervisor {
         live.tree.take_output()
     }
 
+    /// The stdin pipe of a tree launched with `pipe_stdin`, once.
+    pub fn take_input(&self, p: &OwnedProcess) -> Option<Box<dyn std::io::Write + Send>> {
+        let entry = self.entry(&p.id)?;
+        let mut live = entry.lock().unwrap_or_else(|e| e.into_inner());
+        live.tree.take_input()
+    }
+
     /// Observes a tree without blocking; a tree found empty is settled `Reaped`.
     pub fn poll(&self, p: &OwnedProcess) -> Result<Option<StopOutcome>, StorageError> {
         let Some(entry) = self.entry(&p.id) else {

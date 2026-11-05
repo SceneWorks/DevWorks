@@ -414,6 +414,16 @@ pub struct Activate {
     pub registry_revision: Revision,
     pub state_generation: Revision,
     pub configuration_revision: Revision,
+    /// The package's committed configuration (absent when none was saved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<ActivateConfiguration>,
+}
+/// A package's committed configuration: the value and the schema it was validated against.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivateConfiguration {
+    pub schema: SchemaRef,
+    pub value: serde_json::Value,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]

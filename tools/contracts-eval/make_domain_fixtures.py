@@ -456,6 +456,40 @@ case('reject-r2-result-available-metric-without-value','operation-result.r2',{'k
 case('reject-r2-result-progress-over-total','operation-result.r2',{'kind':'workspace.record_diagnostic','value':{**diag_r2,'progressCompleted':'6'}},False,True)
 case('reject-r2-result-diagnostic-page-continuation','operation-result.r2',{'kind':'workspace.logs','value':{'items':[],'hasMore':True}},False,True)
 case('reject-r2-result-metric-unknown-availability','operation-result.r2',{'kind':'workspace.logs','value':{'items':[{**sample('Diagnostic'),'metrics':[{**metric_ok,'availability':'Maybe'}]}],'hasMore':False}},False,False)
+# Schema revision 2 (addons): effective availability apart from configured enablement, kind,
+# languages, targets, prerequisites, requested/effective access, configuration, state generation,
+# the pending version with its waits and proposal, the rollback predecessor, trust and failure.
+prereq={'kind':'package','id':'dotnet-runtime-pack','requirement':'^1.2','required':True,'satisfied':False,'state':'Missing'}
+runtime_prereq={'kind':'runtime','id':'dotnet','requirement':'>=8','required':True,'satisfied':True,'state':'Ready','detectedVersion':'8.0.204'}
+offer={'version':'1.4.0','manifestDigest':'f'*64,'bundleDigest':'e'*64,'bundleBytes':'1048576','publisherId':'acme','source':'https://packs.example/devworks-index.json','hostTargetSupported':True,'newer':True}
+package_r2={**sample('PackageRecord'),'installed':True,'registryRevision':'4','availability':'MissingDependency','availabilityReason':'Required package dotnet-runtime-pack is not installed','packageKind':'LanguagePack','contributions':['dotnet-pack/indexer','dotnet-pack/settings'],'languages':['csharp'],'targets':['aarch64-apple-darwin','x86_64-pc-windows-msvc'],'hostTargetSupported':True,'prerequisites':[prereq,runtime_prereq],'available':[offer],'requestedAccess':['worktree.read','process:dotnet'],'effectiveAccess':['worktree.read'],'configurationRevision':'2','configurationSchema':{'schemaId':'dotnet-pack/config','revision':'1','sha256':'b'*64},'stateGeneration':'3','pendingVersion':'1.3.0','pendingDigest':'c'*64,'pendingWaits':['ExactVersionApproval','Quiescence'],'pendingBundle':ART,'pendingProposalId':'proposal-a','predecessorVersion':'1.1.0','predecessorDigest':'d'*64,'publisherTrusted':False,'signerKey':'e'*64,'failureCode':'StartupTimeout'}
+for name in ['addons.install','addons.configure','addons.enable','addons.disable','addons.update','addons.rollback','addons.uninstall']:
+ case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':package_r2})
+case('r2-result-addons.catalog','operation-result.r2',{'kind':'addons.catalog','value':{'items':[package_r2,{**sample('PackageRecord'),'availability':'Ready'}],'hasMore':False}})
+addon_art={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'application/vnd.devworks.package'}
+for kind,command in [('Install',{'bundle':addon_art,'expectedRegistryRevision':'1'}),('Update',{'packageId':'fixture','bundle':addon_art,'expectedRegistryRevision':'1'}),('Enable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Disable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Rollback',{'packageId':'fixture','targetManifestDigest':'a'*64,'expectedRegistryRevision':'1','expectedStateGeneration':'1'}),('Uninstall',{'packageId':'fixture','expectedRegistryRevision':'1'})]:
+ case('r2-input-addons.'+kind.lower(),'addon-command-request',{'protocol':'1.0-draft.1','requestKey':'addon-a','command':{'kind':kind,**command},'schemaRevision':2})
+case('r2-input-addons.catalog','domain-request.r2',domain('addons.catalog'))
+case('r2-input-addons.configure','domain-request.r2',command_at('addons.configure'))
+case('reject-r1-result-package-availability','operation-result',{'kind':'addons.catalog','value':{'items':[package_r2],'hasMore':False}},False,False)
+case('reject-r2-result-package-unknown-availability','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'availability':'Starting'}},False,False)
+case('reject-r2-result-package-unknown-prerequisite-state','operation-result.r2',{'kind':'addons.catalog','value':{'items':[{**package_r2,'prerequisites':[{**prereq,'state':'Sort-of'}]}],'hasMore':False}},False,False)
+case('reject-r2-result-package-offer-missing-digest','operation-result.r2',{'kind':'addons.catalog','value':{'items':[{**package_r2,'available':[{k:v for k,v in offer.items() if k!='manifestDigest'}]}],'hasMore':False}},False,False)
+case('reject-r2-result-package-unknown-wait','operation-result.r2',{'kind':'addons.update','value':{**package_r2,'pendingWaits':['Coffee']}},False,False)
+case('reject-r2-result-package-prerequisite-missing-satisfied','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'prerequisites':[{k:v for k,v in prereq.items() if k!='satisfied'}]}},False,False)
+# Schema revision 3: saved project enablement is readable without erasing existing overrides.
+package_r3={**package_r2,'disabledProjects':['project-a','project-b'],'configuration':{'schema':package_r2['configurationSchema'],'value':{'format':'compact','enabled':True}}}
+for kind,command in [('Install',{'bundle':addon_art,'expectedRegistryRevision':'1'}),('Update',{'packageId':'fixture','bundle':addon_art,'expectedRegistryRevision':'1'}),('Enable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Disable',{'packageId':'fixture','expectedRegistryRevision':'1'}),('Rollback',{'packageId':'fixture','targetManifestDigest':'a'*64,'expectedRegistryRevision':'1','expectedStateGeneration':'1'}),('Uninstall',{'packageId':'fixture','expectedRegistryRevision':'1'})]:
+ case('r3-input-addons.'+kind.lower(),'addon-command-request',{'protocol':'1.0-draft.1','requestKey':'addon-a','command':{'kind':kind,**command},'schemaRevision':3})
+case('r3-input-addons.catalog','domain-request.r3',domain('addons.catalog',3))
+case('r3-input-addons.configure','domain-request.r3',command_at('addons.configure',3))
+for name in ['addons.install','addons.configure','addons.enable','addons.disable','addons.update','addons.rollback','addons.uninstall']:
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':package_r3})
+case('r3-result-addons.catalog','operation-result.r3',{'kind':'addons.catalog','value':{'items':[package_r3,{**package_r3,'disabledProjects':[]}],'hasMore':False}})
+case('reject-r2-result-package-projects','operation-result.r2',{'kind':'addons.install','value':package_r3},False,False)
+case('reject-r3-result-package-invalid-project','operation-result.r3',{'kind':'addons.install','value':{**package_r3,'disabledProjects':['not a project id']}},False,False)
+case('reject-r2-result-package-configuration','operation-result.r2',{'kind':'addons.install','value':{**package_r2,'configuration':package_r3['configuration']}},False,False)
+case('reject-r3-result-package-invalid-configuration','operation-result.r3',{'kind':'addons.install','value':{**package_r3,'configuration':{'value':{}}}},False,False)
 # Schema revision 2 (router availability): with sessionId, the session's current pin, whether
 # it is eligible for the asked intent/effort/capabilities and why it was last set.
 case('r2-input-router.availability','domain-request.r2',domain('router.availability',sessionId='session-a'))

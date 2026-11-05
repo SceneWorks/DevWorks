@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod files;
 pub mod http;
 pub mod indexing;
+pub mod packages;
 pub mod process;
 pub mod retrieval;
 pub mod router;
@@ -62,6 +63,12 @@ pub enum IdKind {
     /// Router session pins.
     RoutePin,
     Project,
+    /// Exact-version package approval proposals.
+    Proposal,
+    /// Package process sessions (the protocol nonce of one helper instance).
+    PackageSession,
+    /// Package invocations and their short-lived tokens.
+    Invocation,
     /// Repository registrations (discovery).
     Repository,
     /// Index graph generations.

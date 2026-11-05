@@ -37,6 +37,10 @@ pub mod work;
 pub trait Dialogs {
     fn pick_files(&mut self) -> Vec<PathBuf>;
     fn pick_folder(&mut self, start: Option<&str>) -> Option<PathBuf>;
+    /// A package bundle to install (the first picked file by default).
+    fn pick_package(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
 }
 
 /// The platform dialogs.
@@ -47,6 +51,12 @@ impl Dialogs for NativeDialogs {
             .set_title("Attach images or files")
             .pick_files()
             .unwrap_or_default()
+    }
+    fn pick_package(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Install a package bundle")
+            .add_filter("DevWorks package", &["dwpkg"])
+            .pick_file()
     }
     fn pick_folder(&mut self, start: Option<&str>) -> Option<PathBuf> {
         let mut d = rfd::FileDialog::new().set_title("Choose a directory");
@@ -148,6 +158,7 @@ pub struct Shell {
     pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
+    pub addons: crate::addons::AddonsScreen,
     /// All projects, the project selector and Repositories (DW-11).
     pub projects: projects::ProjectsUi,
     pub jobs: jobs::JobsUi,
@@ -290,6 +301,7 @@ impl Shell {
             knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
+            addons: Default::default(),
             projects: projects::ProjectsUi::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
@@ -411,6 +423,16 @@ impl Shell {
             }
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
+            Route::AddOns => {
+                self.load_addons();
+                if let Some(c) = &mut self.client {
+                    c.task(
+                        Slot::AddonsDiscovery,
+                        "Checking runtimes and package indexes",
+                        |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
+                    );
+                }
+            }
             Route::Portfolio => {
                 self.load_projects();
                 self.load_deleted_projects();
@@ -588,6 +610,187 @@ impl Shell {
             ops::workspace_artifacts,
         );
     }
+    /// Loads the whole catalog, following its pages (see the `AddonsList` reply).
+    fn load_addons(&mut self) {
+        self.addons.catalog_pending = None;
+        self.query(Slot::AddonsList, "Loading add-ons", "addons.catalog", |b| {
+            crate::addons::catalog_frame(b, None)
+        });
+    }
+    /// Loads a package's logs from the start, following their pages to the end.
+    fn load_addon_logs(&mut self, package: String) {
+        self.addons.logs_pending.insert(package.clone(), Vec::new());
+        let p = package.clone();
+        self.query(
+            Slot::AddonsLogs(package),
+            "Loading add-on logs",
+            "addons.logs",
+            move |b| crate::addons::logs_frame(b, &p, None),
+        );
+    }
+    fn addons_actions(&mut self, actions: Vec<crate::addons::AddonsAction>) {
+        use crate::addons::{self as a, AddonsAction};
+        for action in actions {
+            let registry = self.addons.registry_revision;
+            let command = |op: &'static str,
+                           cmd: serde_json::Value|
+             -> (&'static str, serde_json::Value) { (op, cmd) };
+            let lifecycle = match action {
+                AddonsAction::Refresh => {
+                    self.load_addons();
+                    None
+                }
+                AddonsAction::Discover => {
+                    if let Some(c) = &mut self.client {
+                        c.task(
+                            Slot::AddonsDiscovery,
+                            "Checking runtimes and package indexes",
+                            |b| b.refresh_packages().map(|()| TaskOutput::Refreshed),
+                        );
+                    }
+                    None
+                }
+                AddonsAction::InstallOffer {
+                    package,
+                    digest,
+                    update,
+                } => {
+                    if let Some(c) = &mut self.client {
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave {
+                                update: update.then_some(package.clone()),
+                                registry,
+                                download: None,
+                            },
+                            "Downloading the add-on",
+                            move |b| {
+                                let path = b.fetch_index_bundle(&package, &digest)?;
+                                a::prepare_downloaded_install(b, path)
+                            },
+                        );
+                    }
+                    None
+                }
+                AddonsAction::Select(id) => {
+                    self.addons.selected = Some(id);
+                    None
+                }
+                AddonsAction::Logs(id) => {
+                    self.load_addon_logs(id);
+                    None
+                }
+                AddonsAction::OpenIndexing => {
+                    self.navigate(Route::Indexing);
+                    None
+                }
+                AddonsAction::InstallFromFile(update) => {
+                    if let Some(path) = self.dialogs.pick_package()
+                        && let Some(c) = &mut self.client
+                    {
+                        self.addons.busy = c.task(
+                            Slot::AddonsSave {
+                                update,
+                                registry,
+                                download: None,
+                            },
+                            "Preparing the add-on",
+                            move |b| a::prepare_install_from_file(b, &path),
+                        );
+                    }
+                    None
+                }
+                AddonsAction::Approve {
+                    package,
+                    bundle,
+                    update,
+                } => {
+                    let bundle = serde_json::to_value(&bundle).unwrap_or_default();
+                    let expected = registry.max(1).to_string();
+                    Some(if update {
+                        command(
+                            "addons.update",
+                            serde_json::json!({"kind": "Update", "packageId": package, "bundle": bundle, "expectedRegistryRevision": expected}),
+                        )
+                    } else {
+                        command(
+                            "addons.install",
+                            serde_json::json!({"kind": "Install", "bundle": bundle, "expectedRegistryRevision": expected}),
+                        )
+                    })
+                }
+                AddonsAction::Enable(p) => Some(command(
+                    "addons.enable",
+                    serde_json::json!({"kind": "Enable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
+                )),
+                AddonsAction::Disable(p) => Some(command(
+                    "addons.disable",
+                    serde_json::json!({"kind": "Disable", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
+                )),
+                AddonsAction::Uninstall(p) => Some(command(
+                    "addons.uninstall",
+                    serde_json::json!({"kind": "Uninstall", "packageId": p, "expectedRegistryRevision": registry.max(1).to_string()}),
+                )),
+                AddonsAction::Rollback {
+                    package,
+                    target,
+                    generation,
+                } => Some(command(
+                    "addons.rollback",
+                    serde_json::json!({"kind": "Rollback", "packageId": package, "targetManifestDigest": target, "expectedRegistryRevision": registry.max(1).to_string(), "expectedStateGeneration": generation.max(1).to_string()}),
+                )),
+                AddonsAction::TrustPublisher {
+                    package,
+                    revision,
+                    trust,
+                } => {
+                    self.addons.busy = true;
+                    self.command(
+                        Slot::AddonsCommand,
+                        "Saving publisher trust",
+                        "addons.configure",
+                        move |b| a::trust_frame(b, &package, revision, trust),
+                    );
+                    None
+                }
+                AddonsAction::Configure {
+                    package,
+                    revision,
+                    schema,
+                    value,
+                } => {
+                    self.addons.busy = true;
+                    self.command(
+                        Slot::AddonsCommand,
+                        "Saving the add-on configuration",
+                        "addons.configure",
+                        move |b| a::configure_frame(b, &package, revision, schema, value),
+                    );
+                    None
+                }
+                AddonsAction::ProjectEnablement {
+                    package,
+                    revision,
+                    disabled,
+                } => {
+                    self.addons.busy = true;
+                    self.command(
+                        Slot::AddonsCommand,
+                        "Saving project enablement",
+                        "addons.configure",
+                        move |b| a::project_frame(b, &package, revision, &disabled),
+                    );
+                    None
+                }
+            };
+            if let Some((op, cmd)) = lifecycle {
+                self.addons.busy = true;
+                self.command(Slot::AddonsCommand, "Updating the add-on", op, move |b| {
+                    a::lifecycle_frame(b, cmd)
+                });
+            }
+        }
+    }
+
     /// Starts a new Knowledge listing (first page) and refreshes the retrieval mode. A listing
     /// that could not be submitted is not left in progress.
     fn load_knowledge(&mut self) {
@@ -1663,9 +1866,12 @@ impl Shell {
                         }
                         Err(e) => AttachState::Failed(e.describe()),
                     },
-                    Ok(TaskOutput::Preview { .. } | TaskOutput::Prepared { .. }) => {
-                        AttachState::Failed("unexpected reply".into())
-                    }
+                    Ok(
+                        TaskOutput::Preview { .. }
+                        | TaskOutput::Prepared { .. }
+                        | TaskOutput::PackagePrepared { .. }
+                        | TaskOutput::Refreshed,
+                    ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
                 let stored = matches!(state, AttachState::Stored(_));
@@ -1721,7 +1927,12 @@ impl Shell {
                                 egui::TextureOptions::LINEAR,
                             ));
                         }
-                        Ok(TaskOutput::Stored { .. } | TaskOutput::Prepared { .. }) => {}
+                        Ok(
+                            TaskOutput::Stored { .. }
+                            | TaskOutput::Prepared { .. }
+                            | TaskOutput::PackagePrepared { .. }
+                            | TaskOutput::Refreshed,
+                        ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
                 }
@@ -1901,6 +2112,181 @@ impl Shell {
                 }
                 Err(e) => self.artifacts.error = Some(e.describe()),
             },
+            (Slot::AddonsList, Reply::Query(q)) => match crate::addons::catalog(q) {
+                Ok((items, registry, next)) => {
+                    let (mut all, first) = self
+                        .addons
+                        .catalog_pending
+                        .take()
+                        .unwrap_or_else(|| (Vec::new(), registry));
+                    let pages = all.len() / usize::from(crate::ops::PAGE_LIMIT) + 1;
+                    if registry != first {
+                        // The registry changed between pages: read it again from the start.
+                        self.load_addons();
+                    } else if let Some(cursor) =
+                        next.filter(|_| pages < crate::addons::CATALOG_PAGES)
+                    {
+                        all.extend(items);
+                        self.addons.catalog_pending = Some((all, first));
+                        self.query(
+                            Slot::AddonsList,
+                            "Loading add-ons",
+                            "addons.catalog",
+                            move |b| crate::addons::catalog_frame(b, Some(&cursor)),
+                        );
+                    } else {
+                        all.extend(items);
+                        self.addons.items = all;
+                        self.addons.registry_revision = registry;
+                        self.addons.loaded = true;
+                        self.addons.error = None;
+                    }
+                }
+                Err(e) => {
+                    self.addons.catalog_pending = None;
+                    self.addons.error = Some(e.describe());
+                }
+            },
+            (Slot::AddonsLogs(id), Reply::Query(q)) => match crate::addons::logs(q) {
+                Ok((entries, next)) => {
+                    let mut all = self.addons.logs_pending.remove(&id).unwrap_or_default();
+                    all.extend(entries);
+                    if let Some((p, d)) = self.addons.awaiting.clone()
+                        && p == id
+                        && let Some(e) = all.iter().find(|e| e.id.as_str() == d)
+                    {
+                        self.addons.config_errors.insert(p, e.message.0.clone());
+                        self.addons.awaiting = None;
+                    }
+                    // Only the newest entries are kept while the log is followed to its end.
+                    if all.len() > crate::addons::LOGS_KEPT {
+                        all.drain(..all.len() - crate::addons::LOGS_KEPT);
+                    }
+                    match next {
+                        Some(cursor) => {
+                            self.addons.logs_pending.insert(id.clone(), all);
+                            self.query(
+                                Slot::AddonsLogs(id.clone()),
+                                "Loading add-on logs",
+                                "addons.logs",
+                                move |b| crate::addons::logs_frame(b, &id, Some(&cursor)),
+                            );
+                        }
+                        None => {
+                            self.addons.logs.insert(id, all);
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.addons.logs_pending.remove(&id);
+                    self.addons.notice = Some(e.describe());
+                }
+            },
+            (Slot::AddonsCommand, Reply::Command(outcome)) => {
+                self.addons.busy = is_unknown(&outcome);
+                // A configuration refused by the package's schema names the diagnostic that
+                // carries its field errors: fetch it for the form.
+                if let Some(package) = crate::addons::configured_package(&outcome) {
+                    self.addons.config_errors.remove(&package);
+                }
+                if let Some((package, diagnostic)) = crate::addons::configuration_refusal(&outcome)
+                {
+                    self.addons.awaiting = Some((package.clone(), diagnostic));
+                    self.load_addon_logs(package);
+                }
+                self.addons.notice = Some(crate::addons::describe(outcome));
+                self.load_addons();
+            }
+            (Slot::AddonsDiscovery, Reply::Task(t)) => {
+                if let Err(e) = t {
+                    self.addons.notice = Some(e);
+                }
+                self.load_addons();
+            }
+            (
+                Slot::AddonsSave {
+                    update, registry, ..
+                },
+                Reply::Task(Ok(TaskOutput::PackagePrepared { frame, download })),
+            ) => {
+                if let Some(client) = &mut self.client {
+                    client.command(
+                        Slot::AddonsSave {
+                            update,
+                            registry,
+                            download: Some(download.into_path()),
+                        },
+                        "Saving the add-on bundle",
+                        "artifacts.save",
+                        frame,
+                    );
+                }
+            }
+            (
+                Slot::AddonsSave {
+                    update,
+                    registry,
+                    download,
+                },
+                Reply::Task(Ok(TaskOutput::Prepared { frame })),
+            ) => {
+                if let Some(client) = &mut self.client {
+                    client.command(
+                        Slot::AddonsSave {
+                            update,
+                            registry,
+                            download,
+                        },
+                        "Saving the add-on bundle",
+                        "artifacts.save",
+                        frame,
+                    );
+                }
+            }
+            (
+                Slot::AddonsSave {
+                    update,
+                    registry,
+                    download,
+                },
+                Reply::Command(outcome),
+            ) => {
+                let unknown = is_unknown(&outcome);
+                if !unknown && let (Some(path), Some(backend)) = (&download, self.backend()) {
+                    attachments::remove_owned(path, &backend.scratch_dir().join("packages"));
+                }
+                match ops::saved_artifact(outcome) {
+                    Ok(saved) => {
+                        if let Some(backend) = self.backend() {
+                            let (op, frame) = crate::addons::install_saved(
+                                &*backend,
+                                &saved.artifact,
+                                update.as_deref(),
+                                registry,
+                            );
+                            if let Some(client) = &mut self.client {
+                                client.command(
+                                    Slot::AddonsCommand,
+                                    "Installing the add-on",
+                                    op,
+                                    frame,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.addons.busy = unknown;
+                        self.addons.notice = Some(e.describe());
+                    }
+                }
+            }
+            (Slot::AddonsSave { .. }, Reply::Task(t)) => {
+                self.addons.busy = false;
+                self.addons.notice = Some(match t {
+                    Err(e) => e,
+                    Ok(_) => "unexpected reply".into(),
+                });
+            }
             (Slot::KnowledgeList(generation), Reply::Query(q)) => {
                 if self.knowledge.listed(generation, q) {
                     self.load_knowledge();
@@ -2738,6 +3124,7 @@ impl Shell {
                             .collect();
                     }
                 }
+                Slot::AddonsSave { .. } | Slot::AddonsCommand => self.addons.busy = true,
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
                     p.sequence = p.sequence.max(*n);
@@ -3456,6 +3843,16 @@ impl Shell {
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
+            Route::AddOns => {
+                let online = self.online();
+                let mut actions = Vec::new();
+                self.addons.ui(
+                    ui,
+                    online.as_ref().map(|_| ()).map_err(String::as_str),
+                    &mut actions,
+                );
+                self.addons_actions(actions);
+            }
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
             Route::Knowledge => {

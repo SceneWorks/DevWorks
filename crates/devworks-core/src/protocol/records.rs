@@ -5314,6 +5314,202 @@ pub struct PackageRecord {
     pub enabled: bool,
     pub trust_state: Label,
     pub contribution_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub registry_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PackageAvailability", extend("x-since" = 2))]
+    pub availability: Option<PackageAvailability>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub availability_reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub package_kind: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub languages: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub targets: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub host_target_supported: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackagePrerequisite>", extend("x-since" = 2))]
+    pub prerequisites: Option<Items<PackagePrerequisite>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub requested_access: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub effective_access: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub configuration_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaRef", extend("x-since" = 2))]
+    pub configuration_schema: Option<SchemaRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub state_generation: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub pending_version: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub pending_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackageWaitReason>", extend("x-since" = 2))]
+    pub pending_waits: Option<Items<PackageWaitReason>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub pending_proposal_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub predecessor_version: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub predecessor_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub publisher_trusted: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub signer_key: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub failure_code: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<Label>", extend("x-since" = 2))]
+    pub contributions: Option<Rows<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 2))]
+    pub pending_bundle: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<PackageOffer>", extend("x-since" = 2))]
+    pub available: Option<Items<PackageOffer>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub installed: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 3))]
+    pub disabled_projects: Option<Items<Id>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaValue", extend("x-since" = 3))]
+    pub configuration: Option<SchemaValue>,
 }
 impl Check for PackageRecord {
     fn check(&self) -> Result<(), String> {
@@ -5325,11 +5521,130 @@ impl Check for PackageRecord {
         self.enabled.check()?;
         self.trust_state.check()?;
         self.contribution_ids.check()?;
+        self.registry_revision.check()?;
+        self.availability.check()?;
+        self.availability_reason.check()?;
+        self.package_kind.check()?;
+        self.languages.check()?;
+        self.targets.check()?;
+        self.host_target_supported.check()?;
+        self.prerequisites.check()?;
+        self.requested_access.check()?;
+        self.effective_access.check()?;
+        self.configuration_revision.check()?;
+        self.configuration_schema.check()?;
+        self.state_generation.check()?;
+        self.pending_version.check()?;
+        self.pending_digest.check()?;
+        self.pending_waits.check()?;
+        self.pending_proposal_id.check()?;
+        self.predecessor_version.check()?;
+        self.predecessor_digest.check()?;
+        self.publisher_trusted.check()?;
+        self.signer_key.check()?;
+        self.failure_code.check()?;
+        self.contributions.check()?;
+        self.pending_bundle.check()?;
+        self.available.check()?;
+        self.installed.check()?;
+        self.disabled_projects.check()?;
+        self.configuration.check()?;
         crate::protocol::rules::record(
             "PackageRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PackageRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.registry_revision = None;
+        }
+        if revision < 2 {
+            self.availability = None;
+        }
+        if revision < 2 {
+            self.availability_reason = None;
+        }
+        if revision < 2 {
+            self.package_kind = None;
+        }
+        if revision < 2 {
+            self.languages = None;
+        }
+        if revision < 2 {
+            self.targets = None;
+        }
+        if revision < 2 {
+            self.host_target_supported = None;
+        }
+        if revision < 2 {
+            self.prerequisites = None;
+        } else {
+            self.prerequisites.retain_revision(revision);
+        }
+        if revision < 2 {
+            self.requested_access = None;
+        }
+        if revision < 2 {
+            self.effective_access = None;
+        }
+        if revision < 2 {
+            self.configuration_revision = None;
+        }
+        if revision < 2 {
+            self.configuration_schema = None;
+        }
+        if revision < 2 {
+            self.state_generation = None;
+        }
+        if revision < 2 {
+            self.pending_version = None;
+        }
+        if revision < 2 {
+            self.pending_digest = None;
+        }
+        if revision < 2 {
+            self.pending_waits = None;
+        }
+        if revision < 2 {
+            self.pending_proposal_id = None;
+        }
+        if revision < 2 {
+            self.predecessor_version = None;
+        }
+        if revision < 2 {
+            self.predecessor_digest = None;
+        }
+        if revision < 2 {
+            self.publisher_trusted = None;
+        }
+        if revision < 2 {
+            self.signer_key = None;
+        }
+        if revision < 2 {
+            self.failure_code = None;
+        }
+        if revision < 2 {
+            self.contributions = None;
+        }
+        if revision < 2 {
+            self.pending_bundle = None;
+        }
+        if revision < 2 {
+            self.available = None;
+        }
+        if revision < 2 {
+            self.installed = None;
+        }
+        if revision < 3 {
+            self.disabled_projects = None;
+        }
+        if revision < 3 {
+            self.configuration = None;
+        }
     }
 }
 
@@ -7593,6 +7908,128 @@ impl Check for ReviewSourceEvidence {
         self.evidence.check()?;
         crate::protocol::rules::record(
             "ReviewSourceEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PackageAvailability {
+    NotInstalled,
+    Disabled,
+    MissingDependency,
+    Incompatible,
+    Ready,
+    Failed,
+}
+impl Check for PackageAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PackageWaitReason {
+    TrustApproval,
+    ExactVersionApproval,
+    AccessApproval,
+    Compatibility,
+    Quiescence,
+}
+impl Check for PackageWaitReason {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackagePrerequisite {
+    pub kind: Label,
+    pub id: Label,
+    pub requirement: Label,
+    pub required: bool,
+    pub satisfied: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PrerequisiteState", extend("x-since" = 2))]
+    pub state: Option<PrerequisiteState>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub detected_version: Option<Label>,
+}
+impl Check for PackagePrerequisite {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.id.check()?;
+        self.requirement.check()?;
+        self.required.check()?;
+        self.satisfied.check()?;
+        self.state.check()?;
+        self.detected_version.check()?;
+        crate::protocol::rules::record(
+            "PackagePrerequisite",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for PackagePrerequisite {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.state = None;
+        }
+        if revision < 2 {
+            self.detected_version = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PrerequisiteState {
+    Missing,
+    Incompatible,
+    Ready,
+}
+impl Check for PrerequisiteState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageOffer {
+    pub version: Label,
+    pub manifest_digest: Digest,
+    pub bundle_digest: Digest,
+    pub bundle_bytes: Counter,
+    pub publisher_id: Id,
+    pub source: Label,
+    pub host_target_supported: bool,
+    pub newer: bool,
+}
+impl Check for PackageOffer {
+    fn check(&self) -> Result<(), String> {
+        self.version.check()?;
+        self.manifest_digest.check()?;
+        self.bundle_digest.check()?;
+        self.bundle_bytes.check()?;
+        self.publisher_id.check()?;
+        self.source.check()?;
+        self.host_target_supported.check()?;
+        self.newer.check()?;
+        crate::protocol::rules::record(
+            "PackageOffer",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

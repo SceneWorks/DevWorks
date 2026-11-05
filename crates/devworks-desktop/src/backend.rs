@@ -54,6 +54,16 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// Probes package runtimes and refreshes the signed package indexes (blocking; off the UI
+    /// thread).
+    fn refresh_packages(&self) -> Result<(), String> {
+        Err("packages are not available here".into())
+    }
+    /// Downloads the bundle a verified index offers into the UI staging directory (verified
+    /// against the signed digests) and returns its path.
+    fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
+        Err("packages are not available here".into())
+    }
     /// The index source configuration of the workspace (or a project) section, read for the
     /// form that edits it through `indexing.configure_sources` (none without indexing).
     fn index_sources(
@@ -131,6 +141,21 @@ pub enum Slot {
     DeleteAttachment(String),
     ArtifactsList,
     ResourcesList,
+    /// The Add-ons catalog.
+    AddonsList,
+    /// One package's logs.
+    AddonsLogs(String),
+    /// The Add-ons screen's one lifecycle command (or install-from-file task) at a time.
+    AddonsCommand,
+    /// Bundle artifact save before the exact install/update command; retained at close.
+    AddonsSave {
+        update: Option<String>,
+        registry: i64,
+        #[serde(default)]
+        download: Option<PathBuf>,
+    },
+    /// The runtime probe and index refresh behind the Add-ons screen.
+    AddonsDiscovery,
     /// A page of the router catalog for the composer's selectors (its load generation).
     RouterCatalog(u64),
     /// A conversation whose first route needs its session record (session ID).
@@ -261,8 +286,13 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
-    /// A prepared command frame (attachment or provider configuration), not admitted yet.
+    /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared { frame: Vec<u8> },
+    /// A downloaded bundle stays owned until its artifact-save command is confirmed.
+    PackagePrepared {
+        frame: Vec<u8>,
+        download: crate::addons::PreparedDownload,
+    },
     /// An attachment's `artifacts.save` outcome with the exact frame it submitted (an unknown
     /// outcome is confirmed by resubmitting that frame, never a new one).
     Stored {
@@ -271,6 +301,8 @@ pub enum TaskOutput {
     },
     /// A decoded preview image (RGBA, unmultiplied).
     Preview { size: [usize; 2], rgba: Vec<u8> },
+    /// Package runtimes and indexes were refreshed.
+    Refreshed,
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;
@@ -314,6 +346,14 @@ pub const COMMANDS: &[&str] = &[
     "sessions.append_message",
     "settings.save_revision",
     "artifacts.delete",
+    "artifacts.save",
+    "addons.install",
+    "addons.update",
+    "addons.enable",
+    "addons.disable",
+    "addons.rollback",
+    "addons.uninstall",
+    "addons.configure",
     "router.configure",
     "router.pin",
     "router.route",

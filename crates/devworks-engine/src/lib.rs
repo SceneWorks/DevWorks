@@ -34,7 +34,15 @@
 //!   original receipt. It refuses a stale or cancelled invocation (fence and cancellation
 //!   epoch) without writing. A package process reaches it through [`AsyncDeliveryHandler`]: the
 //!   dispatcher keeps the claim live with a renewed lease while the handler runs and signals a
-//!   cancellation request. The package process host itself is a later item.
+//!   cancellation request.
+//! * **Package host.** [`package_host::PackageHost`] launches, monitors and stops package
+//!   helpers through the process owner over the framed local protocol (`host.initialize`,
+//!   `host.activate`, `host.invoke`, `host.cancel`, `host.shutdown`), reconciles them to the
+//!   committed package registry, provides the quiescence barrier the package service publishes
+//!   behind, and brokers package requests: an event-handler invocation changes state and admits
+//!   effects only through `broker.commit_event` (never `broker.state` compare-and-set or an
+//!   effectful `broker.call`). See the module documentation and core
+//!   `services::packages` (trust model: a helper is a separate process, not an OS sandbox).
 //! * **Receipt replies.** [`replies::reply_consumer`] registers core's receipt reply publisher
 //!   as an asynchronous consumer: every recorded receipt's durable typed reply is published
 //!   after commit under the claim's fence, retried and recovered without duplicates.
@@ -94,6 +102,12 @@
 //!    ended. Journaled stops of earlier boots are settled from what step 4 verified (a tree it
 //!    could not verify stopped holds the root for reconciliation). The schedules and
 //!    keep-working hooks recover in the same unit of work and cannot clear these holds.
+//!    When packages are composed, the package host then removes interrupted package
+//!    publications and unreferenced install directories (nothing is admitted yet, so none can be
+//!    in progress) and starts every enabled, available package's helper against the committed
+//!    registry (re-verifying its installed files first); its reconciliation loop starts with
+//!    delivery in step 8, and shutdown gives the helpers their cooperative stop before the
+//!    process owner stops the remaining trees.
 //! 6. **Applies keep-awake** from the effective `power.keepAwake` setting through the
 //!    composition's `PowerPort`.
 //! 7. **Records boot recovery** as one `boot` diagnostic (what steps 2–6 established and what
@@ -179,6 +193,7 @@ pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
 pub mod package;
+pub mod package_host;
 pub mod replies;
 pub mod resources;
 pub mod runs;
@@ -196,6 +211,6 @@ pub use runs::{
     ActivationLauncher, Launch, LaunchEnd, LaunchFuture, RunGate, RunSupervisor, RunTick,
 };
 pub use runtime::{
-    BootError, BootReport, CollectionPass, Composition, IndexComposition, RunComposition, Runtime,
-    RuntimeConfig, ShutdownStage, boot,
+    BootError, BootReport, CollectionPass, Composition, IndexComposition, PackageComposition,
+    RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
 };

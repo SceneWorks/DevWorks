@@ -1122,3 +1122,480 @@ fn closing_the_window_with_an_active_root_leaves_it_held_for_continue_after_reop
     );
     assert!(again.contains("code: ContinueRequired"), "{again}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// ADDON-02 / EXT-05: Settings → Add-ons over the shared addons.* use cases
+
+/// An unsigned bundle for a platform this host is not (it installs, is never launched).
+fn foreign_bundle(dir: &std::path::Path) -> std::path::PathBuf {
+    foreign_bundle_with(dir, None)
+}
+/// [`foreign_bundle`], optionally shipping `config` as its configuration schema document.
+fn foreign_bundle_with(dir: &std::path::Path, config: Option<&[u8]>) -> std::path::PathBuf {
+    foreign_bundle_for(dir, config, "riscv64gc-unknown-none-elf")
+}
+/// [`foreign_bundle_with`] declaring `target` (its helper is never a real executable).
+fn foreign_bundle_for(
+    dir: &std::path::Path,
+    config: Option<&[u8]>,
+    target: &str,
+) -> std::path::PathBuf {
+    use devworks_core::fingerprint::sha256_hex;
+    let helper: &[u8] = b"not an executable for this platform";
+    let help: &[u8] = b"# Foreign pack\n";
+    let config_digest = config.map_or("b".repeat(64), sha256_hex);
+    let mut files = vec![
+        json!({"path": "bin/helper", "sha256": sha256_hex(helper), "byteLength": helper.len().to_string()}),
+        json!({"path": "help.md", "sha256": sha256_hex(help), "byteLength": help.len().to_string()}),
+    ];
+    let mut contents: Vec<(&str, &[u8])> = vec![("bin/helper", helper), ("help.md", help)];
+    let mut assets = vec![];
+    if let Some(c) = config {
+        files.push(json!({"path": "config.json", "sha256": sha256_hex(c), "byteLength": c.len().to_string()}));
+        contents.push(("config.json", c));
+        assets.push(
+            json!({"reference": {"schemaId": "foreign-pack/config", "revision": "1",
+            "sha256": config_digest}, "path": "config.json"}),
+        );
+    }
+    let manifest = json!({
+        "packageId": "foreign-pack", "version": "1.0.0", "publisherId": "acme",
+        "protocolMin": {"major": 1, "minor": 0}, "protocolMax": {"major": 1, "minor": 0},
+        "minimumHostVersion": "0.1.0", "dependencies": [], "runtimes": [], "schemaAssets": assets,
+        "requestedLimits": {"maxConcurrent": 1, "queueCapacity": 4,
+            "maxMemoryBytes": "1048576", "streamCreditBytes": 4096},
+        "targets": [{"targetTriple": target, "entrypoint": "bin/helper"}],
+        "files": files,
+        "stateSchema": {"schemaId": "foreign-pack/state", "revision": "1", "sha256": "a".repeat(64)},
+        "configurationSchema": {"schemaId": "foreign-pack/config", "revision": "1",
+            "sha256": config_digest},
+        "helpFile": "help.md", "requestedPermissions": [{"kind": "WorktreeRead"}],
+        "contributions": [{"kind": "Semantic", "meta": {"id": "foreign-pack/index",
+            "inputSchema": {"schemaId": "foreign-pack/in", "revision": "1", "sha256": "c".repeat(64)},
+            "outputSchema": {"schemaId": "foreign-pack/out", "revision": "1", "sha256": "d".repeat(64)},
+            "helpTopic": "index", "required": true, "cancellation": "Cooperative"},
+            "languages": ["csharp"], "format": "Scip"}]
+    })
+    .to_string();
+    let bytes = devworks_adapters::packages::write_bundle(manifest.as_bytes(), &contents, None);
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("foreign-pack.dwpkg");
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn the_add_ons_screen_installs_a_bundle_and_shows_availability_apart_from_enablement() {
+    let root = Root::new("addons");
+    let engine = start(&root);
+    let dialogs = Script::default();
+    let bundle = foreign_bundle(&root.0.with_extension("bundles"));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    assert!(has_text(&h, "No add-ons installed"));
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    settle(&mut h);
+    // Configured enablement and effective availability are separate.
+    let rec = h.state().addons.items[0].clone();
+    assert!(rec.enabled);
+    assert_eq!(format!("{:?}", rec.availability.unwrap()), "Incompatible");
+    assert!(has_text(&h, "Incompatible"));
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    assert!(has_text(&h, "Language pack"));
+    assert!(has_text(
+        &h,
+        "riscv64gc-unknown-none-elf · not this platform"
+    ));
+    click(&mut h, Role::Button, "Disable");
+    step_until(&mut h, "the pack is disabled", |s| {
+        s.addons.items.first().is_some_and(|r| !r.enabled)
+    });
+    settle(&mut h);
+    assert_eq!(
+        format!(
+            "{:?}",
+            h.state().addons.items[0].availability.clone().unwrap()
+        ),
+        "Disabled"
+    );
+    click(&mut h, Role::Button, "Logs");
+    step_until(&mut h, "the pack's logs arrive", |s| {
+        s.addons
+            .logs
+            .get("foreign-pack")
+            .is_some_and(|l| !l.is_empty())
+    });
+}
+
+#[test]
+fn the_add_ons_form_shows_configuration_field_errors_from_the_packages_schema() {
+    let root = Root::new("addons-config");
+    let engine = start(&root);
+    let dialogs = Script::default();
+    let schema = br#"{"type":"object","properties":{"threads":{"type":"integer","minimum":1}}}"#;
+    let bundle = foreign_bundle_with(&root.0.with_extension("bundles"), Some(schema));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    // The default window size, with the install notice banner above the form.
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 0}"#.into());
+    assert!(
+        h.state().addons.notice.is_some(),
+        "a notice banner is shown"
+    );
+    click(&mut h, Role::DisclosureTriangle, "Configuration");
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the field errors arrive", |s| {
+        s.addons.config_errors.contains_key("foreign-pack")
+    });
+    settle(&mut h);
+    assert!(h.state().addons.config_errors["foreign-pack"].contains("/threads"));
+    assert!(has_text(&h, "/threads"));
+    // A value the schema accepts is applied and clears the errors.
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 2}"#.into());
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the errors clear", |s| {
+        !s.addons.config_errors.contains_key("foreign-pack")
+    });
+}
+
+#[test]
+fn the_add_ons_screen_follows_every_log_page_to_the_requested_field_errors() {
+    let root = Root::new("addons-log-pages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let dialogs = Script::default();
+    let schema = br#"{"type":"object","properties":{"threads":{"type":"integer","minimum":1}}}"#;
+    let bundle = foreign_bundle_with(&root.0.with_extension("bundles"), Some(schema));
+    dialogs.files.lock().unwrap().push(vec![bundle]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Install from file…");
+    step_until(&mut h, "the installed pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    // More refusals than one log page holds, before the one the form waits for.
+    let rec = h.state().addons.items[0].clone();
+    let schema_ref = serde_json::to_value(rec.configuration_schema.clone().unwrap()).unwrap();
+    for _ in 0..(devworks_desktop::ops::PAGE_LIMIT as usize + 5) {
+        let frame = devworks_desktop::addons::configure_frame(
+            &*backend,
+            "foreign-pack",
+            rec.revision.get(),
+            schema_ref.clone(),
+            json!({"threads": -1}),
+        );
+        let _ = backend.command("addons.configure", &frame);
+    }
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    h.state_mut()
+        .addons
+        .config_text
+        .insert("foreign-pack".into(), r#"{"threads": 0}"#.into());
+    click(&mut h, Role::DisclosureTriangle, "Configuration");
+    click(&mut h, Role::Button, "Save configuration");
+    step_until(&mut h, "the newest refusal's field errors arrive", |s| {
+        s.addons.config_errors.contains_key("foreign-pack")
+    });
+    assert!(h.state().addons.config_errors["foreign-pack"].contains("/threads"));
+    // The whole log was read: every refusal is listed, newest first in the view.
+    settle(&mut h);
+    let logs = &h.state().addons.logs["foreign-pack"];
+    let refusals = logs
+        .iter()
+        .filter(|d| d.code.0 == "ConfigurationInvalid")
+        .count();
+    assert_eq!(refusals, devworks_desktop::ops::PAGE_LIMIT as usize + 6);
+}
+
+#[test]
+fn the_add_ons_catalog_follows_every_page() {
+    use ed25519_dalek::SigningKey;
+    let root = Root::new("addons-catalog-pages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    // A local signed publisher index offering more packs than one catalog page holds.
+    let dir = root.0.with_extension("index");
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = SigningKey::from_bytes(&[9; 32]);
+    let count = devworks_desktop::ops::PAGE_LIMIT as usize + 7;
+    let entries: Vec<_> = (0..count)
+        .map(|n| {
+            json!({"packageId": format!("offered-{n:03}"), "version": "1.0.0",
+                "manifestDigest": "a".repeat(64), "bundleDigest": "b".repeat(64), "bundleBytes": 10,
+                "targets": ["x86_64-unknown-linux-gnu"], "kind": "HarnessPackage", "languages": [],
+                "bundle": format!("offered-{n:03}.dwpkg")})
+        })
+        .collect();
+    let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": entries});
+    std::fs::write(
+        dir.join("devworks-index.json"),
+        devworks_adapters::packages::write_index(&index, &key),
+    )
+    .unwrap();
+    let hex: String = key
+        .verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let d = descriptor(devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(&*backend, "settings.save_revision", body),
+    ))
+    .expect("an index source");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh");
+    step_until(&mut h, "every offered pack is listed", |s| {
+        s.addons.items.len() == count
+    });
+}
+
+fn prepare_offered_pack(root: &Root, backend: &dyn Backend) -> String {
+    use devworks_core::ports::packages::PackageInspector;
+    use ed25519_dalek::SigningKey;
+    // A local signed index offering one real bundle.
+    let dir = root.0.join("offer-index");
+    // Declared for this platform, so the screen offers it (its helper never starts).
+    let host = devworks_adapters::packages::host_target_triple();
+    let bundle = foreign_bundle_for(&dir, None, &host);
+    let bytes = std::fs::read(&bundle).unwrap();
+    let inspected = devworks_adapters::packages::BundleInspector
+        .inspect(&bytes)
+        .unwrap()
+        .inspection;
+    let key = SigningKey::from_bytes(&[11; 32]);
+    let index = json!({"publisherId": "acme", "generatedAtMs": 1, "entries": [{
+        "packageId": "foreign-pack", "version": inspected.version,
+        "manifestDigest": inspected.manifest_digest,
+        "bundleDigest": devworks_core::fingerprint::sha256_hex(&bytes),
+        "bundleBytes": bytes.len(), "targets": [host],
+        "kind": "LanguagePack", "languages": ["csharp"], "bundle": "foreign-pack.dwpkg"}]});
+    std::fs::write(
+        dir.join("devworks-index.json"),
+        devworks_adapters::packages::write_index(&index, &key),
+    )
+    .unwrap();
+    let hex: String = key
+        .verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let d = descriptor(devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY).unwrap();
+    let body = json!({"scope": {"kind": "Workspace"}, "expectedRevision": "1", "entries": [
+        {"key": d.key, "value": {"schema": d.schema_ref(), "value": [{"location": dir.display().to_string(), "publicKey": hex}]}}]});
+    ops::settings_saved(backend.command(
+        "settings.save_revision",
+        &ops::command_frame(backend, "settings.save_revision", body),
+    ))
+    .expect("an index source");
+    inspected.version.to_string()
+}
+
+fn open_offered_pack(
+    root: &Root,
+    backend: Arc<dyn Backend>,
+) -> egui_kittest::Harness<'static, devworks_desktop::shell::Shell> {
+    let mut h = harness(
+        shell_with(Ok(backend), root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::AddOns);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Refresh");
+    step_until(&mut h, "the offered pack is listed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack")
+    });
+    h.state_mut().addons.selected = Some("foreign-pack".into());
+    settle(&mut h);
+    h
+}
+
+fn assert_offered_pack_installed(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    root: &Root,
+) {
+    step_until(h, "the offered pack is installed", |s| {
+        s.addons
+            .items
+            .iter()
+            .any(|r| r.id.as_str() == "foreign-pack" && r.trust_state.0 != "Available")
+    });
+    settle(h);
+    let downloads = root.0.join("staging-ui").join("packages");
+    assert!(
+        downloads.is_dir(),
+        "the bundle was downloaded through the scratch directory"
+    );
+    let left: Vec<_> = std::fs::read_dir(&downloads)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn installing_an_offered_pack_leaves_no_download_behind() {
+    let root = Root::new("addons-offer-download");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let version = prepare_offered_pack(&root, &*backend);
+    let mut h = open_offered_pack(&root, backend);
+    click(&mut h, Role::Button, &format!("Install {version}"));
+    assert_offered_pack_installed(&mut h, &root);
+}
+
+#[test]
+fn offered_download_survives_lost_save_requests_and_relaunch() {
+    let root = Root::new("addons-offer-unknown");
+    let engine = start(&root);
+    let real = engine.backend();
+    let version = prepare_offered_pack(&root, &*real);
+    let lossy = LoseAcks::losing_requests(real.clone(), "artifacts.save", 4);
+    let mut h = open_offered_pack(&root, lossy.clone());
+    click(&mut h, Role::Button, &format!("Install {version}"));
+    assert_eq!(h.state().unconfirmed_count(), 1);
+    assert!(h.state().addons.busy);
+    let frames = lossy.frames.lock().unwrap().clone();
+    assert_eq!(frames.len(), 4);
+    assert!(frames.iter().all(|f| f == &frames[0]));
+    h.state_mut().on_exit();
+    let saved = devworks_desktop::memory::Memory::load(&root.memory());
+    let devworks_desktop::backend::Slot::AddonsSave {
+        download: Some(path),
+        ..
+    } = &saved.pending.commands[0].slot
+    else {
+        panic!("download ownership persisted")
+    };
+    assert!(path.is_file(), "uncommitted save still needs the bundle");
+    drop(h);
+    let seen = LoseAcks::over(real, "artifacts.save", 0);
+    let mut h = harness(
+        shell_with(Ok(seen.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    assert_offered_pack_installed(&mut h, &root);
+    assert_eq!(seen.frames.lock().unwrap().as_slice(), &[frames[0].clone()]);
+}
+
+#[test]
+fn offered_download_held_past_close_is_cleaned_after_confirmation() {
+    let root = Root::new("addons-offer-close");
+    let engine = start(&root);
+    let real = engine.backend();
+    let version = prepare_offered_pack(&root, &*real);
+    let seen = LoseAcks::over(real.clone(), "artifacts.save", 0);
+    let gate = Gate::holding_replies("artifacts.save");
+    let mut h = open_offered_pack(&root, gate.over(seen.clone()));
+    gate.close();
+    h.get_by_role_and_label(Role::Button, &format!("Install {version}"))
+        .click();
+    step_until(&mut h, "bundle save admitted", |_| {
+        !seen.frames.lock().unwrap().is_empty()
+    });
+    h.state_mut().request_close();
+    step_until(&mut h, "closed with bundle save pending", |s| {
+        matches!(s.lifecycle(), Lifecycle::Closed)
+    });
+    let saved = devworks_desktop::memory::Memory::load(&root.memory());
+    let devworks_desktop::backend::Slot::AddonsSave {
+        download: Some(path),
+        ..
+    } = &saved.pending.commands[0].slot
+    else {
+        panic!("download ownership persisted")
+    };
+    assert!(path.is_file(), "unknown save retains its source");
+    gate.open();
+    drop(h);
+    let again = LoseAcks::over(real, "artifacts.save", 0);
+    let mut h = harness(
+        shell_with(Ok(again.clone()), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
+    assert_offered_pack_installed(&mut h, &root);
+    assert_eq!(
+        again.frames.lock().unwrap()[0],
+        saved.pending.commands[0].frame
+    );
+}
+
+#[test]
+fn index_sources_keep_paths_with_spaces() {
+    let root = Root::new("index-sources");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let dir = root.dir("My Packs");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    let key = devworks_core::settings::catalog::PACKAGE_INDEX_SOURCES_KEY;
+    let label = descriptor(key).unwrap().label;
+    type_into(&mut h, "Search settings", "index sources");
+    settle(&mut h);
+    click(&mut h, Role::Button, &format!("Add {label}"));
+    let location = dir.display().to_string();
+    let publisher = "0123456789abcdef".repeat(4);
+    type_into(&mut h, &format!("{label} 1 location"), &location);
+    type_into(&mut h, &format!("{label} 1 key"), &publisher);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save changes");
+    assert!(has_text(&h, "Settings saved."));
+    let (_, entries) = ops::settings_entries(
+        backend.query("settings.read_effective", &ops::settings_read(&*backend)),
+    )
+    .unwrap();
+    let saved = entries.iter().find(|e| e.key.0 == key).unwrap();
+    assert_eq!(
+        saved.value.value.0,
+        json!([{"location": location, "publicKey": publisher}])
+    );
+}

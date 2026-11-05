@@ -76,6 +76,7 @@ mod diagnostics;
 mod indexing;
 mod jobs;
 mod knowledge;
+mod packages;
 mod projects;
 mod resources;
 mod router;
@@ -89,6 +90,7 @@ pub use diagnostics::*;
 pub use indexing::*;
 pub use jobs::*;
 pub use knowledge::*;
+pub use packages::*;
 pub use projects::*;
 pub use resources::*;
 pub use router::*;
@@ -1188,7 +1190,8 @@ pub struct ProcessingRecord {
     /// `[{"actionKey", "operationId"}]` in submission order.
     pub intents: Value,
 }
-pub trait PackageHandlerRead {
+/// Handler state and processing receipts plus the package registry ([`PackageRegistryRead`]).
+pub trait PackageHandlerRead: PackageRegistryRead {
     fn package_state(&self, package_id: &str) -> Result<Option<PackageState>, StorageError>;
     fn processing(
         &self,
@@ -1197,7 +1200,7 @@ pub trait PackageHandlerRead {
         event_id: &EventId,
     ) -> Result<Option<ProcessingRecord>, StorageError>;
 }
-pub trait PackageHandlerLedger: PackageHandlerRead {
+pub trait PackageHandlerLedger: PackageHandlerRead + PackageRegistry {
     /// Compare-and-set of the package state. `expected_revision` 0 creates it at revision 1. A
     /// different stored generation is [`StorageError::LeaseLost`]; a different revision is a
     /// [`StorageError::RevisionConflict`].

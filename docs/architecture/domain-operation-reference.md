@@ -590,16 +590,16 @@ All 351 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `addons.catalog` | **Query**<br>`page`: `PageRequest` | `Page<PackageRecord>` |
-| `addons.install` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Install'} | `PackageRecord` |
-| `addons.configure` | **Command**<br>`packageId`: `Id`<br>`expectedRevision`: `Revision`<br>`config`: `SchemaValue` | `PackageRecord` |
-| `addons.enable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Enable'} | `PackageRecord` |
-| `addons.disable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Disable'} | `PackageRecord` |
-| `addons.update` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Update'} | `PackageRecord` |
+| `addons.catalog` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<PackageRecord>` |
+| `addons.install` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Install'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.configure` | **Command**<br>`packageId`: `Id`<br>`expectedRevision`: `Revision`<br>`config`: `SchemaValue`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `PackageRecord` |
+| `addons.enable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Enable'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.disable` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Disable'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.update` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Update'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.propose` | **Command**<br>`source`: `ArtifactRef`<br>`manifestDigest`: `Digest`<br>`basePackageId`: `?Id`<br>`expectedRevision`: `?Revision` | `ProposalRecord` |
 | `addons.logs` | **Query**<br>`packageId`: `Id`<br>`afterSequence`: `Counter`<br>`page`: `PageRequest` | `Page<Diagnostic>` |
-| `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'} | `PackageRecord` |
-| `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'} | `PackageRecord` |
+| `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
+| `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 
 ### Help
 
@@ -2271,6 +2271,34 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `enabled` | `bool` |
 | `trustState` | `Label` |
 | `contributionIds` | `Items<Id>` |
+| `registryRevision` | `?Revision` · *revision 2+* |
+| `availability` | `?PackageAvailability` · *revision 2+* |
+| `availabilityReason` | `?Text` · *revision 2+* |
+| `packageKind` | `?Label` · *revision 2+* |
+| `languages` | `?Items<Label>` · *revision 2+* |
+| `targets` | `?Items<Label>` · *revision 2+* |
+| `hostTargetSupported` | `?bool` · *revision 2+* |
+| `prerequisites` | `?Items<PackagePrerequisite>` · *revision 2+* |
+| `requestedAccess` | `?Items<Label>` · *revision 2+* |
+| `effectiveAccess` | `?Items<Label>` · *revision 2+* |
+| `configurationRevision` | `?Revision` · *revision 2+* |
+| `configurationSchema` | `?SchemaRef` · *revision 2+* |
+| `stateGeneration` | `?Counter` · *revision 2+* |
+| `pendingVersion` | `?Label` · *revision 2+* |
+| `pendingDigest` | `?Digest` · *revision 2+* |
+| `pendingWaits` | `?Items<PackageWaitReason>` · *revision 2+* |
+| `pendingProposalId` | `?Id` · *revision 2+* |
+| `predecessorVersion` | `?Label` · *revision 2+* |
+| `predecessorDigest` | `?Digest` · *revision 2+* |
+| `publisherTrusted` | `?bool` · *revision 2+* |
+| `signerKey` | `?Label` · *revision 2+* |
+| `failureCode` | `?Label` · *revision 2+* |
+| `contributions` | `?Rows<Label>` · *revision 2+* |
+| `pendingBundle` | `?ArtifactRef` · *revision 2+* |
+| `available` | `?Items<PackageOffer>` · *revision 2+* |
+| `installed` | `?bool` · *revision 2+* |
+| `disabledProjects` | `?Items<Id>` · *revision 3+* |
+| `configuration` | `?SchemaValue` · *revision 3+* |
 
 ### HelpTopic
 
@@ -2923,6 +2951,43 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `zeroFindingsConfirmed` | `bool` |
 | `findingsCoverage` | `Coverage` |
 | `evidence` | `Items<ArtifactRef>` |
+
+### PackageAvailability
+
+`NotInstalled`, `Disabled`, `MissingDependency`, `Incompatible`, `Ready`, `Failed`.
+
+### PackageWaitReason
+
+`TrustApproval`, `ExactVersionApproval`, `AccessApproval`, `Compatibility`, `Quiescence`.
+
+### PackagePrerequisite
+
+| Field | Type |
+| --- | --- |
+| `kind` | `Label` |
+| `id` | `Label` |
+| `requirement` | `Label` |
+| `required` | `bool` |
+| `satisfied` | `bool` |
+| `state` | `?PrerequisiteState` · *revision 2+* |
+| `detectedVersion` | `?Label` · *revision 2+* |
+
+### PrerequisiteState
+
+`Missing`, `Incompatible`, `Ready`.
+
+### PackageOffer
+
+| Field | Type |
+| --- | --- |
+| `version` | `Label` |
+| `manifestDigest` | `Digest` |
+| `bundleDigest` | `Digest` |
+| `bundleBytes` | `Counter` |
+| `publisherId` | `Id` |
+| `source` | `Label` |
+| `hostTargetSupported` | `bool` |
+| `newer` | `bool` |
 
 ### IndexFreshnessState
 

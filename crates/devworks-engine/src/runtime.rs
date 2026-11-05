@@ -8,6 +8,7 @@ use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
 use crate::indexing::{IndexSupervisor, IndexingConfig};
 use crate::jobs::Scheduler;
+use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
 use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
@@ -30,6 +31,7 @@ use devworks_core::services::jobs::runner::{
     InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
 };
 use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
+use devworks_core::services::packages::PackageService;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
 use devworks_core::services::projects::{ProjectService, RepositoryService};
@@ -96,6 +98,18 @@ impl RunComposition {
     }
 }
 
+/// The package lifecycle as composed: the one package service (registered for the `addons.*`
+/// use cases) and what its host needs to launch helpers.
+pub struct PackageComposition {
+    pub service: Arc<PackageService>,
+    pub launch: LaunchPorts,
+    pub config: HostConfig,
+    /// Runtime probing (the cache must be the service's runtime probe).
+    pub runtimes: Option<crate::package_host::RuntimePorts>,
+    /// Signed publisher index sources (fetch and verification).
+    pub index: Option<crate::package_host::IndexPorts>,
+}
+
 /// Lifecycle hooks run in order (schedules, then the caller's).
 struct ChainedHooks(Vec<Arc<dyn LifecycleHooks>>);
 impl LifecycleHooks for ChainedHooks {
@@ -143,6 +157,11 @@ pub struct Composition {
     /// boot recovery through it, feeds it the boot report, collection passes and consumers, and
     /// runs its retention and monitor passes.
     pub diagnostics: Arc<DiagnosticService>,
+    /// The package lifecycle: [`boot`] registers the `addons.*` use cases with its service
+    /// (replacing any the caller registered), starts the package host after process recovery and
+    /// stops its helpers cooperatively at shutdown. `None`: no package host (packages are not
+    /// offered).
+    pub packages: Option<PackageComposition>,
     /// The other use cases (queue, sessions, history, settings, ...).
     pub use_cases: UseCases,
     /// Consumers besides the required ones [`boot`] registers itself (package handlers, ...).
@@ -227,6 +246,8 @@ pub enum BootError {
     Resources(StorageError),
     /// Run-root recovery failed.
     Runs(StorageError),
+    /// Package install-directory recovery failed.
+    Packages(StorageError),
     /// The keep-awake setting could not be read.
     Settings(StorageError),
 }
@@ -282,6 +303,7 @@ pub struct Runtime {
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
+    packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
     shutdown_bound: Duration,
     report: BootReport,
@@ -336,11 +358,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs,
         power,
         diagnostics,
+        packages,
         use_cases,
         mut consumers,
         indexing,
         config,
     } = composition;
+    let use_cases = match &packages {
+        Some(p) => use_cases.with_packages(p.service.clone()),
+        None => use_cases,
+    };
     let work = Arc::new(
         WorkService::new(ids.clone(), runs.service.clone()).with_staged_plans(artifacts.clone()),
     );
@@ -475,6 +502,37 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .await
         .map_err(BootError::Runs)
         .map_err(failed)?;
+    // Packages (after owned processes are recovered, before any command is admitted): remove
+    // interrupted publications and unreferenced install directories, then start every enabled,
+    // available package's helper against the committed registry.
+    let mut package_guard = PackageBootGuard(None);
+    let package_host = match packages {
+        Some(p) => {
+            let host = PackageHost::new(
+                store.clone(),
+                p.service.clone(),
+                supervisor.clone(),
+                ids.clone(),
+                p.launch,
+                p.config,
+                p.runtimes,
+                p.index,
+            );
+            p.service.set_activity(host.clone());
+            // From here every early return abandons the host (breaks the service<->host cycle
+            // that would keep the store and its workspace lock alive, and kills any started
+            // helper) until the completed Runtime owns it.
+            package_guard.0 = Some(host.clone());
+            let booting = host.clone();
+            tokio::task::spawn_blocking(move || booting.boot())
+                .await
+                .unwrap_or_else(|_| Err(panicked("package boot")))
+                .map_err(BootError::Packages)
+                .map_err(failed)?;
+            Some(host)
+        }
+        None => None,
+    };
     // Applying may start an OS helper (and wait briefly to see it hold), so off the async thread.
     let keep_awake = Arc::new(KeepAwake::new(power));
     let (ka, st) = (keep_awake.clone(), store.clone());
@@ -504,6 +562,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
 
     let run = dispatcher.clone();
     let delivery = tokio::spawn(async move { run.run().await });
+    if let Some(h) = &package_host {
+        h.start();
+    }
     let (status, _) = watch::channel(None);
     let collector = Arc::new(Collector {
         trigger: Notify::new(),
@@ -534,6 +595,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         config.diagnostics_interval,
     );
     let monitoring = tokio::spawn(async move { watcher.run(svc, every).await });
+    // Ownership of the package host moves to the Runtime.
+    package_guard.0 = None;
     let indexing_task = index_supervisor
         .clone()
         .map(|ix| tokio::spawn(async move { ix.run().await }));
@@ -585,6 +648,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         keep_awake,
         diagnostics,
         monitor,
+        packages: package_host,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
         report,
@@ -595,6 +659,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing: index_supervisor,
         indexing_task: Mutex::new(indexing_task),
     })
+}
+
+/// Abandons a package host whose boot did not complete (see `boot`).
+struct PackageBootGuard(Option<Arc<PackageHost>>);
+impl Drop for PackageBootGuard {
+    fn drop(&mut self) {
+        if let Some(host) = self.0.take() {
+            host.abandon();
+        }
+    }
 }
 
 fn panicked(what: &str) -> StorageError {
@@ -666,6 +740,11 @@ impl Runtime {
         self.diagnostics.export(ctx, query, request_key, |raw| {
             self.command(ctx, "artifacts.save", raw)
         })
+    }
+    /// The package host (helper processes, invocations and the quiescence barrier), when packages
+    /// were composed.
+    pub fn packages(&self) -> Option<&Arc<PackageHost>> {
+        self.packages.as_ref()
     }
     /// The process supervisor every owned tree is launched through (process tools, package and
     /// helper hosts).
@@ -850,6 +929,15 @@ impl Runtime {
             }
         }
         let _ = dispatch::first(tokio::time::sleep_until(deadline), self.dispatcher.idle()).await;
+        // Package helpers get their cooperative shutdown (cancel in-flight invocations,
+        // host.shutdown) after the hold above and within what is left of the same bound: the
+        // host stops every helper by that deadline, and its thread is not awaited past it; the
+        // process owner below stops whatever remains.
+        if let Some(host) = self.packages.clone() {
+            let bound = left();
+            let stopping = tokio::task::spawn_blocking(move || host.shutdown(bound));
+            let _ = dispatch::first(tokio::time::sleep_until(deadline), stopping).await;
+        }
         // Index runs are signalled and waited for within the same deadline; their Git trees
         // are owned trees, so the stop below kills any that remain.
         if let Some(ix) = &self.indexing {
@@ -978,6 +1066,11 @@ fn closing_reply(raw: &[u8], correlation: Id) -> CommandOutcome {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
+        // Package helpers are killed at once (no grace): their host threads would otherwise
+        // keep the process owner, and so the helper trees, alive.
+        if let Some(h) = &self.packages {
+            h.abandon();
+        }
         // Launched coordinators are signalled and aborted: nothing renews or writes after drop.
         self.runs.abort_launches();
         self.keep_awake.apply(false);

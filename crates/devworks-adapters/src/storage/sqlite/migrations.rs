@@ -287,6 +287,21 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0019_indexing.sql"),
         rebuilds_tables: false,
     },
+    // Additive: the package registry head, package records, verified versions, approval
+    // proposals, retained state generations, index sources and availability observations (seven
+    // tables and an index), independent of every table of migrations 11-19 (it references only
+    // its own tables). The writer floor stays at 19, the highest so far: applying a migration
+    // overwrites both floors, so a lower writer floor would re-admit the writers migrations 11, 14, 16 and 19 refuse. It need not rise: no earlier build reads or writes these tables, and the
+    // package handler state rows (migration 1) a generation publication rewrites were never
+    // written by an earlier build. The reader floor stays at 8: no earlier build reads these
+    // tables, and every query an earlier reader makes is unchanged.
+    Migration {
+        version: 20,
+        minimum_reader: 8,
+        minimum_writer: 19,
+        sql: include_str!("migrations/0020_packages.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -572,3 +587,7 @@ pub(crate) fn prepare(
         .ok_or_else(|| StorageError::IncompatibleSchema("store_meta disappeared".into()))?;
     Ok((meta, AccessMode::ReadWrite))
 }
+
+/// Recorded checksum of migration 20; shipped SQL is immutable.
+pub const MIGRATION_0020_SHA256: &str =
+    "7cabf466f43dcc1677f62ad14ebb1e96ed9239f2cf505e9646c0a4e38287876a";

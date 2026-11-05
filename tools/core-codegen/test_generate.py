@@ -43,6 +43,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.query', 'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate',
             'knowledge.tag', 'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
             'knowledge.import_user_data', 'knowledge.delete_by_source', 'dreaming.revert',
+            'addons.catalog', 'addons.install', 'addons.configure', 'addons.enable',
+            'addons.disable', 'addons.update', 'addons.rollback', 'addons.uninstall',
             'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
             'jobs.enable', 'jobs.run_now', 'jobs.inspect', 'jobs.cancel', 'jobs.delete',
             'jobs.disable', 'web.search', 'web.fetch',
