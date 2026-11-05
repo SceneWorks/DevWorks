@@ -548,6 +548,32 @@ impl Facts {
     }
 }
 
+/// The exact read-only tier annotations published by a qualified catalog revision. Reused
+/// when a concrete Model edit echoes catalog metadata; tier settings have their own command.
+fn catalog_tier_members(
+    members: &BTreeMap<&'static str, Vec<Id>>,
+    models: &BTreeMap<String, StoredRouteModel>,
+    connections: &[crate::ports::router::ConnectionStatus],
+    revision: u32,
+) -> BTreeMap<&'static str, Vec<Id>> {
+    members
+        .iter()
+        .map(|(tier, ids)| {
+            let ids = ids
+                .iter()
+                .flat_map(|id| match Facts::family_slot(id, true) {
+                    Some(family) if revision >= 3 => {
+                        vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
+                    }
+                    Some(family) => latest::targets(family, models, connections),
+                    None => vec![id.clone()],
+                })
+                .collect();
+            (*tier, ids)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------------------------
 // Refusals
 
@@ -964,23 +990,7 @@ impl InferenceRouter {
         )?;
         let connections = self.connections.connections(snapshot.router())?;
         let need = Need::parse("Default", []).expect("default request");
-        let projected_members: BTreeMap<&'static str, Vec<Id>> = f
-            .members
-            .iter()
-            .map(|(tier, members)| {
-                let ids = members
-                    .iter()
-                    .flat_map(|id| match Facts::family_slot(id, true) {
-                        Some(family) if revision >= 3 => {
-                            vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
-                        }
-                        Some(family) => latest::targets(family, &f.models, &connections),
-                        None => vec![id.clone()],
-                    })
-                    .collect();
-                (*tier, ids)
-            })
-            .collect();
+        let projected_members = catalog_tier_members(&f.members, &f.models, &connections, revision);
         let binding = CursorBinding::new(
             ctx,
             "router.catalog",

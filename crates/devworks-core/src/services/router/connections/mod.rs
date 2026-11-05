@@ -3079,7 +3079,29 @@ fn configure_model(
     asked.sort_by_key(|t| TIERS.iter().position(|(n, _)| n == t));
     asked.dedup();
     if asked != current_tiers {
-        return Err(invalid("tier_memberships"));
+        // Catalog annotations are projections: revision 3 shows virtual family slots, while
+        // older clients see current concrete targets. Accept their current read-only echo,
+        // never a membership change (only the Tier action writes the routing setting).
+        let models = all_models(tx.router())?
+            .into_iter()
+            .map(|m| (m.id.as_str().to_owned(), m))
+            .collect();
+        let connections: Vec<_> = all_connections(tx.router())?
+            .iter()
+            .map(status_filter)
+            .collect();
+        let projected = [1, 3].into_iter().any(|revision| {
+            let members = super::catalog_tier_members(&members, &models, &connections, revision);
+            let tiers: Vec<String> = TIERS
+                .iter()
+                .filter(|(tier, _)| members.get(tier).is_some_and(|ids| ids.contains(&model.id)))
+                .map(|(tier, _)| (*tier).to_owned())
+                .collect();
+            asked == tiers
+        });
+        if !projected {
+            return Err(invalid("tier_memberships"));
+        }
     }
     let current = tx.router().route_model(&model.id)?;
     let now = tx.now_ms();
@@ -3187,7 +3209,9 @@ fn configure_tier(
         if !seen.insert(id.as_str()) {
             return Err(invalid("member_ids"));
         }
-        if tx.router().route_model(id)?.is_none() {
+        if super::latest::alias_family(id.as_str()).is_none()
+            && tx.router().route_model(id)?.is_none()
+        {
             // Decision models are never tier members; unknown models cannot be pooled.
             return Err(refuse(DomainErrorCode::NotFound, MODEL_AGGREGATE, Some(id)));
         }
