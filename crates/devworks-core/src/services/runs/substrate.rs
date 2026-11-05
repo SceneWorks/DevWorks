@@ -1357,6 +1357,9 @@ impl ControlService {
         let Some(root) = tx.sessions().work_root(root_id)? else {
             return Ok(());
         };
+        for linked in super::linked_roots(tx, &root)? {
+            self.request_allocation_yield(tx, &linked.id)?;
+        }
         let Some(before) = tx.runs().live_activation(root_id)? else {
             return Ok(());
         };

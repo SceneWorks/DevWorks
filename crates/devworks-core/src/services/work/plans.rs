@@ -597,6 +597,7 @@ impl WorkService {
                 next.brief = brief.value();
                 let f = touch(tx, ctx, &next)?;
                 if metadata_changed {
+                    super::allocation::invalidate_work(tx, ctx, &f.id)?;
                     bump(tx, project, &[f.queue()])?;
                 }
                 event(
@@ -830,8 +831,11 @@ impl WorkService {
         if changed.is_empty() {
             return Ok(w.clone());
         }
-        if metadata_changed && !queues.contains(&w.queue()) {
-            queues.push(w.queue());
+        if metadata_changed {
+            super::allocation::invalidate_work(tx, ctx, &w.id)?;
+            if !queues.contains(&w.queue()) {
+                queues.push(w.queue());
+            }
         }
         let statuses = tx.work().statuses(&w.project_id)?;
         let semantic = w

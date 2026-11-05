@@ -106,10 +106,11 @@ pub mod workflow_ops;
 pub use model::{fold, link_id, plan_digest, plan_units, search_key};
 
 /// The operations [`WorkService`] is registered for.
-pub const OPERATIONS: [&str; 33] = [
+pub const OPERATIONS: [&str; 34] = [
     "next_work.claim_project_queue",
     "next_work.claim_feature_task",
     "next_work.inspect_claim",
+    "next_work.inspect_queue",
     "next_work.release_claim",
     "features.list",
     "features.get",
@@ -396,6 +397,9 @@ impl QueryHandler for WorkService {
             OperationInput::NextWork(crate::operations::next_work::Input::InspectClaim(i)) => {
                 self.inspect_claim(snapshot, ctx, i)
             }
+            OperationInput::NextWork(crate::operations::next_work::Input::InspectQueue(i)) => {
+                self.inspect_queue(snapshot, ctx, i)
+            }
             OperationInput::Features(fops::Input::List(i)) => self
                 .list(snapshot, ctx, Family::Features, &items::list_args(i))
                 .map(|(v, s)| (O::FeaturesList { value: v }, s)),
@@ -451,10 +455,10 @@ impl CommandHandler for WorkService {
             },
             OperationInput::NextWork(i) => match i {
                 crate::operations::next_work::Input::ClaimProjectQueue(i) => {
-                    self.allocate_project(tx, ctx, i)
+                    self.allocate_project(tx, ctx, i, command.identity())
                 }
                 crate::operations::next_work::Input::ClaimFeatureTask(i) => {
-                    self.allocate_task(tx, ctx, i)
+                    self.allocate_task(tx, ctx, i, command.identity())
                 }
                 crate::operations::next_work::Input::ReleaseClaim(i) => {
                     self.release_allocation(tx, ctx, i)

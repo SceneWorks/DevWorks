@@ -15,10 +15,11 @@ use crate::services::runs::{ControlService, Target, control_of, root_assignments
 use crate::services::sessions::{Refusal, counter};
 use serde_json::json;
 
-pub const OPERATIONS: [&str; 4] = [
+pub const OPERATIONS: [&str; 5] = [
     "next_work.claim_project_queue",
     "next_work.claim_feature_task",
     "next_work.inspect_claim",
+    "next_work.inspect_queue",
     "next_work.release_claim",
 ];
 const PAGE: u16 = 500;
@@ -26,6 +27,58 @@ const MAX_LEASE_MS: i64 = 86_400_000;
 
 fn live(c: &StoredAllocationClaim) -> bool {
     matches!(c.state.as_str(), "Active" | "Transferred" | "Yielding")
+}
+fn owner_heartbeat(
+    tx: &mut dyn WriteTransaction,
+    c: &StoredAllocationClaim,
+) -> Result<Option<i64>, StorageError> {
+    let Some(session) = &c.session_id else {
+        return Ok(None);
+    };
+    if !tx.sessions().session(session)?.is_some_and(|s| !s.closed()) {
+        return Ok(None);
+    }
+    let Some(turn) = tx.runs().session_turn(session)? else {
+        return Ok(None);
+    };
+    if tx.store().boot_id.as_ref() != Some(&turn.boot_id) {
+        return Ok(None);
+    }
+    let Some(a) = tx.runs().activation(&turn.execution_id)? else {
+        return Ok(None);
+    };
+    if a.phase != ActivationPhase::Running
+        || a.owner.is_none()
+        || a.owner_epoch != turn.owner_epoch
+        || a.boot_id != turn.boot_id
+        || a.lease_until_ms.is_none_or(|until| until <= tx.now_ms())
+    {
+        return Ok(None);
+    }
+    if !tx
+        .runs()
+        .assignment(&turn.assignment_id)?
+        .is_some_and(|assignment| {
+            assignment.state.is_live()
+                && assignment.session_id == *session
+                && assignment.execution_id.as_ref() == Some(&a.id)
+        })
+    {
+        return Ok(None);
+    }
+    Ok(a.lease_until_ms)
+}
+fn reserved(
+    tx: &mut dyn WriteTransaction,
+    c: &StoredAllocationClaim,
+) -> Result<bool, StorageError> {
+    if !live(c) {
+        return Ok(false);
+    }
+    if c.state != "Active" {
+        return Ok(true);
+    }
+    Ok(c.expires_at_ms > tx.now_ms() || owner_heartbeat(tx, c)?.is_some())
 }
 fn owned(c: &StoredAllocationClaim, ctx: &InvocationContext) -> bool {
     c.owner_id == *ctx.principal()
@@ -53,6 +106,10 @@ fn change(
     actor: &ActorId,
 ) -> Result<StoredAllocationClaim, StorageError> {
     let mut next = c.clone();
+    if let Some(w) = tx.work().work(&c.work_id)? {
+        next.work_revision = w.revision;
+        next.parent_feature_id = w.parent_feature_id;
+    }
     next.state = state.into();
     next.revision += 1;
     next.fence += 1;
@@ -83,7 +140,7 @@ fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
         owner_session_id: c.session_id.clone(),
         queue_revision: Some(crate::services::sessions::rev(c.queue_revision)),
         state: match c.state.as_str() {
-            "Active" if c.session_id.is_some() || c.expires_at_ms > now => LeaseState::Held,
+            "Active" if c.expires_at_ms > now => LeaseState::Held,
             "Transferred" => LeaseState::Held,
             "Yielding" => LeaseState::Releasing,
             "Yielded" => LeaseState::Waiting,
@@ -121,6 +178,7 @@ fn eligible(
     service: &ControlService,
     w: &StoredWork,
     feature: Option<&StoredWork>,
+    assessment: bool,
 ) -> Result<bool, StorageError> {
     let statuses = tx.work().statuses(&w.project_id)?;
     if w.status_id
@@ -157,16 +215,23 @@ fn eligible(
         let PlanState::Approved { feature: unit, .. } = &plan else {
             return Ok(false);
         };
-        if !unit.readiness.is_current() {
+        let mut needs_assessment =
+            matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. });
+        if !unit.readiness.is_current() && !needs_assessment {
             return Ok(false);
         }
         let brief = super::model::WorkBrief::of(w)?;
-        if brief.inherits.iter().any(|k| {
-            !plan
-                .unit(Some(k.as_str()))
-                .is_some_and(|u| u.readiness.is_current())
-        }) {
-            return Ok(false);
+        for key in &brief.inherits {
+            let Some(unit) = plan.unit(Some(key.as_str())) else {
+                return Ok(false);
+            };
+            if !unit.readiness.is_current() {
+                if matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }) {
+                    needs_assessment = true;
+                } else {
+                    return Ok(false);
+                }
+            }
         }
         if let Some((_, readiness)) = tx.runs().feature_plan(&r.id)?.and_then(|p| p.readiness)
             && super::readiness::gating_finding(&readiness, &w.id).is_some()
@@ -187,7 +252,7 @@ fn eligible(
         {
             return Ok(false);
         }
-        return Ok(true);
+        return Ok(!needs_assessment || assessment);
     }
     if !w.is_feature() {
         return Ok(service
@@ -203,16 +268,13 @@ fn eligible(
     let PlanState::Approved { feature: unit, .. } = &plan else {
         return Ok(false);
     };
-    // A missing/stale assessment can activate only its coordinator to assess readiness.
-    if matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }) {
-        return Ok(true);
-    }
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
-        return Ok(unit.readiness.is_current());
+        return Ok(unit.readiness.is_current()
+            || matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }));
     }
     for candidate in tasks {
-        if eligible(tx, service, &candidate.work, Some(w))? {
+        if eligible(tx, service, &candidate.work, Some(w), true)? {
             return Ok(true);
         }
     }
@@ -235,6 +297,38 @@ pub fn invalidate_work(
     Ok(())
 }
 impl WorkService {
+    pub(crate) fn inspect_queue(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        i: &ops::InspectQueueInput,
+    ) -> R<(OperationResult, i64)> {
+        super::visible_project(read.projects(), ctx, &i.project_id)?;
+        if let Some(f) = &i.feature_id {
+            let work = visible_feature(read.work(), ctx, f)?;
+            if work.project_id != i.project_id {
+                return Err(super::not_found("feature", f).into());
+            }
+        }
+        let queue = i
+            .feature_id
+            .as_ref()
+            .map_or_else(|| PROJECT_QUEUE.to_owned(), feature_queue);
+        let revision = read.work().queue_revision(&i.project_id, &queue)?;
+        Ok((
+            OperationResult::NextWorkInspectQueue {
+                value: crate::protocol::records::AllocationQueueSnapshot {
+                    project_id: i.project_id.clone(),
+                    feature_id: i.feature_id.clone(),
+                    queue_revision: crate::services::sessions::rev(revision),
+                    workflow_revision: crate::services::sessions::rev(
+                        read.work().queue_revision(&i.project_id, WORKFLOW_QUEUE)?,
+                    ),
+                },
+            },
+            revision,
+        ))
+    }
     pub(crate) fn inspect_claim(
         &self,
         read: &dyn ReadSnapshot,
@@ -256,6 +350,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::ClaimProjectQueueInput,
+        identity: &crate::context::ReceiptIdentity,
     ) -> R<DomainDecision> {
         self.allocate(
             tx,
@@ -267,6 +362,7 @@ impl WorkService {
                 .0
                 .parse()
                 .map_err(|_| invalid("lease_ms", None))?,
+            identity,
         )
     }
     pub(crate) fn allocate_task(
@@ -274,6 +370,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::ClaimFeatureTaskInput,
+        identity: &crate::context::ReceiptIdentity,
     ) -> R<DomainDecision> {
         let f = visible_feature(tx.work(), ctx, &i.root_id.0)?;
         self.allocate(
@@ -286,6 +383,7 @@ impl WorkService {
                 .0
                 .parse()
                 .map_err(|_| invalid("lease_ms", None))?,
+            identity,
         )
     }
     fn allocate(
@@ -296,6 +394,7 @@ impl WorkService {
         feature: Option<&StoredWork>,
         expected: i64,
         lease: i64,
+        identity: &crate::context::ReceiptIdentity,
     ) -> R<DomainDecision> {
         open_project(tx, ctx, project)?;
         if lease > MAX_LEASE_MS {
@@ -318,12 +417,17 @@ impl WorkService {
             ));
         }
         let all = claims(tx.work(), project)?;
-        if let Some(existing) = all.iter().find(|c| {
-            c.queue_key == key
-                && owned(c, ctx)
-                && live(c)
-                && (c.state != "Active" || c.expires_at_ms > tx.now_ms())
-        }) {
+        let mut held = std::collections::HashSet::new();
+        for c in &all {
+            if reserved(tx, c)? {
+                held.insert(c.id.clone());
+            }
+        }
+
+        if let Some(existing) = all
+            .iter()
+            .find(|c| c.queue_key == key && owned(c, ctx) && held.contains(&c.id))
+        {
             let value = wire(existing, tx.now_ms());
             return Ok(DomainDecision::NoChange {
                 result: if feature.is_some() {
@@ -334,11 +438,9 @@ impl WorkService {
             });
         }
         if feature.is_none()
-            && all.iter().any(|c| {
-                c.queue_key == PROJECT_QUEUE
-                    && live(c)
-                    && (c.state != "Active" || c.expires_at_ms > tx.now_ms())
-            })
+            && all
+                .iter()
+                .any(|c| c.queue_key == PROJECT_QUEUE && held.contains(&c.id))
         {
             return Err(conflict("project_queue_owned", &project.0));
         }
@@ -347,23 +449,41 @@ impl WorkService {
         candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
         for c in candidates {
             let w = c.work;
-            if !eligible(tx, &self.runs, &w, feature)? || has_execution(tx, &w)? {
+            if !eligible(tx, &self.runs, &w, feature, false)? || has_execution(tx, &w)? {
                 continue;
             }
-            if all.iter().any(|c| {
-                c.work_id == w.id
-                    && live(c)
-                    && (c.state != "Active" || c.expires_at_ms > tx.now_ms())
-            }) {
+            if all
+                .iter()
+                .any(|c| c.work_id == w.id && held.contains(&c.id))
+            {
                 continue;
             }
             // Expired reservations are retired before another owner gets a fresh monotonic fence.
-            let now = tx.now_ms();
             for old in all
                 .iter()
-                .filter(|c| c.work_id == w.id && c.state == "Active" && c.expires_at_ms <= now)
+                .filter(|c| c.work_id == w.id && c.state == "Active" && !held.contains(&c.id))
             {
-                change(tx, old, "Expired", ctx.principal())?;
+                let state = if old.expires_at_ms <= tx.now_ms() {
+                    "Expired"
+                } else {
+                    "Invalidated"
+                };
+                change(tx, old, state, ctx.principal())?;
+            }
+            if feature.is_none() {
+                for old in all.iter().filter(|c| {
+                    c.queue_key == PROJECT_QUEUE
+                        && c.work_id != w.id
+                        && c.state == "Active"
+                        && !held.contains(&c.id)
+                }) {
+                    let state = if old.expires_at_ms <= tx.now_ms() {
+                        "Expired"
+                    } else {
+                        "Invalidated"
+                    };
+                    change(tx, old, state, ctx.principal())?;
+                }
             }
             let fence = all
                 .iter()
@@ -383,7 +503,18 @@ impl WorkService {
                 owner_id: ctx.principal().clone(),
                 session_id: ctx.session_id().cloned(),
                 ingress_namespace: ctx.ingress_namespace().clone(),
-                invocation_id: ctx.invocation_id().clone(),
+                invocation_id: Id::new(format!(
+                    "allocation-{}",
+                    crate::fingerprint::sha256_hex(
+                        format!(
+                            "{}:{}",
+                            identity.scope_key().as_str(),
+                            identity.request_key().0.as_str()
+                        )
+                        .as_bytes()
+                    )
+                ))
+                .expect("digest identifier"),
                 fence,
                 expires_at_ms: tx.now_ms().saturating_add(lease),
                 state: "Active".into(),
@@ -464,10 +595,18 @@ impl WorkService {
     }
 }
 fn quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
-    if !crate::services::runs::recovery::root_quiesced(tx, root)?
+    if tx.runs().live_activation(root)?.is_some()
+        || !crate::services::runs::recovery::root_quiesced(tx, root)?
         || !crate::services::runs::recovery::unsettled_processes(tx, root)?.is_empty()
     {
         return Ok(false);
+    }
+    if let Some(work) = tx.sessions().work_root(root)? {
+        for linked in crate::services::runs::linked_roots(tx, &work)? {
+            if !quiesced(tx, &linked.id)? {
+                return Ok(false);
+            }
+        }
     }
     for a in root_assignments(tx.runs(), root, true)? {
         if a.state == AssignmentState::Active {
@@ -516,12 +655,17 @@ pub fn check_start(
     let Some(work) = tx.work().work(&w.id.0)? else {
         return Ok(());
     };
-    for c in claims(tx.work(), &w.project_id)?
-        .iter()
-        .filter(|c| c.work_id == w.id.0 && live(c))
-    {
+    let all = claims(tx.work(), &w.project_id)?;
+    if all.iter().any(|c| {
+        c.queue_key == PROJECT_QUEUE
+            && c.root_id != w.id
+            && matches!(c.state.as_str(), "Transferred" | "Yielding")
+    }) {
+        return Err(conflict("project_execution_owned", &w.project_id.0));
+    }
+    for c in all.iter().filter(|c| c.work_id == w.id.0 && live(c)) {
         if c.state == "Active" {
-            if !owned(c, ctx) || c.expires_at_ms <= tx.now_ms() {
+            if !owned(c, ctx) || !reserved(tx, c)? {
                 return Err(super::refuse(
                     DomainErrorCode::LeaseLost,
                     "claim",
@@ -538,7 +682,7 @@ pub fn check_start(
                     Some(&c.id),
                 ));
             }
-            if !eligible(tx, service, &work, None)? {
+            if !eligible(tx, service, &work, None, false)? {
                 return Err(super::refuse(
                     DomainErrorCode::DependencyBlocked,
                     "claim",
@@ -562,10 +706,13 @@ pub fn transfer(
     let Some(w) = tx.work().work(work)? else {
         return Ok(());
     };
-    for c in claims(tx.work(), &w.project_id)?
-        .into_iter()
-        .filter(|c| c.work_id == *work && c.state == "Active")
-    {
+    for c in claims(tx.work(), &w.project_id)?.into_iter().filter(|c| {
+        c.work_id == *work
+            && (c.state == "Active"
+                || (c.state == "Transferred"
+                    && session.is_some()
+                    && c.execution_id.as_ref() == Some(execution)))
+    }) {
         let mut next = c.clone();
         next.execution_id = Some(execution.clone());
         next.session_id = session.cloned().or(c.session_id.clone());
@@ -607,7 +754,7 @@ fn fully_dependency_blocked(
     let mut dependency = false;
     for c in unfinished {
         dependency |= !c.open_prerequisites.is_empty();
-        if eligible(tx, service, &c.work, Some(w))? {
+        if eligible(tx, service, &c.work, Some(w), true)? {
             return Ok(false);
         }
     }
@@ -630,8 +777,30 @@ pub fn reconcile_project(
         let Some(w) = tx.work().work(&c.work_id)? else {
             continue;
         };
-        if c.state == "Active" && c.expires_at_ms <= tx.now_ms() {
-            change(tx, &c, "Expired", &actor)?;
+        if c.state == "Active" {
+            if c.work_revision != w.revision || c.parent_feature_id != w.parent_feature_id {
+                change(tx, &c, "Invalidated", &actor)?;
+                changed += 1;
+                continue;
+            }
+            if let Some(until) = owner_heartbeat(tx, &c)?
+                && until > c.expires_at_ms
+            {
+                let mut renewed = c.clone();
+                renewed.revision += 1;
+                renewed.expires_at_ms = until;
+                tx.work().update_allocation_claim(&renewed, c.revision)?;
+                changed += 1;
+                continue;
+            }
+        }
+        if c.state == "Active" && !reserved(tx, &c)? {
+            let state = if c.expires_at_ms <= tx.now_ms() {
+                "Expired"
+            } else {
+                "Invalidated"
+            };
+            change(tx, &c, state, &actor)?;
             changed += 1;
             continue;
         }

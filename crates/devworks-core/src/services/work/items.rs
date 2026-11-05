@@ -854,8 +854,11 @@ impl WorkService {
         if changed.is_empty() {
             return Ok((before, false));
         }
-        if metadata_changed && !queues.contains(&before.queue()) {
-            queues.push(before.queue());
+        if metadata_changed || statuses_changed.is_some() {
+            super::allocation::invalidate_work(tx, ctx, &before.id)?;
+            if !queues.contains(&before.queue()) {
+                queues.push(before.queue());
+            }
         }
         let statuses = tx.work().statuses(&before.project_id)?;
         let semantic = after
@@ -1102,7 +1105,8 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
-        if metadata_changed {
+        if metadata_changed || status_changed {
+            super::allocation::invalidate_work(tx, ctx, &before.id)?;
             bump(tx, &before.project_id, &[before.queue()])?;
         }
         if readiness_changed {
