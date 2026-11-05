@@ -37,6 +37,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
+            'router.route', 'router.pin',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
@@ -61,7 +62,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'browser.upload', 'browser.console', 'browser.network'})
         self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
-        self.assertEqual(carried['router.availability'], {2})
+        self.assertEqual(carried['router.availability'], {2, 3})
+        self.assertEqual(carried['router.route'], {3})
+        self.assertEqual(carried['router.pin'], {3})
         self.assertEqual(carried['router.connections'], {2})
         self.assertEqual(carried['router.configure'], {2})
         # Knowledge projections expose independent challenges at revision 3; full source labels are additive.

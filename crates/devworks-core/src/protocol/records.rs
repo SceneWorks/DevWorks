@@ -4776,6 +4776,27 @@ pub struct RouteChoice {
     pub pin_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_pin_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub resolved_upstream_model_id: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "EndpointKind", extend("x-since" = 3))]
+    pub resolved_endpoint_profile: Option<EndpointKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub resolved_identity_origin: Option<Label>,
 }
 impl Check for RouteChoice {
     fn check(&self) -> Result<(), String> {
@@ -4787,11 +4808,28 @@ impl Check for RouteChoice {
         self.pin_id.check()?;
         self.pin_revision.check()?;
         self.replaced_pin_id.check()?;
+        self.resolved_upstream_model_id.check()?;
+        self.resolved_endpoint_profile.check()?;
+        self.resolved_identity_origin.check()?;
         crate::protocol::rules::record(
             "RouteChoice",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RouteChoice {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.resolved_upstream_model_id = None;
+        }
+        if revision < 3 {
+            self.resolved_endpoint_profile = None;
+        }
+        if revision < 3 {
+            self.resolved_identity_origin = None;
+        }
     }
 }
 
@@ -4848,6 +4886,8 @@ impl Revisioned for RouteAvailability {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 2 {
             self.pin = None;
+        } else {
+            self.pin.retain_revision(revision);
         }
         if revision < 2 {
             self.pin_eligible = None;
