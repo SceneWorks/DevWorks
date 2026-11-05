@@ -264,12 +264,10 @@ impl WorkService {
             "WorkflowStatusCreated",
             json!({"statusId":new.id,"category":new.semantic,"label":new.name}),
         )?;
+        let current = current_status(&statuses(tx.work(), &i.project_id)?, &new.id)?;
         Ok(DomainDecision::Applied {
             result: OperationResult::WorkflowsCreateStatus {
-                value: record(
-                    tx.work(),
-                    &current_status(&statuses(tx.work(), &i.project_id)?, &new.id)?,
-                )?,
+                value: record(tx.work(), &current)?,
             },
         })
     }
