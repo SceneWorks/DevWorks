@@ -187,7 +187,19 @@ pub fn unit_edges(
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
-    for e in read.edges(&g, key)? {
+    let edges = read.edges(&g, key)?;
+    let edges = if view.layers.len() > 1 {
+        super::worker::link_view_edges(
+            read,
+            view.view.repository_id.as_str(),
+            &view.layers,
+            key,
+            edges,
+        )?
+    } else {
+        edges
+    };
+    for e in edges {
         let target_unit = e
             .payload
             .get("targetUnit")

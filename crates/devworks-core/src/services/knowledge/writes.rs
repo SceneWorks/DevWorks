@@ -140,7 +140,10 @@ impl<'a> Writer<'a> {
         {
             return Ok(());
         }
-        match self.k().knowledge_running_source_deletion(scope, source)? {
+        match self
+            .k()
+            .knowledge_running_source_deletion(scope, Some(source))?
+        {
             Some(job) => Err(conflict(super::DELETION, &job)),
             None => Ok(()),
         }
@@ -1485,16 +1488,11 @@ fn relate(
             // A rule that took effect only by the merged events returns to the state it took
             // effect from.
             lose_recurrence_if_due(&mut w, &mut target)?;
-            if target != into {
-                let stored = w.put_claim(target, Some(into.revision), "Unmerged")?;
-                // What this unmerge cites stays the target's own after any later unmerge too.
-                adopt(&mut w, &stored, &evidence, false)?;
-                // A restored inferred rule whose events still reach the threshold is in effect.
-                take_effect_if_due(&mut w, stored)?;
-            } else {
-                adopt(&mut w, &into, &evidence, false)?;
-                w.touch(&into.scope);
-            }
+            // Event ownership/recurrence is stored separately from the claim fields, but
+            // unmerging changes the target's observable revision too.
+            let stored = w.put_claim(target, Some(into.revision), "Unmerged")?;
+            adopt(&mut w, &stored, &evidence, false)?;
+            take_effect_if_due(&mut w, stored)?;
             let message = format!(
                 "Lesson {} restored from {}: {moved} source events moved back.",
                 restored.id.as_str(),
@@ -1874,13 +1872,11 @@ fn restore_merged(
             } else if c.lifecycle == "Superseded" {
                 node = merge_of(w, &c.id)?.map(|r| r.object_id);
             }
-            if next != c {
+            if next != c || root {
                 let stored = w.put_claim(next, Some(c.revision), "MergeSettled")?;
                 if root {
                     take_effect_if_due(w, stored)?;
                 }
-            } else if root {
-                w.touch(&c.scope);
             }
         }
     }
@@ -3055,9 +3051,11 @@ fn delete_by_source(
             rev(current),
         )));
     }
+    // Merge restoration can write another source in this scope. Admit only one bulk
+    // deletion per scope so mutually dependent source fences cannot strand either job.
     if let Some(job) = tx
         .knowledge()
-        .knowledge_running_source_deletion(&scoped.exact, source)?
+        .knowledge_running_source_deletion(&scoped.exact, None)?
     {
         return Err(conflict(super::DELETION, &job));
     }

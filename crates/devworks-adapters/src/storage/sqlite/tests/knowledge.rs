@@ -4717,3 +4717,181 @@ fn non_lesson_challenges_are_readable_with_their_citations_and_old_projections_s
         }
     }
 }
+
+#[test]
+fn an_unmerge_snapshots_the_targets_changed_recurrence() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let from = lesson_in_a(&fx, &a, "From", "Agent", "from-event");
+    let into = lesson_in_a(&fx, &a, "Into", "Agent", "into-event");
+    relate_in_a(&fx, &a, &from, "same_as", &into);
+    let merged = fx.revision(&into);
+    assert_eq!(recurrence_at(&fx, &a, &into, merged), 2);
+    relate_in_a(&fx, &a, &from, "unmerge", &into);
+    let unmerged = fx.revision(&into);
+    assert_eq!(unmerged, merged + 1);
+    assert_eq!(recurrence_at(&fx, &a, &into, merged), 2);
+    assert_eq!(recurrence_at(&fx, &a, &into, unmerged), 1);
+    recur_in_a(&fx, &a, &into, "Agent", "later");
+    assert_eq!(recurrence_at(&fx, &a, &into, unmerged), 1);
+}
+
+#[test]
+fn deleting_a_merge_chain_snapshots_the_roots_changed_recurrence() {
+    let fx = Fx::new();
+    fx.set_threshold(10);
+    let a = fx.agent("agent-a", Some("project-a"));
+    let from = lesson_in_a(&fx, &a, "From", "Agent", "from-event");
+    let middle = lesson_in_a(&fx, &a, "Middle", "Agent", "middle-event");
+    let root = lesson_in_a(&fx, &a, "Root", "Agent", "root-event");
+    relate_in_a(&fx, &a, &from, "same_as", &middle);
+    relate_in_a(&fx, &a, &middle, "same_as", &root);
+    let before = fx.revision(&root);
+    assert_eq!(recurrence_at(&fx, &a, &root, before), 3);
+    delete_claim(&fx, &fx.user(), &middle);
+    let after = fx.revision(&root);
+    assert!(after > before);
+    assert_eq!(recurrence_at(&fx, &a, &root, before), 3);
+    assert_eq!(recurrence_at(&fx, &a, &root, after), 2);
+    recur_in_a(&fx, &a, &root, "Agent", "later");
+    assert_eq!(recurrence_at(&fx, &a, &root, after), 2);
+}
+
+#[test]
+fn relation_only_citations_are_bundled_once_and_remain_scoped() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let cited = receipt(fx.record(&user, proj("project-a"), json!({
+        "entities": [{"clientId": "s", "label": "Evidence owner", "entityType": "t", "aliases": []}],
+        "evidence": [{"id": "e", "source": {"kind": "Observation", "sourceRef": "relation-log"}, "snippet": "relation-only support"}],
+        "claims": [with(draft("Fact", "owner"), json!({"evidenceIds": ["e"]}))]
+    })));
+    let e = fx
+        .read_claim(&user, proj("project-a"), &cited.claim_ids.0[0])
+        .evidence
+        .0[0]
+        .id
+        .clone();
+    let x = fx.claim_id(&user, ws(), "X", draft("Fact", "x"));
+    let y = fx.claim_id(&user, ws(), "Y", draft("Fact", "y"));
+    relate_with(&fx, &user, &x, "contradicts", &y, &[&e]);
+    relate_with(&fx, &user, &x, "depends_on", &y, &[&e]);
+    for endpoint in [&x, &y] {
+        let bundle = fx.read_claim(&user, proj("project-a"), endpoint);
+        assert_eq!(bundle.evidence.0.len(), 1);
+        assert_eq!(bundle.evidence.0[0].id, e);
+        assert_eq!(bundle.evidence.0[0].snippet.0, "relation-only support");
+        assert!(
+            fx.read_claim(&user, proj("project-b"), endpoint)
+                .evidence
+                .0
+                .is_empty()
+        );
+        assert!(fx.read_claim(&user, ws(), endpoint).evidence.0.is_empty());
+    }
+    receipt(fx.cmd(
+        &user,
+        "knowledge.verify",
+        json!({"scope": ws(), "claimId": x,
+        "expectedRevision": fx.revision(&x).to_string(), "reason": "checked", "evidenceIds": []}),
+    ));
+    let historical = match result(fx.q(
+        &user,
+        "knowledge.read",
+        json!({"scope": proj("project-a"), "claimId": x, "revision": "1"}),
+    )) {
+        OperationResult::KnowledgeRead { value } => value,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        historical.evidence.0.is_empty(),
+        "current relation citations do not leak into past claim revisions"
+    );
+}
+
+#[test]
+fn bulk_source_deletions_share_a_scope_fence_until_the_previous_job_finishes() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let mut sources = Vec::new();
+    for source in ["source-a", "source-b"] {
+        let mut ids = Vec::new();
+        for batch in 0..4 {
+            let claims: Vec<_> = (0..128).map(|n| with(draft("Lesson", &format!("{source}-{batch}-{n}")),
+                json!({"source": source, "lesson": lesson_draft("Agent", Some(&format!("{source}-{batch}-{n}")), None)}))).collect();
+            let r = receipt(fx.record(&user, proj("project-a"), json!({
+                "entities": [{"clientId": "s", "label": format!("{source}-{batch}"), "entityType": "t", "aliases": [], "source": source}],
+                "evidence": [], "claims": claims
+            })));
+            ids.extend(r.claim_ids.0);
+        }
+        ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        sources.push(ids);
+    }
+    // Both merged endpoints sort into later deletion batches, after each confirming command.
+    let from = sources[0].last().unwrap();
+    let into = sources[1].last().unwrap();
+    relate_in_a(&fx, &user, from, "same_as", into);
+    let preview = |source: &str| {
+        let (diagnostics, revision) = fx.diagnostics(
+            &user,
+            json!({"scope": proj("project-a"), "sourceId": source}),
+        );
+        let digest = diagnostics
+            .iter()
+            .find(|d| d.component.0 == "knowledge.preview")
+            .unwrap()
+            .id
+            .as_str();
+        json!({"scope": proj("project-a"), "sourceId": source, "expectedScopeRevision": revision.to_string(), "previewDigest": digest})
+    };
+    let first = summary(fx.cmd(&user, "knowledge.delete_by_source", preview("source-a")));
+    assert_eq!(lifecycle(&fx, &user, from), "Superseded");
+    let rejected = refused(fx.cmd(&user, "knowledge.delete_by_source", preview("source-b")));
+    assert_eq!(rejected.code, DomainErrorCode::Conflict);
+    assert_eq!(rejected.target_kind.unwrap().0, "knowledge_source_deletion");
+    assert_eq!(rejected.target_id.unwrap(), first.id);
+    // Other scopes stay independent while this scope's bulk job is running.
+    let other = fx.claim_id(
+        &user,
+        proj("project-b"),
+        "Other",
+        with(draft("Fact", "other"), json!({"source": "other"})),
+    );
+    let (d, revision) = fx.diagnostics(
+        &user,
+        json!({"scope": proj("project-b"), "sourceId": "other"}),
+    );
+    let digest = d
+        .iter()
+        .find(|d| d.component.0 == "knowledge.preview")
+        .unwrap()
+        .id
+        .as_str();
+    summary(fx.cmd(&user,"knowledge.delete_by_source",json!({"scope": proj("project-b"),"sourceId":"other","expectedScopeRevision":revision.to_string(),"previewDigest":digest})));
+    assert_eq!(
+        wire(
+            &fx.claim(&user, proj("project-b"), &other)
+                .lifecycle
+                .unwrap()
+        ),
+        "Deleted"
+    );
+    run_deletion(&fx, &first.id);
+    let second = summary(fx.cmd(&user, "knowledge.delete_by_source", preview("source-b")));
+    run_deletion(&fx, &second.id);
+    for job in [&first.id, &second.id] {
+        let status = match result(fx.q(&user, "knowledge.write_status", json!({"writeId": job}))) {
+            OperationResult::KnowledgeWriteStatus { value } => value,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(wire(&status.state), "ObservedComplete");
+        assert!(status.claim_count.unwrap().get() >= 512);
+        let job_id = job.clone();
+        let job = fx
+            .read(move |s| s.knowledge().knowledge_source_deletion(&job_id))
+            .unwrap();
+        assert_eq!(job.deleted_claims, 512);
+        assert_eq!(job.state, "Complete");
+    }
+}

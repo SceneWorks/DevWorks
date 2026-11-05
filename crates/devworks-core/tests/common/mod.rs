@@ -2462,7 +2462,7 @@ impl KnowledgeRead for Unsupported {
     fn knowledge_running_source_deletion(
         &self,
         _: &KnowledgeScope,
-        _: &str,
+        _: Option<&str>,
     ) -> Result<Option<Id>, StorageError> {
         nope()
     }
