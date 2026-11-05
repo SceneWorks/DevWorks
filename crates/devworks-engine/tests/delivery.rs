@@ -1661,3 +1661,40 @@ fn a_stop_releases_a_ready_delivery_still_waiting_for_a_worker_permit() {
         drop(t.open);
     }));
 }
+
+#[test]
+fn frequent_command_wakeups_cannot_starve_a_parked_claims_lease() {
+    runtime().block_on(within("parked renewal under command traffic", async {
+        let t = PermitStarved::new().await;
+        let wake = t.d.wakeup();
+        // Commands notify supervisors faster than the 100ms renewal interval. Keep doing
+        // so for two full leases while readiness/permit admission remains parked.
+        for _ in 0..30 {
+            t.h.advance(20);
+            wake.wake();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let now = t.h.now();
+        assert!(
+            t.lease_until(&t.parked) > now,
+            "command wakeups must not let the parked lease expire"
+        );
+        assert_eq!(
+            t.d.tick().await.unwrap().recovered,
+            RecoveryOutcome::default()
+        );
+        let held = entry(&*t.s, &t.parked.id);
+        assert_eq!(
+            (held.state, held.generation),
+            (QueueState::Claimed, t.parked.generation)
+        );
+        t.blocker_gate.send(true).unwrap();
+        until(&t.d, || {
+            entry(&*t.s, &t.parked.id).state == QueueState::Completed
+                && entry(&*t.s, &t.blocker.id).state == QueueState::Completed
+        })
+        .await;
+        assert_eq!(t.parked_fx.executed(), 1);
+        assert_eq!(t.blocker_fx.executed(), 1);
+    }));
+}

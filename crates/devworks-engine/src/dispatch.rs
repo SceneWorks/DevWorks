@@ -831,13 +831,18 @@ impl Dispatcher {
             permits.acquire_owned().await.ok()
         });
         let mut proceed = true;
+        let mut renew_at = tokio::time::Instant::now() + every;
         loop {
             if self.inner.stopping.load(Ordering::SeqCst) {
                 proceed = false;
                 break;
             }
-            // A stop (which notifies `changed`) or the lease renewal interval ends one wait.
-            let pause = first(self.inner.changed.notified(), tokio::time::sleep(every));
+            // Wakeups may arrive continuously. Preserve the renewal deadline across them
+            // instead of restarting a full interval after each notification.
+            let pause = first(
+                self.inner.changed.notified(),
+                tokio::time::sleep_until(renew_at),
+            );
             match first(&mut admitted, pause).await {
                 Either::Left(Some(p)) => {
                     slot.permit = Some(p);
@@ -847,8 +852,10 @@ impl Dispatcher {
                     proceed = false;
                     break;
                 }
-                Either::Right(Either::Left(())) => {}
-                Either::Right(Either::Right(())) => {
+                Either::Right(_) => {
+                    if tokio::time::Instant::now() < renew_at {
+                        continue;
+                    }
                     let (id, f) = (entry.id.clone(), fence.clone());
                     let renewed = store::write(&self.inner.store, move |tx| {
                         tx.queue().renew(&id, &f, lease)
@@ -858,6 +865,7 @@ impl Dispatcher {
                         proceed = false;
                         break;
                     }
+                    renew_at = tokio::time::Instant::now() + every;
                 }
             }
         }
