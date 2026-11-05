@@ -374,7 +374,7 @@ fn build() -> Vec<SettingDescriptor> {
             Routing,
             WORKSPACE,
             ValueKind::ModelList,
-            ["fable", "astra"],
+            ["fable-latest", "astra-latest"],
             NextAdmission
         ),
         setting!(
@@ -384,7 +384,7 @@ fn build() -> Vec<SettingDescriptor> {
             Routing,
             WORKSPACE,
             ValueKind::ModelList,
-            ["opus", "sol"],
+            ["opus-latest", "sol-latest"],
             NextAdmission
         ),
         setting!(
@@ -394,7 +394,7 @@ fn build() -> Vec<SettingDescriptor> {
             Routing,
             WORKSPACE,
             ValueKind::ModelList,
-            ["sonnet", "terra"],
+            ["sonnet-latest", "terra-latest"],
             NextAdmission
         ),
         setting!(
@@ -404,7 +404,7 @@ fn build() -> Vec<SettingDescriptor> {
             Routing,
             WORKSPACE,
             ValueKind::ModelList,
-            ["haiku", "luna"],
+            ["haiku-latest", "luna-latest"],
             NextAdmission
         ),
         setting!(

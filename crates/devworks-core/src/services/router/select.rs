@@ -214,24 +214,15 @@ fn capability_blocks(model: &StoredRouteModel, need: &Need) -> Vec<Block> {
     blocks
 }
 
-/// Whether a discovered model list serves `upstream` (the reference's `ModelDiscovery.Lists`):
-/// OpenRouter exactly (its automatic route is always served); every other profile ignoring case,
-/// listed as-is or with only a snapshot date between the two in either direction
-/// (`claude-sonnet-4-5` and `claude-sonnet-4-5-20250929`).
+/// Whether inventory lists this exact concrete upstream identity. A dated snapshot and an
+/// undated provider alias are distinct identities; neither can keep the other's pin alive.
 pub fn lists(profile: &str, discovered: &BTreeSet<String>, upstream: &str) -> bool {
     if profile == OPEN_ROUTER_PROFILE {
         return upstream == OPEN_ROUTER_AUTO_UPSTREAM || discovered.contains(upstream);
     }
-    fn snapshot_of(dated: &str, alias: &str) -> bool {
-        dated.len() == alias.len() + 9
-            && dated.is_char_boundary(alias.len())
-            && dated[..alias.len()].eq_ignore_ascii_case(alias)
-            && dated.as_bytes()[alias.len()] == b'-'
-            && dated[alias.len() + 1..].bytes().all(|b| b.is_ascii_digit())
-    }
-    discovered.iter().any(|id| {
-        id.eq_ignore_ascii_case(upstream) || snapshot_of(id, upstream) || snapshot_of(upstream, id)
-    })
+    discovered
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(upstream))
 }
 
 /// The usable connection of `model` (preferring `preferred`), or why there is none.
