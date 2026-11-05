@@ -462,3 +462,25 @@ fn configuration_values_are_validated_with_field_pointers() {
     let remote = json!({"$ref": "https://example.test/schema.json"});
     assert!(v.validate(&remote, &json!({})).is_err());
 }
+
+#[test]
+fn case_aliases_cannot_pass_the_exact_lowercase_contribution_namespace() {
+    for name in ["Foo", "FOO", "foo"] {
+        let m = manifest(&files(), |m| {
+            m["packageId"] = json!(name);
+            m["contributions"][0]["meta"]["id"] = json!(format!("{name}/index"));
+        });
+        let result = BundleInspector.inspect(&signed(&m, &files()));
+        if name == "foo" {
+            assert_eq!(result.unwrap().inspection.package_id, "foo");
+        } else {
+            assert!(matches!(result, Err(InspectError::Manifest(_))));
+        }
+    }
+    // Keeping a lowercase contribution while changing only package ID also fails validation.
+    let m = manifest(&files(), |m| m["packageId"] = json!("Demo-pack"));
+    assert!(matches!(
+        BundleInspector.inspect(&signed(&m, &files())),
+        Err(InspectError::Manifest(_))
+    ));
+}

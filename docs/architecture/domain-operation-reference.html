@@ -1970,32 +1970,32 @@
 </thead>
 <tbody><tr>
 <td><code>addons.catalog</code></td>
-<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Query</strong><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>Page&lt;PackageRecord&gt;</code></td>
 </tr>
 <tr>
 <td><code>addons.install</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Install&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Install&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.configure</code></td>
-<td><strong>Command</strong><br><code>packageId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>config</code>: <code>SchemaValue</code><br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/domain-request.r2.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><code>packageId</code>: <code>Id</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>config</code>: <code>SchemaValue</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.enable</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Enable&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Enable&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.disable</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Disable&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Disable&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.update</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Update&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Update&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
@@ -2010,12 +2010,12 @@
 </tr>
 <tr>
 <td><code>addons.rollback</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Rollback&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Rollback&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 <tr>
 <td><code>addons.uninstall</code></td>
-<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Uninstall&#39;}<br><br><strong>Schema revisions</strong> 1, 2 (<a href="contracts/addon-command-request.schema.json">revision 2 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/addon-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Uninstall&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/addon-command-request.schema.json">revision 3 input</a>)</td>
 <td><code>PackageRecord</code></td>
 </tr>
 </tbody></table>
@@ -6794,6 +6794,10 @@
 <tr>
 <td><code>installed</code></td>
 <td><code>?bool</code> · <em>revision 2+</em></td>
+</tr>
+<tr>
+<td><code>disabledProjects</code></td>
+<td><code>?Items&lt;Id&gt;</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h3 id="helptopic">HelpTopic</h3>

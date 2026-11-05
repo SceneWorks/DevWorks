@@ -6937,6 +6937,10 @@
         "digest": {
           "$ref": "#/$defs/Digest"
         },
+        "disabledProjects": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 3
+        },
         "effectiveAccess": {
           "$ref": "#/$defs/List_Text1To256_0_128",
           "x-since": 2

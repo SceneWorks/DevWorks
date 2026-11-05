@@ -15136,11 +15136,19 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer.",
+          "semanticRules": "Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer. Schema revision 3 additionally exposes saved disabled-project overrides for lossless editing.",
           "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -15190,6 +15198,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -15244,11 +15260,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Configuration",
           "effect": "Local",
-          "semanticRules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation. Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer.",
+          "semanticRules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation. Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer. Schema revision 3 additionally exposes saved disabled-project overrides for lossless editing.",
           "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -15298,6 +15322,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -15352,6 +15384,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -15406,6 +15446,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -15552,6 +15600,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -15606,6 +15662,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "addon-command-request.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

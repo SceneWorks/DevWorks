@@ -156,7 +156,20 @@ pub fn package_record(
     let configuration_schema = inspection
         .as_ref()
         .and_then(|i| serde_json::from_value::<SchemaRef>(i.configuration_schema.clone()).ok());
+    let disabled_projects = p
+        .config
+        .as_ref()
+        .and_then(|c| c["disabledProjects"].as_array())
+        .into_iter()
+        .flatten()
+        .map(|v| {
+            v.as_str()
+                .and_then(|s| Id::new(s).ok())
+                .ok_or_else(|| StorageError::InvalidRecord("package disabled project id".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(PackageRecord {
+        disabled_projects: Some(BoundedList(disabled_projects)),
         id: Id::new(&p.package_id).map_err(|_| StorageError::InvalidRecord("package id".into()))?,
         version: label(&version_label, "0.0.0"),
         digest: digest(&version_digest).unwrap_or_else(|| Digest("0".repeat(64))),
@@ -288,6 +301,7 @@ pub fn offered_record(
         .or_else(|| offers.first())?;
     let supported = super::index::supported(&best.entry, &host.target_triple);
     let mut r = PackageRecord {
+        disabled_projects: Some(BoundedList(Vec::new())),
         installed: Some(false),
         id: Id::new(package_id).ok()?,
         version: label(&best.entry.version, "0.0.0"),

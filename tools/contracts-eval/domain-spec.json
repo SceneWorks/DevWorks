@@ -2067,7 +2067,8 @@
         "contributions": "?Rows<Label>",
         "pending_bundle": "?ArtifactRef",
         "available": "?Items<PackageOffer>",
-        "installed": "?bool"
+        "installed": "?bool",
+        "disabled_projects": "?Items<Id>"
       },
       "since": {
         "registry_revision": 2,
@@ -2095,7 +2096,8 @@
         "contributions": 2,
         "pending_bundle": 2,
         "available": 2,
-        "installed": 2
+        "installed": 2,
+        "disabled_projects": 3
       }
     },
     "HelpTopic": {
@@ -7023,7 +7025,7 @@
       "result": "Page<PackageRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer."
+      "rules": "Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer. Schema revision 3 additionally exposes saved disabled-project overrides for lossless editing."
     },
     "addons.configure": {
       "operation": "addons.configure",
@@ -7036,7 +7038,7 @@
       "result": "PackageRecord",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation. Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer."
+      "rules": "Exact installed config schema and current authority; increased access/runtime closure requires approval before activation. Schema revision 2: package records carry the registry revision, effective availability (NotInstalled, Disabled, MissingDependency, Incompatible, Ready, Failed) separately from configured enablement, package kind, qualified contribution IDs, languages, targets, prerequisites (with their Missing/Incompatible/Ready state and detected version), requested and effective access, configuration schema and revision, state generation, the pending version with its bundle, waits and proposal, the rollback predecessor, publisher trust, signer and failure, and the versions signed publisher indexes offer. Schema revision 3 additionally exposes saved disabled-project overrides for lossless editing."
     },
     "addons.propose": {
       "operation": "addons.propose",
@@ -7824,35 +7826,43 @@
     ],
     "addons.catalog": [
       1,
-      2
+      2,
+      3
     ],
     "addons.install": [
       1,
-      2
+      2,
+      3
     ],
     "addons.configure": [
       1,
-      2
+      2,
+      3
     ],
     "addons.enable": [
       1,
-      2
+      2,
+      3
     ],
     "addons.disable": [
       1,
-      2
+      2,
+      3
     ],
     "addons.update": [
       1,
-      2
+      2,
+      3
     ],
     "addons.rollback": [
       1,
-      2
+      2,
+      3
     ],
     "addons.uninstall": [
       1,
-      2
+      2,
+      3
     ],
     "router.availability": [
       1,
