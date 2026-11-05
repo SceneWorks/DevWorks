@@ -81,6 +81,7 @@ impl EvalService {
                 suite,
                 self.clock.now_ms().get(),
                 stopped,
+                true,
             )
         })?;
         // Interrupted automatic work remains retryable after restart. Persisting a cancelled
@@ -328,6 +329,7 @@ fn build_report(
     suite: &EvalSuiteSnapshot,
     created_at_ms: i64,
     stopped: impl Fn() -> bool,
+    abort_on_cancel: bool,
 ) -> Result<EvalReport, StorageError> {
     let measurement = sha256_hex(
         crate::jcs::canonicalize(
@@ -362,11 +364,17 @@ fn build_report(
         .len();
     let mut after = 0;
     loop {
+        if abort_on_cancel && stopped() {
+            return Err(StorageError::Cancelled);
+        }
         let entries = snapshot.sessions().entries(&session.id, after, 500)?;
         if entries.is_empty() {
             break;
         }
         for entry in &entries {
+            if abort_on_cancel && stopped() {
+                return Err(StorageError::Cancelled);
+            }
             after = entry.sequence;
             for (n, check) in suite.checks.0.iter().enumerate() {
                 if !matched(check, entry) {
@@ -534,6 +542,7 @@ impl CommandHandler for EvalService {
                 &input.suite,
                 self.clock.now_ms().get(),
                 || env.stopped(self.clock.now_ms().get()),
+                false,
             )
             .map(Ok)
         })?;
