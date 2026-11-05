@@ -642,3 +642,106 @@ fn native_history_grading_excludes_its_own_root_scoped_audit_receipts() {
         second.coverage.eligible.get()
     );
 }
+
+/// Deterministically model a different writer committing after the evaluator's read snapshot
+/// and before gateway decision. The evaluator itself still receives its ordinary read ports.
+struct ChangeWorkAfterPreparation {
+    inner: EvalService,
+    store: Arc<SqliteStore>,
+}
+impl devworks_core::ports::CommandHandler for ChangeWorkAfterPreparation {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        command: &devworks_core::gateway::AdmittedCommand,
+        env: &devworks_core::ports::Preparation<'_>,
+    ) -> Result<Option<devworks_core::ports::Prepared>, StorageError> {
+        let prepared = self.inner.prepare(ctx, command, env)?;
+        run_write(&*self.store, WriteOptions::default(), |tx| {
+            let mut work = tx.work().work(&id("root-a"))?.unwrap();
+            let prior_revision = work.revision;
+            work.title = "Changed by concurrent writer".into();
+            work.search_key = "changed by concurrent writer".into();
+            work.revision += 1;
+            tx.work().update_work(&work, prior_revision)
+        })?;
+        Ok(prepared)
+    }
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        command: &devworks_core::gateway::AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+        self.inner.decide(ctx, command, tx)
+    }
+}
+
+#[test]
+fn a_work_source_changed_after_preparation_refuses_stale_evidence_without_losing_the_update() {
+    let mut fx = fixture();
+    let session_before = fx.session("session-a");
+    let work_revision_before = fx
+        .read(|snapshot| snapshot.work().work(&id("root-a")))
+        .unwrap()
+        .revision;
+    let stale = suite(vec![record_check(
+        "title",
+        "WorkState",
+        "/title",
+        json!("Feature A"),
+    )]);
+    fx.cases.register(
+        "evals.grade",
+        None,
+        Some(Arc::new(ChangeWorkAfterPreparation {
+            inner: EvalService::new(fx.h.ids.clone(), fx.h.clock.clone()),
+            store: fx.store.clone(),
+        })),
+    );
+    let denied = refused(fx.command(
+        &fx.user(),
+        "evals.grade",
+        json!({"sessionId":"session-a","suite":stale}),
+    ));
+    assert_eq!(denied.code, DomainErrorCode::RevisionConflict);
+    assert_eq!(
+        denied.target_kind.as_ref().map(|s| s.0.as_str()),
+        Some("evaluation_evidence")
+    );
+    assert_eq!(
+        fx.session("session-a"),
+        session_before,
+        "the fence must detect changed WorkState independently of the session revision/sequence"
+    );
+    assert!(
+        fx.read(|snapshot| snapshot.evals().eval_runs(&id("session-a"), None, 500))
+            .is_empty()
+    );
+    let updated = fx
+        .read(|snapshot| snapshot.work().work(&id("root-a")))
+        .unwrap();
+    assert_eq!(updated.title, "Changed by concurrent writer");
+    assert_eq!(updated.revision, work_revision_before + 1);
+    enable(&mut fx);
+    let fresh = grade(
+        &fx,
+        &suite(vec![record_check(
+            "title",
+            "WorkState",
+            "/title",
+            json!("Changed by concurrent writer"),
+        )]),
+    );
+    assert!(matches!(fresh.outcome, EvalOutcome::Passed));
+    let stored = serde_json::to_value(&fresh).unwrap();
+    assert_eq!(
+        stored.pointer("/runs/0/instances/0/observedValue/value"),
+        Some(&json!("Changed by concurrent writer"))
+    );
+    assert_eq!(
+        fx.read(|snapshot| snapshot.evals().eval_runs(&id("session-a"), None, 500))
+            .len(),
+        1
+    );
+}
