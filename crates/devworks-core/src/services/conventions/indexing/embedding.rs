@@ -70,6 +70,7 @@ pub struct EmbeddingConfiguration {
     pub reason: Option<String>,
 }
 pub trait ConventionEmbeddings: Send + Sync {
+    fn is_available(&self) -> bool;
     /// Only the explicitly configured, currently compatible embedding space. No conversational
     /// model, first route, unqualified vector dimension or automatic paid default is allowed.
     fn configured_space(

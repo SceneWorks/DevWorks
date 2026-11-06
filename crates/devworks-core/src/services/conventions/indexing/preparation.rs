@@ -106,6 +106,7 @@ impl IndexService {
         &self,
         input: InputPreparation<'_>,
     ) -> Result<PreparedInputs, StorageError> {
+        let _local_preparation = self.closed.enter()?;
         let InputPreparation {
             context,
             origin,
@@ -129,6 +130,7 @@ impl IndexService {
         if texts.is_empty() || texts.len() > 32 {
             return Err(invalid("embedding batch must contain 1..32 actual inputs"));
         }
+        let texts_bytes = texts.iter().map(|text| text.len() as u64).sum::<u64>();
         let source = approvals::save_source_context(context);
         let mut stable_context = source.clone();
         stable_context["invocationContext"]
@@ -199,7 +201,7 @@ impl IndexService {
             let op = match tx.operations().operation(&op_id)? {
                 Some(op) => { if op.capability != CAPABILITY || op.args_digest != args { return Err(StorageError::ScopeDenied); } op },
                 None => tx.operations().record_intent(NewOperation {id:op_id.clone(),root_id:ctx.root_id().cloned(),assignment_id:ctx.assignment_id().cloned(),capability:CAPABILITY.into(),schema_version:1,args_digest:args.clone(),
-                    payload:json!({"requestId":request,"sourceContext":source_value,"embeddingSpace":space,"contextDigest":context_hash,"inputDigest":input_hash,"origin":origin})})?,
+                    payload:json!({"requestId":request,"sourceContext":source_value,"embeddingSpace":space,"contextDigest":context_hash,"inputDigest":input_hash,"origin":origin,"inputReservationEstimate":{"basis":"Utf8ByteCount","value":texts_bytes,"guaranteedUpperBound":false}})})?,
             };
             let op = if matches!(op.state,OperationState::IntentRecorded|OperationState::RetryPending) {
                 tx.operations().begin_attempt(&op.id,op.revision,AttemptBinding{policy_revision:Some(ctx.policy_revision().get()),..Default::default()})?;
