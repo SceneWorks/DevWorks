@@ -1013,3 +1013,6 @@ mod embedding_qualification;
 
 #[path = "providers/convention_search.rs"]
 mod convention_search;
+
+#[path = "providers/selection_refresh.rs"]
+mod selection_refresh;

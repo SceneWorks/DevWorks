@@ -22,8 +22,8 @@ use devworks_core::{
 };
 use devworks_engine::conventions::embedding::NativeEmbeddings;
 use std::sync::atomic::AtomicBool;
-const VECTOR: &str = r#"{"model":"fixture-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":3,"total_tokens":3}}"#;
-fn qualify(f: &Fx) -> (InvocationContext, Arc<NativeEmbeddings>, Arc<IndexService>) {
+pub(super) const VECTOR: &str = r#"{"model":"fixture-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":3,"total_tokens":3}}"#;
+pub(super) fn qualify(f: &Fx) -> (InvocationContext, Arc<NativeEmbeddings>, Arc<IndexService>) {
     let (spaces, operation) = super::embedding_qualification::probe(f);
     let executor = Arc::new(NativeEmbeddings::new(
         f.store.clone(),
