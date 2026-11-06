@@ -502,19 +502,31 @@ pub(super) fn related(
         Some(selection),
         kinds,
     )?;
-    let mut rows = Vec::new();
+    let mut result = Vec::new();
     let mut seen = BTreeSet::new();
     for edge in &edges.linked {
-        if keys.contains(&dataset::key(&edge.target))
-            && kinds.contains(&edge.raw.edge.kind.as_str())
-            && seen.insert(dataset::key(&edge.source))
+        if !keys.contains(&dataset::key(&edge.target))
+            || !kinds.contains(&edge.raw.edge.kind.as_str())
         {
-            let node = raw(reader, &edge.source)?;
-            rows.push((node, edge));
+            continue;
         }
-    }
-    let mut result = Vec::new();
-    for (index, (node, edge)) in rows.iter().enumerate().skip(reader.position.offset) {
+        let identity = dataset::key(&edge.source);
+        if seen.contains(&identity) {
+            continue;
+        }
+        // Endpoint identities are bounded, unlike source payloads. Retain only this
+        // deduplication prefix and hydrate a node after it enters the requested page.
+        if !reader
+            .budget
+            .retain(identity.0.len() + identity.1.len() + identity.2.len() + 96)
+        {
+            break;
+        }
+        seen.insert(identity);
+        let index = seen.len() - 1;
+        if index < reader.position.offset {
+            continue;
+        }
         if result.len() >= reader.limit {
             reader.next = Some(Position {
                 offset: index,
@@ -522,8 +534,9 @@ pub(super) fn related(
             });
             break;
         }
+        let node = raw(reader, &edge.source)?;
         let item = model::wire(
-            json!({"node":reader.node(node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(node)}),
+            json!({"node":reader.node(&node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(&node)}),
         )?;
         if !reader.retain_wire(&item)? {
             reader.next = Some(Position {
