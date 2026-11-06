@@ -1176,5 +1176,9 @@ for name in ['conventions.list','conventions.search','conventions.resources','co
   case('dw33-reject-zero-source-revision-'+name,'operation-result.r4',bad,False,False)
   case('dw33-reject-source-revision-before4-'+name,'operation-result.r3',output,False,False)
 
+# DW36: source metadata revision5, all native engine declarations and strict field gates.
+from metadata_fixtures import append_metadata_cases
+append_metadata_cases(case,sample,request,ART)
+
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

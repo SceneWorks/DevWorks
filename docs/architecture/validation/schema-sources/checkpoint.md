@@ -46,3 +46,11 @@ and cancellation. The fixture login has VIEW DEFINITION and an explicit schema
 SELECT denial. This validates static query functionality under this fixture only;
 supported x86-host and TLS qualification remain pending. An initial command used
 a nonmatching test filter and ran zero cases; it is excluded from evidence.
+
+Current-stack merge d089b9c1 regenerates the shared revision5 envelopes with the
+current convention revision4 fields. All70 pre-existing schema files and all1,814
+prior fixture objects remain byte-exact/identical.32 new revision5 source/configuration,
+engine-declaration, result, pre-revision and null-refusal cases pass independent
+JSON Schema4.25.1 validation; all seven native recorded-contract tests pass0.23s,
+covering1,846 domain fixtures and596 distinct native operation/mode/revision bindings.
+These are wire/admission checks, separate from target-server/runtime qualification.
