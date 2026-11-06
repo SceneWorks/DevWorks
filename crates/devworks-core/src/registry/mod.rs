@@ -616,10 +616,18 @@ impl SpecializedEnvelope for crate::protocol::QueryRequest {
         self.validate().map_err(str::to_owned)
     }
     fn retain_revision(&mut self, revision: u32) {
-        if let crate::protocol::Query::Events { project_id, .. } = &mut self.query
-            && revision < 2
+        if let crate::protocol::Query::Events {
+            project_id,
+            newest_first,
+            ..
+        } = &mut self.query
         {
-            *project_id = None;
+            if revision < 2 {
+                *project_id = None;
+            }
+            if revision < 3 {
+                *newest_first = None;
+            }
         }
     }
 }

@@ -97,7 +97,7 @@ class SchemaRevisionRules(unittest.TestCase):
         # Shared envelopes and union alternatives count only for the operation that selects them:
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
         # command aggregate or project scope of history.events.
-        self.assertEqual(carried['history.events'], {2})
+        self.assertEqual(carried['history.events'], {2, 3})
         self.assertEqual(carried['runs.inspect'], set())
         self.assertEqual(carried['history.operation_status'], set())
 

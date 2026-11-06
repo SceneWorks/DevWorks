@@ -592,10 +592,9 @@ validated_leaf!(
 /// Schema revision 2 adds the project scope of `history.events`.
 impl Revisioned for QueryRequest {
     fn retain_revision(&mut self, revision: u32) {
-        if let Query::Events { project_id, .. } = &mut self.query {
-            if revision < 2 {
-                *project_id = None;
-            }
+        if let Query::Events { project_id, newest_first, .. } = &mut self.query {
+            if revision < 2 { *project_id = None; }
+            if revision < 3 { *newest_first = None; }
         }
     }
 }
