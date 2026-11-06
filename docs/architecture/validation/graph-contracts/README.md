@@ -36,8 +36,13 @@ JSON fragments with offsets/total bytes, permitting inspection of large values
 without replacing them with truncated strings. Completion and continuation must
 remain explicit when bounded work stops.
 
-Only typed unavailable ScopeDetails may omit GraphPage.view. Its real read stamp
-and missing-view reason remain visible; no fake pin or baseline view is invented.
+Only unavailable ScopeDetails, declared static SchemaDetails, or metadata-only
+RepositoryOverview may omit GraphPage.view. Each has a real read stamp and actual
+missing-view reason; no fake pin or baseline view is invented. Metadata-only
+overviews explicitly mark graph coverage unavailable, have no dependency rows and
+leave graph totals unknown. Observed/private schema metadata and indexed facts
+require actual authorized scoped views. An invalid explicit view cannot select
+this exception as a fallback.
 Existing freshness, language, semantic-pack and overlay records carry lifecycle
 states instead of collapsing them into generic coverage.
 
@@ -55,3 +60,32 @@ invented citation, omitted repository hit or fake zero aggregate is published.
 
 Implementation source baseline: `06ff92ac`. Native service and platform acceptance
 are recorded separately by the owning implementation, after actual qualification.
+
+
+## Qualification boundary
+
+The native contract suites exercise all twenty selected revision-3 operations,
+strict present-null and partial mixed selectors, directory/opaque trust witnesses,
+cross-repository snapshots, source-less nodes, unavailable own views, verbatim
+empty/NUL/long-line source, property offsets and faithful legacy projection.
+The inherited five Help projection tests qualify the composed source without
+changing Help behavior. Current Rust semantic counts are omitted when no pass
+was recorded; they are not invented measured zeros.
+
+`retained-source-audit.json` records the per-operation frozen arguments/results
+and quirks, while `source-binding-results.json` verifies inventory bytes and
+ownership. Generated field/reference/architecture/plan readers retain all 377
+requirements and twenty graph operation owners. These checks do not claim a
+native graph service, Graph SQL implementation, source-capture adapter, UI,
+MCP exposure, or platform acceptance.
+
+
+The composed qualification passes 33 native core tests (8 graph, 5 Help, 7
+recorded-fixture, 5 registry and 8 schema-revision), 11 generator tests, 70 schema
+documents, 2,066 message fixtures and 12 scenarios/26 steps. The register admits
+570 operation/mode/revision bindings. All 56 legacy schema bytes remain exact;
+125 generated artifacts regenerate without drift. The current source has 408
+generated domain types, 359 operations, 78 slices and 377 requirements, with no
+unowned operations, requirements or retained source entries. Strict scoped Clippy,
+formatting and whitespace checks pass. The approved requirements Word document
+is unchanged; no new Word layout or native runtime acceptance is inferred.

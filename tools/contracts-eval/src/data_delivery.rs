@@ -1511,7 +1511,7 @@ pub enum GraphResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"properties": {"kind": {"const": "ScopeDetails"}}}}, "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"oneOf": [{"properties": {"kind": {"const": "ScopeDetails"}, "value": {"required": ["unavailableReason"]}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "SchemaDetails"}, "value": {"required": ["unavailableReason"], "properties": {"origin": {"const": "Declared"}}}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "RepositoryOverview"}, "value": {"required": ["unavailableReason"], "properties": {"graphCoverage": {"properties": {"state": {"const": "Unavailable"}}}, "dependencies": {"maxItems": 0}}, "not": {"required": ["graphTotals"]}}}, "required": ["kind", "value"]}]}}, "x-since": 3}]))]
 pub struct GraphPage {
     pub protocol: Protocol,
     pub query_id: QueryId,
@@ -1526,8 +1526,15 @@ pub view: Option<ResolvedViewSet>,
 }
 impl GraphPage {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if let Some(view)=&self.view { view.validate()?; }
-        else if !matches!(&self.result, GraphResult::ScopeDetails{value} if value.unavailable_reason.is_some()) { return Err("only unavailable scope status can omit its graph view"); }
+        if let Some(view)=&self.view{view.validate()?;}else{
+            let metadata=match &self.result {
+                GraphResult::ScopeDetails{value}=>value.unavailable_reason.is_some(),
+                GraphResult::SchemaDetails{value}=>matches!(value.origin,CodeSchemaOrigin::Declared)&&value.unavailable_reason.is_some(),
+                GraphResult::RepositoryOverview{value}=>matches!(value.graph_coverage.state,CoverageState::Unavailable)&&value.unavailable_reason.is_some()&&value.dependencies.0.is_empty()&&value.graph_totals.is_none(),
+                _=>false
+            };
+            if !metadata{return Err("view-less graph response requires explicit unavailable metadata");}
+        }
         self.validate_current()?;
         let Some(view)=&self.view else { return Ok(()); };
         match &self.result {
@@ -1676,7 +1683,7 @@ fn legacy_node(node:&CodeNode)->Option<NodeView>{Some(NodeView{node_id:node.node
 fn legacy_nodes<'a>(nodes:impl IntoIterator<Item=&'a CodeNode>)->Option<Vec<NodeView>>{let nodes:Vec<_>=nodes.into_iter().map(legacy_node).collect::<Option<_>>()?;let mut ids=HashSet::new();if nodes.iter().all(|n|ids.insert(n.node_id.0.clone())&&n.name.len()<=1024){Some(nodes)}else{None}}
 impl Revisioned for GraphPage {
     fn retain_revision(&mut self,revision:u32){
-        if revision>=3{return;}
+        if revision>=3||self.view.is_none(){return;}
         let projected=match &self.result {
             GraphResult::CodeNodes{value}=>legacy_nodes(&value.nodes.0).map(|nodes|GraphResult::Nodes{nodes}),
             GraphResult::CodeSearch{value}=>{let nodes:Option<Vec<_>>=value.items.0.iter().map(|hit|match hit{CodeSearchHit::Node{node}=>Some(node),_=>None}).collect();nodes.and_then(legacy_nodes).map(|nodes|GraphResult::Nodes{nodes})},
@@ -1688,7 +1695,8 @@ impl Revisioned for GraphPage {
         };
         if let Some(projected)=projected{self.result=projected;}
     }
-    fn check_revision(&self,revision:u32)->Result<(),String>{
+    fn check_revision(&self,revision:u32)->Result<(),String>{        if revision<3&&self.view.is_none(){return Err("legacy graph results require a real resolved view".into());}
+
         let current=!matches!(self.result,GraphResult::Nodes{..}|GraphResult::Graph{..}|GraphResult::Source{..}|GraphResult::Schema{..}|GraphResult::ScopeStatus{..});
         if revision<3&&current{return Err("graph result cannot be represented at the negotiated revision".into());}
         if revision>=3&&!current{return Err("revision 3 requires the qualified graph result".into());}

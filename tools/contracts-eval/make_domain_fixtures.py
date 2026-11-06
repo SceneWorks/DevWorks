@@ -8,7 +8,7 @@ def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==ent
 ART={'artifactId':'artifact-a','versionId':'version-a','sha256':'a'*64,'byteLength':'8','mediaType':'text/plain'}
 STAMP={'storeId':'store-a','restoreEpoch':'0','sequence':'1','policyRevision':'1','scopeRevision':'1'}
 BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':'root-a','ActorId':'actor-a','AssignmentId':'assignment-a','OperationId':'operation-a','QueryId':'query-a','RequestKey':'request-a','CommandId':'command-a','EventId':'event-a','StoreId':'store-a','ResourceId':'resource-a','CorrelationId':'correlation-a',
- 'Label':'fixture','Text':'fixture','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
+ 'Label':'fixture','Text':'fixture','GraphUnitKey':'src/main.rs','GraphText':'fixture source','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
  'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
@@ -38,6 +38,8 @@ def sample(t):
  if t=='DecisionQuestion':v['criteria']=[{'name':'yes'},{'name':'no'}]
  if t=='UsageItem':v['amountUsd']='0'
  if t=='ArtifactReadContent':v.update(content='fixture',nextByte='7',truncated=True)
+ if t=='HelpSnapshot':v['canGenerate']=True
+ if t=='HelpCapabilityMetadata':v['available']=True
  if t=='ProcessOutput':v['nextByte']=str(len(v['content'].encode()))
  return v
 
@@ -1096,6 +1098,44 @@ full_reason='; '.join(reason_parts)
 assert 4096<len(full_reason)<=65536
 reason_report=copy.deepcopy(POS['dw21-partial-known-cost']);reason_report['value']['page']['items'][0]['cost']['untrackedReason']=full_reason
 case('dw21-full-monetary-coverage-reason','operation-result.r3',reason_report)
+# DW52 offline Help: text needs Help authority, while legacy projection retains real artifacts.
+help_snapshot=sample('HelpSnapshot');help_snapshot.update(appVersion='0.1.0',helpRevision='2',registryRevision='3',generationOperation=sample('OperationRef'))
+help_topic=sample('HelpTopicSummary');help_topic.update(id='help-workspace',version='0.1.0',title='Workspace',content=copy.deepcopy(ART),relatedCapabilities=['help.read','package/tool'],provenance={'kind':'Bundled','appVersion':'0.1.0','contentDigest':'a'*64},capabilities=[sample('HelpCapabilityMetadata')])
+help_topic['capabilities'][0].update(operation='help.read',mode='Query',schemaRevision='3')
+help_read={'kind':'Available','topic':help_topic,'passage':{'text':'λ'*65536,'offset':'0','nextCursor':'help-next','hasMore':True},'snapshot':help_snapshot}
+case('dw52-inline-full-unicode-passage','operation-result.r3',{'kind':'help.read','value':help_read})
+help_tail=copy.deepcopy(help_read);help_tail['passage']={'text':'Final passage','offset':'65536','hasMore':False};help_tail['snapshot'].update(canGenerate=False,cannotGenerateReason='host_maintenance_required')
+case('dw52-help-only-final-passage','operation-result.r3',{'kind':'help.read','value':help_tail})
+for availability in ['Missing','Stale','Unavailable']:
+ view={'kind':'Unavailable','topicId':'help-workspace','requestedVersion':'old','availability':availability,'reason':'Exact local source is not available','snapshot':help_snapshot}
+ if availability=='Stale':view['currentVersion']='0.1.0'
+ case('dw52-explicit-'+availability.lower(),'operation-result.r3',{'kind':'help.read','value':view})
+help_page={'items':[help_topic],'hasMore':False,'availability':'Available','snapshot':help_snapshot}
+for op in ['help.search','help.topic_for_screen','help.package_guides']:
+ page=copy.deepcopy(help_page)
+ if op=='help.package_guides':
+  page['items'][0].update(version='1.2.3',provenance={'kind':'Package','packageId':'package','packageVersion':'1.2.3','manifestDigest':'b'*64,'contentDigest':'c'*64})
+ if op=='help.topic_for_screen':page['items'][0]['provenance']={'kind':'Generated','appVersion':'0.1.0','registryRevision':'3','contentDigest':'d'*64}
+ case('dw52-current-'+op,'operation-result.r3',{'kind':op,'value':page})
+frame=request('help.read','Query');frame['schemaRevision']=3;frame['body'].update(cursor='help-next',maxChars='65536')
+case('dw52-read-passage-cursor','domain-request.r3',frame)
+frame=request('help.topic_for_screen','Query');frame['schemaRevision']=3;frame['body'].pop('capabilityRevision');frame['body'].update(current=True,page={'limit':20})
+case('dw52-current-screen-bootstrap','domain-request.r3',frame)
+mutate('dw52-screen-both-selectors','dw52-current-screen-bootstrap',['body','capabilityRevision'],'1',False,False)
+mutate('dw52-screen-current-false','dw52-current-screen-bootstrap',['body','current'],False,False,False)
+mutate('dw52-null-revision-alongside-current','dw52-current-screen-bootstrap',['body','capabilityRevision'],None,False,False)
+mutate('dw52-screen-current-before3','dw52-current-screen-bootstrap',['schemaRevision'],1,False,False,entry='domain-request')
+mutate('dw52-passage-limit-bound','dw52-read-passage-cursor',['body','maxChars'],'65537',False,True)
+mutate('dw52-passage-limit-zero','dw52-read-passage-cursor',['body','maxChars'],'0',False,False)
+mutate('dw52-read-cursor-before3','dw52-read-passage-cursor',['schemaRevision'],1,False,False,entry='domain-request')
+mutate('dw52-passage-cursor-mismatch','dw52-inline-full-unicode-passage',['value','passage','hasMore'],False,False,True)
+mutate('dw52-generation-reason-missing','dw52-help-only-final-passage',['value','snapshot','cannotGenerateReason'],None,False,True)
+mutate('dw52-current-view-before3','dw52-inline-full-unicode-passage',['value','passage','offset'],'0',False,False,entry='operation-result')
+case('dw52-legacy-read-not-current','operation-result.r3',result('help.read','HelpReadResult'),False,False)
+
+# All graph revision-3 bindings, selected results and strict source/identity boundaries.
+from graph_fixtures import append_graph_cases
+append_graph_cases(case,sample,BASE)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue

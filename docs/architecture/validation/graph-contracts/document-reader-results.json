@@ -1,0 +1,62 @@
+{
+  "sourceHead": "2b818a79f8ecdd90f2268f6dfdf301175f2fae94",
+  "typedRecords": 408,
+  "schemaFiles": 70,
+  "ownedGraphOperations": [
+    "code.search",
+    "code.architecture",
+    "code.dependency",
+    "code.impact",
+    "code.source",
+    "code.traverse",
+    "code.graph_scope_status",
+    "code.overview",
+    "code.nodes_by_file",
+    "code.node_detail",
+    "code.set_trust",
+    "code.file_impact",
+    "code.graph_schema",
+    "code.call_path",
+    "code.data_lineage",
+    "code.consumers",
+    "code.publishers",
+    "code.snippet",
+    "code.repository_dependencies",
+    "repositories.nodes"
+  ],
+  "counts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 359,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 359,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "legacySchemasUnchanged": 56,
+  "readers": {
+    "docs/architecture/domain-operation-reference.md": "954e5744ae93d107e4f7e3fdc88fb84010d6072e06369ecf74cb776bb374b473",
+    "docs/architecture/domain-operation-reference.html": "de76cc5bad8cc94ceb2086ced1caa2d99c7fb52e1698598029bbdb219574f32b",
+    "docs/architecture/domain-operation-contracts.md": "9a68c5d9ec766e2b445f278cc5bad0dcf7940908bcaf3e1b34c0c03efdf499d8",
+    "docs/architecture/domain-operation-contracts.html": "56b1b20035711b852c616245cea2b4247304375e4a8d7561b6645d3976fc953f",
+    "docs/architecture/devworks-architecture.md": "9fff599aa71c4e7b48f7dfb188afdce8ccfdb97f1c66c43a7f81ad7363372551",
+    "docs/architecture/devworks-architecture.html": "2df970b2bc60a998e28b19fe6712b2a49c099295d80861c29962a223fca6d8dd"
+  },
+  "wordDocumentsUnchanged": [
+    "docs/planning/devworks-requirements.docx"
+  ],
+  "requirementsContentSha256": "6de34b24444a5f0601d8219173e01a8c9d7c15054fde4626788783dfbcc1a8dc",
+  "allPassed": true,
+  "limits": "Document/source traceability only; no native GraphService/UI acceptance or Word layout changes claimed."
+}

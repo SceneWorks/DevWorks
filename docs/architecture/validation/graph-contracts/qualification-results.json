@@ -1,0 +1,75 @@
+{
+  "base": "06ff92ac2e77472e38c185525fd8b4671893cff8",
+  "sourceCheckpoints": [
+    "719add63",
+    "c0bbc441",
+    "2b818a79"
+  ],
+  "helpComposition": [
+    "0b66b866",
+    "2181ea89",
+    "d1c08700"
+  ],
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "40c23fdc68a88bd9964f0e4d13cab03dcff01892950dfbc6abe5fcdc03da5bca",
+    "tools/contracts-eval/build_domain_contracts.py": "5d809b3c2aa2bd4bed49e492cccae3c834d3c872a5500a648d0a716c003bdddd",
+    "tools/contracts-eval/src/data_delivery.rs": "0e20c9bdf95d868462e56afd1b2849d1efa678e4e8fe6cb2b8cacec7517ca85b",
+    "tools/contracts-eval/src/domain_rules.rs": "aebfc24715838cc2179ba1f3024fb3ef79aa39d7c462c3aef8286d1e7d11cdbf",
+    "tools/contracts-eval/src/domain_support.rs": "95c1cbdaf20e90e50a6cd22f5c85b56ca6d88fbd5958d357ec9ef1975353f746",
+    "tools/contracts-eval/src/main.rs": "f48c477b3779141d2b46e37ab3e8159c3d0c09317b3f320d0123a25c2da42af5",
+    "tools/contracts-eval/graph_fixtures.py": "897d4f6f6f040da0ef697d0dfc6bc4f4d28e80cb5872df891d8676b71c7bcc11",
+    "tools/contracts-eval/versioned_result.py": "534a4c6541e290b68231fc211939b9eb4cb0fd709c5a8ded24f1d3fee4c67417",
+    "tools/core-codegen/generate.py": "fc7dd12d41ac9eef21784dd7682bbcf2e16f7285db37184f44ca77cba04e2c44",
+    "crates/devworks-core/src/protocol/data.rs": "8f9f3ec0316e5e228917091a1f19dbd7d4e2c121ed38a23a0ab753d612c912d3",
+    "crates/devworks-core/src/protocol/records.rs": "a485a579b7852658925cd75663cb6f04f1352895db68d9854a41ff9b3b52eee9",
+    "crates/devworks-core/src/registry/mod.rs": "1e24b9545c66869415ed163e88ffea945b90b68c8e2edc8db266f38f612bb8bf"
+  },
+  "nativeCore": {
+    "command": "cargo test --locked -p devworks-core --test graph_contracts --test help_projection --test recorded_fixtures --test registry --test schema_revisions",
+    "suites": {
+      "graph_contracts": 8,
+      "help_projection": 5,
+      "recorded_fixtures": 7,
+      "registry": 5,
+      "schema_revisions": 8
+    },
+    "passed": 33,
+    "failed": 0
+  },
+  "strictClippy": "passed: core lib and the five affected integration-test targets, -D warnings",
+  "generatorTests": 11,
+  "generatedZeroDriftFiles": 125,
+  "schemaFiles": 70,
+  "messageFixtures": 2066,
+  "domainMessageFixtures": 1737,
+  "domainNegativeFixtures": 456,
+  "scenarios": 12,
+  "scenarioSteps": 26,
+  "nativeRevisionModeAdmissions": 570,
+  "typedDomainRecords": 408,
+  "legacySchemaBytesUnchanged": 56,
+  "planCounts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 359,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 359,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "metadataOnlyBootstrap": "Declared schema and scope-filtered registered-repository metadata require real read stamp/reason; no fake view, observed/private facts, dependency fallback or invented graph totals. Actual current/exact data queries still need authorized resolved views.",
+  "noInference": true,
+  "allPassed": true,
+  "confidence": "High for current typed contract/projection/source traceability. Native GraphService/storage/UI/platform acceptance is separate."
+}

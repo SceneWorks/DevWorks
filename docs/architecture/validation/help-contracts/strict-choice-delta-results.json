@@ -1,0 +1,40 @@
+{
+  "scope": "Bounded explicit-null exactly-one regression after the full Help checkpoint; no service or inference execution",
+  "id": "dw52-null-revision-alongside-current",
+  "priorSource": "2181ea89",
+  "redBeforeFix": {
+    "schemaValid": false,
+    "typedValid": true,
+    "normalizedErasedNull": true
+  },
+  "afterFix": {
+    "schemaValid": false,
+    "typedValid": false,
+    "passed": true
+  },
+  "typedRegressionMessages": 1939,
+  "allTypedRegressionMessagesPassed": true,
+  "allLegacySchemasByteIdentical": 56,
+  "ordinaryNullableOptionalMembersUnchanged": true,
+  "reason": "Present members of exactlyOne choices already have non-null schemas; use the existing non-null reader before Option normalization erases explicit null.",
+  "schemaDocumentsIdenticalToFullCheckpoint": 67,
+  "productionAdmissionAndProjectionTestsPassed": 5,
+  "recordedNativeFixtureTestsPassed": 7,
+  "generatorTestsPassed": 11,
+  "sourceSha256": {
+    "tools/core-codegen/generate.py": "50b6aa8f6a5eabf60108dd8f8fd90c9c3356a3d6335936590a3dad0a7c182761",
+    "tools/contracts-eval/build_domain_contracts.py": "9cd1d2de413acf3d11381b340af8b4cbefc7f01a8d4860aeb0e3e25a4d19f392",
+    "crates/devworks-core/src/operations/help.rs": "52233174f317fef1db7a007da4b855db04d935203e682c4885492ed8ea04e790",
+    "crates/devworks-core/tests/help_projection.rs": "dfc7d5299102d7898a8252acbd3ece3981227816eda8eff6162d1218034183b2",
+    "docs/architecture/contracts/domain-fixtures.json": "4adae955b7cb2b95e4d492e74e4e36e237442eaec738f96391604aa1e1ee594e"
+  },
+  "productionNative": {
+    "helpAdmissionAndProjection": 5,
+    "recordedFixtures": 7,
+    "registry": 5,
+    "schemaRevisions": 8,
+    "passed": 25,
+    "failed": 0
+  },
+  "strictCoreClippyPassed": true
+}
