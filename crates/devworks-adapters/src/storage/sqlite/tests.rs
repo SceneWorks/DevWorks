@@ -126,6 +126,7 @@ mod runs;
 mod sessions;
 mod settings;
 mod usage;
+mod usage_reports;
 mod web;
 mod work;
 

@@ -110,6 +110,51 @@ fn breakdown(
     gaps: &mut Gaps,
 ) -> SResult<()> {
     let (dimension, tokens, include_total) = shape;
+    if include_total {
+        // Retained totals group raw values before normalizing labels; series group normalized
+        // labels. Whitespace variants can therefore intentionally retain two total rows.
+        let raw = matches!(
+            q.kind,
+            UsageReportKind::AssistantUsage
+                | UsageReportKind::CodeReviewUsage
+                | UsageReportKind::RepositoryAnalysisUsage
+        ) || matches!(q.kind, UsageReportKind::AssistantActivity)
+            && matches!(dimension, "user" | "status")
+            || matches!(q.kind, UsageReportKind::McpUsage) && dimension == "tool";
+        let mut totals: BTreeMap<Option<String>, Vec<&Fact>> = BTreeMap::new();
+        for row in rows {
+            let key = if raw {
+                row.dimension(dimension).map(str::to_owned)
+            } else {
+                Some(normalized_key(row.dimension(dimension)))
+            };
+            totals.entry(key).or_default().push(row);
+        }
+        let mut ranked = Vec::new();
+        for (key, rows) in totals {
+            let value = if tokens {
+                sum(&rows, total_tokens)?
+            } else {
+                Some(rows.len() as i64)
+            };
+            if let Some(value) = value {
+                if value > 0 {
+                    ranked.push((normalized_key(key.as_deref()), value));
+                }
+            } else {
+                gaps.add("report-metric-unavailable");
+            }
+        }
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ordinal(&a.0, &b.0)));
+        for (key, value) in ranked {
+            out.push(UsageReportRow::Breakdown {
+                dimension: BoundedText(dimension.into()),
+                key: BoundedText(key.clone()),
+                label: BoundedText(key),
+                value: count(value)?,
+            });
+        }
+    }
     let mut groups: BTreeMap<String, Vec<&Fact>> = BTreeMap::new();
     for row in rows {
         groups
@@ -133,15 +178,7 @@ fn breakdown(
         }
     }
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| ordinal(&a.0, &b.0)));
-    for (key, value, rows) in ranked {
-        if include_total {
-            out.push(UsageReportRow::Breakdown {
-                dimension: BoundedText(dimension.into()),
-                key: BoundedText(key.clone()),
-                label: BoundedText(key.clone()),
-                value: count(value)?,
-            });
-        }
+    for (key, _value, rows) in ranked {
         let series_key = format!(
             "breakdown:{dimension}:{}",
             &crate::fingerprint::sha256_hex(key.as_bytes())[..40]
@@ -287,8 +324,8 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
         return Ok(Vec::new());
     }
     let mut buckets = Vec::new();
-    let mut at = q.interval.floor(q.context.range.start_ms.get())?;
-    let end = q.context.range.end_ms.get();
+    let mut at = q.interval.floor(q.start)?;
+    let end = q.end;
     while at < end {
         buckets.push(at);
         at = q.interval.next(at)?;

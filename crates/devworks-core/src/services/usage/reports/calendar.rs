@@ -11,13 +11,23 @@ pub(super) enum Interval {
 impl Interval {
     pub fn parse(value: Option<&str>, start: i64, end: i64) -> SResult<Self> {
         match value.unwrap_or("auto").trim().to_ascii_lowercase().as_str() {
-            "" | "auto" => Ok(if end - start <= 45 * DAY {
-                Self::Day
-            } else if end - start <= 180 * DAY {
-                Self::Week
-            } else {
-                Self::Month
-            }),
+            "" | "auto" => Ok(
+                if end
+                    .checked_sub(start)
+                    .ok_or_else(|| invalid("usage_range"))?
+                    <= 45 * DAY
+                {
+                    Self::Day
+                } else if end
+                    .checked_sub(start)
+                    .ok_or_else(|| invalid("usage_range"))?
+                    <= 180 * DAY
+                {
+                    Self::Week
+                } else {
+                    Self::Month
+                },
+            ),
             "day" => Ok(Self::Day),
             "week" => Ok(Self::Week),
             "month" => Ok(Self::Month),
