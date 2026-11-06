@@ -469,17 +469,28 @@ impl Shell {
                     }
                 }
             }
-            (Slot::ApprovalDecision(_), Reply::Command(q)) => match dops::decided(q) {
-                Ok(p) => {
-                    self.decisions.current = Some((&p).into());
-                    self.decisions.selected = Some(p);
-                    self.decisions.decision_error = None;
-                    self.decisions.rationale.clear();
-                    self.load_approvals();
-                    self.load_completion_notifications();
+            (Slot::ApprovalDecision(id), Reply::Command(q)) => {
+                let selected = self
+                    .decisions
+                    .selected
+                    .as_ref()
+                    .is_some_and(|p| p.id.as_str() == id);
+                match dops::decided(q) {
+                    Ok(p) => {
+                        // A decision can finish after the user has opened another proposal.
+                        if selected && p.id.as_str() == id {
+                            self.decisions.current = Some((&p).into());
+                            self.decisions.selected = Some(p);
+                            self.decisions.decision_error = None;
+                            self.decisions.rationale.clear();
+                        }
+                    }
+                    Err(e) if selected => self.decisions.decision_error = Some(e.describe()),
+                    Err(_) => {}
                 }
-                Err(e) => self.decisions.decision_error = Some(e.describe()),
-            },
+                self.load_approvals();
+                self.load_completion_notifications();
+            }
             // Clearing the project may leave an older project's reply in flight. It cannot
             // restore hidden rows or continue paging without a selected project.
             (Slot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
