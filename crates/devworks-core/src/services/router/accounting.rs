@@ -192,6 +192,16 @@ impl InferenceRouter {
         ctx: &InvocationContext,
         request: &AttemptRequest,
     ) -> Result<Admission, StorageError> {
+        self.admit_attempt_with_process(tx, control, ctx, request, None)
+    }
+    pub(crate) fn admit_attempt_with_process(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        control: &ControlService,
+        ctx: &InvocationContext,
+        request: &AttemptRequest,
+        host_process: Option<&crate::services::usage::accounting::HostProcessIdentity>,
+    ) -> Result<Admission, StorageError> {
         let route = tx
             .router()
             .route_request(&request.request_id)?
@@ -205,7 +215,14 @@ impl InferenceRouter {
                 "the conversational classifier must target Low directly".into(),
             ));
         }
-        crate::services::usage::accounting::admit_attempt(tx, control, self, ctx, request)
+        crate::services::usage::accounting::admit_attempt(
+            tx,
+            control,
+            self,
+            ctx,
+            request,
+            host_process,
+        )
     }
     pub fn mark_attempt_dispatched(
         &self,

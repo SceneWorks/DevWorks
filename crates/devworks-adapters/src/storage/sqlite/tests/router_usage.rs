@@ -257,7 +257,13 @@ fn eof_unknown_tail_closes_local_transport_but_failed_close_keeps_guard() {
         if failed {
             assert!(result.is_err());
             assert!(!b.local_quiescent);
-            assert!(!b.unknown_tail);
+            assert!(b.unknown_tail);
+            assert!(
+                devworks_core::services::usage::accounting::summary(&b)
+                    .unwrap()
+                    .custody_recovery_reason
+                    .is_some()
+            );
         } else {
             assert!(result.is_ok());
             assert!(b.local_quiescent && b.unknown_tail && b.incomplete);
@@ -292,7 +298,7 @@ fn changed_connection_fences_dispatch_without_opening_source() {
 }
 
 #[test]
-fn unknown_tail_recovery_is_bounded_and_preserves_late_billing() {
+fn unknown_owner_recovery_retains_custody_and_preserves_late_billing() {
     let f = NativeFx::new();
     let attempt = f.admitted();
     let (src, _) = source(vec![], true);
@@ -303,17 +309,26 @@ fn unknown_tail_recovery_is_bounded_and_preserves_late_billing() {
     );
     let NativeFx { fx, control, .. } = f;
     let fx = fx.restart();
+    let boot = fx.store.info().boot_id.unwrap();
+    let candidates =
+        fx.read(|s| devworks_core::services::usage::host::recovery_candidates(s, boot, None, 1));
+    let prepared = devworks_core::services::usage::host::probe_recovery(
+        candidates,
+        Some(&crate::process::NativeProcessHost),
+    )
+    .unwrap();
     let c = control.clone();
-    let visited =
-        fx.write(move |tx| devworks_core::services::usage::host::recover_page(tx, &c, None, 1));
+    let progress =
+        fx.write(move |tx| devworks_core::services::usage::host::apply_recovery(tx, &c, prepared));
     assert_eq!(
-        visited.as_slice(),
+        progress.visited.as_slice(),
         std::slice::from_ref(&attempt.attempt_id)
     );
+    assert_eq!(progress.unresolved, 1);
     let balance = fx
         .read(|s| s.usage().attempt_balance(&attempt.attempt_id))
         .unwrap();
-    assert!(balance.local_quiescent && balance.unknown_tail);
+    assert!(!balance.local_quiescent && balance.unknown_tail);
     assert_eq!(balance.reserved_micro_usd, None);
     let c = control.clone();
     let id = attempt.attempt_id.clone();
@@ -326,7 +341,7 @@ fn unknown_tail_recovery_is_bounded_and_preserves_late_billing() {
         )
     });
     assert_eq!(late.priced_micro_usd, Some(125));
-    assert!(late.local_quiescent && late.unknown_tail);
+    assert!(!late.local_quiescent && late.unknown_tail);
 }
 #[test]
 fn bootstrap_pages_survive_restart_without_counting_logical_requests_as_money() {
@@ -719,6 +734,30 @@ fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estima
         CostClassification::ConfiguredEstimate
     );
     let attempt = f.admitted();
+    f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+        devworks_core::services::usage::UsageService::new(f.fx.h.ids.clone(), f.fx.h.clock.clone()),
+    ));
+    match result(f.fx.query_at(
+        &f.fx.user(),
+        "router.usage",
+        json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+        Some(3),
+    )) {
+        OperationResult::RouterUsage {
+            value:
+                devworks_core::protocol::records::RouterUsageResult::Current(
+                    devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                ),
+        } => {
+            let row = &page.items.0[0];
+            assert_eq!(row.state.0, "Admitted");
+            assert!(!row.cost.monetary_complete);
+            assert!(row.cost.untracked_reason.is_some());
+            assert_eq!(row.cost.amount_micro_usd, None);
+        }
+        other => panic!("{other:?}"),
+    }
+
     let newer = tariffs("100").to_vec();
     f.fx.write(move |tx| {
         tx.usage().put_price_override(

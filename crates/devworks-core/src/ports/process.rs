@@ -72,14 +72,14 @@ impl ProcessSpec {
     }
 }
 
-/// Native identity of a launched tree's root, as recorded for recovery.
+/// Native process identity for owned-tree recovery or host-process liveness probes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeIdentity {
     pub pid: u32,
     /// Platform start-time token of `pid`; a different token means a different process.
     pub birth: String,
-    /// The Unix process group (equal to the root's pid). Windows uses an unnamed job that dies
-    /// with this process, so it records none.
+    /// The Unix group of an owned tree (equal to its root PID). Host-process identities record
+    /// none. Windows uses an unnamed job that dies with this process, so it records none.
     pub group: Option<i64>,
 }
 
@@ -163,6 +163,12 @@ pub trait ProcessHost: Send + Sync {
     /// Starts `spec` as an owned tree. On Windows the child is assigned to its job before it
     /// runs; on Unix it leads a new process group.
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError>;
+    /// Identity of the current host process for read-only liveness probes. It is not an owned
+    /// child tree and has no process-group ownership. Return `None` when the platform cannot
+    /// establish the real OS PID and birth token; unsupported hosts must not synthesize one.
+    fn current_identity(&self) -> Option<NativeIdentity> {
+        None
+    }
     /// Inspects a recorded identity without changing anything.
     fn probe(&self, identity: &NativeIdentity) -> Probe;
     /// Forcibly terminates the tree of a recorded identity when the root is verified to be

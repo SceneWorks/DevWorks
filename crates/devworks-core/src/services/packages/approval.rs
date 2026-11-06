@@ -809,12 +809,30 @@ impl PackageService {
             for row in &rows {
                 if row.source == crate::ports::storage::ApprovalSource::Generic
                     && let Some(existing) = tx.decisions().approval(&row.id)?
-                    && existing
-                        .payload
-                        .pointer("/binding/proposal/id")
-                        .and_then(Value::as_str)
-                        == Some(proposal.id.as_str())
                 {
+                    // Source identity lives in the retained owner facts, which may be compacted
+                    // into either review envelope. Reconciliation must also recognize obsolete
+                    // evidence generations so that their pending reviews can be superseded.
+                    let historical =
+                        crate::services::approvals::review_evidence::expand_historical(
+                            &OwnerPreview {
+                                scope: existing.scope.clone(),
+                                target_id: existing.target_id.clone(),
+                                target_revision: existing.target_revision,
+                                summary: existing.summary.clone(),
+                                reviewed: existing.payload["reviewed"].clone(),
+                                binding: existing.payload["binding"].clone(),
+                            },
+                        )?;
+                    let owner = self.expand_review_mode(tx.artifacts(), &historical, false)?;
+                    if owner
+                        .binding
+                        .pointer("/proposal/id")
+                        .and_then(Value::as_str)
+                        != Some(proposal.id.as_str())
+                    {
+                        continue;
+                    }
                     if matches!(existing.state.as_str(), "Pending" | "Approved")
                         && existing.content_digest == request.fingerprint.as_str()
                         && existing.scope_digest == digest

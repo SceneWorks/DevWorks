@@ -426,10 +426,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
-    let usage = crate::usage::UsageRuntime::new(
+    let usage = crate::usage::UsageRuntime::with_process_host(
         store.clone(),
         runs.service.clone(),
         use_cases.inference_router(),
+        process_host.clone(),
     );
     let use_cases = use_cases.with_usage(Arc::new(
         devworks_core::services::usage::UsageService::new(ids.clone(), clock.clone()),
@@ -1241,7 +1242,7 @@ impl Runtime {
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
         // readmission or let its outbox CAS write after shutdown has returned.
         self.resumes.drain().await;
-        self.usage.drain().await;
+        let inference_shutdown = self.usage.drain_until(deadline).await;
         if let Some(worker) = &self.prices {
             worker.drain().await;
         }
@@ -1339,10 +1340,34 @@ impl Runtime {
         }
         self.scheduler.drain(deadline).await;
         let bound = left();
-        let stopped = self
+        let mut stopped = self
             .housekeeper
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
+        match inference_shutdown {
+            Ok(drain) => {
+                stopped.unclosed_inference_attempts = drain.unclosed;
+                if !stopped.unclosed_inference_attempts.is_empty() || drain.pending_preparations > 0
+                {
+                    let service = self.diagnostics.clone();
+                    let ids = stopped.unclosed_inference_attempts.clone();
+                    let _=tokio::task::spawn_blocking(move||{
+                        use devworks_core::services::diagnostics::LogEntry;
+                        use devworks_core::protocol::records::{Severity,DiagnosticOutcome};
+                        let mut entry=LogEntry::new("router.usage","unclosed-inference",Severity::Warning,
+                            format!("{} inference transports were not verified closed before shutdown ({} preparations still settling); custody and reservations remain held.",ids.len(),drain.pending_preparations));
+                        entry.operation=Some("runtime.shutdown".into());entry.stage=Some("shutdown".into());entry.outcome=Some(DiagnosticOutcome::Partial);
+                        entry.target_kind=Some("inference_attempt".into());entry.target_id=ids.first().cloned();
+                        let _=service.log(entry);
+                    }).await;
+                }
+            }
+            Err(error) => {
+                if stopped.reconciliation.is_ok() {
+                    stopped.reconciliation = Err(error);
+                }
+            }
+        }
         // AD20 step 4: final known activation state.
         let _ = self.runs.finish().await;
         self.keep_awake.apply(false);

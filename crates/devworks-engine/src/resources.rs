@@ -132,6 +132,7 @@ impl Housekeeper {
             .await
             .unwrap_or_else(|_| ShutdownReport {
                 stopped: Vec::new(),
+                unclosed_inference_attempts: Vec::new(),
                 reconciliation: Err(StorageError::unavailable(
                     devworks_core::ports::storage::Unavailable::HandlerPanicked,
                     "process shutdown panicked",

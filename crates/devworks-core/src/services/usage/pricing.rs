@@ -700,4 +700,42 @@ mod tests {
             Some(0)
         );
     }
+    #[test]
+    fn legal_dimensional_tariffs_keep_large_exact_intermediates_until_final_rounding() {
+        let mut priced = quote(None);
+        let mut quantities = Quantities {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            ..Default::default()
+        };
+        for (modality, units) in ["Text", "Image", "Audio", "Video", "Any"].into_iter().zip([
+            1_000_000_007,
+            1_000_000_009,
+            1_000_000_021,
+            1_000_000_033,
+            1_000_000_087,
+        ]) {
+            priced.tariffs.push(serde_json::from_value(json!({"upstream_model_id":"priced","service_tier":"Standard","context_lower_exclusive":null,"context_upper_inclusive":null,"modality":modality,"charge_kind":"Runtime","cache_ttl_seconds":null,"unit":"Second","units":units,"amount_usd":"1","region":null,"endpoint_profile":null})).unwrap());
+            quantities.additional.push(MeasuredQuantity {
+                modality: modality.into(),
+                charge_kind: "Runtime".into(),
+                unit: "Second".into(),
+                cache_write_ttl_ms: None,
+                quantity: 1_000_000_000,
+            });
+        }
+        let cost = estimate(
+            &priced,
+            &quantities,
+            &PricingContext {
+                input_semantics: InputSemantics::Inclusive,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(cost.tracked_micro_usd, Some(5_000_000));
+        assert!(cost.monetary_complete);
+    }
 }

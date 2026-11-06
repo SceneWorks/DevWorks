@@ -603,7 +603,7 @@ impl UsageScreen {
                 "Comma separated; current when blank",
             );
         });
-        if self.prices_loading {
+        if self.prices_loading && self.prices.is_none() {
             ui.spinner();
             ui.label("Loading price sources…");
         }
@@ -702,10 +702,7 @@ impl UsageScreen {
             }
         });
         ui.heading("Models and tariffs");
-        let can_edit = !prices.has_more
-            && !self.prices_loading
-            && !self.price_update_available
-            && !self.price_busy;
+        let can_edit = !prices.has_more && !self.price_update_available && !self.price_busy;
         if prices.has_more {
             widgets::caption(
                 ui,
@@ -713,7 +710,8 @@ impl UsageScreen {
             );
         }
         for model in &prices.models.0 {
-            ui.push_id(model.model_id.as_str(), |ui| {
+            let row_id = ui.make_persistent_id(("usage-price-model-row", model.model_id.as_str()));
+            ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(model.model_id.as_str());
                     ui.label(format!(
@@ -894,6 +892,7 @@ pub fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str) {
         ui.label(label);
         let response = ui.add(
             egui::TextEdit::singleline(value)
+                .id_salt(label)
                 .desired_width(ui.available_width().min(240.0))
                 .hint_text(hint),
         );

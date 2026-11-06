@@ -317,6 +317,28 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
             ],
         ),
     };
+    let coverage_rows = match q.kind {
+        UsageReportKind::AssistantUsage => usage
+            .iter()
+            .copied()
+            .chain(runs.iter().copied())
+            .collect::<Vec<_>>(),
+        UsageReportKind::AssistantActivity => runs.clone(),
+        UsageReportKind::McpUsage => mcp_refs.clone(),
+        _ => usage.clone(),
+    };
+    for fact in coverage_rows {
+        if fact.balance.as_ref().is_some_and(|b| b.unknown_tail)
+            || fact.legacy.as_ref().is_some_and(|o| o.unknown_tail)
+        {
+            gaps.add("remote-outcome-unknown");
+        }
+        if fact.balance.as_ref().is_some_and(|b| b.incomplete)
+            || fact.legacy.as_ref().is_some_and(|o| o.incomplete)
+        {
+            gaps.add("usage-observation-incomplete");
+        }
+    }
     // Unknown categorization cannot establish that a source population is empty.
     if rows.is_empty()
         && (gaps.0.contains("filter-identity-unrecorded")

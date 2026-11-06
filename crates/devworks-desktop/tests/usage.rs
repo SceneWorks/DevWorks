@@ -19,10 +19,22 @@ fn replace(h: &mut Ui, label: &str, value: &str) {
     h.get_by_role_and_label(Role::TextInput, label).focus();
     h.step();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.get_by_role_and_label(Role::TextInput, label)
-        .type_text(value);
+    if value.is_empty() {
+        h.key_press(egui::Key::Backspace);
+    } else {
+        h.get_by_role_and_label(Role::TextInput, label)
+            .type_text(value);
+    }
     h.step();
     h.step();
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, label)
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some(value),
+        "native input {label} retains the entered value across frame updates"
+    );
 }
 fn project(b: &dyn Backend, name: &str) -> String {
     ops::project_changed(b.command("projects.create", &ops::project_create(b, name, "", &[])))
@@ -330,15 +342,55 @@ fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative
         ["amountUsd"]
         == json!("3.25")));
     press(&mut h, &format!("Edit tariff override for {model}"));
+    assert!(
+        h.state().usage.price_draft.is_some(),
+        "editor open: busy={}, loading={}, update={}, pages={}, more={}, error={:?}",
+        h.state().usage.price_busy,
+        h.state().usage.prices_loading,
+        h.state().usage.price_update_available,
+        h.state().usage.price_pages,
+        h.state().usage.prices.as_ref().is_some_and(|p| p.has_more),
+        h.state().usage.price_error
+    );
     press(&mut h, "Clear tariff override");
     let cleared = price_catalog(&*b, model);
     assert_eq!(cleared.models.0[0].revision.as_str(), "5");
+    assert_eq!(
+        cleared.models.0[0]
+            .override_revision
+            .as_ref()
+            .map(|r| r.as_str()),
+        Some("5"),
+        "the clear tombstone retains its authoritative revision"
+    );
     assert!(
-        !cleared
-            .items
-            .0
-            .iter()
-            .any(|entry| matches!(entry.origin, PriceOrigin::UserConfigured))
+        !cleared.items.0.iter().any(|entry| entry
+            .override_revision
+            .as_ref()
+            .is_some_and(|r| r.as_str() == "5")),
+        "Clear never invents a tariff"
+    );
+    assert!(matches!(
+        cleared.models.0[0].price_kind,
+        UsagePriceKind::Untracked
+    ));
+    let history = cleared
+        .override_history
+        .as_ref()
+        .expect("configured history is returned when requested");
+    assert_eq!(history.0.len(), 4);
+    assert!(history.0.iter().any(|item|matches!(item, PriceOverrideOutcome::Cleared{revision,updated_by:Some(_),updated_at_ms:Some(_),..} if revision.as_str()=="5")));
+    click(&mut h, Role::CheckBox, "Include historical price sources");
+    press(&mut h, "Apply price catalog filters");
+    click(&mut h, Role::DisclosureTriangle, "Configured price history");
+    assert!(has_text(&h, "revision 5 · Override cleared"));
+    assert!(has_text(&h, "This change removed the configured override"));
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    let blank = h.state().usage.price_draft.as_ref().unwrap();
+    assert_eq!(blank.tariffs.len(), 1);
+    assert!(
+        blank.tariffs[0].amount.is_empty(),
+        "archived inactive rates never prefill a new override"
     );
 }
 
@@ -383,6 +435,12 @@ impl devworks_core::ports::http::HttpTransport for PublicPriceHttp {
             if timeout.timed_out() {
                 return Err(HttpError::Timeout);
             }
+        }
+        if rate == 3 {
+            return Ok(HttpResponse {
+                status: 503,
+                body: Vec::new(),
+            });
         }
         // The actual official adapter parses this retained Markdown table, as in its source tests.
         Ok(HttpResponse { status: 200, body: format!("# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | ${rate} | $2 |\n").into_bytes() })
@@ -500,7 +558,15 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         "prior verified snapshot stays visible while refreshing"
     );
     http.release();
-    wait_for_price_publication(&*b, 2);
+    let second_catalog = wait_for_price_publication(&*b, 2);
+    let last_verified = second_catalog
+        .providers
+        .0
+        .iter()
+        .find(|p| p.provider_id.as_str() == "openai")
+        .unwrap()
+        .snapshot_id
+        .clone();
     h.state_mut().usage.last_refresh = None;
     settle(&mut h);
     click(&mut h, Role::CheckBox, "Include historical price sources");
@@ -523,7 +589,41 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
             .as_str(),
         snapshot.as_str()
     );
-    assert_eq!(http.state.lock().unwrap().2, 2);
+    http.next();
+    start_native_price_refresh(&mut h);
+    http.release();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    loop {
+        let catalog = price_catalog(&*b, "");
+        if let Some(provider) = catalog
+            .providers
+            .0
+            .iter()
+            .find(|p| p.provider_id.as_str() == "openai" && p.error.is_some())
+        {
+            assert_eq!(
+                provider.snapshot_id.as_ref().map(|s| s.as_str()),
+                last_verified.as_ref().map(|s| s.as_str())
+            );
+            assert_eq!(
+                catalog.snapshots.0.len(),
+                2,
+                "failed source refresh publishes no fabricated snapshot"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "failed source is recorded"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.state_mut().usage.last_refresh = None;
+    settle(&mut h);
+    assert!(h.state().usage.refresh.is_none());
+    assert!(has_text(&h, "HTTP 503"));
+    assert!(has_text(&h, "Failed"));
+    assert_eq!(http.state.lock().unwrap().2, 3);
     let connections =
         ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
             .unwrap()
@@ -549,6 +649,12 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     settle(&mut h);
     press(&mut h, "Prices");
     assert!(h.state().usage.prices.as_ref().unwrap().has_more);
+    assert!(
+        h.get_by_role_and_label(Role::Button, &format!("Edit tariff override for {model}"))
+            .accesskit_node()
+            .is_disabled(),
+        "a partial rate set cannot replace the full configured override"
+    );
     press(&mut h, "Load more price rows");
     assert_eq!(h.state().usage.prices.as_ref().unwrap().items.0.len(), 105);
     assert_eq!(h.state().usage.price_pages, 2);
@@ -731,6 +837,162 @@ fn native_unknown_connection_billing_edit_survives_restart_with_exact_frame_and_
     );
 }
 
+fn recorded_report_origins(engine: &devworks_desktop::host::Engine, project: &str, other: &str) {
+    use devworks_core::ports::storage::{StoredUsageOrigin, WriteOptions, run_write};
+    use devworks_core::protocol::{Id, ProjectId};
+    let b = engine.backend();
+    let session=ops::started(b.command("sessions.start", &ops::command_frame(&*b,"sessions.start",json!({"scope":{"kind":"Project","projectId":project},"title":"Recorded report context"})))).unwrap().id;
+    let project = ProjectId(Id::new(project).unwrap());
+    let other = ProjectId(Id::new(other).unwrap());
+    run_write(&**engine.host().runtime().store(),WriteOptions::default(),move |tx| {
+        // Immutable historical source fixtures, deliberately without canonical attempt identity.
+        // This exercises the actual SQLite/gateway projection, not a frontend report substitute.
+        for (source,category,input,output) in [("assistant","Assistant",10,5),("review","CodeReview",7,3),("analysis","RepositoryAnalysis",2,1)] {
+            tx.usage().insert_usage_origin(&StoredUsageOrigin {source_kind:"SessionUsage".into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":"recorded-user","providerId":"openrouter","reportCategory":category,"item":{"purpose":"Conversation","modelId":"recorded-user","inputTokens":input.to_string(),"outputTokens":output.to_string()}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
+        }
+        for (kind,source,payload) in [("RouterRequest","activity",json!({"actorId":"recorded-user","providerId":"openrouter","reportCategory":"Assistant","modelId":"recorded-user","purpose":"Conversation","state":"completed"})),("ToolInvocation","mcp",json!({"actorId":"recorded-user","transportOrigin":"Mcp","capabilityId":"fixture.tool","outcome":"success","durationMs":"3"}))] {
+            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:kind.into(),source_id:source.into(),attempt_id:None,request_id:Some(Id::new(format!("recorded-{source}")).unwrap()),project_id:Some(project.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload,recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
+        }
+        tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:"other-project".into(),attempt_id:None,request_id:Some(Id::new("other-request").unwrap()),project_id:Some(other.clone()),feature_id:None,work_id:None,session_id:None,job_run_id:None,payload:json!({"actorId":"other-user","providerId":"other-provider","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":"other-model","inputTokens":"999","outputTokens":"999"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
+        Ok(())
+    }).unwrap();
+}
+fn report_total(h: &Ui, key: &str) -> Option<String> {
+    match h.state().usage.data.as_ref().unwrap() {
+        UsageQueryResult::Report { report } => report.items.0.iter().find_map(|r| match r {
+            UsageReportRow::Total { key: k, value, .. } if k.0 == key => {
+                Some(value.as_str().to_owned())
+            }
+            _ => None,
+        }),
+        other => panic!("expected report: {other:?}"),
+    }
+}
+#[test]
+fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_legacy_truth() {
+    let root = Root::new("usage-six-native-reports");
+    let engine = start(&root);
+    let b = engine.backend();
+    let p = project(&*b, "Report alpha");
+    let other = project(&*b, "Report beta");
+    recorded_report_origins(&engine, &p, &other);
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    click(&mut h, Role::DisclosureTriangle, "Usage filters");
+    click(&mut h, Role::ComboBox, "Usage project");
+    h.query_all_by_label("Report alpha")
+        .find(|n| {
+            matches!(
+                n.accesskit_node().role(),
+                Role::Button | Role::ListBoxOption
+            ) && n.rect().left() > devworks_desktop::theme::NAV
+        })
+        .unwrap()
+        .click();
+    settle(&mut h);
+    replace(&mut h, "Start UTC", "1970-01-01T00:00:00Z");
+    replace(&mut h, "End UTC (exclusive)", "1970-01-02T00:00:00Z");
+    click(&mut h, Role::ComboBox, "Usage interval");
+    click(&mut h, Role::Button, "Week (Monday)");
+    replace(&mut h, "Usage provider", "openrouter");
+    replace(&mut h, "Usage tool", "ignored-for-llm");
+    press(&mut h, "Apply usage filters");
+    assert_eq!(report_total(&h, "totalTokens").as_deref(), Some("15"));
+    assert!(
+        h.query_by_role_and_label(Role::DisclosureTriangle, "User · recorded-user over time")
+            .is_some()
+    );
+    assert!(
+        h.query_by_role_and_label(Role::DisclosureTriangle, "Model · recorded-user over time")
+            .is_some(),
+        "equal labels from different dimensions remain distinct series"
+    );
+    assert!(has_text(&h, "Partial coverage"));
+    click(&mut h, Role::DisclosureTriangle, "Total Tokens over time");
+    assert!(
+        has_text(&h, "1969-12-29"),
+        "negative epoch Monday bucket renders exactly"
+    );
+    if let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() {
+        assert!(report.context.applied_filters.tool.is_none());
+        assert_eq!(
+            report
+                .context
+                .applied_filters
+                .project_id
+                .as_ref()
+                .unwrap()
+                .0
+                .as_str(),
+            p
+        );
+    }
+    click(&mut h, Role::ComboBox, "Report");
+    click(&mut h, Role::Button, "Assistant activity");
+    assert_eq!(report_total(&h, "completedRuns").as_deref(), Some("1"));
+    click(&mut h, Role::ComboBox, "Report");
+    click(&mut h, Role::Button, "Code review usage");
+    assert_eq!(report_total(&h, "totalTokens").as_deref(), Some("10"));
+    click(&mut h, Role::ComboBox, "Report");
+    click(&mut h, Role::Button, "Repository analysis usage");
+    assert_eq!(report_total(&h, "totalTokens").as_deref(), Some("3"));
+    replace(&mut h, "Usage tool", "fixture.tool");
+    click(&mut h, Role::ComboBox, "Report");
+    click(&mut h, Role::Button, "MCP usage");
+    assert_eq!(report_total(&h, "callCount").as_deref(), Some("1"));
+    assert_eq!(report_total(&h, "averageDurationMs").as_deref(), Some("3"));
+    if let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() {
+        assert!(report.context.applied_filters.provider.is_none());
+    }
+    click(&mut h, Role::ComboBox, "Report");
+    click(&mut h, Role::Button, "Filter discovery");
+    let UsageQueryResult::Filters { filters } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("filter discovery uses real typed response")
+    };
+    assert!(
+        filters
+            .items
+            .0
+            .iter()
+            .any(|v| v.dimension.0 == "tool" && v.value.0 == "fixture.tool")
+    );
+    assert!(
+        !filters
+            .items
+            .0
+            .iter()
+            .any(|v| v.value.0 == "other-provider")
+    );
+    replace(&mut h, "Usage tool", "");
+    press(&mut h, "Attempts");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("attempt page")
+    };
+    assert_eq!(page.items.0.len(), 3);
+    assert_eq!(page.totals.attempts.get(), 0);
+    assert_eq!(page.totals.legacy_usage_facts.get(), 3);
+    assert_eq!(page.totals.tracked_micro_usd.get(), 0);
+    assert!(matches!(page.coverage.state, CoverageState::Partial));
+    assert!(page.items.0.iter().all(|r| r.attempt_id.is_none()
+        && !r.cost.monetary_complete
+        && r.cost.amount_micro_usd.is_none()));
+    assert!(has_text(&h, "Historical usage facts"));
+    assert!(has_text(&h, "Partial coverage"));
+    replace(&mut h, "Start UTC", "1960-01-01T00:00:00Z");
+    replace(&mut h, "End UTC (exclusive)", "1961-01-01T00:00:00Z");
+    press(&mut h, "Apply usage filters");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("historical range remains an actual attempt query")
+    };
+    assert_eq!(page.context.range.start_ms.0, "-315619200000");
+    assert_eq!(page.context.range.end_ms.0, "-283996800000");
+    assert!(page.items.0.is_empty());
+    assert!(has_text(&h, "1960-01-01"));
+    assert!(has_text(&h, "1961-01-01"));
+}
+
 #[test]
 fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_original_change() {
     let root = Root::new("price-native-unknown-restart");
@@ -799,4 +1061,125 @@ fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_ori
             .iter()
             .all(|f| f == &original)
     );
+}
+
+#[test]
+fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_draft() {
+    use devworks_core::ports::storage::{StoredUsageOrigin, WriteOptions, run_write};
+    use devworks_core::protocol::{Id, ProjectId};
+    let root = Root::new("usage-native-paging");
+    let engine = start(&root);
+    let b = engine.backend();
+    let p = project(&*b, "Usage paging");
+    let session = ops::started(b.command(
+        "sessions.start",
+        &ops::command_frame(
+            &*b,
+            "sessions.start",
+            json!({"scope":{"kind":"Project","projectId":p},"title":"Recorded paging context"}),
+        ),
+    ))
+    .unwrap()
+    .id;
+    let project_id = ProjectId(Id::new(p.clone()).unwrap());
+    run_write(&**engine.host().runtime().store(),WriteOptions::default(),move|tx|{
+        for i in 0..120 {
+            tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
+        }Ok(())
+    }).unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    click(&mut h, Role::DisclosureTriangle, "Usage filters");
+    replace(&mut h, "Start UTC", "1970-01-01T00:00:00Z");
+    replace(&mut h, "End UTC (exclusive)", "1970-01-02T00:00:00Z");
+    h.state_mut().usage.draft.project = Some(p);
+    press(&mut h, "Apply usage filters");
+    let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actualreport")
+    };
+    let context = serde_json::to_value(&report.context).unwrap();
+    let initial = report.items.0.len();
+    assert!(report.has_more);
+    replace(&mut h, "Usage user", "unsubmitted-user");
+    press(&mut h, "Load more usage rows");
+    let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actualreport")
+    };
+    assert!(report.items.0.len() > initial);
+    assert_eq!(serde_json::to_value(&report.context).unwrap(), context);
+    assert!(report.context.applied_filters.user.is_none());
+    assert_eq!(h.state().usage.draft.user, "unsubmitted-user");
+    replace(&mut h, "Usage user", "");
+    assert!(h.state().usage.draft.user.is_empty());
+    press(&mut h, "Attempts");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actualattemptpage")
+    };
+    assert!(page.has_more);
+    assert_eq!(page.items.0.len(), 100);
+    let context = serde_json::to_value(&page.context).unwrap();
+    press(&mut h, "Load more usage rows");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actualattemptpage")
+    };
+    assert!(!page.has_more);
+    assert_eq!(page.items.0.len(), 120);
+    assert_eq!(page.totals.legacy_usage_facts.get(), 120);
+    assert_eq!(serde_json::to_value(&page.context).unwrap(), context);
+}
+
+#[test]
+fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
+    let root = Root::new("connection-billing-independent-state");
+    let mut c = config(&root.0);
+    c.connection_tick = None;
+    let engine = devworks_desktop::host::Engine::start(c).unwrap();
+    let b = engine.backend();
+    ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Connection","name":"Independent billing","profile":"CompatibleChat","endpoint":"http://127.0.0.1:11434/v1"})))).unwrap();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1600.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Settings);
+    settle(&mut h);
+    press(&mut h, "Provider connections");
+    press(&mut h, "Edit");
+    replace(&mut h, "Independent billing name", "Retained unsaved name");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Local or free endpoint · Independent billing",
+    );
+    press(&mut h, "Turn off");
+    let stored = configured_connection(&*b);
+    assert_eq!(stored.name.0, "Independent billing");
+    assert_eq!(stored.local_free, Some(false));
+    assert_eq!(stored.enabled, Some(false));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Close editor")
+            .is_some(),
+        "an independent connection command never settles an unsubmitted editor"
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Independent billing name")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Retained unsaved name")
+    );
+    assert!(is_on(&h.get_by_role_and_label(
+        Role::CheckBox,
+        "Local or free endpoint · Independent billing"
+    )));
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save connection")
+            .accesskit_node()
+            .is_disabled()
+    );
+    press(&mut h, "Review and use current connection revision");
+    press(&mut h, "Save connection");
+    let stored = configured_connection(&*b);
+    assert_eq!(stored.name.0, "Retained unsaved name");
+    assert_eq!(stored.local_free, Some(true));
+    assert_eq!(stored.enabled, Some(false));
 }
