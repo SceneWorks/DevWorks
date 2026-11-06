@@ -1463,11 +1463,7 @@ impl Shell {
             cv::Action::SaveResource | cv::Action::CommitUpload => {
                 self.save_convention_resource(matches!(action, cv::Action::CommitUpload))
             }
-            cv::Action::EmbeddingSetup => {
-                self.navigate(Route::Settings);
-                self.settings.show_connections = true;
-                self.load_connections();
-            }
+            cv::Action::EmbeddingSetup => self.open_embedding_setup(),
             _ => {}
         }
     }

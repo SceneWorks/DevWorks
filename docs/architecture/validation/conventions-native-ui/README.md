@@ -32,9 +32,10 @@ The embedding setup link only navigates to the existing provider settings. Conve
 - `cargo clippy -p devworks-desktop --lib --no-deps -- -D warnings`: pass (core dependencies still emit known in-progress service warnings).
 - Native unavailable/offline/near-limit source cases: 3/3 pass, 7.22 seconds. The first case uses the real production gateway returning the not-yet-registered owner; it does not assert successful convention business behavior.
 - Native actual Help context/return case: 1/1 pass, 13.79 seconds, after correcting the new guide to avoid an unsupported decorative arrow glyph. This exercises actual local Help publication/read and preserves convention scope and unsaved source.
+- Native embedding setup navigation: 1/1 pass, 6.45 seconds, with automatic accessibility checking enabled. Opening and returning retain the convention scope/source and emit no router configuration/qualification command. The embedding panel remains owned and qualified separately.
 - No inference compute or remote network was used.
 
-Logs: `/tmp/devworks-conventions-ui-check.log`, `/tmp/devworks-conventions-ui-clippy.log`, `/tmp/devworks-conventions-native-unavailable.log`, `/tmp/devworks-conventions-native-help.log`.
+Logs: `/tmp/devworks-conventions-ui-check.log`, `/tmp/devworks-conventions-ui-clippy.log`, `/tmp/devworks-conventions-native-unavailable.log`, `/tmp/devworks-conventions-native-help.log`, `/tmp/devworks-conventions-native-setup.log`.
 
 ## Required acceptance still pending
 

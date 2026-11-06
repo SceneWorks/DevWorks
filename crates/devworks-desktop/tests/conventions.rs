@@ -254,3 +254,57 @@ fn native_convention_context_help_returns_to_the_same_scope_and_unsaved_source()
     assert_eq!(kept.markdown, draft.markdown);
     assert_eq!(kept.title, draft.title);
 }
+
+#[test]
+fn native_embedding_setup_is_navigation_only_and_retains_convention_scope_and_source() {
+    let root = Root::new("conventions-embedding-navigation");
+    let engine = start(&root);
+    let backend = LoseAcks::over(engine.backend(), "router.configure", 0);
+    let mut h = harness(
+        shell_with(Ok(backend.clone()), &root, Script::default(), None),
+        1500.0,
+        1050.0,
+    );
+    settle(&mut h);
+    click_nav(&mut h, "Knowledge");
+    click(&mut h, Role::Button, "Conventions");
+    click(&mut h, Role::Button, "New convention");
+    replace(&mut h, "Convention title", "Retained setup draft");
+    replace(&mut h, "Convention Markdown", "# Retained setup source");
+    let scope = h.state().conventions.scope.clone();
+    let source = h
+        .state()
+        .conventions
+        .state()
+        .unwrap()
+        .new_draft
+        .as_ref()
+        .unwrap()
+        .markdown
+        .clone();
+    click(&mut h, Role::Button, "Embedding setup");
+    assert_eq!(h.state().route(), Route::Settings);
+    assert!(h.state().settings.show_connections);
+    assert!(h.state().settings.connections.embedding_spaces.open);
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Embedding space name")
+            .is_some()
+    );
+    assert!(
+        backend.frames.lock().unwrap().is_empty(),
+        "opening setup submits no router configuration or qualification"
+    );
+    click_nav(&mut h, "Knowledge");
+    assert_eq!(h.state().conventions.scope, scope);
+    assert_eq!(
+        h.state()
+            .conventions
+            .state()
+            .unwrap()
+            .new_draft
+            .as_ref()
+            .unwrap()
+            .markdown,
+        source
+    );
+}
