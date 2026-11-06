@@ -49,6 +49,7 @@
 //! `LlmProvidersController.ListProviderModels` maps to `router.catalog`; its provider and
 //! analysis/review/assistant configuration endpoints map to `router.connections` and
 //! `router.configure` (the provider-connection item) and to the routing settings.
+pub mod accounting;
 pub mod connections;
 pub mod latest;
 pub mod select;
@@ -124,6 +125,8 @@ pub enum Purpose {
     Enrichment,
     Embedding,
     Vision,
+    Decision,
+    TierClassification,
 }
 impl Purpose {
     pub fn as_str(self) -> &'static str {
@@ -134,6 +137,8 @@ impl Purpose {
             Self::Enrichment => "Enrichment",
             Self::Embedding => "Embedding",
             Self::Vision => "Vision",
+            Self::Decision => "Decision",
+            Self::TierClassification => "TierClassification",
         }
     }
 }

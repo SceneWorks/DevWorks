@@ -16,7 +16,7 @@ pub enum CostClassification {
 }
 
 /// The route/profile binding resolved by the host before attempt admission.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceQuery {
     pub catalog_model_id: Id,
     pub provider_model_id: Option<String>,
