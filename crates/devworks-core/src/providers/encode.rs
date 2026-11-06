@@ -279,7 +279,7 @@ fn check(
     )?;
     require(p.top_k.is_some(), caps.top_k.supported(), "top_k")?;
     require(p.stop.is_some(), caps.stop.supported(), "stop")?;
-    require(p.thinking.is_some(), caps.thinking.supported(), "thinking")?;
+    effort::normalize_effort(p, &r.options, caps)?;
     require(
         p.prompt_cache_key.is_some(),
         caps.prompt_cache_key.supported(),
@@ -341,12 +341,6 @@ fn check(
     }) {
         return Err(ProviderError::Unsupported("cache_breakpoint_ttl"));
     }
-    if let Some(effort) = &r.options.effort
-        && (!caps.efforts.iter().any(|v| v == effort.value.as_str())
-            || !caps.effort_encodings.contains_key(effort.value.as_str()))
-    {
-        return Err(ProviderError::Unsupported("effort"));
-    }
     if matches!(
         caps.binding.endpoint_profile,
         EndpointProfile::OpenAiResponses | EndpointProfile::CodexSubscriptionResponses
@@ -363,13 +357,12 @@ fn check(
                 || p.stop.is_some()
                 || p.max_output_tokens.is_some()
                 || p.user_id.is_some()
-                || p.thinking.is_some()
             {
                 return Err(ProviderError::Unsupported("codex_parameter"));
             }
         }
         EndpointProfile::OpenAiResponses => {
-            if p.top_k.is_some() || p.stop.is_some() || p.thinking.is_some() {
+            if p.top_k.is_some() || p.stop.is_some() {
                 return Err(ProviderError::Unsupported("responses_parameter"));
             }
         }
@@ -382,13 +375,7 @@ fn check(
             }
         }
         EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat => {
-            if p.top_k.is_some()
-                || (p.thinking.is_some()
-                    && !matches!(
-                        (&caps.binding.endpoint_profile, &p.thinking),
-                        (EndpointProfile::OpenRouterChat, Some(Thinking::Adaptive))
-                    ))
-            {
+            if p.top_k.is_some() {
                 return Err(ProviderError::Unsupported("chat_parameter"));
             }
         }
@@ -676,12 +663,8 @@ impl Encoder<'_> {
         if let Some(v) = &p.prompt_cache_retention {
             body["prompt_cache_retention"] = json!(v);
         }
-        if let Some(e) = &r.options.effort {
-            match caps
-                .effort_encodings
-                .get(e.value.as_str())
-                .ok_or(ProviderError::Unsupported("effort"))?
-            {
+        if let Some(encoding) = effort::normalize_effort(p, &r.options, caps)?.encoding {
+            match &encoding {
                 EffortEncoding::ReasoningEffort { value }
                     if profile == &EndpointProfile::CompatibleChat =>
                 {
