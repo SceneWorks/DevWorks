@@ -2,6 +2,7 @@
 pub mod browser;
 pub mod diagnostics;
 pub mod fs;
+pub mod git_transport;
 pub mod http;
 pub mod index;
 pub mod packages;
