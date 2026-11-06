@@ -254,7 +254,7 @@ fn validate(conn: &Connection, r: &StoredConvention) -> Result<(), StorageError>
     states(std::slice::from_ref(&r.lifecycle))?;
     validate_provenance(r)?;
     if r.revision < 1
-        || r.slug.chars().count()>200
+        || r.slug.chars().count() > 200
         || !(1..=500).contains(&r.title.chars().count())
         || r.created_at_ms < 0
         || r.updated_at_ms < r.created_at_ms

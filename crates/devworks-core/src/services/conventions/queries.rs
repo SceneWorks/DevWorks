@@ -292,10 +292,25 @@ impl ConventionService {
         exact_root: bool,
     ) -> Result<StoredConvention, Failure> {
         let scoped = access::scope(read, ctx, Some(scope), false)?;
-        let exact = ConventionQuery { scopes: scoped.readable.clone(), lifecycles: vec!["Active".into()], parent_id: Some(None), slug: Some(slug.to_owned()), ..Default::default() };
+        let exact = ConventionQuery {
+            scopes: scoped.readable.clone(),
+            lifecycles: vec!["Active".into()],
+            parent_id: Some(None),
+            slug: Some(slug.to_owned()),
+            ..Default::default()
+        };
         let mut roots = read.conventions().conventions(&exact, None, 2)?;
-        if roots.len() == 1 { return Ok(roots.remove(0)); }
-        if roots.len() > 1 { return Err(Refusal::new(crate::protocol::DomainErrorCode::InvalidArgument, "ambiguous_convention", None).into()); }
+        if roots.len() == 1 {
+            return Ok(roots.remove(0));
+        }
+        if roots.len() > 1 {
+            return Err(Refusal::new(
+                crate::protocol::DomainErrorCode::InvalidArgument,
+                "ambiguous_convention",
+                None,
+            )
+            .into());
+        }
         let mut parent = None;
         let mut found = None;
         let segments: Vec<_> = if exact_root {

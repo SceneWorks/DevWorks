@@ -216,7 +216,7 @@ struct Fx {
     http: Arc<ScriptHttp>,
     profile: String,
     model: Id,
-    source_fences:Mutex<Vec<devworks_core::ports::AuthorityFence>>,
+    source_fences: Mutex<Vec<devworks_core::ports::AuthorityFence>>,
 }
 impl Fx {
     fn new(profile: &str, script: Script, embedding: bool) -> Self {
@@ -433,7 +433,7 @@ impl Fx {
             http,
             profile: profile.into(),
             model,
-            source_fences:Mutex::new(Vec::new()),
+            source_fences: Mutex::new(Vec::new()),
         }
     }
     fn bytes(&self, bytes: &[u8]) -> ArtifactRef {
@@ -666,7 +666,7 @@ impl Fx {
             pin_id: None,
             args_digest: "a".repeat(64),
         };
-        let source_fences=self.source_fences.lock().unwrap().clone();
+        let source_fences = self.source_fences.lock().unwrap().clone();
         self.driver
             .produce_cancellable(
                 devworks_engine::providers::driver::NativeInvocation {
@@ -964,21 +964,39 @@ fn external_auxiliary_cancel_reaches_the_actual_producer_without_stopping_other_
 
 struct SourceGateSecrets {
     inner: SessionSecrets,
-    reads:AtomicUsize,
-    at:usize,
-    change:Mutex<Option<Box<dyn FnOnce()+Send>>>,
+    reads: AtomicUsize,
+    at: usize,
+    change: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl SecretStore for SourceGateSecrets {
-    fn name(&self)->&'static str { "controlled source-authority gate" }
-    fn put(&self,key:&SecretKey,value:&Secret)->Result<(),devworks_core::ports::secrets::SecretError>{self.inner.put(key,value)}
-    fn get(&self,key:&SecretKey)->Result<Option<Secret>,devworks_core::ports::secrets::SecretError>{
-        if self.reads.fetch_add(1,Ordering::SeqCst)+1==self.at
-            && let Some(change)=self.change.lock().unwrap().take(){change();}
+    fn name(&self) -> &'static str {
+        "controlled source-authority gate"
+    }
+    fn put(
+        &self,
+        key: &SecretKey,
+        value: &Secret,
+    ) -> Result<(), devworks_core::ports::secrets::SecretError> {
+        self.inner.put(key, value)
+    }
+    fn get(
+        &self,
+        key: &SecretKey,
+    ) -> Result<Option<Secret>, devworks_core::ports::secrets::SecretError> {
+        if self.reads.fetch_add(1, Ordering::SeqCst) + 1 == self.at
+            && let Some(change) = self.change.lock().unwrap().take()
+        {
+            change();
+        }
 
         self.inner.get(key)
     }
-    fn delete(&self,key:&SecretKey)->Result<bool,devworks_core::ports::secrets::SecretError>{self.inner.delete(key)}
-    fn list(&self,store:&str)->Result<Vec<Id>,devworks_core::ports::secrets::SecretError>{self.inner.list(store)}
+    fn delete(&self, key: &SecretKey) -> Result<bool, devworks_core::ports::secrets::SecretError> {
+        self.inner.delete(key)
+    }
+    fn list(&self, store: &str) -> Result<Vec<Id>, devworks_core::ports::secrets::SecretError> {
+        self.inner.list(store)
+    }
 }
 #[test]
 fn original_auxiliary_authority_is_fenced_at_admission_and_after_credential_wait() {

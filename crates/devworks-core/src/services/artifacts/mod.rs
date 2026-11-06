@@ -117,11 +117,11 @@
 //! filename); an unknown attachment and a stored file that cannot be read are both `NotFound`
 //! (the source's quirk: I/O failures were reported as not found), and an unavailable store is
 //! `StorageUnavailable`.
+pub(crate) mod convention_import;
+mod convention_source;
 pub mod evidence;
 pub mod host;
 mod index_source;
-mod convention_source;
-pub(crate) mod convention_import;
 pub(crate) use convention_source::{ConventionSourceLease, ConventionSourceSelection};
 pub mod lifecycle;
 pub mod observed;

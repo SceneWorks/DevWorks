@@ -1,8 +1,6 @@
 //! Current guidance visibility uses the existing Knowledge scope policy, not caller IDs.
 use crate::context::InvocationContext;
-use crate::ports::storage::{
-    AuthorityRead, KnowledgeScope, ReadSnapshot, WriteTransaction,
-};
+use crate::ports::storage::{AuthorityRead, KnowledgeScope, ReadSnapshot, WriteTransaction};
 use crate::protocol::Id;
 use crate::protocol::data::DataScope;
 use crate::services::knowledge::{self, Scoped};
@@ -79,4 +77,3 @@ pub(crate) fn owner(
         .convention(id, revision, &scoped.readable)?
         .ok_or_else(|| not_found("convention", id).into())
 }
-

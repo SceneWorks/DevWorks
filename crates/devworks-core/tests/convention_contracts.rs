@@ -136,13 +136,34 @@ fn verbatim_source_preserves_nul_and_obeys_the_actual_utf8_passage_ceiling() {
 #[test]
 fn virtual_documents_and_attachments_have_distinct_closed_selectors() {
     let base = json!({"kind":"conventions.resources","scope":{"kind":"Workspace"},"page":{"limit":10},"applicability":[]});
-    assert!(decode("conventions.resources", Mode::Query, 1, base.clone()));
-    let mut body=base;
-    body["selection"]=json!({"kind":"Document","rootSlug":"exact-root","maxChars":"12"});
-    assert!(decode("conventions.resources", Mode::Query, 3, body.clone()));
-    assert!(!decode("conventions.resources", Mode::Query, 1, body.clone()));
-    body["selection"]=json!({"kind":"Attachments","conventionId":"owner","conventionRevision":"2"});
-    assert!(decode("conventions.resources", Mode::Query, 3, body.clone()));
-    body["selection"]["rootSlug"]=json!("not-an-attachment");
+    assert!(decode(
+        "conventions.resources",
+        Mode::Query,
+        1,
+        base.clone()
+    ));
+    let mut body = base;
+    body["selection"] = json!({"kind":"Document","rootSlug":"exact-root","maxChars":"12"});
+    assert!(decode(
+        "conventions.resources",
+        Mode::Query,
+        3,
+        body.clone()
+    ));
+    assert!(!decode(
+        "conventions.resources",
+        Mode::Query,
+        1,
+        body.clone()
+    ));
+    body["selection"] =
+        json!({"kind":"Attachments","conventionId":"owner","conventionRevision":"2"});
+    assert!(decode(
+        "conventions.resources",
+        Mode::Query,
+        3,
+        body.clone()
+    ));
+    body["selection"]["rootSlug"] = json!("not-an-attachment");
     assert!(!decode("conventions.resources", Mode::Query, 3, body));
 }

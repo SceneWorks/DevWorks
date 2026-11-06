@@ -6854,7 +6854,9 @@ impl Revisioned for RouterConfigAction {
                 return Err("union variant predates its introduction: CreateEmbeddingSpace".into());
             }
             Self::QualifyEmbeddingSpace { .. } if revision < 3 => {
-                return Err("union variant predates its introduction: QualifyEmbeddingSpace".into());
+                return Err(
+                    "union variant predates its introduction: QualifyEmbeddingSpace".into(),
+                );
             }
             Self::SelectEmbeddingSpace { .. } if revision < 3 => {
                 return Err("union variant predates its introduction: SelectEmbeddingSpace".into());
