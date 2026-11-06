@@ -568,3 +568,24 @@ fn chat_native_unit_and_tool_group_reserve_their_first_observed_positions() {
         }
     });
 }
+
+#[test]
+fn sqlite_failure_rolls_back_the_entire_canonical_turn_and_clears_the_preview() {
+    runtime().block_on(async {
+        let mut script=Script::sse(&events("AnthropicMessages",&body("AnthropicMessages",true),true));
+        let gate=Arc::new((Mutex::new(false),std::sync::Condvar::new()));script.close_gate=Some(gate.clone());let closing=script.closing.clone();
+        let f=Arc::new(Fx::new("AnthropicMessages",script,false));
+        let tool=f.driver.schemas().builtin("sessions.list",devworks_core::registry::Mode::Query,devworks_core::registry::SchemaRevision(1),"list_sessions").unwrap();
+        let request=f.generation(vec![tool]);let owner=f.clone();let producing=tokio::spawn(async move{owner.produce(request).await});
+        closing.notified().await;assert!(f.driver.text_preview(&id("session")).is_some());
+        let db=rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
+        // Fail a later entry, after the batch already inserted its leading native/text rows.
+        db.execute_batch("CREATE TRIGGER fail_canonical BEFORE INSERT ON transcript_chunks WHEN NEW.kind='ToolCallRecorded' BEGIN SELECT RAISE(ABORT,'fixture canonical write failure'); END;").unwrap();
+        *gate.0.lock().unwrap()=true;gate.1.notify_all();assert!(producing.await.unwrap().is_err());
+        assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+        assert!(f.transcript().is_empty(),"no accepted prefix of the failed canonical batch");
+        assert_eq!(read(f.store.as_ref(),|s|s.sessions().session(&id("session"))).unwrap().next_sequence,1);
+        assert!(read(f.store.as_ref(),|s|s.sessions().pending_calls(&id("session"),10)).is_empty());
+        assert!(f.driver.text_preview(&id("session")).is_none());
+    });
+}
