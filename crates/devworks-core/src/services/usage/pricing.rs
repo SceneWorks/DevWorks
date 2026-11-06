@@ -71,12 +71,27 @@ pub fn estimate(
     let mut known = false;
     let mut unknown = Vec::new();
     let mut input = quantities.clone();
-    // Unsupported cache categories are not billed. Their observable counters remain None.
-    if !context.cache_read_possible {
+    // A missing category on a profile that cannot use it is inapplicable. A positive
+    // contradictory observation remains unknown; it cannot disappear into a cheap estimate.
+    let unexpected_read =
+        !context.cache_read_possible && input.cached_read_tokens.is_some_and(|v| v > 0);
+    let unexpected_write =
+        !context.cache_write_possible && input.cache_write_tokens.is_some_and(|v| v > 0);
+    if unexpected_read {
+        unknown.push("profile contradicts observed cache read quantity".into());
+    }
+    if unexpected_write {
+        unknown.push("profile contradicts observed cache write quantity".into());
+    }
+    if !context.cache_read_possible && !unexpected_read {
         input.cached_read_tokens = Some(0);
     }
-    if !context.cache_write_possible {
+    if !context.cache_write_possible && !unexpected_write {
         input.cache_write_tokens = Some(0);
+    }
+    if (unexpected_read || unexpected_write) && context.input_semantics == InputSemantics::Inclusive
+    {
+        input.input_tokens = None;
     }
     let uncached = input
         .uncached_input(context.input_semantics)
@@ -150,6 +165,14 @@ pub fn estimate(
         }
     }
     for quantity in &quantities.additional {
+        if (quantity.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (quantity.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            if quantity.quantity > 0 {
+                unknown.push("profile contradicts measured cache unit".into());
+            }
+            continue;
+        }
         let matching = quote
             .tariffs
             .iter()
@@ -205,6 +228,68 @@ pub fn estimate(
         monetary_complete: unknown.is_empty(),
         unknown_components: unknown,
     })
+}
+
+/// Independently rounded component estimates for display, never summed into incurred spending.
+/// Provider-reported whole charges do not establish a reported cache component charge.
+pub fn cache_estimates(
+    quote: &PriceQuote,
+    quantities: &Quantities,
+    context: &PricingContext,
+) -> Result<(Option<i64>, Option<i64>), MoneyError> {
+    let component =
+        |kind: &str, count: Option<i64>, possible: bool| -> Result<Option<i64>, MoneyError> {
+            let units = quantities
+                .additional
+                .iter()
+                .filter(|q| q.charge_kind == kind)
+                .cloned()
+                .collect::<Vec<_>>();
+            if count.is_none() && units.is_empty() {
+                return Ok(None);
+            }
+            if !possible {
+                return Ok(None);
+            }
+            let mut selected = quote.clone();
+            selected.tariffs.retain(|t| t.charge_kind == kind);
+            if let Some(rates) = &mut selected.rates {
+                rates.input_usd_per_million = Some("0".into());
+                rates.output_usd_per_million = Some("0".into());
+            }
+            let q = Quantities {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                cached_read_tokens: if kind == "CacheRead" { count } else { Some(0) },
+                cache_write_tokens: if kind == "CacheWrite" { count } else { Some(0) },
+                reasoning_tokens: None,
+                additional: units,
+            };
+            let p = PricingContext {
+                input_semantics: InputSemantics::Disjoint,
+                cache_read_possible: kind == "CacheRead",
+                cache_write_possible: kind == "CacheWrite",
+                cache_write_ttl_ms: context.cache_write_ttl_ms,
+            };
+            let result = estimate(&selected, &q, &p)?;
+            Ok(if result.monetary_complete {
+                result.tracked_micro_usd
+            } else {
+                None
+            })
+        };
+    Ok((
+        component(
+            "CacheRead",
+            quantities.cached_read_tokens,
+            context.cache_read_possible,
+        )?,
+        component(
+            "CacheWrite",
+            quantities.cache_write_tokens,
+            context.cache_write_possible,
+        )?,
+    ))
 }
 
 /// Reserve validated total input plus output headroom. Cache reads never grant a provisional
@@ -539,5 +624,80 @@ mod tests {
         let cost = reservation(&quote, 0, 0, true, &units).unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(2));
         assert!(cost.monetary_complete);
+    }
+    #[test]
+    fn contradictory_cache_observation_cannot_be_costed_as_zero() {
+        let quantities = Quantities {
+            input_tokens: Some(100),
+            output_tokens: Some(10),
+            cached_read_tokens: Some(50),
+            ..Default::default()
+        };
+        let priced = estimate(
+            &quote(Some(UsageRates {
+                input_usd_per_million: Some("1".into()),
+                output_usd_per_million: Some("2".into()),
+                ..Default::default()
+            })),
+            &quantities,
+            &PricingContext {
+                input_semantics: InputSemantics::Inclusive,
+                cache_read_possible: false,
+                cache_write_possible: false,
+                cache_write_ttl_ms: None,
+            },
+        )
+        .unwrap();
+        assert!(!priced.monetary_complete);
+        assert!(
+            priced
+                .unknown_components
+                .iter()
+                .any(|v| v.contains("contradicts"))
+        );
+        assert_eq!(quantities.cached_read_tokens, Some(50));
+    }
+    #[test]
+    fn cache_component_estimates_preserve_missing_and_ambiguous_ttl() {
+        let context = PricingContext {
+            input_semantics: InputSemantics::Inclusive,
+            cache_read_possible: true,
+            cache_write_possible: true,
+            cache_write_ttl_ms: None,
+        };
+        let mut quantities = Quantities {
+            input_tokens: Some(100),
+            output_tokens: Some(0),
+            cached_read_tokens: Some(50),
+            cache_write_tokens: Some(10),
+            ..Default::default()
+        };
+        let mut priced = quote(Some(UsageRates {
+            cache_read_usd_per_million: Some("0.5".into()),
+            ..Default::default()
+        }));
+        priced.rates.as_mut().unwrap().cache_writes = vec![
+            crate::ports::usage::CacheWriteRate {
+                ttl_ms: Some(300_000),
+                usd_per_million: "2".into(),
+            },
+            crate::ports::usage::CacheWriteRate {
+                ttl_ms: Some(3_600_000),
+                usd_per_million: "3".into(),
+            },
+        ];
+        let (read, write) = cache_estimates(&priced, &quantities, &context).unwrap();
+        assert!(read.is_some());
+        assert_eq!(write, None);
+        quantities.cached_read_tokens = None;
+        assert_eq!(
+            cache_estimates(&priced, &quantities, &context).unwrap().0,
+            None
+        );
+        quantities.cached_read_tokens = Some(0);
+        assert_eq!(
+            cache_estimates(&priced, &quantities, &context).unwrap().0,
+            Some(0)
+        );
     }
 }
