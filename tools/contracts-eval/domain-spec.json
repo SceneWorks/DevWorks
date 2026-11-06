@@ -4945,14 +4945,15 @@
         "inbound": "Rows<CodeRepositoryLink>",
         "outbound": "Rows<CodeRepositoryLink>",
         "packages": "Rows<CodePackageDependency>",
-        "package_count": "Counter",
+        "package_count": "?Counter",
         "package_counts_by_ecosystem": "Rows<CodeCount>",
         "supertypes": "Rows<CodeSupertype>",
         "internal_modules": "Rows<CodeModuleAnalysis>"
       },
       "since": {
         "summary": 3,
-        "confidence": 3
+        "confidence": 3,
+        "package_count": 3
       }
     },
     "CodeRisk": {
