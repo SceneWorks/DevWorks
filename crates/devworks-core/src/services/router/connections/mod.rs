@@ -518,8 +518,13 @@ pub fn open_router_request_fields(
     upstream_model: &str,
 ) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
-    if upstream_model == select::OPEN_ROUTER_AUTO_UPSTREAM {
-        let mut plugin = json!({"id": "auto-router"});
+    let plugin_id = match upstream_model {
+        select::OPEN_ROUTER_AUTO_UPSTREAM => Some("auto-router"),
+        "openrouter/auto-beta" => Some("auto-beta-router"),
+        _ => None,
+    };
+    if let Some(plugin_id) = plugin_id {
+        let mut plugin = json!({"id": plugin_id});
         if let Some(t) = &constraints.cost_tier {
             plugin["cost_tier"] = json!(wire(t));
         }

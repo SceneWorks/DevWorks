@@ -27,4 +27,40 @@ pub struct Capabilities {
     pub prompt_cache_retention: Support,
     pub cache_breakpoints: Support,
     pub efforts: Vec<String>,
+    /// Exact configured mapping; compatible syntax alone never implies support.
+    pub effort_encodings: std::collections::BTreeMap<String, EffortEncoding>,
+    pub cache_retentions: Vec<String>,
+    pub cache_breakpoint_ttls: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum EffortEncoding {
+    ReasoningEffort { value: String },
+    ChatTemplateKwargs { value: serde_json::Value },
+    MessagesOutputConfig { value: String },
+    ResponsesReasoning { value: String },
+}
+impl Capabilities {
+    /// No support is inferred from a brand name or OpenAI-compatible syntax.
+    pub fn unknown(binding: NativeBinding) -> Self {
+        Self {
+            binding,
+            images: Support::Unknown,
+            tools: Support::Unknown,
+            parallel_tools: Support::Unknown,
+            structured_output: Support::Unknown,
+            embeddings: Support::Unknown,
+            sampling: Support::Unknown,
+            top_k: Support::Unknown,
+            stop: Support::Unknown,
+            thinking: Support::Unknown,
+            prompt_cache_key: Support::Unknown,
+            prompt_cache_retention: Support::Unknown,
+            cache_breakpoints: Support::Unknown,
+            efforts: Vec::new(),
+            effort_encodings: Default::default(),
+            cache_retentions: Vec::new(),
+            cache_breakpoint_ttls: Vec::new(),
+        }
+    }
 }

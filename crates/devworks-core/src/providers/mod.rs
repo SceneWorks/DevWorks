@@ -2,6 +2,9 @@
 //! Preparation resolves immutable material but never opens sockets or grants dispatch authority.
 pub mod capabilities;
 pub mod context;
+pub mod decode;
+pub mod encode;
+pub mod materialize;
 use crate::protocol::provider::{EndpointProfile, NativeBinding, QualifiedId, SchemaRef};
 use crate::protocol::{AttemptId, Id};
 use serde::{Deserialize, Serialize};
@@ -44,9 +47,13 @@ pub struct PreparedRequest {
     pub profile: EndpointProfile,
     pub path: &'static str,
     pub body: Vec<u8>,
+    /// Nonsecret pinned profile headers only. Authentication is injected at dispatch.
+    pub headers: Vec<(String, String)>,
     pub response_mode: ResponseMode,
     pub tools: Vec<PreparedTool>,
     pub embedding_dimensions: Option<u32>,
+    /// Stable per-session affinity for provider-specific send-time headers.
+    pub session_key: Option<String>,
 }
 impl std::fmt::Debug for PreparedRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,3 +64,6 @@ impl std::fmt::Debug for PreparedRequest {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests;
