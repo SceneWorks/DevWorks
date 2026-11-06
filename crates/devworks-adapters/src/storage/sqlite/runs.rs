@@ -739,6 +739,9 @@ macro_rules! run_reads {
                     params![subject, after, n],
                 )
             }
+            fn inference_quiescent(&self,root:&RootId)->Result<bool,StorageError>{
+                db(self.conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM usage_attempts a LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.execution_root_id=?1 AND coalesce(b.local_quiescent,0)=0)",[root.0.as_str()],|r|r.get(0)))
+            }
             fn assignment_handoff_quiescent(&self,assignment:&AssignmentId)->Result<bool,StorageError>{
                 super::handoff::quiescent(self.conn,assignment)
             }

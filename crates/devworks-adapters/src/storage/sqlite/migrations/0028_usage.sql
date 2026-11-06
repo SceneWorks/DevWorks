@@ -27,6 +27,8 @@ CREATE TABLE usage_attempts (
  feature_id TEXT REFERENCES work_items,
  work_id TEXT REFERENCES work_items,
  assignment_id TEXT REFERENCES assignments,
+ execution_root_id TEXT REFERENCES work_items,
+ execution_id TEXT REFERENCES executions,
  session_id TEXT REFERENCES sessions,
  job_run_id TEXT REFERENCES job_runs,
  actor_id TEXT NOT NULL REFERENCES actors,
@@ -41,13 +43,17 @@ CREATE TABLE usage_attempts (
  state TEXT NOT NULL CHECK(state IN ('Admitted','Dispatched','Settled','UnknownTail','CancelledBeforeDispatch')),
  revision INTEGER NOT NULL CHECK(revision>0),
  created_at INTEGER NOT NULL CHECK(created_at>=0),
+ CHECK((execution_root_id IS NULL)=(execution_id IS NULL)),
+ CHECK(assignment_id IS NULL OR execution_id IS NOT NULL),
  UNIQUE(request_id,attempt_number)
 ) STRICT;
 CREATE TRIGGER usage_attempts_immutable_binding BEFORE UPDATE ON usage_attempts
- WHEN OLD.attempt_id IS NOT NEW.attempt_id OR OLD.request_id IS NOT NEW.request_id OR OLD.operation_id IS NOT NEW.operation_id OR OLD.attempt_number IS NOT NEW.attempt_number OR OLD.project_id IS NOT NEW.project_id OR OLD.feature_id IS NOT NEW.feature_id OR OLD.work_id IS NOT NEW.work_id OR OLD.assignment_id IS NOT NEW.assignment_id OR OLD.session_id IS NOT NEW.session_id OR OLD.job_run_id IS NOT NEW.job_run_id OR OLD.actor_id IS NOT NEW.actor_id OR OLD.role IS NOT NEW.role OR OLD.purpose IS NOT NEW.purpose OR OLD.catalog_model_id IS NOT NEW.catalog_model_id OR OLD.connection_id IS NOT NEW.connection_id OR OLD.endpoint_profile IS NOT NEW.endpoint_profile OR OLD.access_mode IS NOT NEW.access_mode OR OLD.pricing_snapshot_json IS NOT NEW.pricing_snapshot_json OR OLD.created_at IS NOT NEW.created_at
+ WHEN OLD.attempt_id IS NOT NEW.attempt_id OR OLD.request_id IS NOT NEW.request_id OR OLD.operation_id IS NOT NEW.operation_id OR OLD.attempt_number IS NOT NEW.attempt_number OR OLD.project_id IS NOT NEW.project_id OR OLD.feature_id IS NOT NEW.feature_id OR OLD.work_id IS NOT NEW.work_id OR OLD.assignment_id IS NOT NEW.assignment_id OR OLD.execution_root_id IS NOT NEW.execution_root_id OR OLD.execution_id IS NOT NEW.execution_id OR OLD.session_id IS NOT NEW.session_id OR OLD.job_run_id IS NOT NEW.job_run_id OR OLD.actor_id IS NOT NEW.actor_id OR OLD.role IS NOT NEW.role OR OLD.purpose IS NOT NEW.purpose OR OLD.catalog_model_id IS NOT NEW.catalog_model_id OR OLD.connection_id IS NOT NEW.connection_id OR OLD.endpoint_profile IS NOT NEW.endpoint_profile OR OLD.access_mode IS NOT NEW.access_mode OR OLD.pricing_snapshot_json IS NOT NEW.pricing_snapshot_json OR OLD.created_at IS NOT NEW.created_at
  BEGIN SELECT RAISE(ABORT,'usage attempt admission binding is immutable'); END;
 CREATE TRIGGER usage_attempts_immutable_delete BEFORE DELETE ON usage_attempts
  BEGIN SELECT RAISE(ABORT,'usage attempts are retained'); END;
+CREATE INDEX usage_attempts_execution_root ON usage_attempts(execution_root_id,attempt_id);
+CREATE INDEX usage_attempts_assignment ON usage_attempts(assignment_id,attempt_id);
 CREATE INDEX usage_attempts_project ON usage_attempts(project_id,attempt_id);
 CREATE INDEX usage_attempts_feature ON usage_attempts(feature_id,attempt_id);
 CREATE INDEX usage_attempts_work ON usage_attempts(work_id,attempt_id);
@@ -76,6 +82,7 @@ CREATE TABLE usage_attempt_balances (
  monetary_complete INTEGER NOT NULL CHECK(monetary_complete IN (0,1)),
  incomplete INTEGER NOT NULL CHECK(incomplete IN (0,1)),
  unknown_tail INTEGER NOT NULL CHECK(unknown_tail IN (0,1)),
+ local_quiescent INTEGER NOT NULL CHECK(local_quiescent IN (0,1)),
  summary_json TEXT NOT NULL CHECK(json_valid(summary_json) AND json_type(summary_json)='object')
 ) STRICT;
 CREATE TABLE usage_feature_budgets (

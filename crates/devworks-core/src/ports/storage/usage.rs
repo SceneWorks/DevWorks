@@ -2,7 +2,7 @@
 //! host-resolved ownership at admission; later association edits never rewrite incurred usage.
 use super::{SequenceKey, StorageError};
 use crate::ports::usage::PublishedTariff;
-use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId};
+use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId, RootId};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -15,6 +15,9 @@ pub struct StoredInferenceAttempt {
     pub feature_id: Option<Id>,
     pub work_id: Option<Id>,
     pub assignment_id: Option<AssignmentId>,
+    /// Positive managed-execution ownership captured at admission, never inferred from membership.
+    pub execution_root_id: Option<RootId>,
+    pub execution_id: Option<Id>,
     pub session_id: Option<Id>,
     pub job_run_id: Option<Id>,
     pub actor_id: ActorId,
@@ -50,6 +53,8 @@ pub struct StoredAttemptBalance {
     pub monetary_complete: bool,
     pub incomplete: bool,
     pub unknown_tail: bool,
+    /// Host transport closed/reconciled; independent of remote completion or monetary coverage.
+    pub local_quiescent: bool,
     /// Core-owned merged metrics, field provenance and cumulative/delta semantics.
     pub summary: Value,
 }

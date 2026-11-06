@@ -2274,6 +2274,9 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn inference_quiescent(&self, _root: &RootId) -> Result<bool, StorageError> {
+        nope()
+    }
     fn assignment_handoff_quiescent(&self, _: &AssignmentId) -> Result<bool, StorageError> {
         nope()
     }

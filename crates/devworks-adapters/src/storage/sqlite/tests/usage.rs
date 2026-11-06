@@ -101,6 +101,8 @@ fn attempt(s: &SqliteStore, name: &str) -> StoredInferenceAttempt {
         feature_id: Some(id("feature")),
         work_id: Some(id("feature")),
         assignment_id: None,
+        execution_root_id: None,
+        execution_id: None,
         session_id: None,
         job_run_id: None,
         actor_id: s.info().host_actor,
@@ -132,6 +134,7 @@ fn balance(
         monetary_complete: priced.is_some(),
         incomplete: false,
         unknown_tail: false,
+        local_quiescent: false,
         summary: json!({"merged":"exact host facts"}),
     }
 }
@@ -1134,4 +1137,238 @@ fn usage28_price_history_is_bounded_and_refresh_operation_survives_publication_f
     })
     .unwrap();
     assert!(s.integrity_check().unwrap().problems.is_empty());
+}
+fn managed_source(s: &SqliteStore, name: &str, worker: bool) -> StoredInferenceAttempt {
+    use devworks_core::protocol::{AssignmentId, RootId};
+    let mut a = attempt(s, name);
+    let actor = s.info().host_actor;
+    let boot = s.info().boot_id.unwrap();
+    let owned_name = name.to_owned();
+    run_write(s, WriteOptions::default(), move |tx| {
+        let name = owned_name.as_str();
+        if tx.runs().activation(&id("execution"))?.is_none() {
+            tx.runs().insert_activation(&StoredActivation {
+                id: id("execution"),
+                root_id: RootId(id("feature")),
+                boot_id: boot,
+                generation: 1,
+                phase: ActivationPhase::Running,
+                purpose: ActivationPurpose::Planning,
+                owner: None,
+                lease_until_ms: None,
+                owner_epoch: 1,
+                revision: 1,
+                attempts: 0,
+                ready_at_ms: T0,
+                created_at_ms: T0,
+                stop_cause: None,
+                stop_requested_at_ms: None,
+                stop_acknowledged_at_ms: None,
+                stopped_at_ms: None,
+                outcome: None,
+                detail: None,
+                plan_revision: None,
+            })?;
+        }
+        tx.sessions().insert_session(&StoredSession {
+            id: id(name),
+            conversation_id: id(&format!("conversation-{name}")),
+            agent_id: actor.clone(),
+            project_id: Some(ProjectId(id("project"))),
+            root_id: Some(RootId(id("feature"))),
+            title: name.into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor,
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        if worker {
+            tx.runs().insert_assignment(&StoredAssignment {
+                id: AssignmentId(id(name)),
+                root_id: RootId(id("feature")),
+                work_id: RootId(id("feature")),
+                parent_id: None,
+                session_id: id(name),
+                execution_id: Some(id("execution")),
+                state: AssignmentState::Superseded,
+                generation: 1,
+                slot_held: false,
+                revision: 1,
+                checkpoint: None,
+                scope_key: None,
+                scope_digest: None,
+                plan_revision: None,
+                instruction_revision: 0,
+                created_at_ms: T0,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let raw = rusqlite::Connection::open(&s.path).unwrap();
+    raw.execute(
+        "UPDATE router_requests SET session_id=?1 WHERE request_id=?2",
+        rusqlite::params![name, a.request_id.as_str()],
+    )
+    .unwrap();
+    a.session_id = Some(id(name));
+    a.assignment_id = worker.then(|| AssignmentId(id(name)));
+    a.execution_root_id = Some(RootId(id("feature")));
+    a.execution_id = Some(id("execution"));
+    a
+}
+#[test]
+fn usage28_captured_coordinator_custody_survives_execution_stop_and_restart_without_assignment_or_cost_inference()
+ {
+    use devworks_core::protocol::RootId;
+    let h = Harness::new();
+    let s = seeded(&h);
+    let manual = attempt(&s, "manual");
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&manual)?;
+        tx.usage()
+            .put_attempt_balance(&balance("manual", None, None, "Untracked"), None)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+    let a = managed_source(&s, "coordinator", false);
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)?;
+        let mut b = balance("coordinator", Some(3), Some(100), "OfficialEstimate");
+        b.unknown_tail = true;
+        b.monetary_complete = false;
+        tx.usage().put_attempt_balance(&b, None)
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+    h.raw()
+        .execute(
+            "UPDATE executions SET phase='Stopped',outcome='Interrupted',stopped_at=1700000000000 WHERE id='execution'",
+            [],
+        )
+        .unwrap();
+    drop(s);
+    let s = h.store();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut b = tx.usage().attempt_balance(&id("coordinator"))?.unwrap();
+        b.revision = 2;
+        b.local_quiescent = true;
+        tx.usage().put_attempt_balance(&b, Some(1))?;
+        b.revision = 3;
+        b.local_quiescent = false;
+        assert!(tx.usage().put_attempt_balance(&b, Some(2)).is_err());
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+    let t = totals(&s);
+    assert_eq!(
+        (
+            t.spent_micro_usd,
+            t.unknown_tail_attempts,
+            t.monetary_incomplete_attempts
+        ),
+        (3, 1, 2)
+    );
+}
+#[test]
+fn usage28_superseded_assignment_handoff_waits_for_canonical_transport_even_without_operation_assignment()
+ {
+    use devworks_core::protocol::{AssignmentId, RootId};
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = managed_source(&s, "worker", true);
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
+        .unwrap()
+    );
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)
+    })
+    .unwrap();
+    // A missing balance is conservatively unclosed; operation.assignment_id is intentionally NULL.
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
+        .unwrap()
+    );
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut b = balance("worker", None, None, "Untracked");
+        b.local_quiescent = true;
+        b.unknown_tail = true;
+        tx.usage().put_attempt_balance(&b, None)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
+        .unwrap()
+    );
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+}
+#[test]
+fn usage28_execution_owner_pair_is_validated_and_immutable() {
+    use devworks_core::protocol::RootId;
+    let h = Harness::new();
+    let s = seeded(&h);
+    let valid = managed_source(&s, "owned", false);
+    for mode in 0..3 {
+        let mut bad = valid.clone();
+        match mode {
+            0 => bad.execution_id = None,
+            1 => bad.execution_root_id = Some(RootId(id("issue"))),
+            _ => bad.session_id = None,
+        };
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .usage()
+                .insert_inference_attempt(&bad))
+            .is_err()
+        );
+    }
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&valid)?;
+        let mut bad = valid;
+        bad.revision = 2;
+        bad.execution_root_id = None;
+        bad.execution_id = None;
+        assert!(tx.usage().update_inference_attempt(&bad, 1).is_err());
+        Ok(())
+    })
+    .unwrap();
+    assert!(h.raw().execute("UPDATE usage_attempts SET execution_id=NULL,execution_root_id=NULL WHERE attempt_id='owned'",[]).is_err());
 }

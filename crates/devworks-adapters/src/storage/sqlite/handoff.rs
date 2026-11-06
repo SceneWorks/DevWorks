@@ -221,6 +221,7 @@ pub(super) fn quiescent(
     let unsafe_subtree:bool=db(conn.query_row(
         "WITH RECURSIVE tree(id,session_id,state,slot_held) AS (SELECT id,session_id,state,slot_held FROM assignments WHERE id=?1 UNION SELECT a.id,a.session_id,a.state,a.slot_held FROM assignments a JOIN tree t ON a.parent_id=t.id)
          SELECT EXISTS(SELECT 1 FROM tree WHERE state IN ('Ready','Active','Waiting') OR slot_held=1)
+         OR EXISTS(SELECT 1 FROM usage_attempts a LEFT JOIN usage_attempt_balances b ON b.attempt_id=a.attempt_id WHERE a.assignment_id IN (SELECT id FROM tree) AND coalesce(b.local_quiescent,0)=0)
          OR EXISTS(SELECT 1 FROM session_turns WHERE session_id IN (SELECT session_id FROM tree))
          OR EXISTS(SELECT 1 FROM owned_processes WHERE assignment_id IN (SELECT id FROM tree) AND state NOT IN ('Reaped','Failed'))
          OR EXISTS(SELECT 1 FROM queue_entries q JOIN operations o ON o.id=q.operation_id WHERE o.assignment_id IN (SELECT id FROM tree) AND q.state IN ('Ready','Claimed','Reconciling'))",

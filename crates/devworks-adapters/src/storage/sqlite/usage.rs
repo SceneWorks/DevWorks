@@ -187,7 +187,7 @@ fn write(
     db(c.execute(&q, params_from_iter(values)))?;
     Ok(())
 }
-const ATTEMPT_COLS: &str = "attempt_id,request_id,operation_id,attempt_number,project_id,feature_id,work_id,assignment_id,session_id,job_run_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,provider_model_id,pricing_snapshot_json,state,revision,created_at";
+const ATTEMPT_COLS: &str = "attempt_id,request_id,operation_id,attempt_number,project_id,feature_id,work_id,assignment_id,execution_root_id,execution_id,session_id,job_run_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,provider_model_id,pricing_snapshot_json,state,revision,created_at";
 fn decode_attempt(v: &Value) -> Result<StoredInferenceAttempt, StorageError> {
     Ok(StoredInferenceAttempt {
         attempt_id: field(v, "attempt_id")?,
@@ -198,6 +198,8 @@ fn decode_attempt(v: &Value) -> Result<StoredInferenceAttempt, StorageError> {
         feature_id: field(v, "feature_id")?,
         work_id: field(v, "work_id")?,
         assignment_id: field(v, "assignment_id")?,
+        execution_root_id: field(v, "execution_root_id")?,
+        execution_id: field(v, "execution_id")?,
         session_id: field(v, "session_id")?,
         job_run_id: field(v, "job_run_id")?,
         actor_id: field(v, "actor_id")?,
@@ -232,6 +234,8 @@ fn write_attempt(
             sql(&r.feature_id)?,
             sql(&r.work_id)?,
             sql(&r.assignment_id)?,
+            sql(&r.execution_root_id)?,
+            sql(&r.execution_id)?,
             sql(&r.session_id)?,
             sql(&r.job_run_id)?,
             sql(&r.actor_id)?,
@@ -284,7 +288,7 @@ fn write_observation(
         2,
     )
 }
-const BALANCE_COLS: &str = "attempt_id,revision,priced_micro_usd,reserved_micro_usd,classification,monetary_complete,incomplete,unknown_tail,summary_json";
+const BALANCE_COLS: &str = "attempt_id,revision,priced_micro_usd,reserved_micro_usd,classification,monetary_complete,incomplete,unknown_tail,local_quiescent,summary_json";
 fn decode_balance(v: &Value) -> Result<StoredAttemptBalance, StorageError> {
     Ok(StoredAttemptBalance {
         attempt_id: field(v, "attempt_id")?,
@@ -295,6 +299,7 @@ fn decode_balance(v: &Value) -> Result<StoredAttemptBalance, StorageError> {
         monetary_complete: boolean(v, "monetary_complete")?,
         incomplete: boolean(v, "incomplete")?,
         unknown_tail: boolean(v, "unknown_tail")?,
+        local_quiescent: boolean(v, "local_quiescent")?,
         summary: json(v, "summary_json")?,
     })
 }
@@ -316,6 +321,7 @@ fn write_balance(
             sql(&r.monetary_complete)?,
             sql(&r.incomplete)?,
             sql(&r.unknown_tail)?,
+            sql(&r.local_quiescent)?,
             sql(&r.summary)?,
         ],
         update,
@@ -761,6 +767,50 @@ fn validate_binding(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), S
             }
         }
     }
+    match (&r.execution_root_id, &r.execution_id) {
+        (None, None) => {
+            if r.assignment_id.is_some() {
+                return Err(invalid(
+                    "managed assignment requires captured execution ownership",
+                ));
+            }
+        }
+        (Some(root), Some(execution)) => {
+            let activation = RunRead::activation(unit, execution)?
+                .ok_or_else(|| missing("activation", execution))?;
+            if activation.root_id != *root {
+                return Err(invalid("captured execution root does not match activation"));
+            }
+            if r.work_id.as_ref() != Some(&root.0) && r.feature_id.as_ref() != Some(&root.0) {
+                return Err(invalid("captured execution does not own admitted work"));
+            }
+            let session = r
+                .session_id
+                .as_ref()
+                .ok_or_else(|| invalid("managed execution requires its durable session"))?;
+            let session =
+                SessionRead::session(unit, session)?.ok_or_else(|| missing("session", session))?;
+            if session.root_id.as_ref() != Some(root) {
+                return Err(invalid("managed execution session root mismatch"));
+            }
+            let work = WorkRead::work(unit, &root.0)?.ok_or_else(|| missing("work", &root.0))?;
+            if r.project_id.as_ref() != Some(&work.project_id) {
+                return Err(invalid("captured execution project mismatch"));
+            }
+            if let Some(assignment) = &r.assignment_id {
+                let a = RunRead::assignment(unit, assignment)?
+                    .ok_or_else(|| missing("assignment", &assignment.0))?;
+                if a.root_id != *root || a.execution_id.as_ref() != Some(execution) {
+                    return Err(invalid("captured assignment execution mismatch"));
+                }
+            }
+        }
+        _ => {
+            return Err(invalid(
+                "captured execution root and activation must be paired",
+            ));
+        }
+    }
     if let Some(id) = &r.assignment_id {
         let a = RunRead::assignment(unit, id)?.ok_or_else(|| missing("assignment", &id.0))?;
         if r.work_id.as_ref() != Some(&a.work_id.0) || r.session_id.as_ref() != Some(&a.session_id)
@@ -1019,12 +1069,18 @@ impl UsageRepository for Unit<'_> {
         r: &StoredAttemptBalance,
         expected: Option<i64>,
     ) -> Result<(), StorageError> {
+        let prior = balance(self.conn, &r.attempt_id)?;
         cas(
             r.attempt_id.as_str(),
-            balance(self.conn, &r.attempt_id)?.map(|v| v.revision),
+            prior.as_ref().map(|v| v.revision),
             expected,
             r.revision,
         )?;
+        if prior.is_some_and(|v| v.local_quiescent) && !r.local_quiescent {
+            return Err(invalid(
+                "a locally closed attempt cannot reopen its transport",
+            ));
+        }
         nonnegative(r.priced_micro_usd)?;
         nonnegative(r.reserved_micro_usd)?;
         classification(&r.classification)?;
