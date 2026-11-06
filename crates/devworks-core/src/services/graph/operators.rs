@@ -36,6 +36,19 @@ pub(super) fn detail(
             ..reader.position.clone()
         });
     }
+    if reader.next.is_some()
+        && reader.position.edge_property.is_none()
+        && reader.position.offset == 0
+    {
+        return Ok(GraphResult::NodeDetail {
+            value: model::wire(
+                json!({"node":node,"neighbors":[],"incoming":[],"outgoing":[],"crossRepository":[],"relationshipsComplete":false}),
+            )?,
+        });
+    }
+    if reader.position.edge_property.is_some() || reader.position.offset > 0 {
+        reader.next = None;
+    }
     let edges = reader.raw_edges()?;
     let key = dataset::node_key(&target);
     let incident: Vec<_> = edges
@@ -48,9 +61,8 @@ pub(super) fn detail(
     let mut outgoing = Vec::new();
     let mut cross = Vec::new();
     let offset = reader.position.offset;
-    let mut emitted = 0;
     for (index, edge) in incident.iter().enumerate().skip(offset) {
-        if emitted >= reader.limit.min(249) {
+        if index - offset >= reader.limit.min(249) {
             reader.next = Some(Position {
                 offset: index,
                 ..Default::default()
@@ -64,7 +76,14 @@ pub(super) fn detail(
         };
         let other_node = raw(reader, other)?;
         let projected = reader.node(&other_node, None)?.0;
-        let projected_edge = model::edge(edge)?;
+        let (projected_edge, edge_next) = model::edge_page(
+            edge,
+            if index == offset {
+                reader.position.edge_property.as_ref()
+            } else {
+                None
+            },
+        )?;
         if !reader.retain_wire(&(&projected, &projected_edge))? {
             reader.next = Some(Position {
                 offset: index,
@@ -81,7 +100,14 @@ pub(super) fn detail(
         if edge.source.repository_id != edge.target.repository_id {
             cross.push(projected_edge);
         }
-        emitted += 1;
+        if let Some(property) = edge_next {
+            reader.next = Some(Position {
+                offset: index,
+                edge_property: Some(property),
+                ..Default::default()
+            });
+            break;
+        }
     }
     Ok(GraphResult::NodeDetail {
         value: model::wire(
@@ -118,14 +144,41 @@ pub(super) fn by_file(
         };
         span(a).cmp(&span(b))
     });
-    let selected=if let Some(line)=&selection.line {
-        let line=line.0.parse::<u64>().map_err(|_|StorageError::CursorExpired)?;
-        rows.iter().find(|n|n.node.payload["span"]["startLine"].as_u64().is_some_and(|s|s<=line)&&n.node.payload["span"]["endLine"].as_u64().is_some_and(|e|line<=e)).or_else(||rows.iter().find(|n|n.node.kind=="File")).or_else(||rows.first()).map(|n|n.node.node_id.clone())
-    }else{None};
-    let total=if reader.budget.exhausted.is_none(){Some(model::count(rows.len()as u64)?)}else{None};
-    let low=rows.iter().filter(|n|dataset::low_node(n)).count();
-    let nodes=reader.page_nodes(&rows)?;
-    Ok(GraphResult::CodeNodes{value:CodeNodesResult{nodes:crate::protocol::support::BoundedList(nodes),total,low_confidence_count:model::count(low as u64)?,selected_node_id:selected.map(|id|model::wire(json!(id))).transpose()?}})
+    let selected = if let Some(line) = &selection.line {
+        let line = line
+            .0
+            .parse::<u64>()
+            .map_err(|_| StorageError::CursorExpired)?;
+        rows.iter()
+            .find(|n| {
+                n.node.payload["span"]["startLine"]
+                    .as_u64()
+                    .is_some_and(|s| s <= line)
+                    && n.node.payload["span"]["endLine"]
+                        .as_u64()
+                        .is_some_and(|e| line <= e)
+            })
+            .or_else(|| rows.iter().find(|n| n.node.kind == "File"))
+            .or_else(|| rows.first())
+            .map(|n| n.node.node_id.clone())
+    } else {
+        None
+    };
+    let total = if reader.budget.exhausted.is_none() {
+        Some(model::count(rows.len() as u64)?)
+    } else {
+        None
+    };
+    let low = rows.iter().filter(|n| dataset::low_node(n)).count();
+    let nodes = reader.page_nodes(&rows)?;
+    Ok(GraphResult::CodeNodes {
+        value: CodeNodesResult {
+            nodes: crate::protocol::support::BoundedList(nodes),
+            total,
+            low_confidence_count: model::count(low as u64)?,
+            selected_node_id: selected.map(|id| model::wire(json!(id))).transpose()?,
+        },
+    })
 }
 
 pub(super) struct Walk<'a> {
@@ -268,7 +321,14 @@ fn graph_steps(reader: &mut Reader<'_>, steps: &[Step]) -> Result<GraphResult, F
         )) {
             continue;
         }
-        let edge = model::edge(&step.edge)?;
+        let (edge, edge_next) = model::edge_page(
+            &step.edge,
+            if index == reader.position.offset {
+                reader.position.edge_property.as_ref()
+            } else {
+                None
+            },
+        )?;
         let a = raw(reader, &step.edge.source)?;
         let b = raw(reader, &step.edge.target)?;
         let a_node = reader.node(&a, None)?.0;
@@ -283,6 +343,14 @@ fn graph_steps(reader: &mut Reader<'_>, steps: &[Step]) -> Result<GraphResult, F
         nodes.insert(dataset::node_key(&a), a_node);
         nodes.insert(dataset::node_key(&b), b_node);
         edges.push(edge);
+        if let Some(property) = edge_next {
+            reader.next = Some(Position {
+                offset: index,
+                edge_property: Some(property),
+                ..Default::default()
+            });
+            break;
+        }
     }
     let low = edges
         .iter()
@@ -330,10 +398,12 @@ pub(super) fn calls(
         .first()
         .map(|n| reader.node(n, None).map(|n| n.0))
         .transpose()?;
+    let mut value = json!({"entries":entries,"lowConfidenceCount":low.to_string()});
+    if let Some(start) = start {
+        value["start"] = json!(start);
+    }
     Ok(GraphResult::CallTrace {
-        value: model::wire(
-            json!({"start":start,"entries":entries,"lowConfidenceCount":low.to_string()}),
-        )?,
+        value: model::wire(value)?,
     })
 }
 
@@ -469,62 +539,96 @@ pub(super) fn lineage(
             depth: 4,
         },
     )?;
-    // One outer offset covers both directions and all exact cross-repository edges.
-    let mut combined = inbound;
-    let split = combined.len();
-    combined.extend(outbound);
-    let entries = entries(reader, &combined)?;
-    let offset = reader.position.offset;
-    let producer_count = split.saturating_sub(offset).min(entries.len());
-    let producers = entries[..producer_count].to_vec();
-    let consumers = entries[producer_count..].to_vec();
-    let model_node = starts
-        .first()
-        .map(|n| reader.node(n, None).map(|n| n.0))
-        .transpose()?;
-    let name = starts
-        .first()
-        .map(|n| n.node.name.clone())
-        .unwrap_or_default();
-    let mut cross = Vec::new();
+    let cross: Vec<_> = all
+        .linked
+        .iter()
+        .filter(|edge| {
+            edge.source.repository_id != edge.target.repository_id
+                && starts.first().is_some_and(|start| {
+                    edge.source.repository_id == start.repository_id
+                        || edge.target.repository_id == start.repository_id
+                })
+        })
+        .collect();
+    let total = inbound.len() + outbound.len() + cross.len();
+    let mut producers = Vec::new();
+    let mut consumers = Vec::new();
+    let mut links = Vec::new();
     let mut related = BTreeMap::new();
-    if let Some(start) = starts.first() {
-        for edge in all.linked.iter().filter(|e| {
-            e.source.repository_id != e.target.repository_id
-                && (e.source.repository_id == start.repository_id
-                    || e.target.repository_id == start.repository_id)
-        }) {
-            if cross.len() >= 249 {
-                reader.gaps.push("lineage_cross_repository_limit");
+    for index in reader.position.offset..total {
+        if index - reader.position.offset >= reader.limit.min(250) {
+            reader.next = Some(Position {
+                offset: index,
+                ..Default::default()
+            });
+            break;
+        }
+        if index < inbound.len() + outbound.len() {
+            let (step, producer) = if index < inbound.len() {
+                (&inbound[index], true)
+            } else {
+                (&outbound[index - inbound.len()], false)
+            };
+            let node = raw(reader, &step.identity)?;
+            let value: CodeTraversalEntry = model::wire(
+                json!({"node":reader.node(&node,None)?.0,"depth":step.depth.to_string(),"parentId":step.parent.node_id,"edgeKind":step.edge.raw.edge.kind,"edgeId":step.edge.raw.edge.edge_id}),
+            )?;
+            if !reader.retain_wire(&value)? {
+                reader.next = Some(Position {
+                    offset: index,
+                    ..Default::default()
+                });
                 break;
             }
+            if producer {
+                producers.push(value);
+            } else {
+                consumers.push(value);
+            }
+        } else {
+            let edge = cross[index - inbound.len() - outbound.len()];
+            let (edge_value, next) = model::edge_page(
+                edge,
+                if index == reader.position.offset {
+                    reader.position.edge_property.as_ref()
+                } else {
+                    None
+                },
+            )?;
             let a = raw(reader, &edge.source)?;
             let b = raw(reader, &edge.target)?;
-            let projected = model::edge(edge)?;
             let na = reader.node(&a, None)?.0;
             let nb = reader.node(&b, None)?.0;
-            if !reader.retain_wire(&(&projected, &na, &nb))? {
-                reader.gaps.push("lineage_cross_repository_limit");
+            if !reader.retain_wire(&(&edge_value, &na, &nb))? {
+                reader.next = Some(Position {
+                    offset: index,
+                    ..Default::default()
+                });
                 break;
             }
             related.insert(dataset::node_key(&a), na);
             related.insert(dataset::node_key(&b), nb);
-            cross.push(projected);
+            links.push(edge_value);
+            if let Some(property) = next {
+                reader.next = Some(Position {
+                    offset: index,
+                    edge_property: Some(property),
+                    ..Default::default()
+                });
+                break;
+            }
         }
     }
-    let low = producers
+    let low = inbound
         .iter()
-        .chain(&consumers)
-        .filter(|e| {
-            e.node
-                .confidence
-                .as_ref()
-                .is_some_and(|v| v.0.eq_ignore_ascii_case("low"))
-        })
+        .chain(&outbound)
+        .filter(|s| dataset::low_edge(&s.edge))
         .count();
+    let mut value = json!({"modelName":starts.first().map(|n|n.node.name.as_str()).unwrap_or(""),"producers":producers,"consumers":consumers,"crossRepository":links,"relatedNodes":related.into_values().collect::<Vec<_>>(),"lowConfidenceCount":low.to_string()});
+    if let Some(start) = starts.first() {
+        value["model"] = json!(reader.node(start, None)?.0);
+    }
     Ok(GraphResult::Lineage {
-        value: model::wire(
-            json!({"modelName":name,"model":model_node,"producers":producers,"consumers":consumers,"crossRepository":cross,"relatedNodes":related.into_values().collect::<Vec<_>>(),"lowConfidenceCount":low.to_string()}),
-        )?,
+        value: model::wire(value)?,
     })
 }

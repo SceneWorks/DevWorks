@@ -177,6 +177,8 @@ pub enum EdgeTarget {
         unit: String,
         kind: String,
         qualified_name: String,
+        /// The actual captured target name, when the semantic producer knows it.
+        target_name: Option<String>,
     },
 }
 

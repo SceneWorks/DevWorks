@@ -633,6 +633,48 @@ impl ArtifactFiles for NativeArtifactFiles {
         Ok(Box::new(f.take(byte_count)))
     }
 
+    fn open_controlled(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Box<dyn Read + Send>, FileFault> {
+        let interrupted = || FileFault::Source("blob verification interrupted".into());
+        if stopped() {
+            return Err(interrupted());
+        }
+        let mut file = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
+        let mut hash = Sha256::new();
+        let mut bytes = 0u64;
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            if stopped() {
+                return Err(interrupted());
+            }
+            let count = file.read(&mut buffer).map_err(fault)?;
+            if count == 0 {
+                break;
+            }
+            bytes = bytes
+                .checked_add(count as u64)
+                .ok_or_else(|| corrupt(digest))?;
+            if bytes > byte_count {
+                return Err(corrupt(digest));
+            }
+            hash.update(&buffer[..count]);
+        }
+        if stopped() {
+            return Err(interrupted());
+        }
+        if bytes != byte_count || hex(hash) != digest {
+            self.forget(digest, generation);
+            return Err(corrupt(digest));
+        }
+        file.seek(SeekFrom::Start(0)).map_err(fault)?;
+        Ok(Box::new(file.take(byte_count)))
+    }
+
     fn unlink(&self, digest: &str, generation: &str) -> Result<(), FileFault> {
         self.forget(digest, generation);
         match std::fs::remove_file(self.blob_path(digest, generation)?) {

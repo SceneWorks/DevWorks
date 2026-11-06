@@ -6,6 +6,8 @@ use std::cell::RefCell;
 
 struct BoundedIndex<'a> {
     read: &'a dyn IndexRead,
+    graph: &'a dyn GraphRead,
+    scope: GraphScope,
     budget: RefCell<&'a mut Budget>,
 }
 
@@ -84,18 +86,73 @@ impl IndexRead for BoundedIndex<'_> {
         self.read.unit(generation, unit_key)
     }
     fn nodes(&self, generation: &Id, unit_key: &str) -> Result<Vec<StoredNode>, StorageError> {
-        self.nodes(self.read.nodes(generation, unit_key)?)
+        let mut after = None;
+        let mut rows = Vec::new();
+        loop {
+            let page = self.graph.graph_nodes(
+                &self.scope,
+                &GraphNodeFilter {
+                    unit_key: Some(unit_key.into()),
+                    ..Default::default()
+                },
+                after.as_ref(),
+                32,
+            )?;
+            let more = page.has_more;
+            for node in page.items {
+                after = Some(GraphPosition {
+                    repository_id: node.repository_id.clone(),
+                    unit_key: node.node.unit_key.clone(),
+                    item_id: node.node.node_id.clone(),
+                });
+                self.charge(
+                    node.node.payload.to_string().len()
+                        + node.node.name.len()
+                        + node.node.node_id.len()
+                        + node.node.unit_key.len()
+                        + std::mem::size_of::<StoredNode>(),
+                )?;
+                if node.generation_id == *generation {
+                    rows.push(node.node);
+                }
+            }
+            if !more {
+                break;
+            }
+        }
+        Ok(rows)
     }
     fn edges(&self, generation: &Id, unit_key: &str) -> Result<Vec<StoredEdge>, StorageError> {
-        let rows = self.read.edges(generation, unit_key)?;
-        for e in &rows {
-            self.charge(
-                e.unit_key.len()
-                    + e.edge_id.len()
-                    + e.source_node_id.len()
-                    + e.target_node_id.len()
-                    + e.payload.to_string().len(),
+        let mut after = None;
+        let mut rows = Vec::new();
+        loop {
+            let page = self.graph.graph_edges(
+                &self.scope,
+                &GraphEdgeFilter::default(),
+                after.as_ref(),
+                32,
             )?;
+            let more = page.has_more;
+            for edge in page.items {
+                after = Some(GraphPosition {
+                    repository_id: edge.repository_id.clone(),
+                    unit_key: edge.edge.unit_key.clone(),
+                    item_id: edge.edge.edge_id.clone(),
+                });
+                self.charge(
+                    edge.edge.payload.to_string().len()
+                        + edge.edge.source_node_id.len()
+                        + edge.edge.target_node_id.len()
+                        + edge.edge.unit_key.len()
+                        + std::mem::size_of::<StoredEdge>(),
+                )?;
+                if edge.generation_id == *generation && edge.edge.unit_key == unit_key {
+                    rows.push(edge.edge);
+                }
+            }
+            if !more {
+                break;
+            }
         }
         Ok(rows)
     }
@@ -121,7 +178,7 @@ impl IndexRead for BoundedIndex<'_> {
 }
 
 pub(super) fn link(
-    read: &dyn IndexRead,
+    read: &dyn ReadSnapshot,
     view: &crate::services::indexing::views::ViewLayers,
     session: &mut crate::services::indexing::worker::ViewLinker,
     unit: &str,
@@ -129,7 +186,15 @@ pub(super) fn link(
     budget: &mut Budget,
 ) -> Result<Option<Vec<StoredEdge>>, StorageError> {
     let bounded = BoundedIndex {
-        read,
+        read: read.indexing(),
+        graph: read.graph(),
+        scope: GraphScope {
+            views: vec![GraphViewBinding {
+                repository_id: view.view.repository_id.clone(),
+                view_id: view.view.view_id.clone(),
+                view_digest: view.view.view_digest.clone(),
+            }],
+        },
         budget: RefCell::new(budget),
     };
     let result = session.link(

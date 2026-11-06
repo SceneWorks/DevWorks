@@ -45,17 +45,22 @@ pub(super) fn check_pin(
     Ok(())
 }
 
+pub(super) struct Host<'a> {
+    pub store: &'a Arc<dyn ApplicationStore>,
+    pub clock: &'a dyn Clock,
+    pub ids: &'a dyn IdSource,
+}
 pub(super) fn select(
-    store: &Arc<dyn ApplicationStore>,
-    clock: &dyn Clock,
-    ids: &dyn IdSource,
+    host: Host<'_>,
     ctx: &InvocationContext,
     query: &AdmittedQuery,
     data_scope: &DataScope,
     requested: Option<&ViewSelection>,
+    options: &ReadOptions,
 ) -> Result<Selected, Failure> {
+    let Host { store, clock, ids } = host;
     let now = clock.now_ms().get();
-    let found = read_snapshot(&**store, &ReadOptions::default(), |read| {
+    let found = read_snapshot(&**store, options, |read| {
         Ok(match requested {
             Some(ViewSelection::Pinned { pin_id }) => {
                 let pin = read.graph().graph_pin(pin_id)?.ok_or_else(|| scope::unavailable(Some(pin_id.clone())));
@@ -99,39 +104,15 @@ pub(super) fn select(
         Some(ViewSelection::Exact { .. } | ViewSelection::Pinned { .. })
     );
     let renew = matches!(requested, Some(ViewSelection::Pinned { .. }));
-    let selected = run_write(&**store, WriteOptions::default(), move |tx| {
-        if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
-            return Ok(Err(crate::services::sessions::Refusal::new(
-                crate::protocol::DomainErrorCode::PermissionDenied,
-                "graph_scope",
-                None,
-            )
-            .into()));
-        }
-        if let Err(error) = scope::validate_in(
-            tx,
-            &context,
-            &data_scope,
-            &found.layers,
-            current,
-            renew.then_some(found.pin.view_witnesses.as_slice()),
-        ) {
-            return Ok(Err(error));
-        }
-        for missing in &found.pin.unavailable_repositories {
-            if let Err(error) = crate::services::projects::visible_repository(
-                tx.projects(),
-                &context,
-                &missing.repository_id,
-            ) {
-                return Ok(Err(error));
-            }
-            if let DataScope::Project { project_id } = &data_scope
-                && !tx
-                    .projects()
-                    .members(project_id)?
-                    .contains(&missing.repository_id)
-            {
+    let selected = run_write(
+        &**store,
+        WriteOptions {
+            deadline_ms: options.deadline_ms,
+            cancellation: options.cancellation.clone(),
+            ..Default::default()
+        },
+        move |tx| {
+            if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
                 return Ok(Err(crate::services::sessions::Refusal::new(
                     crate::protocol::DomainErrorCode::PermissionDenied,
                     "graph_scope",
@@ -139,49 +120,81 @@ pub(super) fn select(
                 )
                 .into()));
             }
-        }
-        let mut selected = found;
-        if renew {
-            // Concurrent detail/source reads may renew the same immutable lease. Refresh
-            // only its lifecycle CAS; owner, scope, views and witnesses cannot change.
-            let Some(current) = tx.graph().graph_pin(&selected.pin.id)? else {
-                return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
-            };
-            if current.intent_digest != selected.pin.intent_digest {
-                return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
-            }
-            if let Err(error) = check_pin(&current, &context, &data_scope, tx.now_ms()) {
+            if let Err(error) = scope::validate_in(
+                tx,
+                &context,
+                &data_scope,
+                &found.layers,
+                current,
+                renew.then_some(found.pin.view_witnesses.as_slice()),
+            ) {
                 return Ok(Err(error));
             }
-            let expiry = selected
-                .pin
-                .view_witnesses
-                .iter()
-                .filter_map(|w| w.expires_at_ms)
-                .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
-            selected.pin = if expiry > current.expires_at_ms {
-                tx.graph().renew_graph_pin(
-                    &selected.pin.id,
-                    &selected.pin.owner_namespace,
-                    current.revision,
-                    expiry,
-                )?
+            for missing in &found.pin.unavailable_repositories {
+                if let Err(error) = crate::services::projects::visible_repository(
+                    tx.projects(),
+                    &context,
+                    &missing.repository_id,
+                ) {
+                    return Ok(Err(error));
+                }
+                if let DataScope::Project { project_id } = &data_scope
+                    && !tx
+                        .projects()
+                        .members(project_id)?
+                        .contains(&missing.repository_id)
+                {
+                    return Ok(Err(crate::services::sessions::Refusal::new(
+                        crate::protocol::DomainErrorCode::PermissionDenied,
+                        "graph_scope",
+                        None,
+                    )
+                    .into()));
+                }
+            }
+            let mut selected = found;
+            if renew {
+                // Concurrent detail/source reads may renew the same immutable lease. Refresh
+                // only its lifecycle CAS; owner, scope, views and witnesses cannot change.
+                let Some(current) = tx.graph().graph_pin(&selected.pin.id)? else {
+                    return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
+                };
+                if current.intent_digest != selected.pin.intent_digest {
+                    return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
+                }
+                if let Err(error) = check_pin(&current, &context, &data_scope, tx.now_ms()) {
+                    return Ok(Err(error));
+                }
+                let expiry = selected
+                    .pin
+                    .view_witnesses
+                    .iter()
+                    .filter_map(|w| w.expires_at_ms)
+                    .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
+                selected.pin = if expiry > current.expires_at_ms {
+                    tx.graph().renew_graph_pin(
+                        &selected.pin.id,
+                        &selected.pin.owner_namespace,
+                        current.revision,
+                        expiry,
+                    )?
+                } else {
+                    // A repeated page in the same clock tick (or at the overlay's hard
+                    // expiry ceiling) reuses the still-live lease without a false renewal.
+                    current
+                };
             } else {
-                // A repeated page in the same clock tick (or at the overlay's hard
-                // expiry ceiling) reuses the still-live lease without a false renewal.
-                current
-            };
-        } else {
-            selected.pin.created_at_ms = tx.now_ms();
-            selected.pin.expires_at_ms = selected
-                .pin
-                .view_witnesses
-                .iter()
-                .filter_map(|w| w.expires_at_ms)
-                .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
-            tx.graph().acquire_graph_pin(&selected.pin)?;
-        }
-        Ok(Ok(selected))
-    })??;
+                selected.pin.created_at_ms = tx.now_ms();
+                selected.pin.expires_at_ms = selected
+                    .pin
+                    .view_witnesses
+                    .iter()
+                    .filter_map(|w| w.expires_at_ms)
+                    .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
+                tx.graph().acquire_graph_pin(&selected.pin)?;
+            }
+            Ok(Ok(selected))
+        },
+    )??;
     Ok(selected)
 }
