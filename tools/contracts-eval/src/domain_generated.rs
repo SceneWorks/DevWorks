@@ -795,6 +795,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "Items<Label>", extend("x-since" = 3))]
     pub labels: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkInheritanceOrigin", extend("x-since" = 3))]
+    pub previous_inheritance: Option<WorkInheritanceOrigin>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -841,6 +848,7 @@ impl Check for WorkRecord {
         self.pending_readiness.check()?;
         self.task_type.check()?;
         self.labels.check()?;
+        self.previous_inheritance.check()?;
         super::domain_rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -871,6 +879,9 @@ impl Revisioned for WorkRecord {
         }
         if revision < 3 {
             self.labels = None;
+        }
+        if revision < 3 {
+            self.previous_inheritance = None;
         }
     }
 }
@@ -10260,7 +10271,7 @@ pub struct AllocationRecovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_handoff: Option<HandoffRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_activity: Option<Event>,
+    pub last_activity: Option<AllocationActivity>,
     pub unmet_acceptance: Items<AcceptanceCriterion>,
 }
 impl Check for AllocationRecovery {
@@ -10299,6 +10310,7 @@ pub enum AllocationOutcome {
         reason: Label,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         evidence: Option<DomainFault>,
+        reused: bool,
     },
 }
 impl Check for AllocationOutcome {
@@ -10324,9 +10336,14 @@ impl Check for AllocationOutcome {
                 reused.check()?;
                 recovery.check()?;
             }
-            Self::NoEligible { reason, evidence } => {
+            Self::NoEligible {
+                reason,
+                evidence,
+                reused,
+            } => {
                 reason.check()?;
                 evidence.check()?;
+                reused.check()?;
             }
         }
         Ok(())
@@ -10401,6 +10418,72 @@ impl Revisioned for AllocationSelection {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationActivityPayload {
+    pub value: DynamicJson,
+}
+impl Check for AllocationActivityPayload {
+    fn check(&self) -> Result<(), String> {
+        self.value.check()?;
+        super::domain_rules::record(
+            "AllocationActivityPayload",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllocationActivity {
+    pub event_id: Id,
+    pub sequence: Revision,
+    pub actor_id: ActorId,
+    pub occurred_at_ms: Counter,
+    pub kind: Label,
+    pub work_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<AllocationActivityPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_unavailable_reason: Option<Label>,
+}
+impl Check for AllocationActivity {
+    fn check(&self) -> Result<(), String> {
+        self.event_id.check()?;
+        self.sequence.check()?;
+        self.actor_id.check()?;
+        self.occurred_at_ms.check()?;
+        self.kind.check()?;
+        self.work_id.check()?;
+        self.payload.check()?;
+        self.payload_unavailable_reason.check()?;
+        super::domain_rules::record(
+            "AllocationActivity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkInheritanceOrigin {
+    pub feature_id: Id,
+    pub requirement_ids: Items<Id>,
+}
+impl Check for WorkInheritanceOrigin {
+    fn check(&self) -> Result<(), String> {
+        self.feature_id.check()?;
+        self.requirement_ids.check()?;
+        super::domain_rules::record(
+            "WorkInheritanceOrigin",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
     }
 }
 

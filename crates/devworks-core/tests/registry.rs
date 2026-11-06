@@ -31,13 +31,13 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 356);
+    assert_eq!(registry::all().len(), 357);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 356);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 357);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
@@ -143,10 +143,10 @@ fn exactly_the_five_recorded_hybrid_names_have_both_modes() {
 fn every_binding_publishes_strict_input_and_result_schemas() {
     let mut count = 0;
     for d in registry::all() {
-        let result = serde_json::to_value(d.result_schema(SchemaRevision::INITIAL)).unwrap();
+        let result = serde_json::to_value(d.result_schema(d.revisions[0])).unwrap();
         assert!(result.is_object(), "{}", d.name);
         for b in d.modes {
-            let schema = serde_json::to_value(b.input_schema(SchemaRevision::INITIAL)).unwrap();
+            let schema = serde_json::to_value(b.input_schema(d.revisions[0])).unwrap();
             if d.envelope == Envelope::Domain {
                 // Agent tool descriptors expose the body members; unknown members are refused.
                 assert_eq!(
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 361);
+    assert_eq!(count, 362);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -215,7 +215,16 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "{} revisions",
             d.name
         );
-        assert_eq!(d.revisions[0], SchemaRevision::INITIAL, "{}", d.name);
+        assert_eq!(
+            d.revisions[0],
+            SchemaRevision(
+                o.get("introducedRevision")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as u32
+            ),
+            "{}",
+            d.name
+        );
         if d.revisions.len() > 1 {
             revisioned.insert(d.name);
         }
@@ -317,6 +326,15 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "resources.release",
             "resources.renew",
             "resources.waiters",
+            "projects.create",
+            "workflows.list",
+            "workflows.create_status",
+            "workflows.rename_status",
+            "workflows.order",
+            "next_work.claim_project_queue",
+            "next_work.claim_feature_task",
+            "next_work.inspect_claim",
+            "next_work.release_claim",
             "router.availability",
             "router.catalog",
             "router.pin",

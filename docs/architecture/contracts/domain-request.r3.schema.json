@@ -1483,6 +1483,10 @@
               "const": "issues.create",
               "type": "string"
             },
+            "labels": {
+              "$ref": "#/$defs/List_Text1To256_0_128",
+              "x-since": 3
+            },
             "priority": {
               "format": "int32",
               "type": "integer"
@@ -1495,6 +1499,10 @@
             },
             "statusId": {
               "$ref": "#/$defs/Id"
+            },
+            "taskType": {
+              "$ref": "#/$defs/WorkItemType",
+              "x-since": 3
             },
             "title": {
               "$ref": "#/$defs/Text1To256"
@@ -1546,6 +1554,10 @@
               "const": "tasks.create",
               "type": "string"
             },
+            "labels": {
+              "$ref": "#/$defs/List_Text1To256_0_128",
+              "x-since": 3
+            },
             "parentId": {
               "anyOf": [
                 {
@@ -1568,6 +1580,10 @@
             },
             "statusId": {
               "$ref": "#/$defs/Id"
+            },
+            "taskType": {
+              "$ref": "#/$defs/WorkItemType",
+              "x-since": 3
             },
             "title": {
               "$ref": "#/$defs/Text1To256"
@@ -2138,18 +2154,38 @@
         {
           "additionalProperties": false,
           "properties": {
+            "another": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "expectedQueueRevision": {
               "$ref": "#/$defs/Revision"
+            },
+            "idempotencyKey": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
             },
             "kind": {
               "const": "next_work.claim_project_queue",
               "type": "string"
+            },
+            "label": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
             },
             "leaseMs": {
               "$ref": "#/$defs/PositiveCounter"
             },
             "projectId": {
               "$ref": "#/$defs/Id"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
+            "taskType": {
+              "$ref": "#/$defs/WorkItemType",
+              "x-since": 3
             }
           },
           "required": [
@@ -2163,18 +2199,38 @@
         {
           "additionalProperties": false,
           "properties": {
+            "another": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "expectedTaskSetRevision": {
               "$ref": "#/$defs/Revision"
+            },
+            "idempotencyKey": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
             },
             "kind": {
               "const": "next_work.claim_feature_task",
               "type": "string"
             },
+            "label": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
+            },
             "leaseMs": {
               "$ref": "#/$defs/PositiveCounter"
             },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "rootId": {
               "$ref": "#/$defs/Id"
+            },
+            "taskType": {
+              "$ref": "#/$defs/WorkItemType",
+              "x-since": 3
             }
           },
           "required": [
@@ -9935,6 +9991,34 @@
             "page"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "featureId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "next_work.inspect_queue",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },
@@ -10216,6 +10300,10 @@
               "const": "Single",
               "type": "string"
             },
+            "labels": {
+              "$ref": "#/$defs/List_Text1To256_0_128",
+              "x-since": 3
+            },
             "plan": {
               "anyOf": [
                 {
@@ -10333,6 +10421,10 @@
             }
           ]
         },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
         "readiness": {
           "$ref": "#/$defs/ReadinessChange",
           "x-since": 2
@@ -10408,6 +10500,10 @@
               "type": "null"
             }
           ]
+        },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
         },
         "plan": {
           "$ref": "#/$defs/PlanDraft"
@@ -10611,6 +10707,10 @@
             }
           ]
         },
+        "clearTaskType": {
+          "type": "boolean",
+          "x-since": 3
+        },
         "description": {
           "anyOf": [
             {
@@ -10640,6 +10740,10 @@
               "type": "null"
             }
           ]
+        },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
         },
         "priority": {
           "format": "int32",
@@ -10677,6 +10781,10 @@
               "type": "null"
             }
           ]
+        },
+        "taskType": {
+          "$ref": "#/$defs/WorkItemType",
+          "x-since": 3
         },
         "title": {
           "anyOf": [
@@ -13324,6 +13432,10 @@
             }
           ]
         },
+        "clearTaskType": {
+          "type": "boolean",
+          "x-since": 3
+        },
         "description": {
           "anyOf": [
             {
@@ -13364,6 +13476,10 @@
             }
           ]
         },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
         "priority": {
           "format": "int32",
           "type": [
@@ -13401,6 +13517,10 @@
             }
           ]
         },
+        "taskType": {
+          "$ref": "#/$defs/WorkItemType",
+          "x-since": 3
+        },
         "title": {
           "anyOf": [
             {
@@ -13429,6 +13549,10 @@
       "properties": {
         "acceptance": {
           "$ref": "#/$defs/List_AcceptanceCriterion_0_128"
+        },
+        "clearTaskType": {
+          "type": "boolean",
+          "x-since": 3
         },
         "clientKey": {
           "$ref": "#/$defs/Id"
@@ -13459,6 +13583,10 @@
             }
           ]
         },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
         "priority": {
           "format": "int32",
           "type": [
@@ -13468,6 +13596,10 @@
         },
         "repositoryIds": {
           "$ref": "#/$defs/List_Id_0_128"
+        },
+        "taskType": {
+          "$ref": "#/$defs/WorkItemType",
+          "x-since": 3
         },
         "title": {
           "$ref": "#/$defs/Text1To256"
@@ -13678,6 +13810,14 @@
         "evidence"
       ],
       "type": "object"
+    },
+    "WorkItemType": {
+      "enum": [
+        "Story",
+        "Task",
+        "Bug"
+      ],
+      "type": "string"
     },
     "WorkLink": {
       "additionalProperties": false,

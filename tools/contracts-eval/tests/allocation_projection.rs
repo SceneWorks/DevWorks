@@ -43,9 +43,10 @@ fn claimed_and_recovered_results_project_to_the_exact_old_claim() {
 
 #[test]
 fn no_eligible_outcome_is_explicit_and_has_no_legacy_fake_claim() {
-    let mut decoded: AllocationSelection =
-        serde_json::from_value(json!({"kind":"NoEligible","reason":"all_candidates_blocked","reused":false}))
-            .unwrap();
+    let mut decoded: AllocationSelection = serde_json::from_value(
+        json!({"kind":"NoEligible","reason":"all_candidates_blocked","reused":false}),
+    )
+    .unwrap();
     decoded.check().unwrap();
     decoded.check_revision(3).unwrap();
     decoded.retain_revision(1);

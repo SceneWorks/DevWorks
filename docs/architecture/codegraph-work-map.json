@@ -19,9 +19,9 @@
     "latestAmendment": "ROUTE-25\u201327 and AD81: hourly catalogs, reversible availability, latest-family allocation and concrete pin preservation."
   },
   "structuredSharedRequirements": 3,
-  "nativeImplementationItems": 65,
+  "nativeImplementationItems": 66,
   "publicationItem": "DW-64",
-  "dependencyEdges": 309,
+  "dependencyEdges": 311,
   "nativeInitialStatus": "backlog",
   "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All377 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026. Approved latest-model amendment adds DW-108 and three requirements, preserves Auto/SystemOne ownership and extends existing final acceptance; see latestModelAmendment.",
   "items": [
@@ -200,7 +200,8 @@
       "localSliceId": "DW-013",
       "blockedBy": [
         "DW-12",
-        "DW-9"
+        "DW-9",
+        "DW-109"
       ],
       "acceptanceCriteria": 3,
       "featureKey": "DW-F5"
@@ -1266,6 +1267,19 @@
       ],
       "acceptanceCriteria": 3,
       "featureKey": "DW-F6"
+    },
+    {
+      "ref": "slice-work_item_metadata",
+      "key": "DW-109",
+      "id": "b1137224-8eec-491f-b003-6397e8eb9ee8",
+      "title": "Restore task type and labels for retained work allocation filters",
+      "type": "bug",
+      "localSliceId": "DW-109",
+      "blockedBy": [
+        "DW-12"
+      ],
+      "acceptanceCriteria": 2,
+      "featureKey": "DW-F5"
     }
   ],
   "structuredSourceRequirements": 377,
@@ -1746,7 +1760,8 @@
       "items": [
         "DW-12",
         "DW-13",
-        "DW-15"
+        "DW-15",
+        "DW-109"
       ],
       "sourceRequirements": [
         {
@@ -3454,5 +3469,12 @@
       "blockedBy": "DW-104",
       "reason": "Existing live watcher-acceptance prerequisite preserved; the watcher plan is outside this baseline/EVAL/latest document snapshot."
     }
-  ]
+  ],
+  "workAllocationAmendment": {
+    "date": "2026-11-05",
+    "supportingItem": "DW-109",
+    "itemVersionAtSync": 2,
+    "blockedItem": "DW-13",
+    "scope": "Restore typed card metadata required by frozen allocator filters; existing operation ownership and377 requirements preserved."
+  }
 }

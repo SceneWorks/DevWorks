@@ -243,14 +243,15 @@
       ],
       "dependsOnKeys": [
         "work",
-        "controls"
+        "controls",
+        "work_item_metadata"
       ],
       "acceptance": "Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.",
       "gates": [
         "G01",
         "G11"
       ],
-      "status": "Planned; implementation not authorized or started",
+      "status": "Native implementation in progress; acceptance tracked by DW-13",
       "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds."
     },
     {
@@ -1688,6 +1689,37 @@
         "router.pin",
         "router.availability"
       ]
+    },
+    {
+      "key": "work_item_metadata",
+      "id": "DW-109",
+      "type": "Bug",
+      "title": "Restore task type and labels for retained work allocation filters",
+      "operations": [],
+      "dependsOnKeys": [
+        "work"
+      ],
+      "acceptance": "Humans and agents can set/edit story/task/bug type and bounded unique labels through shared revision-checked work operations; values persist across restart and membership changes without altering native work kind or prior history. Retained next_work repository/type/label filters select only matching eligible work and report nonmatches honestly, including legacy records without type; native success/fault/roundtrip evidence and legacy schema projections pass.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Tracked supporting restoration; native acceptance belongs to DW-109",
+      "codegraphItem": "DW-109",
+      "codegraphFeature": "DW-F5",
+      "codegraphStateAtSync": "in_progress",
+      "integratesOperations": [
+        "features.create",
+        "features.edit",
+        "projects.create",
+        "tasks.create",
+        "tasks.edit",
+        "issues.create",
+        "issues.edit",
+        "tasks.sync_plan",
+        "next_work.claim_project_queue",
+        "next_work.claim_feature_task"
+      ]
     }
   ],
   "retiredSlices": [
@@ -1763,7 +1795,8 @@
       "mcp_server",
       "mcp_server_access",
       "session_auto_routing",
-      "model_latest"
+      "model_latest",
+      "work_item_metadata"
     ],
     "eval_acceptance": [
       "eval_recorded",
@@ -1830,5 +1863,14 @@
     ],
     "finalAcceptance": "DW-61",
     "scope": "Approved planning metadata; no native implementation or inference acceptance."
+  },
+  "workAllocationSynchronization": {
+    "date": "2026-11-05",
+    "items": [
+      "DW-13",
+      "DW-109"
+    ],
+    "newOperation": "next_work.inspect_queue",
+    "scope": "Preserve existing primary operation ownership and all 377 source requirements; restore frozen type/label authoring and full allocation result/filter semantics."
   }
 }

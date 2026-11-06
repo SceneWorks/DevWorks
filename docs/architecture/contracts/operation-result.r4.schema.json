@@ -140,6 +140,317 @@
       ],
       "type": "object"
     },
+    "AllocationActivity": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "eventId": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "occurredAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AllocationActivityPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payloadUnavailableReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/Revision"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "eventId",
+        "sequence",
+        "actorId",
+        "occurredAtMs",
+        "kind",
+        "workId"
+      ],
+      "type": "object"
+    },
+    "AllocationActivityPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/BoundedUntrustedJson"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "type": "object"
+    },
+    "AllocationClaimRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "fence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/Id"
+        },
+        "ownerSessionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "queueRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 3
+        },
+        "rootId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "state": {
+          "$ref": "#/$defs/LeaseState"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workKind": {
+          "$ref": "#/$defs/WorkKind",
+          "x-since": 3
+        },
+        "workRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "id",
+        "workId",
+        "ownerId",
+        "fence",
+        "expiresAtMs",
+        "state"
+      ],
+      "type": "object"
+    },
+    "AllocationOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/AllocationClaimRecord"
+            },
+            "kind": {
+              "const": "Claimed",
+              "type": "string"
+            },
+            "reused": {
+              "type": "boolean"
+            },
+            "work": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "claim",
+            "reused"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claim": {
+              "$ref": "#/$defs/AllocationClaimRecord"
+            },
+            "kind": {
+              "const": "Recovered",
+              "type": "string"
+            },
+            "recovery": {
+              "$ref": "#/$defs/AllocationRecovery"
+            },
+            "reused": {
+              "type": "boolean"
+            },
+            "work": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "claim",
+            "reused",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DomainFault"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "NoEligible",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "reused": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "reason",
+            "reused"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AllocationQueueSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "featureId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id"
+        },
+        "queueRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "projectId",
+        "queueRevision",
+        "workflowRevision"
+      ],
+      "type": "object"
+    },
+    "AllocationRecovery": {
+      "additionalProperties": false,
+      "properties": {
+        "lastActivity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AllocationActivity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latestHandoff": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HandoffRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "links": {
+          "$ref": "#/$defs/List_WorkLink_0_128"
+        },
+        "previousOwnerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previousSessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unmetAcceptance": {
+          "$ref": "#/$defs/List_AcceptanceCriterion_0_128"
+        }
+      },
+      "required": [
+        "links",
+        "unmetAcceptance"
+      ],
+      "type": "object"
+    },
+    "AllocationSelection": {
+      "$ref": "#/$defs/AllocationOutcome",
+      "x-since": 3
+    },
     "AnalysisRecord": {
       "additionalProperties": false,
       "properties": {
@@ -2155,6 +2466,117 @@
         "retrievalEnabled",
         "extractionState",
         "coverage"
+      ],
+      "type": "object"
+    },
+    "DomainErrorCode": {
+      "enum": [
+        "NotFound",
+        "RevisionConflict",
+        "InvalidArgument",
+        "PermissionDenied",
+        "UnsupportedCapability",
+        "UnsupportedTarget",
+        "CredentialsRequired",
+        "ApprovalRequired",
+        "ContinueRequired",
+        "DependencyBlocked",
+        "CapacityWait",
+        "BudgetHold",
+        "SchemaMismatch",
+        "SourceChanged",
+        "ViewUnavailable",
+        "CursorExpired",
+        "LeaseLost",
+        "Conflict",
+        "Cancelled",
+        "ExternalFailure",
+        "OutcomeUnknown",
+        "StorageUnavailable"
+      ],
+      "type": "string"
+    },
+    "DomainFault": {
+      "additionalProperties": false,
+      "properties": {
+        "blockerIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "code": {
+          "$ref": "#/$defs/DomainErrorCode"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "currentRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnosticId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryAdvice"
+        },
+        "revisionDimension": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionDimension"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "retry",
+        "correlationId",
+        "blockerIds"
       ],
       "type": "object"
     },
@@ -10429,6 +10851,17 @@
       ],
       "type": "object"
     },
+    "RetryAdvice": {
+      "enum": [
+        "Never",
+        "SameCommand",
+        "AfterBlockerClears",
+        "ResolveReceipt",
+        "ReconcileOperation",
+        "RefreshAndNewRequest"
+      ],
+      "type": "string"
+    },
     "ReviewFinding": {
       "additionalProperties": false,
       "properties": {
@@ -10672,6 +11105,32 @@
     "Revision": {
       "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
       "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "RevisionDimension": {
+      "enum": [
+        "work",
+        "control",
+        "blocker",
+        "operation",
+        "policy",
+        "scope",
+        "plan",
+        "authority",
+        "configuration",
+        "registry",
+        "workflow",
+        "queue",
+        "store",
+        "source",
+        "artifact",
+        "reference",
+        "review",
+        "claim",
+        "schedule",
+        "connection",
+        "package"
+      ],
       "type": "string"
     },
     "RevisionedRef": {
@@ -11512,6 +11971,14 @@
     "StatusRecord": {
       "additionalProperties": false,
       "properties": {
+        "affectedWorkCount": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "affectedWorkDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 3
+        },
         "category": {
           "$ref": "#/$defs/Text1To256"
         },
@@ -11526,6 +11993,10 @@
         },
         "revision": {
           "$ref": "#/$defs/Revision"
+        },
+        "workflowRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 3
         }
       },
       "required": [
@@ -12701,6 +13172,30 @@
       ],
       "type": "object"
     },
+    "WorkInheritanceOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "featureId": {
+          "$ref": "#/$defs/Id"
+        },
+        "requirementIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        }
+      },
+      "required": [
+        "featureId",
+        "requirementIds"
+      ],
+      "type": "object"
+    },
+    "WorkItemType": {
+      "enum": [
+        "Story",
+        "Task",
+        "Bug"
+      ],
+      "type": "string"
+    },
     "WorkKind": {
       "enum": [
         "Feature",
@@ -12873,6 +13368,10 @@
         "kind": {
           "$ref": "#/$defs/WorkKind"
         },
+        "labels": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
         "links": {
           "$ref": "#/$defs/List_WorkLink_0_128"
         },
@@ -12923,6 +13422,10 @@
             }
           ]
         },
+        "previousInheritance": {
+          "$ref": "#/$defs/WorkInheritanceOrigin",
+          "x-since": 3
+        },
         "priority": {
           "format": "int32",
           "type": "integer"
@@ -12949,6 +13452,10 @@
         },
         "statusId": {
           "$ref": "#/$defs/Id"
+        },
+        "taskType": {
+          "$ref": "#/$defs/WorkItemType",
+          "x-since": 3
         },
         "title": {
           "$ref": "#/$defs/Text1To256"
@@ -13631,7 +14138,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ClaimRecord"
+          "$ref": "#/$defs/AllocationSelection"
         }
       },
       "required": [
@@ -13648,7 +14155,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ClaimRecord"
+          "$ref": "#/$defs/AllocationSelection"
         }
       },
       "required": [
@@ -13665,7 +14172,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ClaimRecord"
+          "$ref": "#/$defs/AllocationClaimRecord"
         }
       },
       "required": [
@@ -13682,7 +14189,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ClaimRecord"
+          "$ref": "#/$defs/AllocationClaimRecord"
         }
       },
       "required": [
@@ -18059,6 +18566,24 @@
         "value"
       ],
       "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "next_work.inspect_queue",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/AllocationQueueSnapshot"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 3
     },
     {
       "additionalProperties": false,

@@ -1,7 +1,7 @@
 """Structural coverage fixtures plus independent adversarial contract cases; no effects."""
 from pathlib import Path
 import copy,json,re
-from domain_spec import TYPES,OPS,LEGACY_RESULTS
+from domain_spec import TYPES,OPS,LEGACY_RESULTS,REVISIONS
 ROOT=Path(__file__).resolve().parents[2];D=ROOT/'docs/architecture/contracts'
 ALL=[c for n in ['fixtures','provider-package-fixtures','data-delivery-fixtures'] for c in json.loads((D/(n+'.json')).read_text())]
 def valid(entry):return json.loads(next(c['raw'] for c in ALL if c['entry']==entry and c['typedValid']))
@@ -21,6 +21,7 @@ def sample(t):
   if outer in ['Page','HistoryPage']:return {'items':[],'hasMore':False}
   return [sample(inner)] if outer in ['NonEmpty','PlanFeatures'] else []
  d=TYPES[t]
+ if d['kind']=='versioned':return sample(d['legacy'])
  if d['kind']=='enum':return d['values'][0]
  if d['kind']=='union':
   k,fs=next(iter(d['variants'].items()));v={'kind':k,**{camel(n):sample(f) for n,f in fs.items() if not f.startswith('?')}}
@@ -48,7 +49,9 @@ def request(name,mode):
  if name=='knowledge.claim_bundle':body['query']['claimIds']=['claim-a']
  if name=='queue.reconcile':body['resolution']='Reconcile'
  if name.startswith('maintenance.'):body['previewOnly']=True
- return {'mode':mode,'protocol':'1.0-draft.1',('queryId' if mode=='Query' else 'requestKey'):'request-a','body':body}
+ frame={'mode':mode,'protocol':'1.0-draft.1',('queryId' if mode=='Query' else 'requestKey'):'request-a','body':body}
+ if d.get('introducedRevision',1)>1:frame['schemaRevision']=d['introducedRevision']
+ return frame
 
 def result(name,t):
  value=sample(t)
@@ -67,9 +70,9 @@ def case(id,entry,value,typed=True,schema=True):
  CASES.append({'id':id,'entry':entry,'raw':json.dumps(value,separators=(',',':')),'typedValid':typed,'schemaValid':schema})
  if typed:POS[id]=copy.deepcopy(value)
 for name,d in OPS.items():
- for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request',request(name,mode))
+ for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request'+('.r'+str(d['introducedRevision'])if d.get('introducedRevision',1)>1 else ''),request(name,mode))
 for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
- case('result-'+name,'operation-result',result(name,t))
+ case('result-'+name,'operation-result'+('.r'+str(OPS[name]['introducedRevision'])if OPS.get(name,{}).get('introducedRevision',1)>1 else ''),result(name,t))
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):
@@ -869,5 +872,61 @@ for kind in ['Text','Binary']:
  value['testedRepository']=source
  case('r4-result-artifacts.read-'+kind,'operation-result.r4',{'kind':'artifacts.read','value':value})
  case('reject-r3-artifact-read-source-'+kind,'operation-result.r3',{'kind':'artifacts.read','value':value},False,False)
+# DW13/109: metadata is additive; allocation outcomes have an explicit legacy adapter.
+status3={**sample('StatusRecord'),'category':'Ready','workflowRevision':'4','affectedWorkDigest':'b'*64,'affectedWorkCount':'2'}
+claim3={**sample('AllocationClaimRecord'),'state':'Held','workKind':'Feature','workRevision':'3','projectId':'project-a','rootId':'root-a','ownerSessionId':'session-a','queueRevision':'5'}
+work3=sample('WorkRecord');work3['labels']=['native']
+selection3={'kind':'Claimed','claim':claim3,'work':work3,'reused':False}
+recovery3={'previousOwnerId':'previous-actor','links':[],'unmetAcceptance':[], 'lastActivity':{'eventId':'event-a','sequence':'2','actorId':'previous-actor','occurredAtMs':'1','kind':'WorkEdited','workId':'id-a','payload':{'value':{'title':'Changed title'}}}}
+for name in ['workflows.list','workflows.create_status','workflows.rename_status','workflows.order']:
+ value={'items':[status3],'hasMore':False} if name in ['workflows.list','workflows.order'] else status3
+ case('dw13-r3-status-'+name,'operation-result.r3',{'kind':name,'value':value})
+for name in ['next_work.claim_project_queue','next_work.claim_feature_task']:
+ request3=request(name,'Command');request3['schemaRevision']=3
+ request3['body'].update(repositoryId='repo-a',taskType='Story',label='native',another=True,idempotencyKey='allocation-intent-a')
+ case('dw13-r3-full-filter-'+name,'domain-request.r3',request3)
+ case('dw13-r3-claimed-'+name,'operation-result.r3',{'kind':name,'value':selection3})
+ case('dw13-r3-recovered-'+name,'operation-result.r3',{'kind':name,'value':{'kind':'Recovered','claim':claim3,'work':work3,'reused':False,'recovery':recovery3}})
+ case('dw13-r3-reused-'+name,'operation-result.r3',{'kind':name,'value':{**selection3,'reused':True}})
+ case('dw13-r3-none-'+name,'operation-result.r3',{'kind':name,'value':{'kind':'NoEligible','reason':'all_candidates_blocked','reused':False,'evidence':{'code':'DependencyBlocked','retry':'AfterBlockerClears','correlationId':'correlation-a','targetKind':'no_eligible_work','blockerIds':[],'diagnosticId':'evidence-a'}}})
+ case('dw13-reject-new-outcome-at1-'+name,'operation-result',{'kind':name,'value':selection3},False,False)
+ case('dw13-reject-old-claim-at3-'+name,'operation-result.r3',{'kind':name,'value':sample('ClaimRecord')},False,False)
+ case('dw13-reject-filters-at1-'+name,'domain-request',{**request3,'schemaRevision':1},False,False)
+for name in ['next_work.inspect_claim','next_work.release_claim']:
+ case('dw13-r3-claim-'+name,'operation-result.r3',{'kind':name,'value':claim3})
+case('dw13-reject-status-metadata-at1','operation-result',{'kind':'workflows.create_status','value':status3},False,False)
+queue=request('next_work.inspect_queue','Query')
+for revision,entry in [(1,'domain-request'),(2,'domain-request.r2')]:
+ case('dw13-reject-queue-before3-'+str(revision),entry,{**queue,'schemaRevision':revision},False,False)
+for name in ['tasks.create','issues.create']:
+ create=request(name,'Command');create['schemaRevision']=3;create['body'].update(taskType='Bug',labels=['native'])
+ case('dw109-r3-create-'+name,'domain-request.r3',create)
+ bad=copy.deepcopy(create);bad['body']['labels']=['native','native'];case('dw109-reject-duplicate-'+name,'domain-request.r3',bad,False,True)
+ bad=copy.deepcopy(create);bad['body']['labels']=['   '];case('dw109-reject-empty-'+name,'domain-request.r3',bad,False,True)
+ case('dw109-reject-old-create-'+name,'domain-request',{**create,'schemaRevision':1},False,False)
+for name in ['tasks.edit','issues.edit']:
+ edit=request(name,'Command');edit['schemaRevision']=3;edit['body']['changes']={'clearTaskType':True,'labels':[]}
+ case('dw109-r3-clear-'+name,'domain-request.r3',edit)
+ bad=copy.deepcopy(edit);bad['body']['changes']['taskType']='Story';case('dw109-reject-type-clear-conflict-'+name,'domain-request.r3',bad,False,True)
+legacy_receipt=copy.deepcopy(POS['command-recorded-accepted']);legacy_receipt['receipt'].pop('operationId');legacy_receipt['receipt']['decision']={'kind':'Applied','result':{'kind':'next_work.claim_project_queue','value':sample('ClaimRecord')}}
+case('dw13-legacy-receipt-unchanged','domain-command-reply',legacy_receipt)
+current_receipt=copy.deepcopy(legacy_receipt);current_receipt['receipt']['decision']['result']['value']=selection3
+case('dw13-current-receipt','domain-command-reply.r3',current_receipt)
+case('dw13-reject-current-in-old-receipt','domain-command-reply',current_receipt,False,False)
+transfer=sample('WorkRecord');transfer.update(kind='Task',parentId='feature-b',inheritsRequirementIds=['E2'],previousInheritance={'featureId':'feature-a','requirementIds':['E1']})
+case('dw13-origin-qualified-inheritance','operation-result.r3',{'kind':'tasks.get','value':transfer})
+case('dw13-reject-previous-inheritance-before3','operation-result.r2',{'kind':'tasks.get','value':transfer},False,False)
+# Every newly registered domain revision has an admitted input and matching result fixture.
+for name,revisions in REVISIONS.items():
+ if 3 not in revisions or name not in OPS:continue
+ definition=OPS[name]
+ for mode in ([definition['mode']]if definition['mode']!='Hybrid'else['Query','Command']):
+  if not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
+   frame=request(name,mode);frame['schemaRevision']=3;case('dw13-r3-admission-'+name+'-'+mode,'domain-request.r3',frame)
+ if not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
+  output=result(name,definition['result'])
+  if TYPES.get(definition['result'],{}).get('kind')=='versioned':output['value']=selection3
+  case('dw13-r3-binding-'+name,'operation-result.r3',output)
+
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

@@ -1056,7 +1056,8 @@
           "acceptance_criteria_unchanged": true,
           "blocked_by": [
             "DW-12",
-            "DW-9"
+            "DW-9",
+            "DW-109"
           ]
         },
         {
@@ -1070,6 +1071,17 @@
             "DW-9",
             "DW-13",
             "DW-14"
+          ]
+        },
+        {
+          "local_id": "DW-109",
+          "key": "DW-109",
+          "ref": "slice-work_item_metadata",
+          "title": "Restore task type and labels for retained work allocation filters",
+          "type": "bug",
+          "acceptance_criteria_unchanged": true,
+          "blocked_by": [
+            "DW-12"
           ]
         }
       ],
@@ -3417,5 +3429,12 @@
     "nativeAcceptance": "pending",
     "newItemStatus": "ready",
     "addedDependencyEdges": 4
+  },
+  "workAllocationAmendment": {
+    "date": "2026-11-05",
+    "supportingItem": "DW-109",
+    "itemVersionAtSync": 2,
+    "blockedItem": "DW-13",
+    "scope": "Restore typed card metadata required by frozen allocator filters; existing operation ownership and377 requirements preserved."
   }
 }
