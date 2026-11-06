@@ -1,6 +1,6 @@
 //! Project conventions through the actual desktop Human/runtime ingress, without lineage.
 mod common;
-use common::{Root, start};
+use common::{Root, native_runtime_case, start};
 use devworks_core::{
     context::PrincipalKind,
     protocol::{ProjectId, provider::ArtifactRef, records::*, results::OperationResult},
@@ -172,6 +172,7 @@ impl Fixture {
 }
 #[test]
 fn project_metadata_edit_reuses_authorized_current_markdown_and_raw_without_lineage() {
+    let _native_case = native_runtime_case();
     let f = Fixture::new("convention-scope-current");
     let owner = f.import(false);
     let edited=f.edit(&owner,owner.content.as_ref().unwrap(),json!({"title":"Metadata only title","rawContent":{"kind":"Set","content":owner.raw_content}}));
@@ -198,6 +199,7 @@ fn project_metadata_edit_reuses_authorized_current_markdown_and_raw_without_line
 }
 #[test]
 fn project_resource_capture_reuses_exact_authorized_resource_with_new_body_upload() {
+    let _native_case = native_runtime_case();
     let f = Fixture::new("convention-scope-resource");
     let owner = f.import(true);
     let resource = f.resources(&owner).remove(0);
@@ -218,6 +220,7 @@ fn project_resource_capture_reuses_exact_authorized_resource_with_new_body_uploa
 }
 #[test]
 fn project_historical_source_restore_uses_history_scope_instead_of_upload_visibility() {
+    let _native_case = native_runtime_case();
     let f = Fixture::new("convention-scope-history");
     let original = f.import(false);
     let next = f.upload(
@@ -261,6 +264,7 @@ fn project_historical_source_restore_uses_history_scope_instead_of_upload_visibi
 }
 #[test]
 fn project_search_and_section_path_keep_the_authorized_hit_scope_without_lineage() {
+    let _native_case = native_runtime_case();
     let f = Fixture::new("convention-scope-breadcrumb");
     let owner = f.import(false);
     let until = Instant::now() + Duration::from_secs(30);
@@ -332,6 +336,7 @@ fn wait_index(f: &Fixture, owner: &ConventionRecord) {
 }
 #[test]
 fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search() {
+    let _native_case = native_runtime_case();
     use devworks_desktop::conventions_screen::Scope;
     use eframe::egui::accesskit::Role;
     let _case = common::native_runtime_case();
@@ -390,6 +395,7 @@ fn native_project_bulk_index_uses_exact_source_revision_after_listing_and_search
 }
 #[test]
 fn native_search_pages_large_legal_applicability_inside_real_response_frame() {
+    let _native_case = native_runtime_case();
     let _case = common::native_runtime_case();
     let f = Fixture::new("convention-search-response-budget");
     let body = format!("# Budget\n{}", "budgetneedle source ".repeat(15_000));
