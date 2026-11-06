@@ -301,9 +301,16 @@ fn trust_current_scope_and_optional_retained_pin_are_strict_revision_fields() {
 fn architecture_preserves_unknown_package_total_under_work_limit() {
     let mut value = fixture("dw28-result-code.architecture");
     value["value"]["completion"] = json!("WorkLimit");
-    value["value"]["result"]["value"].as_object_mut().unwrap().remove("packageCount");
+    value["value"]["result"]["value"]
+        .as_object_mut()
+        .unwrap()
+        .remove("packageCount");
     let decoded = result(value.clone()).unwrap();
-    assert!(serde_json::to_value(decoded).unwrap()["value"]["result"]["value"].get("packageCount").is_none());
+    assert!(
+        serde_json::to_value(decoded).unwrap()["value"]["result"]["value"]
+            .get("packageCount")
+            .is_none()
+    );
     value["value"]["result"]["value"]["packageCount"] = Value::Null;
     assert!(result(value).is_err());
 }

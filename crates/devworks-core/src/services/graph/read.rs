@@ -347,9 +347,8 @@ impl<'a> Reader<'a> {
             )
             .into());
         }
-        if rows.is_empty()
-            && (self.budget.exhausted.is_some()
-                || !self.selected.pin.unavailable_repositories.is_empty())
+        if self.budget.exhausted.is_some()
+            || (rows.is_empty() && !self.selected.pin.unavailable_repositories.is_empty())
         {
             return Err(Refusal::new(
                 DomainErrorCode::ViewUnavailable,

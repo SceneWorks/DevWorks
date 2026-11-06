@@ -171,7 +171,6 @@ pub(super) fn query(
     if matches!(query.mode, CodeSearchMode::Unified) && query.text.trim().is_empty() {
         selected.clear();
     }
-    let low = selected.iter().filter(|n| dataset::low_node(n)).count() as u64;
     if nodes_only {
         let total = if reader.budget.exhausted.is_none()
             && (query.module.is_none() || !reader.gaps.contains(&"ambiguous_internal_module"))
@@ -181,6 +180,7 @@ pub(super) fn query(
             None
         };
         let nodes = reader.page_nodes(&selected)?;
+        let low = model::low_nodes(&nodes) as u64;
         return Ok(GraphResult::CodeNodes {
             value: CodeNodesResult {
                 nodes: BoundedList(nodes),
@@ -286,6 +286,10 @@ pub(super) fn query(
         }
         out.push(hit);
     }
+    let low = model::low_nodes(out.iter().filter_map(|hit| match hit {
+        CodeSearchHit::Node { node } => Some(node),
+        _ => None,
+    })) as u64;
     Ok(GraphResult::CodeSearch {
         value: CodeSearchResult {
             mode: query.mode,

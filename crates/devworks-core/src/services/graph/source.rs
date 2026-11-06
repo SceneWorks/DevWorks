@@ -170,7 +170,9 @@ pub(super) fn prepare(
                 .count();
     }
     if !reader.budget.retain(text.len()) {
-        return Err(unavailable());
+        return Err(
+            Refusal::new(DomainErrorCode::ViewUnavailable, "graph_memory_limit", None).into(),
+        );
     }
     Ok(Source {
         capture,

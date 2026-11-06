@@ -751,7 +751,38 @@ impl GraphService {
     ) -> Result<GraphResult, Failure> {
         let mut repositories = Vec::new();
         let mut position = 0;
-        metadata.repositories(|row|{let index=position;position+=1;if index<metadata.position.offset{return Ok(true);}if let Some(env)=&self.indexing{let status=crate::services::indexing::status::status(env,metadata.read,metadata.context,&row.id,3,None)?;let value=serde_json::to_value(status).map_err(|_|scope::unavailable(None))?;let record:CodeRepositoryStatus=model::wire(json!({"repositoryId":row.id,"freshness":value["freshness"],"languages":value["languages"],"semanticPacks":value["semanticPacks"],"overlays":value["overlays"]}))?;if repositories.len()>=metadata.limit||!metadata.retain_wire(&record)?{*metadata.next.borrow_mut()=Some(Position{offset:index,..Default::default()});return Ok(false);}repositories.push(record);}Ok(true)})?;
+        metadata.repositories(|row| {
+            let index = position;
+            position += 1;
+            if index < metadata.position.offset {
+                return Ok(true);
+            }
+            if let Some(env) = &self.indexing {
+                let status = crate::services::indexing::status::status(
+                    env,
+                    metadata.read,
+                    metadata.context,
+                    &row.id,
+                    3,
+                    None,
+                )?;
+                let value = serde_json::to_value(status).map_err(|_| scope::unavailable(None))?;
+                let record: CodeRepositoryStatus = model::wire(json!({
+                    "repositoryId":row.id,"freshness":value["freshness"],
+                    "languages":value["languages"],"semanticPacks":value["semanticPacks"],
+                    "overlays":value["overlays"]
+                }))?;
+                if repositories.len() >= metadata.limit || !metadata.retain_wire(&record)? {
+                    *metadata.next.borrow_mut() = Some(Position {
+                        offset: index,
+                        ..Default::default()
+                    });
+                    return Ok(false);
+                }
+                repositories.push(record);
+            }
+            Ok(true)
+        })?;
         if let Some(reader) = &mut reader {
             reader.budget.absorb_usage(&metadata.budget.borrow());
             reader.next = metadata.next.borrow().clone();

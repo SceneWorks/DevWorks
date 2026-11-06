@@ -941,7 +941,7 @@ fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without
     else {
         panic!("{answer:?}")
     };
-    let owned_pin=value.view.as_ref().unwrap().pin_id.clone();
+    let owned_pin = value.view.as_ref().unwrap().pin_id.clone();
     assert_eq!(
         value.view.unwrap().views[0].snapshot.worktree_id.as_ref(),
         Some(&tree.worktree_id)
@@ -955,7 +955,7 @@ fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without
         let expected = tree.revision;
         tree.revision += 1;
         tree.ownership_revision += 1;
-        tree.owner=devworks_core::protocol::ActorId(id("user"));
+        tree.owner = devworks_core::protocol::ActorId(id("user"));
         tx.git().update_git_worktree(&tree, expected)
     })
     .unwrap();
@@ -970,11 +970,512 @@ fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without
         matches!(&stale,DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::PermissionDenied),
         "{stale:?}"
     );
-    let owner=context.principal().clone();
-    write(&*store,move|tx|{let mut tree=tx.git().git_worktree(&id("git-owned-record"))?.unwrap();let expected=tree.revision;tree.owner=owner;tree.revision+=1;tree.ownership_revision+=1;tx.git().update_git_worktree(&tree,expected)}).unwrap();
-    let rebound=devworks_core::services::git::context::bind_worktree(&*store,context.clone(),&id("git-owned-record")).unwrap();
-    let mut old_pin=frame.clone();old_pin.as_object_mut().unwrap().remove("current");old_pin["view"]=json!({"kind":"Pinned","pinId":owned_pin});
-    let denied=app.query(&rebound,"code.source",old_pin.to_string().as_bytes()).unwrap();assert!(matches!(&denied,DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::ViewUnavailable),"an ABA owner cannot inherit an earlier custody pin: {denied:?}");
+    let owner = context.principal().clone();
+    write(&*store, move |tx| {
+        let mut tree = tx.git().git_worktree(&id("git-owned-record"))?.unwrap();
+        let expected = tree.revision;
+        tree.owner = owner;
+        tree.revision += 1;
+        tree.ownership_revision += 1;
+        tx.git().update_git_worktree(&tree, expected)
+    })
+    .unwrap();
+    let rebound = devworks_core::services::git::context::bind_worktree(
+        &*store,
+        context.clone(),
+        &id("git-owned-record"),
+    )
+    .unwrap();
+    let mut old_pin = frame.clone();
+    old_pin.as_object_mut().unwrap().remove("current");
+    old_pin["view"] = json!({"kind":"Pinned","pinId":owned_pin});
+    let denied = app
+        .query(&rebound, "code.source", old_pin.to_string().as_bytes())
+        .unwrap();
+    assert!(
+        matches!(&denied,DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::ViewUnavailable),
+        "an ABA owner cannot inherit an earlier custody pin: {denied:?}"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn native_overlay_read_operators_expose_only_relevant_formerly_mapped_callers() {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("endpoint-metadata");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/changed.rs"), "pub fn target() {}\n").unwrap();
+    std::fs::write(repo.join("src/lib.rs"),"pub mod changed;\nuse crate::changed::target;\npub fn caller(){target();never_indexed();}\n").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "endpoint baseline"]);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "endpoint-index");
+    executor.block_on(within("endpoint baseline publishes", async {
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    git(&repo, &["rm", "src/changed.rs"]);
+    git(&repo, &["commit", "-q", "-m", "delete target"]);
+    let revision = read(&*store, |s| {
+        devworks_core::services::indexing::section_config(
+            s.indexing(),
+            &devworks_core::services::indexing::section_key(None),
+        )
+    })
+    .revision;
+    let refresh = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"endpoint-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":revision.to_string()}});
+    let CommandReply::Recorded { receipt, .. } = app
+        .command(
+            &ctx,
+            "indexing.refresh_overlay",
+            refresh.to_string().as_bytes(),
+        )
+        .unwrap()
+    else {
+        panic!("overlay")
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::IndexingRefreshOverlay { value },
+    } = receipt.decision
+    else {
+        panic!("{:?}", receipt.decision)
+    };
+    let overlay = executor.block_on(within("endpoint overlay publishes", async {
+        loop {
+            let state = run_state(&store, value.id.as_str());
+            if state.state == RUN_SUCCEEDED {
+                break state;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let view = json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]});
+    let target = json!({"kind":"Name","name":"target","repositoryId":repository});
+    let calls = page(
+        &app,
+        &ctx,
+        "code.call_path",
+        json!({"kind":"Path","selection":{"target":target,"direction":"Inbound","depth":3}}),
+        Some(view.clone()),
+        None,
+    );
+    let GraphResult::CallTrace { value } = calls.result else {
+        panic!("calls")
+    };
+    assert!(value.start.is_none());
+    assert_eq!(value.unmapped_inbound_edges.unwrap().get(), 1);
+    for operation in ["code.consumers", "code.publishers"] {
+        let query = json!({"kind":if operation=="code.consumers"{"Consumers"}else{"Publishers"},"selection":target});
+        let answer = page(&app, &ctx, operation, query, Some(view.clone()), None);
+        let GraphResult::Related { value } = answer.result else {
+            panic!("related")
+        };
+        assert_eq!(value.unmapped_inbound_edges.unwrap().get(), 1);
+    }
+    let lineage = page(
+        &app,
+        &ctx,
+        "code.data_lineage",
+        json!({"kind":"DataLineage","selection":target}),
+        Some(view.clone()),
+        None,
+    );
+    let GraphResult::Lineage { value } = lineage.result else {
+        panic!("lineage")
+    };
+    assert_eq!(value.model_name.0, "target");
+    assert_eq!(
+        value.unmapped_inbound_edges.unwrap().get(),
+        0,
+        "CALLS is not a data-lineage relation"
+    );
+    let unknown = page(
+        &app,
+        &ctx,
+        "code.call_path",
+        json!({"kind":"Path","selection":{"target":{"kind":"Name","name":"never_indexed","repositoryId":repository},"direction":"Inbound","depth":3}}),
+        Some(view.clone()),
+        None,
+    );
+    let GraphResult::CallTrace { value } = unknown.result else {
+        panic!("unknown")
+    };
+    assert_eq!(
+        value.unmapped_inbound_edges.unwrap().get(),
+        0,
+        "an unresolved symbol was never mapped"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// Controlled recorded metadata on actual Tree-sitter facts; this does not run a semantic
+/// compiler or model, and does not claim that either failed during this fixture.
+struct CapturedConfidence(TreeSitterParser);
+impl devworks_core::ports::indexing::StructuralParser for CapturedConfidence {
+    fn languages(&self) -> &[devworks_core::ports::indexing::LanguageInfo] {
+        devworks_core::ports::indexing::StructuralParser::languages(&self.0)
+    }
+    fn language_of(&self, path: &str) -> Option<&devworks_core::ports::indexing::LanguageInfo> {
+        devworks_core::ports::indexing::StructuralParser::language_of(&self.0, path)
+    }
+    fn extract(
+        &self,
+        language: &str,
+        path: &str,
+        repository: &str,
+        source: &[u8],
+        stop: &(dyn Fn() -> bool + Sync),
+        budget_ms: u64,
+    ) -> Result<
+        devworks_core::ports::indexing::FileExtract,
+        devworks_core::ports::indexing::ExtractFault,
+    > {
+        let mut result = devworks_core::ports::indexing::StructuralParser::extract(
+            &self.0, language, path, repository, source, stop, budget_ms,
+        )?;
+        for node in &mut result.nodes {
+            if node.name == "fallback" {
+                node.properties.insert("confidence".into(), json!("low"));
+                node.properties
+                    .insert("extractionSource".into(), json!("tree-sitter-fallback"));
+                node.properties.insert(
+                    "fallbackReason".into(),
+                    json!("scripted-captured-confidence"),
+                );
+            } else if node.name == "caller" {
+                node.properties
+                    .insert("analysis_confidence".into(), json!("low"));
+            }
+        }
+        Ok(result)
+    }
+}
+#[test]
+fn native_fallback_confidence_survives_publication_and_counts_distinct_answer_nodes() {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("confidence");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn fallback(){fallback();}\npub fn caller(){fallback();}\n",
+    )
+    .unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "captured metadata"]);
+    let mut composed = composition(&h, store.clone(), "git");
+    composed.indexing.as_mut().unwrap().parser =
+        Arc::new(CapturedConfidence(TreeSitterParser::new()));
+    let app = executor.block_on(boot(composed)).unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "confidence-index");
+    executor.block_on(within("captured confidence publishes", async {
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let found = page(
+        &app,
+        &ctx,
+        "code.search",
+        json!({"kind":"Search","selection":{"mode":"NodeList","text":"%","repositoryId":repository}}),
+        None,
+        None,
+    );
+    let GraphResult::CodeSearch { value } = found.result else {
+        panic!("search")
+    };
+    assert_eq!(value.low_confidence_count.get(), 1);
+    let fallback = value
+        .items
+        .0
+        .iter()
+        .find_map(|hit| match hit {
+            devworks_core::protocol::records::CodeSearchHit::Node { node }
+                if node.name.0 == "fallback" =>
+            {
+                Some(node)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(fallback.confidence.as_ref().unwrap().0, "low");
+    assert_eq!(
+        fallback.extraction_source.as_ref().unwrap().0,
+        "tree-sitter-fallback"
+    );
+    let calls = page(
+        &app,
+        &ctx,
+        "code.call_path",
+        json!({"kind":"Path","selection":{"target":{"kind":"Node","nodeId":fallback.node_id},"direction":"Inbound","depth":3}}),
+        None,
+        None,
+    );
+    let GraphResult::CallTrace { value } = calls.result else {
+        panic!("calls")
+    };
+    assert!(value.entries.0.len() > 2);
+    assert_eq!(
+        value.low_confidence_count.get(),
+        1,
+        "loops and model analysis confidence do not inflate the fallback-node count"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// Controlled semantic facts over real Tree-sitter definitions; no compiler execution.
+struct CapturedForeignCall {
+    parser: TreeSitterParser,
+    target: devworks_core::protocol::Id,
+    qualified: String,
+    name: String,
+}
+impl devworks_core::ports::indexing::StructuralParser for CapturedForeignCall {
+    fn languages(&self) -> &[devworks_core::ports::indexing::LanguageInfo] {
+        devworks_core::ports::indexing::StructuralParser::languages(&self.parser)
+    }
+    fn language_of(&self, path: &str) -> Option<&devworks_core::ports::indexing::LanguageInfo> {
+        devworks_core::ports::indexing::StructuralParser::language_of(&self.parser, path)
+    }
+    fn extract(
+        &self,
+        language: &str,
+        path: &str,
+        repository: &str,
+        source: &[u8],
+        stop: &(dyn Fn() -> bool + Sync),
+        budget_ms: u64,
+    ) -> Result<
+        devworks_core::ports::indexing::FileExtract,
+        devworks_core::ports::indexing::ExtractFault,
+    > {
+        use devworks_core::ports::indexing::*;
+        let mut result = StructuralParser::extract(
+            &self.parser,
+            language,
+            path,
+            repository,
+            source,
+            stop,
+            budget_ms,
+        )?;
+        // Tree-sitter intentionally merges duplicate qualified definitions. The controlled
+        // semantic capture records the second source declaration as a distinct fact.
+        if repository == "callee" && source == b"pub fn target(){}\npub fn target(){}\n" {
+            let mut duplicate = result
+                .nodes
+                .iter()
+                .find(|node| node.name == "target")
+                .unwrap()
+                .clone();
+            duplicate.span.start_line = 2;
+            duplicate.span.end_line = 2;
+            duplicate.span.start_byte += 18;
+            duplicate.span.end_byte += 18;
+            duplicate
+                .properties
+                .insert("fixtureSource".into(), json!("ScriptedSemanticCapture"));
+            result.nodes.push(duplicate);
+        }
+        if repository == "caller"
+            && let Some(index) = result.nodes.iter().position(|node| node.name == "caller")
+        {
+            result.edges.push(ExtractedEdge {
+                kind: "CALLS".into(),
+                source: index,
+                target: EdgeTarget::RepositoryNode {
+                    repository_id: self.target.clone(), unit: "src/lib.rs".into(),
+                    kind: "Function".into(), qualified_name: self.qualified.clone(),
+                    target_name: Some(self.name.clone()),
+                },
+                resolution: Resolution::Resolved, confidence: 1.0,
+                properties: json!({"fixtureSource":"ScriptedSemanticCapture","resolutionBasis":"scripted-exact-capture"}).as_object().unwrap().clone(),
+            });
+        }
+        Ok(result)
+    }
+}
+#[test]
+fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_ambiguous() {
+    use devworks_core::ports::indexing::StructuralParser;
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    for (name, body) in [
+        ("callee", "pub fn target(){}\n"),
+        ("caller", "pub fn caller(){}\n"),
+    ] {
+        let repo = src.join(name);
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/lib.rs"), body).unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "foreign definition"]);
+    }
+    let warm = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repositories = discovered(&warm, &ctx);
+    let ids: std::collections::BTreeMap<_, _> = repositories
+        .iter()
+        .map(|key| {
+            let row = read(&*store, |s| s.projects().repository(&id(key))).unwrap();
+            (row.name, key.clone())
+        })
+        .collect();
+    executor.block_on(warm.shutdown());
+    let parser = TreeSitterParser::new();
+    let extracted = parser
+        .extract(
+            "rust",
+            "src/lib.rs",
+            "callee",
+            b"pub fn target(){}\n",
+            &|| false,
+            1000,
+        )
+        .unwrap();
+    let target = extracted
+        .nodes
+        .iter()
+        .find(|node| node.name == "target")
+        .unwrap();
+    let mut composed = composition(&h, store.clone(), "git");
+    composed.indexing.as_mut().unwrap().parser = Arc::new(CapturedForeignCall {
+        parser: TreeSitterParser::new(),
+        target: id(&ids["callee"]),
+        qualified: target.qualified_name.clone(),
+        name: target.name.clone(),
+    });
+    let app = executor.block_on(boot(composed)).unwrap();
+    for repository in &repositories {
+        let run = index(&app, &ctx, repository, &format!("foreign-{repository}"));
+        executor.block_on(within("foreign captured baseline publishes", async {
+            loop {
+                let state = run_state(&store, &run);
+                if state.state == RUN_SUCCEEDED {
+                    break;
+                }
+                assert!(!run_terminal(&state.state));
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+    }
+    let query = json!({"kind":"Path","selection":{"target":{"kind":"Name","name":"caller","repositoryId":ids["caller"]},"direction":"Outbound","depth":1}});
+    let base = page(
+        &app,
+        &ctx,
+        "code.call_path",
+        query.clone(),
+        Some(json!({"kind":"Published","repositoryIds":repositories})),
+        None,
+    );
+    let GraphResult::CallTrace { value } = base.result else {
+        panic!("baseline")
+    };
+    assert_eq!(
+        value.entries.0.len(),
+        1,
+        "the captured fact initially resolves"
+    );
+    let callee = src.join("callee");
+    std::fs::write(
+        callee.join("src/lib.rs"),
+        "pub fn target(){}\npub fn target(){}\n",
+    )
+    .unwrap();
+    git(&callee, &["add", "-A"]);
+    git(
+        &callee,
+        &["commit", "-q", "-m", "ambiguous intermediate definitions"],
+    );
+    let revision = read(&*store, |s| {
+        devworks_core::services::indexing::section_config(
+            s.indexing(),
+            &devworks_core::services::indexing::section_key(None),
+        )
+    })
+    .revision;
+    let request = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"ambiguous-overlay","command":{"kind":"RefreshOverlay","repositoryId":ids["callee"],"ref":"refs/heads/main","expectedSourceRevision":revision.to_string()}});
+    let CommandReply::Recorded { receipt, .. } = app
+        .command(
+            &ctx,
+            "indexing.refresh_overlay",
+            request.to_string().as_bytes(),
+        )
+        .unwrap()
+    else {
+        panic!("overlay")
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::IndexingRefreshOverlay { value },
+    } = receipt.decision
+    else {
+        panic!("{:?}", receipt.decision)
+    };
+    let overlay = executor.block_on(within("ambiguous overlay publishes", async {
+        loop {
+            let state = run_state(&store, value.id.as_str());
+            if state.state == RUN_SUCCEEDED {
+                break state;
+            }
+            assert!(!run_terminal(&state.state));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let caller_view = read(&*store, |s| s.indexing().published(&id(&ids["caller"])))
+        .unwrap()
+        .view_id;
+    let answer = page(
+        &app,
+        &ctx,
+        "code.call_path",
+        query,
+        Some(json!({"kind":"Exact","viewIds":[caller_view,overlay.output_view_id.unwrap()]})),
+        None,
+    );
+    let GraphResult::CallTrace { value } = answer.result else {
+        panic!("ambiguous answer")
+    };
+    assert!(
+        value.entries.0.is_empty(),
+        "two exact qualified definitions must remain unresolved: {:?}",
+        value
+    );
+    assert_eq!(value.unmapped_inbound_edges.unwrap().get(), 1);
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }
