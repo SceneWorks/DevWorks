@@ -398,6 +398,7 @@ pub(crate) fn rows_of(
                 unit,
                 kind,
                 qualified_name,
+                target_name,
             } => {
                 let target_repository = repository_id.as_str();
                 let id = match kind.as_str() {
@@ -410,10 +411,14 @@ pub(crate) fn rows_of(
                 (
                     id.clone(),
                     id,
-                    json!({
-                        "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
-                        "targetUnit":unit, "targetQualifiedName":qualified_name,
-                    }),
+                    {
+                        let mut payload=json!({
+                            "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
+                            "targetUnit":unit, "targetQualifiedName":qualified_name,
+                        });
+                        if let Some(name)=target_name {payload["targetName"]=json!(name);}
+                        payload
+                    },
                 )
             }
         };
