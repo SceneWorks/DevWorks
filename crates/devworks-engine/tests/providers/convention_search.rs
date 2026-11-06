@@ -510,16 +510,8 @@ fn interrupted_query(
         script.waiting.clone()
     };
     std::thread::scope(|scope| {
-        let worker = scope.spawn(|| {
-            search(
-                f,
-                index.clone(),
-                ctx,
-                "same-financial-query",
-                "alpha",
-                None,
-            )
-        });
+        let worker =
+            scope.spawn(|| search(f, index.clone(), ctx, "same-financial-query", "alpha", None));
         runtime().block_on(common::within(
             "actual query transport starts",
             waiting.notified(),
@@ -576,14 +568,7 @@ fn interrupted_query(
         f.h.clock(),
     ));
     index.set_embeddings(Some(native));
-    let first = search(
-        f,
-        index.clone(),
-        ctx,
-        "same-financial-query",
-        "alpha",
-        None,
-    );
+    let first = search(f, index.clone(), ctx, "same-financial-query", "alpha", None);
     (index, first)
 }
 
