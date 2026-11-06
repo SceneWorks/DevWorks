@@ -474,6 +474,15 @@ fn field(ui: &mut Ui, label: &str, value: &mut String) {
     ui.add(egui::TextEdit::singleline(value))
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
 }
+fn claim_time(milliseconds: i64) -> String {
+    jiff::Timestamp::from_millisecond(milliseconds)
+        .map(|time| {
+            time.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M:%S %Z")
+                .to_string()
+        })
+        .unwrap_or_else(|_| "unknown time".into())
+}
 fn lease(work: &WorkUi) -> Option<u64> {
     work.claim_lease_ms
         .as_deref()
@@ -508,7 +517,13 @@ pub(super) fn next_task(
         ));
     }
 }
-pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &mut Vec<Action>) {
+pub(super) fn controls(
+    ui: &mut Ui,
+    work: &mut WorkUi,
+    enabled: bool,
+    runtime_available: bool,
+    actions: &mut Vec<Action>,
+) {
     let Some(project) = work.of.clone() else {
         return;
     };
@@ -643,13 +658,13 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
                     claim.id.as_str(),
                     claim.state,
                     claim.owner_id.0.as_str(),
-                    crate::routing::local_time(claim.expires_at_ms.get())
+                    claim_time(claim.expires_at_ms.get())
                 ),
             );
             widgets::caption(
                 ui,
                 format!(
-                    "Work {} · kind {} · work revision {} · claim fence {} · selection queue revision {}",
+                    "Work {} · selected kind {} · selection work revision {} · claim fence {} · selection queue revision {}",
                     claim.work_id.as_str(),
                     claim
                         .work_kind
@@ -709,7 +724,7 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
                                     activity.kind.0,
                                     activity.sequence.as_str(),
                                     activity.actor_id.0.as_str(),
-                                    crate::routing::local_time(activity.occurred_at_ms.get())
+                                    claim_time(activity.occurred_at_ms.get())
                                 ),
                             );
                         }
@@ -778,7 +793,7 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
                 }
                 if ui
                     .add_enabled(
-                        enabled && !matches!(claim.state,devworks_core::protocol::records::LeaseState::Released),
+                        runtime_available && !matches!(claim.state,devworks_core::protocol::records::LeaseState::Released),
                         egui::Button::new(format!("Release claim {}", claim.id.as_str())),
                     )
                     .clicked()
@@ -792,7 +807,7 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
         field(ui, "Claim ID", &mut work.inspect_claim_id);
         if ui
             .add_enabled(
-                !work.inspect_claim_id.is_empty(),
+                runtime_available && !work.inspect_claim_id.is_empty(),
                 egui::Button::new("Inspect claim"),
             )
             .clicked()

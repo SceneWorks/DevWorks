@@ -127,6 +127,25 @@ fn custom_columns_rename_order_and_occupied_removal_use_backend_fences() {
         "destination must be chosen before removal"
     );
     choose(&mut h, "Reassign work to", "Backlog");
+    let arrived = create_issue(&*b, &p, "Arrived during review", intake.id.as_str());
+    press(&mut h, "Refresh");
+    press(&mut h, "Reassign work and remove status");
+    assert!(
+        statuses(&*b, &p).iter().any(|s| s.id == incoming.id),
+        "a stale affected-work digest cannot remove the column"
+    );
+    let unchanged = wops::work_record(b.query(
+        "tasks.get",
+        &wops::work_get(&*b, "tasks.get", issue.id.as_str()),
+    ))
+    .unwrap();
+    assert_eq!(
+        unchanged.status_id, incoming.id,
+        "the refused removal moved no work"
+    );
+    assert!(has_text(&h, "Your draft is kept"));
+    press(&mut h, "Review current workflow");
+    assert!(has_text(&h, "2 work records will move together"));
     press(&mut h, "Reassign work and remove status");
     assert!(statuses(&*b, &p).iter().all(|s| s.id != incoming.id));
     let changed = wops::work_record(b.query(
@@ -136,6 +155,15 @@ fn custom_columns_rename_order_and_occupied_removal_use_backend_fences() {
     .unwrap();
     assert_eq!(changed.id, issue.id);
     assert_ne!(changed.status_id, incoming.id);
+    let arrived = wops::work_record(b.query(
+        "tasks.get",
+        &wops::work_get(&*b, "tasks.get", arrived.id.as_str()),
+    ))
+    .unwrap();
+    assert_eq!(
+        arrived.status_id, changed.status_id,
+        "all reviewed records moved together"
+    );
     close_editor(&mut h);
     assert!(has_text(&h, "Preserved work"));
 }
@@ -324,6 +352,21 @@ fn native_type_and_label_editing_preserves_unset_and_uses_selection_filters() {
         Some(devworks_core::protocol::records::WorkItemType::Bug)
     ));
     assert_eq!(created.labels.as_ref().unwrap().0[0].0, "triage");
+    let legacy_frame = json!({"protocol":ops::PROTOCOL,"queryId":real.token("q"),"schemaRevision":2,"mode":"Query",
+        "body":{"kind":"tasks.get","workId":created.id,"detailLevel":"Summary"}}).to_string().into_bytes();
+    let legacy = wops::work_record(real.query("tasks.get", &legacy_frame)).unwrap();
+    assert!(legacy.task_type.is_none() && legacy.labels.is_none());
+    let mut cache = devworks_desktop::shell::work::WorkUi::default();
+    cache.detail.insert(created.id.as_str().into(), legacy);
+    cache.cards.items.push(created.clone());
+    assert!(
+        matches!(
+            cache.freshest(created.id.as_str()).unwrap().task_type,
+            Some(devworks_core::protocol::records::WorkItemType::Bug)
+        ),
+        "current metadata is not hidden by an older-schema receipt at the same revision"
+    );
+
     h.query_all_by_label_contains("Typed issue  ·")
         .next()
         .unwrap()

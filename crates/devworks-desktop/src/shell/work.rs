@@ -509,6 +509,12 @@ impl WorkUi {
                     newest.readiness = l.readiness.clone();
                     newest.pending_readiness = l.pending_readiness.clone();
                 }
+                // A replayed older-schema receipt can omit metadata at the same work revision.
+                // Keep the fields already observed by the current-schema listing.
+                if newest.labels.is_none() && l.labels.is_some() {
+                    newest.labels = l.labels.clone();
+                    newest.task_type = l.task_type.clone();
+                }
                 Some(newest)
             }
             (Some(d), _) => Some(d.clone()),
@@ -1402,7 +1408,9 @@ impl Shell {
                     self.select_project(Some(w.project_id.0.as_str().to_owned()));
                     let key = w.id.as_str().to_owned();
                     if feature {
-                        self.routes.entry(Route::Features).or_default().selection = Some(key);
+                        let view = self.routes.entry(Route::Features).or_default();
+                        view.tab = 0;
+                        view.selection = Some(key);
                         self.navigate(Route::Features);
                     } else if let Some(f) = &w.parent_id {
                         self.work.board = Some(f.as_str().to_owned());
@@ -1719,6 +1727,7 @@ impl Shell {
     pub(super) fn overview_screen(&mut self, ui: &mut Ui) {
         let screen = Route::Overview.screen();
         let online = self.online();
+        let open = self.project_open() && online.is_ok();
         let mut mem = self.routes.remove(&Route::Overview).unwrap_or_default();
         let mut actions: Vec<Action> = Vec::new();
         let project = self.selected_project.clone();
@@ -1792,7 +1801,7 @@ impl Shell {
                     Self::no_project(ui, &online);
                     return;
                 }
-                workflow::controls(ui, work, online.is_ok(), actions);
+                workflow::controls(ui, work, open, online.is_ok(), actions);
                 if tab == 0 {
                     if !Self::list_state(ui, &work.features, "features")
                         || !Self::list_state(ui, &work.cards, "tasks and issues")
@@ -1941,7 +1950,7 @@ impl Shell {
                                 chip(ui, text.clone(), *tone);
                                 ui.add_space(6.0);
                             }
-                            workflow::controls(ui, work, open, actions);
+                            workflow::controls(ui, work, open, online.is_ok(), actions);
                             create_form(ui, work, creating, actions);
                             if tab == 0 {
                                 feature_list(ui, work, mem, &cols, open, actions);
@@ -2087,7 +2096,7 @@ impl Shell {
                                 chip(ui, text.clone(), *tone);
                                 ui.add_space(6.0);
                             }
-                            workflow::controls(ui, work, open, actions);
+                            workflow::controls(ui, work, open, online.is_ok(), actions);
                             create_form(ui, work, creating, actions);
                             issue_list(ui, work, mem, &cols, tab == 1, open, actions);
                         },
@@ -3621,6 +3630,10 @@ fn card_detail(
         }
         edit_section(ui, work, w, enabled, actions);
         ui.add_space(6.0);
+        if let Some(origin) = &w.previous_inheritance {
+            widgets::caption(ui,format!("Earlier requirements from feature {}: {}",origin.feature_id.as_str(),origin.requirement_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
+            if ui.button("Open earlier feature").clicked() { actions.push(Action::OpenWork(origin.feature_id.as_str().into())); }
+        }
         // Membership: link, transfer or remove (remove pauses).
         let current = w
             .parent_id

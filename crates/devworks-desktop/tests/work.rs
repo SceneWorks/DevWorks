@@ -1559,4 +1559,13 @@ fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() 
         "selection does not dispatch the task"
     );
     assert!(has_text(&h, "Open feature controls"));
+    click(&mut h, Role::Button, "Board");
+    h.get_by_role_and_label(Role::Button, "Open feature controls")
+        .click_accesskit();
+    settle(&mut h);
+    assert_eq!(
+        h.state().route_memory(Route::Features).tab,
+        0,
+        "the explicit feature link opens its detail, not a previouslyselectedboard"
+    );
 }
