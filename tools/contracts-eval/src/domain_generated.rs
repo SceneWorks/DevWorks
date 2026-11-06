@@ -11832,6 +11832,8 @@ pub struct FeatureBudgetView {
     pub continue_required: bool,
     pub untracked_attempts: Counter,
     pub unknown_tail_attempts: Counter,
+    pub accounting_ready: bool,
+    pub monetary_incomplete_attempts: Counter,
 }
 impl Check for FeatureBudgetView {
     fn check(&self) -> Result<(), String> {
@@ -11843,6 +11845,8 @@ impl Check for FeatureBudgetView {
         self.continue_required.check()?;
         self.untracked_attempts.check()?;
         self.unknown_tail_attempts.check()?;
+        self.accounting_ready.check()?;
+        self.monetary_incomplete_attempts.check()?;
         super::domain_rules::record(
             "FeatureBudgetView",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,

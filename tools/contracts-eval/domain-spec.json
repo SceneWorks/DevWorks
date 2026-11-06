@@ -4458,7 +4458,9 @@
         "warning": "bool",
         "continue_required": "bool",
         "untracked_attempts": "Counter",
-        "unknown_tail_attempts": "Counter"
+        "unknown_tail_attempts": "Counter",
+        "accounting_ready": "bool",
+        "monetary_incomplete_attempts": "Counter"
       }
     },
     "PriceChargeKind": {
