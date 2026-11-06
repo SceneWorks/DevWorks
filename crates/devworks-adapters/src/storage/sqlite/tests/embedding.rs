@@ -44,7 +44,12 @@ fn connection() -> StoredConnection {
 }
 fn candidate(store: &SqliteStore, name: &str) -> StoredEmbeddingCandidate {
     let c = connection();
-    let model_digest = sha256_hex(b"recorded embedding model identity");
+    let model_identity = json!({"version":1,"connectionId":c.id,"endpointProfile":"Embedding","endpoint":c.endpoint,"accountRevision":c.account_revision.to_string(),"accountDigest":c.account_digest,"upstreamModelId":"literal-model"});
+    let model_digest = sha256_hex(
+        devworks_core::jcs::canonicalize(&model_identity)
+            .unwrap()
+            .as_bytes(),
+    );
     let encoder_config = json!({"version":1,"modelDigest":model_digest,"dimensions":2,"dimensionMode":"Native","metric":"Cosine","elementType":"Float32","encodingFormat":"float"});
     let configuration_digest = sha256_hex(
         devworks_core::jcs::canonicalize(&encoder_config)
@@ -650,5 +655,94 @@ fn restored_probe_authority_is_not_selection_authority() {
         .unwrap()
         .revision,
         1
+    );
+}
+
+#[test]
+fn cosmetic_connection_change_preserves_qualification_but_selection_cas_still_applies() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let fence = start(&s);
+    let evidence = native_facts(&s);
+    stage(&s, fence.clone(), evidence);
+    complete(&s, fence);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-connection"))?
+            .unwrap();
+        c.name = "Renamed".into();
+        c.local_free = true;
+        tx.router().put_connection(&c, Some(1))?;
+        Ok(())
+    })
+    .unwrap();
+    let selected = run_write(&s, WriteOptions::default(), |tx| {
+        tx.router()
+            .select_embedding_candidate(1, Some((&id("candidate"), 4)))
+    })
+    .unwrap();
+    assert_eq!(selected.candidate_id, Some(id("candidate")));
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), |tx| tx
+            .router()
+            .select_embedding_candidate(2, Some((&id("candidate"), 3)))),
+        Err(StorageError::RevisionConflict(_))
+    ));
+}
+
+#[test]
+fn existing_vector_identity_is_never_relabelled_by_qualification() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let fence = start(&s);
+    let evidence = native_facts(&s);
+    stage(&s, fence.clone(), evidence);
+    let c = candidate(&s, "candidate");
+    h.raw().execute("INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) VALUES(?1,?2,2,'L2','Float32')",rusqlite::params![c.space_id.as_str(),sha256_hex(b"older incompatible identity")]).unwrap();
+    assert!(
+        run_write(&s, WriteOptions::default(), move |tx| {
+            tx.operations().transition(
+                &OperationId(id("qualification-operation")),
+                3,
+                Some(&fence),
+                OperationState::ObservedComplete,
+                None,
+            )?;
+            tx.router().finish_embedding_qualification(
+                &id("candidate"),
+                3,
+                &OperationId(id("qualification-operation")),
+                &fence,
+                EmbeddingQualificationState::Qualified,
+                None,
+            )
+        })
+        .is_err()
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT metric FROM embedding_spaces", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "L2"
+    );
+    assert_eq!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .router()
+            .embedding_qualification(&id("candidate")))
+        .unwrap()
+        .unwrap()
+        .revision,
+        3
+    );
+    assert_eq!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .operations()
+            .operation(&OperationId(id("qualification-operation"))))
+        .unwrap()
+        .unwrap()
+        .state,
+        OperationState::Dispatching
     );
 }
