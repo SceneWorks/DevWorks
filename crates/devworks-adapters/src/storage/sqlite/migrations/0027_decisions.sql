@@ -89,3 +89,10 @@ CREATE TABLE notifications (
 CREATE INDEX notifications_inbox ON notifications(user_id,created_at DESC,id DESC);
 CREATE INDEX notifications_project ON notifications(user_id,project_id,created_at DESC,id DESC);
 CREATE INDEX notifications_completion ON notifications(user_id,acknowledged,created_at DESC,id DESC) WHERE category='Completion';
+
+-- The local host binds its actual UI Human identity; registered historical humans do not
+-- automatically become notification recipients.
+CREATE TABLE notification_audience (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ user_id TEXT NOT NULL REFERENCES actors
+) STRICT;

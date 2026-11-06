@@ -2778,6 +2778,9 @@ impl EvalRepository for Unsupported {
 }
 
 impl DecisionRead for Unsupported {
+    fn notification_users(&self) -> Result<Vec<ActorId>, StorageError> {
+        nope()
+    }
     fn list_approval_sources(
         &self,
         _: &ApprovalSourceFilter,
@@ -2826,6 +2829,9 @@ impl DecisionRead for Unsupported {
     }
 }
 impl DecisionRepository for Unsupported {
+    fn bind_notification_user(&mut self, _: &ActorId) -> Result<(), StorageError> {
+        nope()
+    }
     fn put_approval(&mut self, _: &StoredApproval, _: Option<i64>) -> Result<(), StorageError> {
         nope()
     }

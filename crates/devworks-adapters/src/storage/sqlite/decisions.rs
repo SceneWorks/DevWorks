@@ -347,6 +347,11 @@ fn notification_list(
     rows(conn, &sql, params_from_iter(p), notification)
 }
 macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
+    fn notification_users(&self)->Result<Vec<ActorId>,StorageError>{
+        let mut statement=db(self.conn.prepare_cached("SELECT a.id FROM notification_audience n JOIN actors a ON a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'"))?;
+        let values=db(db(statement.query_map([],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
+        values.into_iter().map(|v|id(v).map(ActorId)).collect()
+    }
     fn list_approval_sources(&self,f:&ApprovalSourceFilter,a:Option<&ApprovalSourcePosition>,n:u16)->Result<Vec<ApprovalSourceRef>,StorageError>{source_list(self.conn,f,a,n)}
     fn approval(&self,id:&Id)->Result<Option<StoredApproval>,StorageError>{one_approval(self.conn,id)}
     fn human_decision(&self,s:ApprovalSource,id:&Id)->Result<Option<StoredHumanDecision>,StorageError>{Ok(rows(self.conn,"SELECT * FROM human_decisions WHERE source=?1 AND proposal_id=?2",params![s.as_str(),id.as_str()],audit)?.into_iter().next())}
@@ -360,6 +365,11 @@ decision_reads!(Snapshot<'_>);
 decision_reads!(Unit<'_>);
 
 impl DecisionRepository for Unit<'_> {
+    fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError> {
+        actor(self.conn, user, PrincipalKind::Human)?;
+        db(self.conn.execute("INSERT INTO notification_audience(singleton,user_id) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET user_id=excluded.user_id",[user.0.as_str()]))?;
+        Ok(())
+    }
     fn put_approval(
         &mut self,
         a: &StoredApproval,

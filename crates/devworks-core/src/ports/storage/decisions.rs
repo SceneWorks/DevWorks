@@ -142,6 +142,8 @@ pub struct NotificationPosition {
 }
 
 pub trait DecisionRead {
+    /// The host-bound canonical Human audience (at most one); never every historical actor.
+    fn notification_users(&self) -> Result<Vec<ActorId>, StorageError>;
     /// Newest first by timestamp, ID and source; exclusive cursor; limit 1..=MAX_PAGE.
     fn list_approval_sources(
         &self,
@@ -178,6 +180,8 @@ pub trait DecisionRead {
     ) -> Result<Vec<StoredNotification>, StorageError>;
 }
 pub trait DecisionRepository: DecisionRead {
+    /// Host composition binds the actual local UI identity; no tool operation exposes this.
+    fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError>;
     /// Immutable content/binding; a Pending row may take one terminal decision at revision+1.
     fn put_approval(
         &mut self,
