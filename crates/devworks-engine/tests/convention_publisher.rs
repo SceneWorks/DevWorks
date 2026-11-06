@@ -439,3 +439,142 @@ fn search_cursor_expires_on_changed_source_and_changed_top_k() {
         "CursorExpired"
     );
 }
+struct IndexCommand(Arc<IndexService>);
+impl devworks_core::ports::CommandHandler for IndexCommand {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        c: &devworks_core::gateway::AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+        let devworks_core::operations::OperationInput::Conventions(
+            devworks_core::operations::conventions::Input::Index(input),
+        ) = c.input()
+        else {
+            panic!("actual selected index input")
+        };
+        self.0.decide_index(ctx, c, tx, input).map_err(|e| match e {
+            devworks_core::services::sessions::Failure::Storage(e) => e.into(),
+            e => panic!("unexpected actual owner refusal {e:?}"),
+        })
+    }
+}
+#[test]
+fn actual_accepted_all_request_captures_configuration_and_processes_every_keyset_page() {
+    let f = Fixture::new();
+    let mut owners = Vec::new();
+    for n in 0..65 {
+        owners.push(f.source(&format!("guide-{n:03}"), "alpha rule").0);
+    }
+    let revision = read(&*f.store, |s| {
+        s.conventions()
+            .convention_scope_revision(&KnowledgeScope::Workspace)
+    });
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &Authority,
+        store: &*f.store,
+        ids: f.h.ids.as_ref(),
+    };
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"all-index","schemaRevision":3,"body":{"kind":"conventions.index","allScope":{"kind":"Workspace"},"expectedRevision":revision.to_string()}});
+    let handler = Arc::new(IndexCommand(f.index.clone()));
+    let first = gateway
+        .command(
+            &f.ctx,
+            "conventions.index",
+            frame.to_string().as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    let replay = gateway
+        .command(
+            &f.ctx,
+            "conventions.index",
+            frame.to_string().as_bytes(),
+            handler,
+        )
+        .unwrap();
+    let devworks_core::protocol::CommandReply::Recorded {
+        receipt,
+        replayed: false,
+        ..
+    } = first
+    else {
+        panic!("actual durable Accepted")
+    };
+    assert!(matches!(
+        receipt.decision,
+        devworks_core::protocol::results::DomainDecision::Accepted { .. }
+    ));
+    assert!(matches!(
+        replay,
+        devworks_core::protocol::CommandReply::Recorded { replayed: true, .. }
+    ));
+    let operation = receipt.operation_id.unwrap();
+    let before = read(&*f.store, |s| s.operations().operation(&operation)).unwrap();
+    assert_eq!(
+        before.payload["configurationSourceDigest"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert!(before.payload["embeddingSpace"].is_null());
+    let op = dispatch(&*f.store, &operation);
+    let IndexOutcome::Completed(result) =
+        f.index.run_index(&op, &Cancellation::new(), None).unwrap()
+    else {
+        panic!("complete full scope")
+    };
+    assert_eq!(result["indexed"], 65);
+    for owner in &owners {
+        let head = read(&*f.store, |s| {
+            s.conventions().convention_index_head(&owner.id)
+        })
+        .unwrap();
+        assert_eq!(head.operation_id, operation);
+        assert_eq!(head.status, "LexicalOnly");
+    }
+}
+#[test]
+fn cancellation_while_waiting_for_sql_writer_cannot_publish() {
+    let f = Fixture::new();
+    let (owner, op) = f.source("writer-cancel", "# Heading\nalpha");
+    let store = f.store.clone();
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        write(&*store, move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap()
+    });
+    entered
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let index = f.index.clone();
+    let cancellation = Cancellation::new();
+    let cancel = cancellation.clone();
+    let (started_tx, started) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        index.run_index(&op, &cancellation, None)
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    cancel.cancel();
+    release.send(()).unwrap();
+    blocker.join().unwrap();
+    assert!(matches!(
+        worker.join().unwrap(),
+        Err(StorageError::Cancelled)
+    ));
+    assert!(
+        read(&*f.store, |s| s
+            .conventions()
+            .convention_index_head(&owner.id))
+        .is_none()
+    );
+}

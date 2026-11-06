@@ -52,6 +52,7 @@ struct Snapshot {
     revision: i64,
     top_k: u16,
     configuration: EmbeddingConfiguration,
+    documents: u64,
 }
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
@@ -67,17 +68,6 @@ impl IndexService {
         if !crate::authority::authorization_holds(read, query.authorization())? {
             return Err(StorageError::ScopeDenied.into());
         }
-        if input.lifecycles.as_ref().is_some_and(|l| {
-            l.0.iter()
-                .any(|state| !matches!(state, ConventionLifecycle::Active))
-        }) {
-            return Err(crate::services::sessions::Refusal::new(
-                crate::protocol::DomainErrorCode::UnsupportedCapability,
-                "convention_search_requires_active",
-                None,
-            )
-            .into());
-        }
         let scoped = access::scope(read, ctx, Some(&input.scope), false)?;
         let top_k = if query.schema_revision().0 >= 3 {
             input
@@ -91,10 +81,7 @@ impl IndexService {
         };
         let filter = ConventionQuery {
             scopes: scoped.readable.clone(),
-            lifecycles: input.lifecycles.as_ref().map_or_else(
-                || vec!["Active".into()],
-                |l| l.0.iter().map(|x| format!("{x:?}")).collect(),
-            ),
+            lifecycles: vec!["Active".into()],
             applicability: input.applicability.0.iter().map(|s| s.0.clone()).collect(),
             ..Default::default()
         };
@@ -111,12 +98,16 @@ impl IndexService {
                     .map(|r| json!({"scope":s.key(),"revision":r}))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint=sha256_hex(crate::jcs::canonicalize(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"lifecycles":input.lifecycles,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?.as_bytes());
+        let fingerprint=sha256_hex(crate::jcs::canonicalize(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?.as_bytes());
         let principal = read.authority().principal(ctx.principal())?;
         let policy =
             crate::authority::policy::resolve_policy(read.configuration(), ctx.project_id())?
                 .digest();
         let witness=sha256_hex(json!({"query":fingerprint,"sources":sources,"index":revision,"configuration":config.source_digest,"principal":principal.map(|p|(p.revision,p.active)),"policy":policy,"registry":read.packages().registry_revision()?}).to_string().as_bytes());
+        let documents = read
+            .conventions()
+            .convention_lexical_statistics(&filter, &[])?
+            .documents;
         Ok(Snapshot {
             binding: CursorBinding::new(ctx, "conventions.search", &[&witness], revision),
             witness,
@@ -125,6 +116,7 @@ impl IndexService {
             revision,
             top_k,
             configuration: config,
+            documents,
         })
     }
     pub fn prepare_search(
@@ -134,9 +126,15 @@ impl IndexService {
         env: &Preparation<'_>,
         input: &ops::SearchInput,
     ) -> Result<PreparedSearch, Failure> {
-        let snapshot = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            Ok(self.search_snapshot(read, ctx, query, input))
-        })??;
+        let snapshot = read_snapshot(
+            &*self.store,
+            &ReadOptions {
+                cancellation: env.cancellation.cloned(),
+                deadline_ms: env.deadline_ms,
+                ..Default::default()
+            },
+            |read| Ok(self.search_snapshot(read, ctx, query, input)),
+        )??;
         if env.stopped(self.clock.now_ms().get()) || self.is_stopped() {
             return Err(StorageError::Cancelled.into());
         }
@@ -168,6 +166,18 @@ impl IndexService {
             reason: snapshot.configuration.reason.clone(),
             configuration: snapshot.configuration.clone(),
         };
+        // Frozen SearchAsync returns before provider work for whitespace or no authored chunks.
+        if input.text.0.chars().all(char::is_whitespace) || snapshot.documents == 0 {
+            prepared.reason = Some(
+                if snapshot.documents == 0 {
+                    "No current published convention chunks."
+                } else {
+                    "The query is whitespace."
+                }
+                .into(),
+            );
+            return Ok(prepared);
+        }
         if let Some(space) = snapshot.configuration.space {
             // A lexical cursor stays lexical even when its original optional provider failed.
             if position.as_ref().is_some_and(|p| !p.dense) {
@@ -385,7 +395,7 @@ impl IndexService {
                 break;
             }
             for owner in &owners {
-                let index = read.conventions().convention_index_status(&owner.id)?;
+                let index = read.conventions().convention_index_head(&owner.id)?;
                 let gap = match index {
                     None => Some("Unindexed"),
                     Some(ref g)
