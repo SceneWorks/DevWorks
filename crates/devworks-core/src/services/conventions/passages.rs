@@ -16,7 +16,6 @@ use crate::{
     },
 };
 use base64::Engine;
-use std::io::{self, Read};
 
 pub(super) struct DocumentRequest<'a> {
     pub owner: StoredConvention,
@@ -127,8 +126,10 @@ impl ConventionService {
                 return Err(StorageError::CursorExpired.into());
             }
             let mut bytes = lease
-                .read_range(offset, request.max_bytes + 1)
-                .map_err(|_| unavailable())?;
+                .read_range_controlled(offset, request.max_bytes + 1, &mut || {
+                    self.is_stopped() || env.stopped(self.clock.now_ms().get())
+                })
+                .map_err(source_error)?;
             let more = bytes.len() > request.max_bytes;
             bytes.truncate(request.max_bytes);
             let end = offset
@@ -159,7 +160,11 @@ impl ConventionService {
             if offset > lease.version.byte_count as u64 {
                 return Err(StorageError::CursorExpired.into());
             }
-            let bytes = lease.read_range(offset, 65540).map_err(|_| unavailable())?;
+            let bytes = lease
+                .read_range_controlled(offset, 65540, &mut || {
+                    self.is_stopped() || env.stopped(self.clock.now_ms().get())
+                })
+                .map_err(source_error)?;
             let valid = match std::str::from_utf8(&bytes) {
                 Ok(s) => s,
                 Err(e)
@@ -264,69 +269,11 @@ impl ConventionService {
         })
     }
 }
-fn scalar(reader: &mut dyn Read) -> io::Result<Option<char>> {
-    let mut raw = [0_u8; 4];
-    if reader.read(&mut raw[..1])? == 0 {
-        return Ok(None);
+pub(super) fn source_error(
+    error: crate::services::artifacts::lifecycle::ExactReadRefusal,
+) -> Failure {
+    match error {
+        crate::services::artifacts::lifecycle::ExactReadRefusal::Storage(e) => Failure::Storage(e),
+        _ => unavailable(),
     }
-    let n = match raw[0] {
-        0..=0x7f => 1,
-        0xc2..=0xdf => 2,
-        0xe0..=0xef => 3,
-        0xf0..=0xf4 => 4,
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "convention source is not UTF-8",
-            ));
-        }
-    };
-    reader.read_exact(&mut raw[1..n])?;
-    Ok(Some(
-        std::str::from_utf8(&raw[..n])
-            .map_err(io::Error::other)?
-            .chars()
-            .next()
-            .expect("scalar"),
-    ))
-}
-pub(super) fn text_page(
-    reader: &mut dyn Read,
-    offset: u64,
-    max_chars: usize,
-    cursor: &CursorBinding,
-    stopped: impl Fn() -> bool,
-) -> Result<ConventionPassage, Failure> {
-    for n in 0..offset {
-        if n % 4096 == 0 && stopped() {
-            return Err(StorageError::Cancelled.into());
-        }
-        if scalar(reader).map_err(invalid)?.is_none() {
-            return Err(StorageError::CursorExpired.into());
-        }
-    }
-    let mut text = String::new();
-    let mut count = 0_u64;
-    let more = loop {
-        if count % 4096 == 0 && stopped() {
-            return Err(StorageError::Cancelled.into());
-        }
-        let Some(ch) = scalar(reader).map_err(invalid)? else {
-            break false;
-        };
-        if count >= max_chars as u64 || text.len() + ch.len_utf8() > 65536 {
-            break true;
-        }
-        text.push(ch);
-        count += 1;
-    };
-    let end = offset
-        .checked_add(count)
-        .ok_or_else(|| invalid("source offset overflow"))?;
-    Ok(ConventionPassage {
-        text: GraphText(text),
-        offset: counter(i64::try_from(offset).map_err(invalid)?),
-        next_cursor: more.then(|| BoundedText(cursor.encode(&end.to_string()))),
-        has_more: more,
-    })
 }

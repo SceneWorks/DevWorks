@@ -38,23 +38,6 @@ impl Read for Reader {
     }
 }
 impl ConventionSourceLease {
-    /// A bounded range from this exact verified generation, outside SQL. The native adapter
-    /// revalidates changed file identity/timestamps and caches only settled verification.
-    pub fn read_range(&self, offset: u64, max: usize) -> Result<Vec<u8>, ExactReadRefusal> {
-        self.files
-            .read_range(
-                &self.version.blob_digest,
-                &self.version.blob_generation,
-                self.version
-                    .byte_count
-                    .try_into()
-                    .map_err(|_| ExactReadRefusal::Unreadable)?,
-                offset,
-                max,
-            )
-            .map_err(|_| ExactReadRefusal::Unreadable)
-    }
-
     pub fn read_range_controlled(
         &self,
         offset: u64,
@@ -98,26 +81,6 @@ impl ConventionSourceLease {
             ));
         }
         let bytes = result.map_err(|_| ExactReadRefusal::Unreadable)?;
-        Ok(Box::new(Reader {
-            bytes,
-            _hold: self.hold,
-        }))
-    }
-
-    /// Call outside every SQL snapshot/transaction. The managed file adapter verifies the
-    /// complete immutable generation on the same handle it returns.
-    pub fn open(self) -> Result<Box<dyn Read + Send>, ExactReadRefusal> {
-        let bytes = self
-            .files
-            .open(
-                &self.version.blob_digest,
-                &self.version.blob_generation,
-                self.version
-                    .byte_count
-                    .try_into()
-                    .map_err(|_| ExactReadRefusal::Unreadable)?,
-            )
-            .map_err(|_| ExactReadRefusal::Unreadable)?;
         Ok(Box::new(Reader {
             bytes,
             _hold: self.hold,

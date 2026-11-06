@@ -1,6 +1,6 @@
 //! Source-backed breadcrumbs: at most three original heading spans, never copied per chunk.
 use super::{
-    ConventionService, access, model,
+    ConventionService, access,
     passages::{DocumentRequest, PreparedDocument},
     queries,
 };

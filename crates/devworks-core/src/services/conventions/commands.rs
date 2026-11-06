@@ -213,12 +213,20 @@ impl ConventionService {
         if let Some(resources) = input.resources.as_ref() {
             for change in &resources.0 {
                 match change {
-                    ConventionResourceChange::Attach { name, content, .. } => changes.push((
+                    ConventionResourceChange::Attach {
+                        name,
+                        content,
+                        media_type,
+                        ..
+                    } => changes.push((
                         None,
                         name.0.clone(),
                         self.retain(tx, ctx, &old, content, prepared, true)?,
                         "Active".to_owned(),
-                        content.media_type.clone(),
+                        media_type
+                            .as_ref()
+                            .map(|s| s.0.clone())
+                            .unwrap_or_else(|| content.media_type.clone()),
                     )),
                     ConventionResourceChange::Update {
                         resource_id,
@@ -226,6 +234,7 @@ impl ConventionService {
                         name,
                         content,
                         lifecycle,
+                        media_type,
                         ..
                     } => {
                         let previous = resource(tx, &old, resource_id)?;
@@ -264,7 +273,10 @@ impl ConventionService {
                                 .unwrap_or_else(|| previous.name.clone()),
                             reference,
                             state,
-                            previous.media_type,
+                            media_type
+                                .as_ref()
+                                .map(|s| s.0.clone())
+                                .unwrap_or(previous.media_type),
                         ));
                     }
                 }

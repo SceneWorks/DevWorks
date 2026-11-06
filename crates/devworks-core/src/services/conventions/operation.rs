@@ -13,7 +13,7 @@ use crate::{
         records::*,
         results::{DomainDecision, OperationResult},
     },
-    services::sessions::{Failure, Refusal, counter, rev},
+    services::sessions::{Failure, counter, rev},
 };
 fn missing(id: &OperationId) -> Failure {
     crate::services::sessions::not_found("convention_operation", &id.0).into()

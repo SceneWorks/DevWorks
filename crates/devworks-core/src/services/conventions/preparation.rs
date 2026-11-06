@@ -45,9 +45,9 @@ impl ConventionService {
         env: &Preparation<'_>,
         owner: &StoredConvention,
         reference: &ArtifactRef,
-        text: bool,
+        text: Option<bool>,
     ) -> Result<SourceCapture, Failure> {
-        if text && reference.byte_length.get() as u64 > model::MAX_MARKDOWN_BYTES {
+        if text.is_some() && reference.byte_length.get() as u64 > model::MAX_MARKDOWN_BYTES {
             return Err(invalid("convention_source_size"));
         }
         let (lease, upload) = env.read(|read| {
@@ -142,7 +142,8 @@ impl ConventionService {
                 }
             })())
         })??;
-        if text {
+        if let Some(required) = text {
+            let mut nonblank = false;
             let mut offset = 0_u64;
             let mut pending = Vec::new();
             while offset < lease.version.byte_count as u64 {
@@ -150,28 +151,42 @@ impl ConventionService {
                     return Err(StorageError::Cancelled.into());
                 }
                 let bytes = lease
-                    .read_range(offset, 65536)
-                    .map_err(|_| invalid("convention_source"))?;
+                    .read_range_controlled(offset, 65536, &mut || {
+                        self.is_stopped() || env.stopped(self.clock.now_ms().get())
+                    })
+                    .map_err(super::passages::source_error)?;
                 if bytes.is_empty() {
                     return Err(invalid("convention_source"));
                 }
                 offset += bytes.len() as u64;
                 pending.extend_from_slice(&bytes);
                 match std::str::from_utf8(&pending) {
-                    Ok(_) => pending.clear(),
+                    Ok(value) => {
+                        nonblank |= value.chars().any(|c| !c.is_whitespace());
+                        pending.clear();
+                    }
                     Err(e) if e.error_len().is_none() => {
+                        nonblank |= std::str::from_utf8(&pending[..e.valid_up_to()])
+                            .expect("valid prefix")
+                            .chars()
+                            .any(|c| !c.is_whitespace());
                         pending.drain(..e.valid_up_to());
                     }
                     Err(_) => return Err(invalid("convention_utf8")),
                 }
+            }
+            if required && !nonblank {
+                return Err(invalid("convention_content"));
             }
             if !pending.is_empty() {
                 return Err(invalid("convention_utf8"));
             }
         } else {
             let _ = lease
-                .read_range(0, 1)
-                .map_err(|_| invalid("convention_source"))?;
+                .read_range_controlled(0, 1, &mut || {
+                    self.is_stopped() || env.stopped(self.clock.now_ms().get())
+                })
+                .map_err(super::passages::source_error)?;
         }
         Ok(SourceCapture {
             reference: reference.clone(),
@@ -194,20 +209,20 @@ impl ConventionService {
                 input.scope.as_ref(),
             ))
         })??;
-        let mut sources = vec![self.capture(ctx, env, &owner, &input.content, true)?];
+        let mut sources = vec![self.capture(ctx, env, &owner, &input.content, Some(true))?];
         if let Some(ConventionRawChange::Set { content }) = input.raw_content.as_ref() {
-            sources.push(self.capture(ctx, env, &owner, content, true)?);
+            sources.push(self.capture(ctx, env, &owner, content, Some(false))?);
         }
         if let Some(changes) = input.resources.as_ref() {
             for change in &changes.0 {
                 match change {
                     ConventionResourceChange::Attach { content, .. } => {
-                        sources.push(self.capture(ctx, env, &owner, content, false)?)
+                        sources.push(self.capture(ctx, env, &owner, content, None)?)
                     }
                     ConventionResourceChange::Update {
                         content: Some(content),
                         ..
-                    } => sources.push(self.capture(ctx, env, &owner, content, false)?),
+                    } => sources.push(self.capture(ctx, env, &owner, content, None)?),
                     _ => {}
                 }
             }
