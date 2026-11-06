@@ -984,6 +984,9 @@ impl PackageService {
                         let bundle: ArtifactRef =
                             serde_json::from_value(source.summary["source"].clone())
                                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+                        if !review_source_available(s.artifacts(), &bundle)? {
+                            return Ok(None);
+                        }
                         let facts = self
                             .review_facts(s.packages(), &inspection, &bundle)
                             .map_err(review_failure)?;
@@ -1031,6 +1034,14 @@ impl PackageService {
                     if source.id != source_id || source.revision != source_revision {
                         return Ok(false);
                     };
+                    let bundle: ArtifactRef =
+                        serde_json::from_value(source.summary["source"].clone())
+                            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+                    // The source may disappear after preparation. Check before staging can
+                    // supersede any old review, within the same writer snapshot as staging.
+                    if !review_source_available(tx.artifacts(), &bundle)? {
+                        return Ok(false);
+                    }
                     let context = package_source_context(tx, &source).map_err(|e| match e {
                         Failure::Storage(e) => e,
                         Failure::Refused(r) => StorageError::InvalidRecord(format!(
@@ -1059,6 +1070,24 @@ impl PackageService {
                 return Ok(count);
             }
         }
+    }
+}
+
+fn review_source_available(
+    read: &dyn crate::ports::storage::ArtifactRead,
+    reference: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    match artifact_binding(read, reference) {
+        Ok(_) => Ok(true),
+        // A retained proposal is still inspectable/rejectable when its immutable bundle is
+        // unavailable. This is non-actionable inventory, not evidence of store corruption.
+        Err(Failure::Refused(refusal))
+            if refusal.code == DomainErrorCode::SourceChanged
+                && refusal.target_kind == "approval_artifact" =>
+        {
+            Ok(false)
+        }
+        Err(failure) => Err(review_failure(failure)),
     }
 }
 

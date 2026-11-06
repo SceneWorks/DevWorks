@@ -983,10 +983,22 @@ impl Git<'_> {
                 paths.insert(path, true);
             }
         }
+        let honor_filemode = if paths.values().any(|untracked| *untracked) {
+            match self
+                .line(dir, &["config", "--bool", "--get", "core.fileMode"])?
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return Err(GitFault::Malformed("core.fileMode".into())),
+            }
+        } else {
+            true
+        };
         let mut files = Vec::new();
         let mut total = 0usize;
         for (path, untracked) in paths {
-            let bytes = if untracked {
+            let mut bytes = if untracked {
                 self.runner.run_difference(
                     self.ctx,
                     self.spec(
@@ -1028,6 +1040,17 @@ impl Git<'_> {
                 ]);
                 self.run(dir, &args, BOUND)?
             };
+            // No-index diff uses raw filesystem modes. Git add ignores a new regular file's
+            // executable bit when core.fileMode=false; match its mode without altering patch
+            // content, binary data or symlink metadata. The new-file header is the second line.
+            if untracked
+                && !honor_filemode
+                && let Some(start) = bytes.iter().position(|b| *b == b'\n').map(|at| at + 1)
+                && bytes[start..].starts_with(b"new file mode 100755\n")
+            {
+                bytes[start..start + b"new file mode 100755\n".len()]
+                    .copy_from_slice(b"new file mode 100644\n");
+            }
             total = total.saturating_add(bytes.len());
             if total > BOUND {
                 return Err(GitFault::Helper(HelperFault::OutputTooLarge));

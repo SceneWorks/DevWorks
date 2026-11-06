@@ -930,3 +930,153 @@ fn saved_package_preserves_an_original_human_author_too() {
 
 #[path = "approval_publication.rs"]
 mod publication;
+
+#[test]
+fn deleted_small_and_compact_package_sources_survive_reopen_and_keep_reviews_rejectable() {
+    let _serial = serial();
+    let mut a = native_app();
+    let small = Spec::new("a-deleted-small", "1.0.0");
+    let (small_proposal, _, small_bundle) = propose(&a, &small);
+    let (large, bytes, digest, _) = large_signed_bundle("b-deleted-compact");
+    let large_bundle = a.save(&a.agent, &bytes);
+    let large_proposal = match applied(a.domain(
+        &a.agent,
+        "addons.propose",
+        json!({
+            "kind":"addons.propose", "source":large_bundle,
+            "manifestDigest":digest, "basePackageId":large.package
+        }),
+    )) {
+        OperationResult::AddonsPropose { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let old = [
+        (small_proposal, small_bundle),
+        (large_proposal, large_bundle),
+    ]
+    .into_iter()
+    .map(|(proposal, bundle)| {
+        let review = saved(&a, &proposal);
+        let source = read(&*a.store, |s| s.packages().proposal(&proposal.id)).unwrap();
+        let reference: devworks_core::protocol::provider::ArtifactRef =
+            serde_json::from_value(bundle).unwrap();
+        (source, review, reference)
+    })
+    .collect::<Vec<_>>();
+    assert!(old[0].1.payload["binding"].get("packageReview").is_none());
+    assert!(old[1].1.payload["binding"].get("packageReview").is_some());
+    for (_, _, reference) in &old {
+        let artifact = read(&*a.store, |s| {
+            s.artifacts().artifact(&reference.artifact_id)
+        })
+        .unwrap();
+        let deletion = json!({"protocol":"1.0-draft.1", "schemaRevision":1,
+        "requestKey":a.key("delete-package-source"), "deletion":{
+            "kind":"DeleteVersion", "artifactId":reference.artifact_id,
+            "versionId":reference.version_id, "expectedRevision":artifact.revision.to_string(),
+            "expectedReferenceRevision":artifact.reference_revision.to_string()
+        }});
+        assert!(matches!(
+            applied(
+                a.app()
+                    .command(
+                        &a.user,
+                        "artifacts.delete",
+                        &serde_json::to_vec(&deletion).unwrap()
+                    )
+                    .unwrap()
+            ),
+            OperationResult::ArtifactsDelete { .. }
+        ));
+    }
+    let healthy = Spec::new("z-healthy-after-deleted", "1.0.0");
+    let (healthy_proposal, _, _) = propose(&a, &healthy);
+    let previous_healthy_review = saved(&a, &healthy_proposal);
+    a.shutdown();
+    // A durable owning source without its generic review models reconciliation after a crash.
+    // The generator must create that review from its actual saved context, not skip the tail.
+    let connection = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    connection
+        .execute(
+            "DELETE FROM decision_approvals WHERE id=?1",
+            [previous_healthy_review.id.as_str()],
+        )
+        .unwrap();
+    let artifacts: i64 = connection
+        .query_row("SELECT count(*) FROM artifacts", [], |r| r.get(0))
+        .unwrap();
+    drop(connection);
+    let parking = Harness::new();
+    drop(std::mem::replace(&mut a.store, parking.open()));
+    a.store = a.h.open();
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    composition.config.approval_resume_interval = Duration::from_secs(3600);
+    a.app = Some(
+        a.rt.block_on(boot(composition))
+            .expect("deleted sources must not abort startup"),
+    );
+    assert_eq!(
+        a.app()
+            .packages()
+            .unwrap()
+            .service()
+            .sync_pending_reviews()
+            .unwrap(),
+        1
+    );
+    let current_healthy = saved(&a, &healthy_proposal);
+    assert_ne!(current_healthy.id, previous_healthy_review.id);
+    assert_eq!(
+        current_healthy.payload["invocation"],
+        previous_healthy_review.payload["invocation"]
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().package(&healthy.package))
+            .unwrap()
+            .active_digest,
+        None
+    );
+    let connection = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        artifacts,
+        "stale compact sources publish no new evidence"
+    );
+    drop(connection);
+    for (source, review, _) in old {
+        assert_eq!(
+            read(&*a.store, |s| s.packages().proposal(&source.id)).unwrap(),
+            source
+        );
+        assert_eq!(
+            read(&*a.store, |s| s.decisions().approval(&review.id)).unwrap(),
+            review
+        );
+        let inspection = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,
+            "queryId":a.key("inspect-deleted-source"),"body":{"kind":"approvals.inspect","proposalId":review.id}});
+        assert!(matches!(
+            a.app()
+                .query(
+                    &a.user,
+                    "approvals.inspect",
+                    &serde_json::to_vec(&inspection).unwrap()
+                )
+                .unwrap(),
+            DomainQueryReply::Result { .. }
+        ));
+        decide(&a, &review, "Reject");
+        assert_eq!(
+            read(&*a.store, |s| s.packages().proposal(&source.id))
+                .unwrap()
+                .state,
+            "Rejected"
+        );
+        assert!(read(&*a.store, |s| s.decisions().approval_resume(&review.id)).is_none());
+    }
+}
