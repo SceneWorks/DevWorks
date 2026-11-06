@@ -55,6 +55,8 @@ pub struct PreparedRequest {
     pub embedding_dimensions: Option<u32>,
     /// Stable per-session affinity for provider-specific send-time headers.
     pub session_key: Option<String>,
+    /// Every exact source read, for the host's final current-visibility/metadata fence.
+    pub artifact_refs: Vec<crate::protocol::provider::ArtifactRef>,
 }
 impl std::fmt::Debug for PreparedRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

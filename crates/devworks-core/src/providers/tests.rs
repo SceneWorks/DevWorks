@@ -55,6 +55,15 @@ impl Materials for Material {
     fn schema(&self, _: &SchemaRef) -> Result<Value, ProviderError> {
         Ok(self.schema.clone())
     }
+    fn tool(&self, alias: &ToolSchema) -> Result<PreparedTool, ProviderError> {
+        Ok(PreparedTool {
+            wire_name: alias.wire_name.clone(),
+            capability_id: alias.capability_id.clone(),
+            input_schema: alias.input_schema.clone(),
+            schema: self.schema.clone(),
+            description: Some("Look up the exact current record.".into()),
+        })
+    }
 }
 fn context() -> ProviderContext {
     ProviderContext {
@@ -97,6 +106,7 @@ fn caps(b: NativeBinding) -> Capabilities {
     c.parallel_tools = Support::Supported;
     c.structured_output = Support::Supported;
     c.embeddings = Support::Supported;
+    c.embedding_dimensions = EmbeddingDimensions::Parameter;
     c.sampling = Support::Supported;
     c.top_k = Support::Supported;
     c.stop = Support::Supported;
@@ -104,6 +114,9 @@ fn caps(b: NativeBinding) -> Capabilities {
     c.prompt_cache_key = Support::Supported;
     c.prompt_cache_retention = Support::Supported;
     c.cache_breakpoints = Support::Supported;
+    c.cache_tool_breakpoints = Support::Supported;
+    c.cache_minimum_input_tokens = Some(1024);
+    c.cache_maximum_breakpoints = Some(4);
     c.cache_breakpoint_ttls = vec!["5m".into(), "1h".into()];
     c.cache_retentions = vec!["in_memory".into(), "24h".into()];
     c
@@ -193,7 +206,7 @@ fn all_generation_profiles_encode_distinct_native_shapes_without_credentials() {
                     assert!(v.get("store").is_none());
                 }
             }
-            _ => assert_eq!(v["messages"][1]["content"][0]["text"], "Hello"),
+            _ => assert_eq!(v["messages"][1]["content"], "Hello"),
         }
     }
 }
@@ -308,6 +321,12 @@ fn exact_native_bindings_and_tool_argument_bytes_survive() {
     )
     .unwrap();
     let v = body(&p);
+    assert_eq!(p.artifact_refs.len(), 3); // context + opaque item + exact arguments
+    assert!(
+        p.artifact_refs
+            .iter()
+            .any(|r| r.sha256.as_str() == crate::fingerprint::sha256_hex(b"{ \"x\" : \"hello\" }"))
+    );
     assert_eq!(v["input"][1], opaque);
     assert_eq!(v["input"][2]["content"][0]["text"], "Before");
     assert_eq!(v["input"][3]["call_id"], "call-a");
@@ -541,5 +560,280 @@ fn tool_result_errors_and_grouped_images_keep_call_and_artifact_order() {
                 .unwrap()
                 .contains("[image omitted")
         );
+    }
+}
+
+#[test]
+fn current_registered_tool_metadata_is_required_and_descriptions_reach_each_profile() {
+    let mut m = Material::new();
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut r = request(&mut m, &context());
+        let alias = ToolSchema {
+            capability_id: "test/lookup".to_owned().try_into().unwrap(),
+            wire_name: "lookup".into(),
+            input_schema: m.schema_ref(),
+        };
+        if let InferenceInput::Generation { tools, .. } = &mut r.input {
+            tools.push(alias.clone());
+        }
+        let b = binding(profile.clone());
+        let p = prepare(identity(b.clone()), &r, &caps(b), &m, None, &limits()).unwrap();
+        let v = body(&p);
+        let tool = if matches!(
+            profile,
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+        ) {
+            &v["tools"][0]["function"]
+        } else {
+            &v["tools"][0]
+        };
+        assert_eq!(tool["description"], "Look up the exact current record.");
+        assert_eq!(tool["name"], "lookup");
+        assert_eq!(p.tools[0].capability_id.as_str(), "test/lookup");
+    }
+    struct Bare;
+    impl Materials for Bare {
+        fn artifact(&self, _: &ArtifactRef, _: u64) -> Result<Vec<u8>, ProviderError> {
+            Err(ProviderError::MaterialUnavailable)
+        }
+        fn schema(&self, _: &SchemaRef) -> Result<Value, ProviderError> {
+            Ok(json!({"type":"object"}))
+        }
+    }
+    let alias = ToolSchema {
+        capability_id: "test/lookup".to_owned().try_into().unwrap(),
+        wire_name: "lookup".into(),
+        input_schema: m.schema_ref(),
+    };
+    assert!(matches!(
+        materialize::tools(&Bare, &[alias]),
+        Err(ProviderError::MaterialUnavailable)
+    ));
+}
+#[test]
+fn fixed_embedding_models_omit_dimensions_and_unknown_support_never_guesses() {
+    let mut m = Material::new();
+    let text = m.put(b"input", "text/plain");
+    let mut r = request(&mut m, &context());
+    r.purpose = InferencePurpose::Embedding;
+    r.input = InferenceInput::Embedding {
+        embedding_space_id: id("space"),
+        dimensions: 1536,
+        inputs: vec![text],
+    };
+    let b = binding(EndpointProfile::Embedding);
+    let mut c = caps(b.clone());
+    c.embedding_dimensions = EmbeddingDimensions::Fixed(1536);
+    let p = prepare(identity(b.clone()), &r, &c, &m, None, &limits()).unwrap();
+    assert!(body(&p).get("dimensions").is_none());
+    assert_eq!(p.embedding_dimensions, Some(1536));
+    c.embedding_dimensions = EmbeddingDimensions::Fixed(768);
+    assert!(matches!(
+        prepare(identity(b.clone()), &r, &c, &m, None, &limits()),
+        Err(ProviderError::Unsupported("embedding_dimensions"))
+    ));
+    c.embedding_dimensions = EmbeddingDimensions::Unknown;
+    assert!(matches!(
+        prepare(identity(b), &r, &c, &m, None, &limits()),
+        Err(ProviderError::Unsupported("embedding_dimensions_unknown"))
+    ));
+}
+
+#[test]
+fn compatible_text_only_content_and_system_prefix_remain_stable_strings() {
+    let mut c = context();
+    c.instructions.push(TextBlock {
+        text: "Second rule".into(),
+        cache: None,
+    });
+    c.messages[0].content.push(ContentBlock::Text {
+        text: "Second paragraph".into(),
+        cache: None,
+    });
+    let first = run(EndpointProfile::CompatibleChat, &c);
+    let v = body(&first);
+    assert_eq!(
+        v["messages"][0],
+        json!({"role":"system","content":"Rules\n\nSecond rule"})
+    );
+    assert_eq!(
+        v["messages"][1],
+        json!({"role":"user","content":"Hello\n\nSecond paragraph"})
+    );
+    c.messages.push(Message {
+        role: MessageRole::Assistant,
+        content: vec![ContentBlock::Text {
+            text: "Answer".into(),
+            cache: None,
+        }],
+    });
+    c.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: "Next turn".into(),
+            cache: None,
+        }],
+    });
+    let next = body(&run(EndpointProfile::CompatibleChat, &c));
+    assert_eq!(
+        &v["messages"].as_array().unwrap()[..],
+        &next["messages"].as_array().unwrap()[..2]
+    );
+}
+
+#[test]
+fn qualified_tool_cache_breakpoints_preserve_order_and_refuse_unknown_controls() {
+    let mut m = Material::new();
+    let mut c = context();
+    c.instructions[0].cache = Some(CacheBreakpoint {
+        ttl: Some("5m".into()),
+    });
+    c.parameters.tool_cache = Some(BTreeMap::from([(
+        "lookup".into(),
+        CacheBreakpoint {
+            ttl: Some("1h".into()),
+        },
+    )]));
+    let mut r = request(&mut m, &c);
+    let alias = ToolSchema {
+        capability_id: "test/lookup".to_owned().try_into().unwrap(),
+        wire_name: "lookup".into(),
+        input_schema: m.schema_ref(),
+    };
+    if let InferenceInput::Generation { tools, .. } = &mut r.input {
+        tools.push(alias);
+    }
+    let b = binding(EndpointProfile::AnthropicMessages);
+    let mut cap = caps(b.clone());
+    cap.cache_maximum_breakpoints = Some(2);
+    let p = prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap();
+    let v = body(&p);
+    assert_eq!(v["tools"][0]["name"], "lookup");
+    assert_eq!(
+        v["tools"][0]["cache_control"],
+        json!({"type":"ephemeral","ttl":"1h"})
+    );
+    assert_eq!(
+        v["tools"][0]["description"],
+        "Look up the exact current record."
+    );
+    cap.cache_maximum_breakpoints = Some(1);
+    assert!(matches!(
+        prepare(identity(b.clone()), &r, &cap, &m, None, &limits()),
+        Err(ProviderError::Unsupported("cache_breakpoint_count"))
+    ));
+    cap.cache_maximum_breakpoints = Some(2);
+    cap.cache_tool_breakpoints = Support::Unknown;
+    assert!(matches!(
+        prepare(identity(b), &r, &cap, &m, None, &limits()),
+        Err(ProviderError::Unsupported("tool_cache_breakpoints"))
+    ));
+}
+#[test]
+fn qualified_messages_betas_are_merged_only_for_the_selected_access_profile() {
+    let mut m = Material::new();
+    let mut c = context();
+    c.parameters.anthropic_betas = Some(vec!["interleaved-thinking-2025-05-14".into()]);
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        let b = binding(profile.clone());
+        let mut cap = caps(b.clone());
+        cap.anthropic_betas = vec!["interleaved-thinking-2025-05-14".into()];
+        let r = request(&mut m, &c);
+        let p = prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap();
+        let expected = if profile == EndpointProfile::ClaudeSubscriptionMessages {
+            "interleaved-thinking-2025-05-14,oauth-2025-04-20"
+        } else {
+            "interleaved-thinking-2025-05-14"
+        };
+        assert!(
+            p.headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-beta" && v == expected)
+        );
+        cap.anthropic_betas.clear();
+        assert!(matches!(
+            prepare(identity(b), &r, &cap, &m, None, &limits()),
+            Err(ProviderError::Unsupported("anthropic_beta"))
+        ));
+    }
+    c.parameters.anthropic_betas = Some(vec!["oauth-2025-04-20".into()]);
+    let r = request(&mut m, &c);
+    let b = binding(EndpointProfile::AnthropicMessages);
+    let mut cap = caps(b.clone());
+    cap.anthropic_betas = vec!["oauth-2025-04-20".into()];
+    assert!(matches!(
+        prepare(identity(b), &r, &cap, &m, None, &limits()),
+        Err(ProviderError::Unsupported("anthropic_beta"))
+    ));
+    let mut c = context();
+    c.instructions[0].text =
+        "  You are Claude Code, Anthropic's official CLI for Claude. Extra instructions".into();
+    assert_eq!(
+        body(&run(EndpointProfile::ClaudeSubscriptionMessages, &c))["system"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+#[test]
+fn effort_encoding_is_exact_per_profile_and_never_silently_removed() {
+    let mut m = Material::new();
+    for (profile, encoding, field) in [
+        (
+            EndpointProfile::CompatibleChat,
+            EffortEncoding::ReasoningEffort {
+                value: "high".into(),
+            },
+            "/reasoning_effort",
+        ),
+        (
+            EndpointProfile::OpenRouterChat,
+            EffortEncoding::ReasoningEffort {
+                value: "high".into(),
+            },
+            "/reasoning/effort",
+        ),
+        (
+            EndpointProfile::OpenAiResponses,
+            EffortEncoding::ResponsesReasoning {
+                value: "high".into(),
+            },
+            "/reasoning/effort",
+        ),
+        (
+            EndpointProfile::AnthropicMessages,
+            EffortEncoding::MessagesOutputConfig {
+                value: "high".into(),
+            },
+            "/output_config/effort",
+        ),
+    ] {
+        let b = binding(profile);
+        let mut cap = caps(b.clone());
+        cap.efforts = vec!["High".into()];
+        cap.effort_encodings.insert("High".into(), encoding);
+        let mut r = request(&mut m, &context());
+        r.options.effort = Some(EffortOption {
+            value: id("High"),
+            required: true,
+        });
+        let p = prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap();
+        assert_eq!(body(&p).pointer(field), Some(&json!("high")));
+        cap.effort_encodings.clear();
+        assert!(matches!(
+            prepare(identity(b), &r, &cap, &m, None, &limits()),
+            Err(ProviderError::Unsupported("effort"))
+        ));
     }
 }

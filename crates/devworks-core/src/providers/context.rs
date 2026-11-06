@@ -110,7 +110,11 @@ pub struct GenerationParameters {
     pub parallel_tool_calls: Option<bool>,
     pub prompt_cache_key: Option<String>,
     pub prompt_cache_retention: Option<String>,
+    /// Explicit breakpoints on current frozen tool aliases; never reorder tool definitions.
+    pub tool_cache: Option<std::collections::BTreeMap<String, CacheBreakpoint>>,
     pub thinking: Option<Thinking>,
+    /// Required protocol beta tokens; only exact host-qualified tokens may be sent.
+    pub anthropic_betas: Option<Vec<String>>,
     pub response_mode: Option<ResponseMode>,
     pub user_id: Option<String>,
 }

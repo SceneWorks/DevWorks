@@ -1,6 +1,6 @@
 //! Pure profile encoders. No socket, credentials, mutable catalog or implicit content repair.
 use super::{
-    capabilities::{Capabilities, EffortEncoding},
+    capabilities::{Capabilities, EffortEncoding, EmbeddingDimensions},
     context::*,
     materialize::{self, Materials},
     *,
@@ -30,6 +30,11 @@ pub fn prepare(
     limits: &PreparationLimits,
 ) -> Result<PreparedRequest, ProviderError> {
     request.validate().map_err(ProviderError::InvalidInput)?;
+    let tracked = materialize::TrackedMaterials {
+        source: materials,
+        references: Default::default(),
+    };
+    let materials: &dyn Materials = &tracked;
     if identity.request_id != request.request_id
         || capabilities.binding != identity.binding
         || identity.upstream_model.is_empty()
@@ -48,6 +53,7 @@ pub fn prepare(
         identity: &identity,
         limits,
     };
+    let mut required_betas = Vec::new();
     let (body, tools, response_mode, embedding_dimensions) = match &request.input {
         InferenceInput::Embedding {
             dimensions, inputs, ..
@@ -62,12 +68,19 @@ pub fn prepare(
                         .map_err(|_| ProviderError::InvalidInput("embedding_utf8"))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            (
-                json!({"model":identity.upstream_model,"input":text,"dimensions":dimensions,"encoding_format":"float"}),
-                Vec::new(),
-                ResponseMode::Aggregate,
-                Some(*dimensions),
-            )
+            let mut body =
+                json!({"model":identity.upstream_model,"input":text,"encoding_format":"float"});
+            match capabilities.embedding_dimensions {
+                EmbeddingDimensions::Parameter => body["dimensions"] = json!(dimensions),
+                EmbeddingDimensions::Fixed(native) if native == *dimensions => {}
+                EmbeddingDimensions::Fixed(_) => {
+                    return Err(ProviderError::Unsupported("embedding_dimensions"));
+                }
+                EmbeddingDimensions::Unknown => {
+                    return Err(ProviderError::Unsupported("embedding_dimensions_unknown"));
+                }
+            }
+            (body, Vec::new(), ResponseMode::Aggregate, Some(*dimensions))
         }
         InferenceInput::Generation {
             context,
@@ -87,6 +100,11 @@ pub fn prepare(
             let context: ProviderContext = serde_json::from_slice(&bytes)
                 .map_err(|_| ProviderError::InvalidInput("provider_context"))?;
             context.validate()?;
+            required_betas = context
+                .parameters
+                .anthropic_betas
+                .clone()
+                .unwrap_or_default();
             check(
                 &context,
                 request,
@@ -149,8 +167,15 @@ pub fn prepare(
             profiles::ANTHROPIC_VERSION.into(),
         ));
     }
-    if profile == EndpointProfile::ClaudeSubscriptionMessages {
-        headers.push(("anthropic-beta".into(), profiles::CLAUDE_OAUTH_BETA.into()));
+    if profile == EndpointProfile::ClaudeSubscriptionMessages
+        && !required_betas
+            .iter()
+            .any(|v| v == profiles::CLAUDE_OAUTH_BETA)
+    {
+        required_betas.push(profiles::CLAUDE_OAUTH_BETA.into());
+    }
+    if !required_betas.is_empty() {
+        headers.push(("anthropic-beta".into(), required_betas.join(",")));
     }
     if profile == EndpointProfile::CodexSubscriptionResponses {
         headers.push(("OpenAI-Beta".into(), "responses=experimental".into()));
@@ -170,6 +195,7 @@ pub fn prepare(
         tools,
         embedding_dimensions,
         session_key,
+        artifact_refs: tracked.references.into_inner(),
     })
 }
 fn require(needed: bool, supported: bool, name: &'static str) -> Result<(), ProviderError> {
@@ -187,6 +213,33 @@ fn check(
     parallel: bool,
 ) -> Result<(), ProviderError> {
     let p = &c.parameters;
+    if let Some(betas) = &p.anthropic_betas {
+        let messages = matches!(
+            caps.binding.endpoint_profile,
+            EndpointProfile::AnthropicMessages | EndpointProfile::ClaudeSubscriptionMessages
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        for beta in betas {
+            if beta.is_empty()
+                || beta.len() > 128
+                || !beta
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+                || !seen.insert(beta)
+            {
+                return Err(ProviderError::InvalidInput("anthropic_beta"));
+            }
+            let oauth = beta == crate::services::router::connections::profiles::CLAUDE_OAUTH_BETA;
+            if !messages
+                || (oauth
+                    && caps.binding.endpoint_profile != EndpointProfile::ClaudeSubscriptionMessages)
+                || (!oauth && !caps.anthropic_betas.contains(beta))
+            {
+                return Err(ProviderError::Unsupported("anthropic_beta"));
+            }
+        }
+    }
+
     let has_images=c.messages.iter().any(|m|m.content.iter().any(|b|matches!(b,ContentBlock::Image{..})||matches!(b,ContentBlock::ToolResult{content,..} if content.iter().any(|v|matches!(v,ResultBlock::Image{..})))));
     let has_calls = c.messages.iter().any(|m| {
         m.content.iter().any(|b| {
@@ -258,12 +311,29 @@ fn check(
                     _ => None,
                 }),
         )
+        .chain(p.tool_cache.iter().flat_map(|map| map.values()))
         .collect::<Vec<_>>();
     require(
         !breakpoints.is_empty(),
         caps.cache_breakpoints.supported(),
         "cache_breakpoints",
     )?;
+    if let Some(cache) = &p.tool_cache {
+        require(
+            !cache.is_empty(),
+            caps.cache_tool_breakpoints.supported(),
+            "tool_cache_breakpoints",
+        )?;
+        if cache.keys().any(|name| !matches!(&r.input,InferenceInput::Generation{tools,..} if tools.iter().any(|t| &t.wire_name==name))) {
+            return Err(ProviderError::InvalidInput("tool_cache_alias"));
+        }
+    }
+    if caps
+        .cache_maximum_breakpoints
+        .is_some_and(|max| breakpoints.len() > max)
+    {
+        return Err(ProviderError::Unsupported("cache_breakpoint_count"));
+    }
     if breakpoints.iter().any(|b| {
         b.ttl
             .as_ref()
@@ -385,7 +455,11 @@ impl Encoder<'_> {
                     .collect::<Vec<_>>();
                 if profile == &EndpointProfile::ClaudeSubscriptionMessages {
                     let identity = "You are Claude Code, Anthropic's official CLI for Claude.";
-                    if !system.first().is_some_and(|v| v["text"] == identity) {
+                    if !system.first().is_some_and(|v| {
+                        v["text"]
+                            .as_str()
+                            .is_some_and(|v| v.trim_start().starts_with(identity))
+                    }) {
                         system.insert(0, json!({"type":"text","text":identity}));
                     }
                 }
@@ -402,7 +476,10 @@ impl Encoder<'_> {
                     body["tools"] = json!(
                         tools
                             .iter()
-                            .map(|t| json!({"name":t.wire_name,"input_schema":t.schema}))
+                            .map(|t| cache(
+                                tool_definition(t, ToolDialect::Messages),
+                                p.tool_cache.as_ref().and_then(|map| map.get(&t.wire_name))
+                            ))
                             .collect::<Vec<_>>()
                     );
                 }
@@ -450,10 +527,27 @@ impl Encoder<'_> {
             }
             EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat => {
                 let mut messages = Vec::new();
-                for t in &c.instructions {
-                    messages.push(if t.cache.is_some() {
-                        json!({"role":"system","content":[cache(json!({"type":"text","text":t.text}),t.cache.as_ref())]})
-                    } else { json!({"role":"system","content":t.text}) });
+                if !c.instructions.is_empty() {
+                    let content = if c.instructions.iter().any(|t| t.cache.is_some()) {
+                        json!(
+                            c.instructions
+                                .iter()
+                                .map(|t| cache(
+                                    json!({"type":"text","text":t.text}),
+                                    t.cache.as_ref()
+                                ))
+                                .collect::<Vec<_>>()
+                        )
+                    } else {
+                        json!(
+                            c.instructions
+                                .iter()
+                                .map(|t| t.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n\n")
+                        )
+                    };
+                    messages.push(json!({"role":"system","content":content}));
                 }
                 for m in &c.messages {
                     self.chat(m, &mut messages)?;
@@ -461,7 +555,15 @@ impl Encoder<'_> {
                 body["messages"] = json!(messages);
                 body["max_tokens"] = json!(max);
                 if !tools.is_empty() {
-                    body["tools"]=json!(tools.iter().map(|t|json!({"type":"function","function":{"name":t.wire_name,"parameters":t.schema}})).collect::<Vec<_>>());
+                    body["tools"] = json!(
+                        tools
+                            .iter()
+                            .map(|t| cache(
+                                tool_definition(t, ToolDialect::Chat),
+                                p.tool_cache.as_ref().and_then(|map| map.get(&t.wire_name))
+                            ))
+                            .collect::<Vec<_>>()
+                    );
                 }
                 if streaming {
                     body["stream_options"] = json!({"include_usage":true});
@@ -544,7 +646,12 @@ impl Encoder<'_> {
                     }
                 }
                 if !tools.is_empty() {
-                    body["tools"]=json!(tools.iter().map(|t|json!({"type":"function","name":t.wire_name,"parameters":t.schema})).collect::<Vec<_>>());
+                    body["tools"] = json!(
+                        tools
+                            .iter()
+                            .map(|t| tool_definition(t, ToolDialect::Responses))
+                            .collect::<Vec<_>>()
+                    );
                 }
                 if let Some(v) = p.parallel_tool_calls {
                     body["parallel_tool_calls"] = json!(v);
@@ -817,7 +924,24 @@ fn flush_chat(
     if parts.is_empty() && calls.is_empty() && native.is_empty() {
         return;
     }
-    let mut v = json!({"role":role(&m.role),"content":std::mem::take(parts)});
+    let content = if parts.is_empty() {
+        Value::Null
+    } else if parts
+        .iter()
+        .all(|p| p["type"] == "text" && p.get("cache_control").is_none())
+    {
+        json!(
+            parts
+                .iter()
+                .map(|p| p["text"].as_str().expect("encoded text"))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        )
+    } else {
+        json!(parts)
+    };
+    parts.clear();
+    let mut v = json!({"role":role(&m.role),"content":content});
     if !calls.is_empty() {
         v["tool_calls"] = json!(std::mem::take(calls));
     }
@@ -901,5 +1025,30 @@ fn result_text(content: &[ResultBlock], is_error: bool) -> Result<String, Provid
 fn flush_result_images(images: &mut Vec<Value>, out: &mut Vec<Value>) {
     if !images.is_empty() {
         out.push(json!({"role":"user","content":std::mem::take(images)}));
+    }
+}
+
+enum ToolDialect {
+    Messages,
+    Chat,
+    Responses,
+}
+fn tool_definition(tool: &PreparedTool, dialect: ToolDialect) -> Value {
+    let mut definition = match dialect {
+        ToolDialect::Messages => json!({"name":tool.wire_name,"input_schema":tool.schema}),
+        ToolDialect::Chat | ToolDialect::Responses => {
+            json!({"name":tool.wire_name,"parameters":tool.schema})
+        }
+    };
+    if let Some(description) = &tool.description {
+        definition["description"] = json!(description);
+    }
+    match dialect {
+        ToolDialect::Messages => definition,
+        ToolDialect::Chat => json!({"type":"function","function":definition}),
+        ToolDialect::Responses => {
+            definition["type"] = json!("function");
+            definition
+        }
     }
 }
