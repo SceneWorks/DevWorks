@@ -2,7 +2,7 @@
 
 DW-125 addresses the configured job budget, without changing test behavior.
 
-On commit `027bb5cb34538710c34f066fe032b2ea9cd5d835`, Actions run `42225961242`, Windows job `127919421703` started at 13:30:02 UTC and was cancelled at the 45-minute limit. Qualification passed. The full suite continued passing through adapters, core, desktop and engine package tests until cancellation. Ubuntu and macOS completed successfully. The direct Actions API and actual job log established cancellation; an initially stale connector response still reported running.
+On commit `027bb5cb34538710c34f066fe032b2ea9cd5d835`, Actions run `42225961242`, Windows job `127919421703` started at 13:30:02 UTC and was cancelled at the 45-minute limit. Qualification passed. The full suite continued passing through adapters, core, desktop and engine package tests until cancellation. Ubuntu and macOS completed successfully. The direct Actions API and actual job log established cancellation.
 
 Windows now has two independent native jobs, each retaining the existing 45-minute timeout:
 
