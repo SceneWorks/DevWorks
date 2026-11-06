@@ -78,8 +78,16 @@ pub enum Action {
     RefreshView,
     Read(Read),
     Node(CodeNode),
-    Endpoint { id: String, repository: String },
+    Endpoint {
+        id: String,
+        repository: String,
+    },
     Repository(String),
+    Filter {
+        repository: String,
+        module: Option<String>,
+        kind: Option<String>,
+    },
     Page(bool),
     Trust(CodeNode, bool),
     Registration,
@@ -460,13 +468,25 @@ impl GraphScreen {
 pub fn coverage(ui: &mut Ui, page: &GraphPage) {
     if !matches!(
         page.completion,
-        devworks_core::protocol::data::QueryCompletion::Complete
+        devworks_core::protocol::data::GraphCompletion::Complete
     ) {
         widgets::chip(
             ui,
             format!("Partial result: {:?}", page.completion),
             Tone::Attention,
         );
+    }
+    if let Some(scope) = &page.scope_coverage {
+        widgets::caption(
+            ui,
+            format!("Repository coverage: {:?}", scope.coverage.state),
+        );
+        for gap in &scope.unavailable_repositories.0 {
+            widgets::caption(
+                ui,
+                format!("{}: {}", gap.repository_id.as_str(), gap.reason.0),
+            );
+        }
     }
     if let Some(pin) = &page.view {
         for view in &pin.views {
@@ -677,6 +697,46 @@ fn entries(ui: &mut Ui, items: &[CodeTraversalEntry], actions: &mut Vec<Action>)
     }
 }
 
+fn modules(ui: &mut Ui, items: &[CodeModuleAnalysis], actions: &mut Vec<Action>) {
+    ui.heading("Internal code modules");
+    if items.is_empty() {
+        ui.label("No internal module analysis is reported in this page.");
+    }
+    for item in items {
+        egui::CollapsingHeader::new(&item.module.module_name.0)
+            .id_salt((item.module.repository_id.as_str(),&item.module.module_name.0)).default_open(true)
+            .show(ui,|ui|{
+                widgets::caption(ui,format!("Analysis: {:?}",item.state));
+                optional(ui,"Reason",item.reason.as_ref().map(|v|v.0.as_str()));
+                if ui.button("Browse this module").clicked(){actions.push(Action::Filter{
+                    repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:None});}
+                if let Some(node)=&item.module.indexed_node
+                    && ui.button("Inspect module node").clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}
+                if let Some(recorded)=&item.recorded {
+                    selectable(ui,&recorded.summary.0);
+                    widgets::caption(ui,format!("Recorded confidence: {} · recorded at {}",recorded.confidence.0,recorded.updated_at_ms.as_str()));
+                    optional(ui,"Analysis model",recorded.model_used.as_ref().map(|v|v.0.as_str()));
+                    optional(ui,"Source revision",recorded.source_revision.as_ref().map(|v|v.0.as_str()));
+                    optional(ui,"Source identity",recorded.source_hash.as_ref().map(|v|v.0.as_str()));
+                    optional(ui,"Source view",recorded.source_view_id.as_ref().map(|id|id.as_str()));
+                    if let Some(totals)=&recorded.program_totals {widgets::caption(ui,format!("Recorded program totals: {} endpoints · {} services · {} tables",totals.endpoint_count.as_str(),totals.service_count.as_str(),totals.table_count.as_str()));}
+                    else {widgets::caption(ui,"Program totals have not been recorded.");}
+                    for endpoint in &recorded.endpoints.0 {selectable(ui,format!("{} {} — {}",endpoint.http_method.0,endpoint.route.0,endpoint.description.0));optional(ui,"Request model",endpoint.request_model.as_ref().map(|v|v.0.as_str()));optional(ui,"Response model",endpoint.response_model.as_ref().map(|v|v.0.as_str()));}
+                    for service in &recorded.services.0 {selectable(ui,format!("{} · {} · {}",service.name.0,service.lifetime.0,service.description.0));optional(ui,"Interface",service.interface_name.as_ref().map(|v|v.0.as_str()));}
+                    for table in &recorded.database_tables.0 {selectable(ui,format!("Recorded table: {}",table.0));}
+                    for dependency in &recorded.external_dependencies.0 {selectable(ui,format!("Recorded dependency: {}",dependency.0));}
+                } else {ui.label("No semantic analysis has been recorded for this module. Indexed observations below are not program totals.");}
+                widgets::caption(ui,format!("Observed index coverage: {:?}",item.observed_coverage.state));
+                for count in &item.observed_node_counts.0 {if ui.button(format!("Indexed {} · {}",count.name.0,count.count.as_str())).clicked(){actions.push(Action::Filter{repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:Some(count.name.0.clone())});}}
+                for(label,drill)in [("Indexed endpoints",&item.endpoints),("Indexed services",&item.services),("Indexed tables",&item.tables)] {
+                    if ui.button(format!("{label}: {}",drill.count.as_ref().map_or("unknown",|v|v.as_str()))).clicked(){actions.push(Action::Filter{repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:Some(drill.node_kind.0.clone())});}
+                    for node in &drill.nodes.0 {if ui.small_button(format!("Inspect {}",node.node_id.as_str())).clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}}
+                    if drill.has_more {widgets::caption(ui,"More indexed nodes are available through this module's node list.");}
+                }
+            });
+    }
+}
+
 fn render(
     ui: &mut Ui,
     page: &GraphPage,
@@ -862,6 +922,27 @@ fn render(
             }
         }
         GraphResult::RepositoryOverview { value } => {
+            widgets::caption(
+                ui,
+                format!("Graph coverage: {:?}", value.graph_coverage.state),
+            );
+            optional(
+                ui,
+                "Unavailable",
+                value.unavailable_reason.as_ref().map(|v| v.0.as_str()),
+            );
+            if let Some(totals) = &value.graph_totals {
+                widgets::caption(
+                    ui,
+                    format!(
+                        "{} indexed nodes · {} relationships",
+                        totals.node_count.as_str(),
+                        totals.edge_count.as_str()
+                    ),
+                );
+            } else {
+                widgets::caption(ui, "Indexed totals are unknown.");
+            }
             for repo in &value.repositories.0 {
                 ui.heading(&repo.name.0);
                 optional(
@@ -877,6 +958,7 @@ fn render(
                 );
             }
             links(ui, &value.dependencies.0, actions);
+            modules(ui, &value.internal_modules.0, actions);
         }
         GraphResult::Architecture { value } => {
             if let Some(summary) = &value.summary {
@@ -891,8 +973,18 @@ fn render(
             );
             ui.heading("Indexed node kinds");
             for count in &value.node_counts.0 {
-                selectable(ui, format!("{} · {}", count.name.0, count.count.as_str()));
+                if ui
+                    .button(format!("{} · {}", count.name.0, count.count.as_str()))
+                    .clicked()
+                {
+                    actions.push(Action::Filter {
+                        repository: value.repository_id.as_str().into(),
+                        module: None,
+                        kind: Some(count.name.0.clone()),
+                    });
+                }
             }
+            modules(ui, &value.internal_modules.0, actions);
             ui.heading("Hotspots");
             for item in &value.hotspots.0 {
                 selectable(

@@ -250,6 +250,25 @@ impl Shell {
                     self.graph.tab = 0;
                 }
                 Action::Read(read) => self.open_graph_read(read, true),
+                Action::Filter {
+                    repository,
+                    module,
+                    kind,
+                } => {
+                    let mut query = json!({"repositoryId":repository});
+                    if let Some(module) = &module {
+                        query["internalModule"] = json!(module);
+                    }
+                    if let Some(kind) = &kind {
+                        query["nodeKind"] = json!(kind);
+                    }
+                    self.open_graph_read(Read::new("repositories.nodes", "Nodes", query), true);
+                    self.graph.repository = repository;
+                    self.graph.node_kind = kind.unwrap_or_default();
+                    self.graph.module = module.unwrap_or_default();
+                    self.graph.selected = None;
+                    self.graph.tab = 1;
+                }
                 Action::Node(node) => {
                     let id = node.node_id.clone();
                     self.open_graph_read(
