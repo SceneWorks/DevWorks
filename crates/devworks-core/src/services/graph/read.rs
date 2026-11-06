@@ -314,13 +314,19 @@ impl<'a> Reader<'a> {
     }
 
     pub fn filtered_edges(&mut self, kinds: &[&str]) -> Result<dataset::Edges, Failure> {
-        dataset::edges(
-            self.read,
-            &self.selected.pin.scope,
-            &self.selected.layers,
-            kinds,
-            &mut self.budget,
-        )
+        let (edges, partial) = self.budget.reserve_visits(|budget| {
+            dataset::edges(
+                self.read,
+                &self.selected.pin.scope,
+                &self.selected.layers,
+                kinds,
+                budget,
+            )
+        });
+        if partial && !self.gaps.contains(&"graph_visited_limit") {
+            self.gaps.push("graph_visited_limit");
+        }
+        edges
     }
 
     pub fn node(
