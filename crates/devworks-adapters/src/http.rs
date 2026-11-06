@@ -3,7 +3,10 @@
 //! authorization header never reaches another origin); every request has its own global timeout
 //! and a response-size limit that fails instead of truncating. Error values name the failure
 //! class only, never a URL, header or body.
-use devworks_core::ports::http::{HttpError, HttpRequest, HttpResponse, HttpTransport, Method};
+use devworks_core::ports::http::{
+    HttpError, HttpExchange, HttpRequest, HttpResponse, HttpTransport, MAX_RESPONSE_METADATA_BYTES,
+    Method,
+};
 use std::time::Duration;
 
 pub struct NativeHttp {
@@ -61,6 +64,14 @@ fn classify(e: &ureq::Error) -> HttpError {
 
 impl HttpTransport for NativeHttp {
     fn send(&self, r: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.exchange(r, false).map(|exchange| exchange.response)
+    }
+    fn send_with_headers(&self, r: &HttpRequest) -> Result<HttpExchange, HttpError> {
+        self.exchange(r, true)
+    }
+}
+impl NativeHttp {
+    fn exchange(&self, r: &HttpRequest, metadata: bool) -> Result<HttpExchange, HttpError> {
         let timeout = Some(Duration::from_millis(r.timeout_ms.max(1)));
         let result = match r.method {
             Method::Get => {
@@ -89,13 +100,49 @@ impl HttpTransport for NativeHttp {
         };
         let mut response = result.map_err(|e| classify(&e))?;
         let status = response.status().as_u16();
+        let mut headers = Vec::new();
+        let mut retained = 0usize;
+        let names: &[&str] = if metadata {
+            &[
+                "etag",
+                "link",
+                "date",
+                "x-poll-interval",
+                "retry-after",
+                "x-ratelimit-limit",
+                "x-ratelimit-remaining",
+                "x-ratelimit-reset",
+                "x-ratelimit-resource",
+                "x-oauth-scopes",
+                "x-accepted-oauth-scopes",
+                "x-github-sso",
+                "x-github-request-id",
+            ]
+        } else {
+            &[]
+        };
+        for &name in names {
+            for value in response.headers().get_all(name) {
+                let value = value.to_str().map_err(|_| {
+                    HttpError::Unreachable("the response metadata was invalid".into())
+                })?;
+                retained = retained
+                    .checked_add(name.len() + value.len())
+                    .filter(|bytes| *bytes <= MAX_RESPONSE_METADATA_BYTES)
+                    .ok_or(HttpError::TooLarge)?;
+                headers.push((name.to_owned(), value.to_owned()));
+            }
+        }
         let body = response
             .body_mut()
             .with_config()
             .limit(r.max_response_bytes as u64)
             .read_to_vec()
             .map_err(|e| classify(&e))?;
-        Ok(HttpResponse { status, body })
+        Ok(HttpExchange {
+            response: HttpResponse { status, body },
+            headers,
+        })
     }
 }
 
@@ -160,6 +207,91 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
+    }
+
+    #[test]
+    fn conditional_exchange_preserves_control_headers_without_logging_values() {
+        let (base, seen) = serve(vec![(Duration::ZERO,
+            "HTTP/1.1 304 Not Modified\r\nETag: W/\"opaque-private\"\r\nLink: </page2>; rel=\"next\"\r\nLink: </page9>; rel=\"last\"\r\nX-Poll-Interval: 60\r\nRetry-After: 120\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 12345\r\nX-OAuth-Scopes: repo,read:org\r\nSet-Cookie: private-cookie\r\nAuthorization: private-response-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())]);
+        let exchange = NativeHttp::direct()
+            .send_with_headers(
+                &HttpRequest::get(format!("{base}/issues"))
+                    .header("If-None-Match", "W/\"opaque-private\""),
+            )
+            .unwrap();
+        assert_eq!(exchange.response.status, 304);
+        assert!(exchange.response.body.is_empty());
+        assert_eq!(
+            exchange.header_values("ETAG").collect::<Vec<_>>(),
+            ["W/\"opaque-private\""]
+        );
+        assert_eq!(
+            exchange.header_values("link").collect::<Vec<_>>(),
+            ["</page2>; rel=\"next\"", "</page9>; rel=\"last\""]
+        );
+        for (name, value) in [
+            ("x-poll-interval", "60"),
+            ("retry-after", "120"),
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", "12345"),
+            ("x-oauth-scopes", "repo,read:org"),
+        ] {
+            assert_eq!(exchange.header_values(name).collect::<Vec<_>>(), [value]);
+        }
+        assert!(exchange.header_values("set-cookie").next().is_none());
+        assert!(exchange.header_values("authorization").next().is_none());
+        let debug = format!("{exchange:?}");
+        for value in [
+            "opaque-private",
+            "private-cookie",
+            "private-response-token",
+            "repo,read:org",
+            "/page2",
+        ] {
+            assert!(!debug.contains(value));
+        }
+        assert!(
+            seen.recv()
+                .unwrap()
+                .headers
+                .iter()
+                .any(|(name, value)| name == "if-none-match" && value == "W/\"opaque-private\"")
+        );
+    }
+
+    #[test]
+    fn header_exchange_keeps_body_bound_and_rejects_oversized_metadata() {
+        let metadata = (0..18)
+            .map(|_| format!("ETag: {}\r\n", "x".repeat(2048)))
+            .collect::<String>();
+        let (base, _) = serve(vec![
+            (Duration::ZERO, ok(&"x".repeat(32))),
+            (
+                Duration::ZERO,
+                format!(
+                    "HTTP/1.1 200 OK\r\n{metadata}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+            ),
+            (
+                Duration::ZERO,
+                format!(
+                    "HTTP/1.1 200 OK\r\n{metadata}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+            ),
+        ]);
+        let http = NativeHttp::direct();
+        let mut request = HttpRequest::get(format!("{base}/bounded"));
+        request.max_response_bytes = 4;
+        assert!(matches!(
+            http.send_with_headers(&request),
+            Err(HttpError::TooLarge)
+        ));
+        assert!(matches!(
+            http.send_with_headers(&request),
+            Err(HttpError::TooLarge)
+        ));
+        // Existing callers do not opt into retaining or validating response metadata.
+        assert_eq!(http.send(&request).unwrap().status, 200);
     }
 
     #[test]
