@@ -368,9 +368,12 @@ impl NativeProviders {
             .copied()
             .unwrap_or(match attempt.query.endpoint_profile.as_str() {
                 "AnthropicMessages" | "ClaudeSubscriptionMessages" => InputSemantics::Disjoint,
-                "OpenAiResponses" | "CodexSubscriptionResponses" | "OpenRouterChat" => {
-                    InputSemantics::Inclusive
-                }
+                // The embedding codec's prompt_tokens is total input; this profile has no
+                // cache sub-buckets to subtract. Actual usage remains provider-reported.
+                "Embedding"
+                | "OpenAiResponses"
+                | "CodexSubscriptionResponses"
+                | "OpenRouterChat" => InputSemantics::Inclusive,
                 _ => InputSemantics::Unknown,
             });
         let shared = Arc::new(Mutex::new(None));
