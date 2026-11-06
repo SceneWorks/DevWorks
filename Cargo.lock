@@ -937,6 +937,7 @@ name = "devworks-core"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "num-rational",
  "schemars",
  "semver",
  "serde",

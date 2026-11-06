@@ -12,6 +12,8 @@ publish.workspace = true
 # none, as on Windows).
 [dependencies]
 jiff = "=0.2.39"
+# Exact bounded tariff ratios; this version already exists in the workspace lockfile.
+num-rational = "=0.4.2"
 schemars.workspace = true
 semver.workspace = true
 serde.workspace = true
