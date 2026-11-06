@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 type LinkKey = (String, String, String);
 type DegreeKey = dataset::Key;
+type Ranked = (Vec<Value>, Vec<Value>, Vec<Value>, Option<u64>, Vec<Value>);
 #[derive(Default)]
 pub(super) struct Aggregate {
     degrees: BTreeMap<DegreeKey, (u64, u64, u64)>,
@@ -103,11 +104,7 @@ impl Aggregate {
                 .collect(),
         )
     }
-    pub fn ranked(
-        &mut self,
-        reader: &mut Reader<'_>,
-        repository: &Id,
-    ) -> Result<(Vec<Value>, Vec<Value>, Vec<Value>, Option<u64>, Vec<Value>), Failure> {
+    pub fn ranked(&mut self, reader: &mut Reader<'_>, repository: &Id) -> Result<Ranked, Failure> {
         let scope = reader.scoped_repository(repository)?;
         let mut hotspots = Vec::new();
         let mut supertypes = Vec::new();

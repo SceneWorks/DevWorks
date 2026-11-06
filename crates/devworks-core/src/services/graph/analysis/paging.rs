@@ -102,7 +102,7 @@ fn finish_drills(
             .last()
             .and_then(|last| all.iter().position(|row| row == last))
             .map_or(0, |at| at + 1);
-        set_cursor(reader, shown, *field, *kind, index, end, all.len())?;
+        set_cursor(reader, shown, field, kind, index, end, all.len())?;
     }
     Ok(())
 }
@@ -186,13 +186,12 @@ pub(super) fn sections(
             });
         }
         for name in sections {
-            if *name != "internalModules" {
-                if let Some(array) = value
+            if *name != "internalModules"
+                && let Some(array) = value
                     .pointer_mut(&format!("/{name}"))
                     .and_then(Value::as_array_mut)
-                {
-                    array.clear();
-                }
+            {
+                array.clear();
             }
         }
         value["internalModules"] = json!([shown]);

@@ -19,6 +19,7 @@ struct Observed {
 pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<Value>, Failure> {
     let owners = Modules::load(reader.read, scope, &mut reader.budget)?;
     let mut modules = BTreeMap::<(String, String), Observed>::new();
+    let mut ambiguous_membership = false;
     scan::nodes(
         reader.read,
         scope,
@@ -27,6 +28,7 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         |node, budget| {
             let (owner, ambiguous) = owners.owner(&node);
             if ambiguous {
+                ambiguous_membership = true;
                 return Ok(true);
             }
             let Some(name) = owner else {
@@ -37,6 +39,11 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
                 return Ok(false);
             }
             let group = modules.entry(key).or_default();
+            if !group.counts.contains_key(&node.node.kind)
+                && !budget.retain(node.node.kind.len() + 64)
+            {
+                return Ok(false);
+            }
             *group.counts.entry(node.node.kind.clone()).or_default() += 1;
             let refs = match node.node.kind.as_str() {
                 "Route" => Some(&mut group.endpoints),
@@ -66,7 +73,10 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
             Ok(true)
         },
     )?;
-    let complete = reader.budget.exhausted.is_none();
+    if ambiguous_membership && !reader.gaps.contains(&"ambiguous_internal_module") {
+        reader.gaps.push("ambiguous_internal_module");
+    }
+    let complete = reader.budget.exhausted.is_none() && !ambiguous_membership;
     let mut out = Vec::new();
     for ((repo, name), group) in modules {
         let mut module = json!({"repositoryId":repo,"moduleName":name});
