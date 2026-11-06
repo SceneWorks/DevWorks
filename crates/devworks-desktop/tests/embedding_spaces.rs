@@ -2,113 +2,15 @@
 //! The provider returns recorded vectors; no learned model or network runs in this fixture.
 mod common;
 use common::*;
-use devworks_core::ports::http::{HttpError, HttpRequest, HttpResponse, HttpTransport};
-use devworks_core::ports::provider_http::*;
-use devworks_core::ports::storage::Cancellation;
-use devworks_desktop::connections_screen::{ADD_LABEL, NEW_NAME_LABEL};
-use devworks_desktop::host::Engine;
 use devworks_desktop::ops;
-use devworks_engine::providers::driver::ProviderComposition;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
-use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[path = "embedding_spaces/fixture.rs"]
+mod fixture;
+use fixture::*;
 
-#[derive(Default)]
-struct RecordedEmbedding {
-    requests: Mutex<Vec<HttpRequest>>,
-}
-impl HttpTransport for RecordedEmbedding {
-    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        Ok(HttpResponse {
-            status: if request.url.ends_with("/models") {
-                200
-            } else {
-                404
-            },
-            body: br#"{"data":[{"id":"fixture-embedding"}]}"#.to_vec(),
-        })
-    }
-}
-struct RecordedStream {
-    head: ResponseHead,
-    bytes: std::io::Cursor<Vec<u8>>,
-}
-struct Closed;
-impl StreamCloser for Closed {
-    fn close(&self) -> Result<(), TransportError> {
-        Ok(())
-    }
-}
-impl HttpStream for RecordedStream {
-    fn head(&self) -> &ResponseHead {
-        &self.head
-    }
-    fn closer(&self) -> Arc<dyn StreamCloser> {
-        Arc::new(Closed)
-    }
-    fn read(
-        &mut self,
-        out: &mut [u8],
-        cancellation: &Cancellation,
-    ) -> Result<usize, TransportError> {
-        if cancellation.is_cancelled() {
-            return Err(TransportError {
-                phase: SendPhase::AfterSend,
-                kind: TransportFailure::Cancelled,
-            });
-        }
-        Ok(self.bytes.read(out).unwrap())
-    }
-    fn close(&mut self) -> Result<(), TransportError> {
-        Ok(())
-    }
-}
-impl StreamingHttp for RecordedEmbedding {
-    fn open(
-        &self,
-        request: &HttpRequest,
-        _: &StreamLimits,
-        cancellation: &Cancellation,
-    ) -> Result<Box<dyn HttpStream>, TransportError> {
-        assert!(!cancellation.is_cancelled());
-        assert!(
-            request.url.ends_with("/embeddings"),
-            "only the explicit embedding endpoint"
-        );
-        self.requests.lock().unwrap().push(request.clone());
-        Ok(Box::new(RecordedStream {
-            head: ResponseHead { status: 200, headers: vec![("content-type".into(), "application/json".into())] },
-            bytes: std::io::Cursor::new(br#"{"model":"fixture-embedding","data":[{"index":0,"embedding":[0.6,0.8]}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#.to_vec()),
-        }))
-    }
-}
-fn configured(root: &Root, http: Arc<RecordedEmbedding>) -> Engine {
-    let mut c = config(&root.0);
-    c.http = Some(http.clone());
-    c.connection_tick = None;
-    // No host-qualified space/capability: the durable native owner must earn qualification.
-    c.providers = Some(ProviderComposition::new(http));
-    Engine::start(c).expect("the real desktop runtime boots")
-}
-fn type_into(
-    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
-    label: &str,
-    text: &str,
-) {
-    h.get_by_role_and_label(Role::TextInput, label)
-        .scroll_to_me();
-    for _ in 0..3 {
-        h.step();
-    }
-    h.get_by_role_and_label(Role::TextInput, label).focus();
-    h.step();
-    h.get_by_role_and_label(Role::TextInput, label)
-        .type_text(text);
-    h.step();
-}
-
-fn setup_qualify_reopen(paid: bool) {
+fn setup_qualify_reopen(paid: bool, lose_acks: bool) {
     let root = Root::new(if paid {
         "embedding-spaces-paid"
     } else {
@@ -117,30 +19,13 @@ fn setup_qualify_reopen(paid: bool) {
     let http = Arc::new(RecordedEmbedding::default());
     let engine = configured(&root, http.clone());
     let backend = engine.backend();
-    let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1100.0);
-    settle(&mut h);
-    click_nav(&mut h, "Settings");
-    click(&mut h, Role::Button, "Provider connections");
-    click(&mut h, Role::ComboBox, "Kind");
-    click(&mut h, Role::Button, "Compatible embedding endpoint");
-    type_into(&mut h, NEW_NAME_LABEL, "Recorded embeddings");
-    if !paid {
-        click(&mut h, Role::CheckBox, "Local or free new connection");
-    }
-    click(&mut h, Role::Button, ADD_LABEL);
-    click(&mut h, Role::Button, "Test connection");
-    click(&mut h, Role::Button, "Configure embedding spaces");
-    assert!(http.requests.lock().unwrap().is_empty());
-    type_into(&mut h, "Embedding space name", "Recorded space");
-    click(&mut h, Role::ComboBox, "Embedding connection");
-    click(&mut h, Role::Button, "Recorded embeddings");
-    type_into(&mut h, "Embedding upstream model", "fixture-embedding");
-    type_into(&mut h, "Embedding dimensions (1–65536)", "2");
-    click(&mut h, Role::Button, "Create embedding space");
-    assert!(
-        http.requests.lock().unwrap().is_empty(),
-        "candidate creation performs no inference"
+    let seen = LoseAcks::over(backend.clone(), "router.configure", 0);
+    let mut h = harness(
+        shell_with(Ok(seen.clone()), &root, Script::default(), None),
+        1500.0,
+        1100.0,
     );
+    create_candidate(&mut h, &http, paid);
     let page = || {
         ops::embedding_space_page(backend.query(
             "router.embedding_spaces",
@@ -149,7 +34,19 @@ fn setup_qualify_reopen(paid: bool) {
         .unwrap()
     };
     let before = page();
-    assert_eq!(before.items.0.len(), 1);
+    assert_eq!(
+        before.items.0.len(),
+        1,
+        "candidate creation UI: message={:?}, error={:?}, frames={:?}",
+        h.state().settings.connections.message,
+        h.state().settings.connections.embedding_spaces.error,
+        seen.frames
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|f| String::from_utf8_lossy(f).into_owned())
+            .collect::<Vec<_>>()
+    );
     assert!(before.selected_candidate_id.is_none());
     assert_eq!(
         serde_json::to_value(&before.items.0[0].status).unwrap(),
@@ -160,6 +57,14 @@ fn setup_qualify_reopen(paid: bool) {
             .pricing_model_id
             .as_ref()
             .expect("actual price-only subject");
+        assert!(
+            !h.get_by_role_and_label(Role::Button, "Configure price for Recorded space")
+                .accesskit_node()
+                .is_disabled(),
+            "pricing link must be actionable: loading={}, busy={:?}",
+            h.state().settings.connections.embedding_spaces.loading,
+            h.state().settings.connections.busy
+        );
         click(&mut h, Role::Button, "Configure price for Recorded space");
         let edit = format!("Edit tariff override for {}", model.as_str());
         assert!(
@@ -186,11 +91,68 @@ fn setup_qualify_reopen(paid: bool) {
         // Returning to Settings retains the explicitly opened connection/setup panel.
         settle(&mut h);
     }
+    let lossy = if lose_acks {
+        drop(h);
+        let lossy = LoseAcks::over(backend.clone(), "router.configure", 4);
+        h = harness(
+            shell_with(Ok(lossy.clone()), &root, Script::default(), None),
+            1500.0,
+            1100.0,
+        );
+        settle(&mut h);
+        click_nav(&mut h, "Settings");
+        click(&mut h, Role::Button, "Provider connections");
+        click(&mut h, Role::Button, "Configure embedding spaces");
+        Some(lossy)
+    } else {
+        None
+    };
     click(
         &mut h,
         Role::Button,
         "Queue qualification for Recorded space (may incur usage)",
     );
+    if let Some(lossy) = lossy {
+        assert_eq!(h.state().unconfirmed_count(), 1);
+        let frames = lossy.frames.lock().unwrap().clone();
+        assert_eq!(frames.len(), 4);
+        assert!(
+            frames.iter().all(|f| f == &frames[0]),
+            "unknown acknowledgment retries exactly the original admitted frame"
+        );
+        let original_operation = page().items.0[0]
+            .qualification_operation
+            .as_ref()
+            .unwrap()
+            .operation_id
+            .clone();
+        h.state_mut().on_exit();
+        let saved = devworks_desktop::memory::Memory::load(&root.memory());
+        assert_eq!(saved.pending.commands.len(), 1);
+        assert_eq!(saved.pending.commands[0].frame, frames[0]);
+        drop(h);
+        let replay = LoseAcks::over(backend.clone(), "router.configure", 0);
+        h = harness(
+            shell_with(Ok(replay.clone()), &root, Script::default(), None),
+            1500.0,
+            1100.0,
+        );
+        settle(&mut h);
+        assert_eq!(h.state().unconfirmed_count(), 0);
+        assert_eq!(*replay.frames.lock().unwrap(), vec![frames[0].clone()]);
+        assert_eq!(
+            page().items.0[0]
+                .qualification_operation
+                .as_ref()
+                .unwrap()
+                .operation_id,
+            original_operation
+        );
+        click_nav(&mut h, "Settings");
+        click(&mut h, Role::Button, "Provider connections");
+        click(&mut h, Role::Button, "Configure embedding spaces");
+    }
+
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     let qualified = loop {
         let p = page();
@@ -262,6 +224,7 @@ fn setup_qualify_reopen(paid: bool) {
     );
     drop(requests);
     drop(h);
+    drop(seen);
     drop(backend);
     drop(engine);
     let reopened = configured(&root, http.clone());
@@ -282,14 +245,178 @@ fn setup_qualify_reopen(paid: bool) {
         1,
         "reopen never resends a probe"
     );
+    if !paid && !lose_acks {
+        let records = || {
+            ops::connection_records(backend.query(
+                "router.connections",
+                &ops::router_connections(&*backend, None),
+            ))
+            .unwrap()
+            .0
+        };
+        let current = records().remove(0);
+        let original_endpoint = current.endpoint.as_ref().unwrap().0.clone();
+        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Renamed embeddings","profile":"Embedding","endpoint":original_endpoint})))).unwrap();
+        let inspect = || {
+            ops::embedding_space_page(backend.query(
+                "router.embedding_spaces",
+                &ops::router_embedding_spaces(&*backend, None),
+            ))
+            .unwrap()
+        };
+        let renamed = inspect();
+        assert_eq!(
+            renamed.items.0[0].space_id, restored.items.0[0].space_id,
+            "display edits do not relabel vector identity"
+        );
+        assert_eq!(
+            serde_json::to_value(&renamed.items.0[0].status).unwrap(),
+            "Qualified"
+        );
+        assert_eq!(
+            renamed.items.0[0].qualification_attempt_id,
+            restored.items.0[0].qualification_attempt_id
+        );
+        let current = records().remove(0);
+        ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":current.id,"expectedRevision":current.revision,"name":"Changed destination","profile":"Embedding","endpoint":"http://localhost:11434/another-endpoint"})))).unwrap();
+        let stale = inspect();
+        assert_eq!(
+            serde_json::to_value(&stale.items.0[0].status).unwrap(),
+            "Stale"
+        );
+        assert!(
+            !stale.items.0[0].can_qualify,
+            "an immutable candidate cannot be requalified as a different encoder"
+        );
+        assert!(
+            stale.items.0[0].pricing_model_id.is_none(),
+            "old price metadata is not current owner authority"
+        );
+        assert_eq!(
+            stale.items.0[0].space_id, restored.items.0[0].space_id,
+            "old proof remains inspectable"
+        );
+        let request = ops::router_configure(
+            &*backend,
+            serde_json::json!({"kind":"QualifyEmbeddingSpace","candidateId":stale.items.0[0].id,"expectedRevision":stale.items.0[0].revision}),
+        );
+        let Err(ops::Failure::Refused(fault)) =
+            ops::command_result(backend.command("router.configure", &request))
+        else {
+            panic!("changed source must refuse new paid work")
+        };
+        assert!(matches!(
+            fault.code,
+            devworks_core::protocol::DomainErrorCode::UnsupportedCapability
+        ));
+        assert_eq!(
+            http.requests.lock().unwrap().len(),
+            1,
+            "identity changes never silently route, requalify or resend"
+        );
+    }
 }
 
 #[test]
 fn settings_qualifies_selects_and_reopens_an_explicit_recorded_embedding_space() {
-    setup_qualify_reopen(false);
+    setup_qualify_reopen(false, false);
 }
 
 #[test]
 fn settings_prices_an_embedding_subject_before_accounted_paid_qualification() {
-    setup_qualify_reopen(true);
+    setup_qualify_reopen(true, false);
+}
+
+#[test]
+fn unknown_qualification_ack_replays_the_original_frame_operation_and_native_request() {
+    setup_qualify_reopen(false, true);
+}
+
+#[test]
+fn retained_embedding_controls_survive_an_actual_background_read() {
+    let root = Root::new("embedding-retained-read");
+    let http = Arc::new(RecordedEmbedding::default());
+    let engine = configured(&root, http.clone());
+    let backend = engine.backend();
+    let gate = Gate::holding_replies("router.embedding_spaces");
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1500.0,
+        1500.0,
+    );
+    let _release = Release(gate.clone());
+    create_candidate(&mut h, &http, false);
+    h.get_by_role_and_label(Role::Button, "Configure price for Recorded space")
+        .scroll_to_me();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .settings
+            .connections
+            .embedding_spaces
+            .page
+            .is_some()
+    );
+    let connection = ops::connection_records(backend.query(
+        "router.connections",
+        &ops::router_connections(&*backend, None),
+    ))
+    .unwrap()
+    .0
+    .remove(0);
+    gate.close();
+    // A real committed change emits the normal runtime hint. Hold only the subsequent read
+    // reply, so the loading interval covers the entire pointer interaction deterministically.
+    ops::configured(backend.command("router.configure", &ops::router_configure(&*backend,serde_json::json!({"kind":"Connection","connectionId":connection.id,"expectedRevision":connection.revision,"name":"Background renamed connection","profile":"Embedding","endpoint":connection.endpoint.unwrap().0})))).unwrap();
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while !h.state().settings.connections.embedding_spaces.loading {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the actual background read starts"
+        );
+        h.step();
+        std::thread::yield_now();
+    }
+    let panel = &h.state().settings.connections.embedding_spaces;
+    assert!(
+        panel.page.is_some(),
+        "the inspected candidate remains retained during the read"
+    );
+    assert!(
+        !h.get_by_role_and_label(Role::TextInput, "Embedding space name")
+            .accesskit_node()
+            .is_disabled(),
+        "background reads cannot disable a retained configuration draft"
+    );
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Configure price for Recorded space")
+            .accesskit_node()
+            .is_disabled(),
+        "background reads cannot eat the user's pointer click"
+    );
+    h.get_by_role_and_label(Role::Button, "Configure price for Recorded space")
+        .click();
+    h.step();
+    assert_eq!(
+        h.state().route(),
+        devworks_desktop::route::Route::Usage,
+        "the real pointer action navigates while the independent read is held"
+    );
+    gate.open();
+    settle(&mut h);
+    assert!(
+        http.requests.lock().unwrap().is_empty(),
+        "a metadata refresh or price navigation never runs paid inference"
+    );
 }

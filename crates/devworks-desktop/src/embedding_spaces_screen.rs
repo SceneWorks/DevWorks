@@ -76,9 +76,10 @@ impl EmbeddingSpacesPanel {
         if let Some(error) = &self.error {
             chip(ui, error, Tone::Bad);
         }
-        if self.loading {
-            ui.spinner();
-        }
+        // A background refresh keeps its layout and inspected revisions. Current-source
+        // validation and CAS still run when a user submits a retained action.
+        ui.add_visible(self.loading, egui::Spinner::new());
+        let actionable = idle && (!self.loading || self.page.is_some());
         if let Some(reason) = self
             .page
             .as_ref()
@@ -89,7 +90,7 @@ impl EmbeddingSpacesPanel {
         if widgets::secondary_button(ui, "Reload embedding spaces").clicked() {
             actions.push(ConnectionAction::EmbeddingSpaces { cursor: None });
         }
-        ui.add_enabled_ui(idle && !self.loading,|ui| {
+        ui.add_enabled_ui(actionable,|ui| {
             field(ui,"Embedding space name",&mut self.name);
             let current=self.connection.as_ref().and_then(|(id,_)|connections.iter().find(|c|c.id.as_str()==id));
             egui::ComboBox::from_label("Embedding connection")
@@ -122,10 +123,7 @@ impl EmbeddingSpacesPanel {
         }
         if page.selected_candidate_id.is_some()
             && ui
-                .add_enabled(
-                    idle && !self.loading,
-                    egui::Button::new("Stop using embedding space"),
-                )
+                .add_enabled(actionable, egui::Button::new("Stop using embedding space"))
                 .clicked()
         {
             configure(
@@ -141,12 +139,12 @@ impl EmbeddingSpacesPanel {
                 ui.monospace(format!("Space: {}",record.space_id.as_str()));
                 if let Some(reason)=&record.reason {ui.label(&reason.0);}
                 if let Some(operation)=&record.qualification_operation {ui.label(format!("Qualification operation: {} ({})",operation.operation_id.0.as_str(),wire(&operation.state)));}
-                if let Some(model)=&record.pricing_model_id && ui.add_enabled(idle&&!self.loading,egui::Button::new(format!("Configure price for {}",record.name.0))).clicked() {actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));}
+                if let Some(model)=&record.pricing_model_id && ui.add_enabled(actionable,egui::Button::new(format!("Configure price for {}",record.name.0))).clicked() {actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));}
                 let state=wire(&record.status);
-                if record.can_qualify && ui.add_enabled(idle&&!self.loading,egui::Button::new(format!("Queue qualification for {} (may incur usage)",record.name.0))).clicked() {
+                if record.can_qualify && ui.add_enabled(actionable,egui::Button::new(format!("Queue qualification for {} (may incur usage)",record.name.0))).clicked() {
                     configure(actions,format!("Queue qualification for {}",record.name.0),json!({"kind":"QualifyEmbeddingSpace","candidateId":record.id,"expectedRevision":record.revision}));
                 }
-                if state=="Qualified" && page.selected_candidate_id.as_ref()!=Some(&record.id) && ui.add_enabled(idle&&!self.loading,egui::Button::new(format!("Use embedding space {}",record.name.0))).clicked() {
+                if state=="Qualified" && page.selected_candidate_id.as_ref()!=Some(&record.id) && ui.add_enabled(actionable,egui::Button::new(format!("Use embedding space {}",record.name.0))).clicked() {
                     configure(actions,format!("Select embedding space {}",record.name.0),json!({"kind":"SelectEmbeddingSpace","candidateId":record.id,"expectedRevision":record.revision,"expectedSelectionRevision":page.selection_revision}));
                 }
             });});
