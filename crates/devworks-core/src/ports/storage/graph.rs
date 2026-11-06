@@ -128,6 +128,12 @@ pub trait GraphRead {
     ) -> Result<Option<StoredGraphTrust>, StorageError>;
     fn graph_trust_revision(&self, scope: &GraphScope) -> Result<i64, StorageError>;
     fn graph_pin(&self, id: &Id) -> Result<Option<StoredGraphReadPin>, StorageError>;
+    fn graph_retirable_views(
+        &self,
+        now_ms: i64,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<GraphPage<super::StoredView>, StorageError>;
     fn graph_source_capture(
         &self,
         id: &Id,
@@ -166,9 +172,17 @@ pub struct StoredGraphReadPin {
     /// Exact owner/store/restore/scope/view-set binding; never operation or query filters.
     pub intent_digest: String,
     pub scope: GraphScope,
+    pub view_witnesses: Vec<GraphViewWitness>,
     pub revision: i64,
     pub created_at_ms: i64,
     pub expires_at_ms: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphViewWitness {
+    pub view_id: Id,
+    pub source_revision: i64,
+    pub overlay_id: Option<Id>,
+    pub expires_at_ms: Option<i64>,
 }
 /// Private retained source bytes. No public artifact/version row is created; the blob is held
 /// by generation/unit bindings, with the same reader, backup and physical-removal guards.
@@ -205,6 +219,7 @@ pub trait GraphRepository: GraphRead {
         owner_namespace: &str,
         expected_revision: i64,
     ) -> Result<(), StorageError>;
+    fn invalidate_graph_pins_for_view(&mut self, view: &Id) -> Result<(), StorageError>;
     fn insert_graph_source_capture(
         &mut self,
         record: &StoredGraphSourceCapture,

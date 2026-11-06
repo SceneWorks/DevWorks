@@ -3268,6 +3268,14 @@ impl GraphRead for Unsupported {
     fn graph_trust_revision(&self, _: &GraphScope) -> Result<i64, StorageError> {
         nope()
     }
+    fn graph_retirable_views(
+        &self,
+        _: i64,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<GraphPage<StoredView>, StorageError> {
+        nope()
+    }
     fn graph_pin(&self, _: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
         nope()
     }
@@ -3300,6 +3308,9 @@ impl GraphRepository for Unsupported {
         nope()
     }
     fn retire_graph_pin(&mut self, _: &Id, _: &str, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn invalidate_graph_pins_for_view(&mut self, _: &Id) -> Result<(), StorageError> {
         nope()
     }
     fn insert_graph_source_capture(
