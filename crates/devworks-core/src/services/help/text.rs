@@ -24,9 +24,16 @@ pub(super) fn visit(
         if stopped() {
             return Err(StorageError::Cancelled);
         }
-        let count = reader
-            .read(&mut buffer[carry..carry + CHUNK])
-            .map_err(|e| invalid(&format!("Help source read: {e}")))?;
+        let count = match reader.read(&mut buffer[carry..carry + CHUNK]) {
+            Ok(count) => count,
+            Err(_) if stopped() => return Err(StorageError::Cancelled),
+            Err(_) => {
+                return Err(StorageError::unavailable(
+                    Unavailable::Io,
+                    "Help source read failed",
+                ));
+            }
+        };
         if count == 0 {
             if carry != 0 {
                 return Err(invalid("incomplete Help UTF-8"));

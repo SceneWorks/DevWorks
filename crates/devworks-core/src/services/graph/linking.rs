@@ -128,7 +128,10 @@ impl IndexRead for BoundedIndex<'_> {
         loop {
             let page = self.graph.graph_edges(
                 &self.scope,
-                &GraphEdgeFilter::default(),
+                &GraphEdgeFilter {
+                    unit_key: Some(unit_key.into()),
+                    ..Default::default()
+                },
                 after.as_ref(),
                 32,
             )?;

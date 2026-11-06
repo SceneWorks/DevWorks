@@ -8,6 +8,7 @@ struct PublishGate {
     entered: AtomicBool,
     released: Mutex<bool>,
     wake: Condvar,
+    store: Mutex<Option<std::sync::Weak<dyn ApplicationStore>>>,
 }
 impl PublishGate {
     fn new(h: &Harness) -> Arc<Self> {
@@ -17,6 +18,7 @@ impl PublishGate {
             entered: AtomicBool::new(false),
             released: Mutex::new(false),
             wake: Condvar::new(),
+            store: Mutex::new(None),
         })
     }
     fn arm(&self) {
@@ -24,8 +26,23 @@ impl PublishGate {
         self.entered.store(false, Ordering::SeqCst);
         self.armed.store(true, Ordering::SeqCst);
     }
-    fn pause(&self) {
-        if self.armed.swap(false, Ordering::SeqCst) {
+    fn pause(&self, generation: &str) {
+        if !self.armed.load(Ordering::SeqCst) {
+            return;
+        }
+        // Gateway receipts share this file port. Hold only actual Help-topic work,
+        // whose physical generation is the persisted host staging operation.
+        let store = self
+            .store
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.upgrade());
+        let Some(store) = store else { return };
+        let operation = devworks_core::protocol::OperationId(Id::new(generation).unwrap());
+        let help_topic = read(&*store, |s| s.operations().operation(&operation))
+            .is_some_and(|op| op.payload["source"]["kind"] == "HelpTopic");
+        if help_topic && self.armed.swap(false, Ordering::SeqCst) {
             self.entered.store(true, Ordering::SeqCst);
             let guard = self.released.lock().unwrap();
             let (_released_guard, wait) = self
@@ -59,7 +76,7 @@ impl ArtifactFiles for PublishGate {
         let published = self
             .inner
             .publish(name, source, digest, bytes, reuse, generation)?;
-        self.pause();
+        self.pause(&published.generation);
         Ok(published)
     }
     fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
@@ -85,7 +102,7 @@ impl ArtifactFiles for PublishGate {
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
         let reader = self.inner.open_controlled(d, g, n, stopped)?;
-        self.pause();
+        self.pause(g);
         Ok(reader)
     }
     fn read_range_controlled(
@@ -135,6 +152,7 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     let rt = runtime();
     let gate = PublishGate::new(&h);
     let app = boot_help_with_files(&rt, &h, gate.clone());
+    *gate.store.lock().unwrap() = Some(Arc::downgrade(&app.store));
     let (scheduler, _) = scheduler(&app, 0);
     let old_head = app.head();
     let registry = read(&*app.store, |s| s.packages().registry_revision());
@@ -167,7 +185,15 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
             tokio::task::yield_now().await;
         }
     }));
-    let running = app.runs(&job).into_iter().max_by_key(|r| r.seq).unwrap();
+    let running = rt.block_on(within("Help job records its accepted child", async {
+        loop {
+            let run = app.runs(&job).into_iter().max_by_key(|r| r.seq).unwrap();
+            if run.inner_operation_id.is_some() {
+                break run;
+            }
+            tokio::task::yield_now().await;
+        }
+    }));
     let inner = running
         .inner_operation_id
         .clone()

@@ -233,7 +233,7 @@ impl HelpService {
         if sha256_hex(body.as_bytes()) != topic.content_digest
             || body.chars().count() as i64 != topic.character_count
         {
-            return Err(invalid("previous Help source changed"));
+            return Err(StorageError::ViewUnavailable);
         }
         Ok(body)
     }
@@ -309,9 +309,13 @@ impl HelpService {
                         .map(|_| ()),
                     Err(error) => Err(error),
                 };
-                if valid.is_err() {
-                    control.finish(Ok(()))?;
-                    document.topic.content_ref = None;
+                match valid {
+                    Ok(()) => {}
+                    Err(StorageError::ViewUnavailable) => {
+                        control.finish(Ok(()))?;
+                        document.topic.content_ref = None;
+                    }
+                    Err(error) => return control.finish(Err(error)),
                 }
             }
         }
@@ -495,7 +499,13 @@ impl HelpService {
             })?;
             let body = match old {
                 Some(old) if old.source_kind == "Generated" && old.package_id.is_none() => {
-                    metadata::replace_auto(&self.old_body(&old.generation_id, &old.id)?, &generated)
+                    match self.old_body(&old.generation_id, &old.id) {
+                        Ok(body) => metadata::replace_auto(&body, &generated),
+                        Err(StorageError::ViewUnavailable) => format!(
+                            "> The previous generated document source is unavailable. Automatic content was rebuilt; any manual material in that source could not be recovered.\n\n{generated}\n\n"
+                        ),
+                        Err(error) => return Err(error),
+                    }
                 }
                 _ => format!("{generated}\n\n"),
             };

@@ -111,7 +111,17 @@ pub(super) fn overview(
     })?;
     let mut value = json!({"repositories":repositories,"dependencies":[],"stamp":metadata.stamp,
         "graphCoverage":{"state":"Unavailable","gaps":[],"moreGaps":false},"unavailableReason":"graph_not_indexed","internalModules":[]});
-    if let Some(reader) = reader.as_mut() {
+    let graph_available = reader.as_ref().is_some_and(|reader| {
+        repository.is_none_or(|id| {
+            reader
+                .scope()
+                .views
+                .iter()
+                .any(|view| &view.repository_id == id)
+        })
+    });
+    if graph_available {
+        let reader = reader.as_mut().expect("selected repository view");
         reader.budget.absorb_usage(&metadata.budget.borrow());
         for row in value["repositories"].as_array_mut().expect("repositories") {
             let id: Id = model::wire(row["repositoryId"].clone())?;
@@ -174,6 +184,10 @@ pub(super) fn overview(
         )?;
     } else {
         paging::metadata(metadata, &mut value, &["repositories"])?;
+        if let Some(reader) = reader {
+            reader.budget.absorb_usage(&metadata.budget.borrow());
+            reader.next = metadata.next.borrow().clone();
+        }
     }
     Ok(GraphResult::RepositoryOverview {
         value: model::wire(value)?,

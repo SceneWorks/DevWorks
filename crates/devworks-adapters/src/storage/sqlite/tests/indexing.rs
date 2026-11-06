@@ -410,3 +410,69 @@ fn the_overlay_listing_bound_never_hides_a_live_overlay_behind_ended_records() {
     assert_eq!(listed.len(), 256);
     assert_eq!(listed[0], live, "the live overlay is listed first");
 }
+
+#[test]
+fn equal_timestamp_publications_follow_their_durable_revision_not_opaque_ids() {
+    let h = Harness::new();
+    let s = store(&h);
+    registered(&s, "repo-a");
+    registered(&s, "legacy");
+    write(&s, |tx| {
+        let mut g = generation("generation", "repo-a");
+        tx.indexing().insert_generation(&g)?;
+        g.state = GEN_SEALED.into();
+        tx.indexing().update_generation(&g)?;
+        for (revision, name) in [(1, "view-9"), (2, "view-10"), (3, "view-11")] {
+            let view = StoredView {
+                view_id: id(name),
+                repository_id: id("repo-a"),
+                view_digest: devworks_core::fingerprint::sha256_hex(name.as_bytes()),
+                baseline_id: g.id.clone(),
+                branch_id: None,
+                worktree_id: None,
+                coverage: json!({"sourceRevision":revision}),
+            };
+            tx.indexing().insert_view(&view)?;
+            assert_eq!(
+                tx.indexing()
+                    .publish(&id("repo-a"), &view.view_id, revision - 1)?,
+                revision
+            );
+            tx.projects().publish_index_view(&StoredIndexView {
+                view_id: view.view_id,
+                repository_id: id("repo-a"),
+                source_revision: "commit".into(),
+                coverage: "Complete".into(),
+                published_at_ms: T0,
+            })?;
+        }
+        for (name, at) in [("legacy-old", T0 - 1), ("legacy-a", T0), ("legacy-z", T0)] {
+            tx.projects().publish_index_view(&StoredIndexView {
+                view_id: id(name),
+                repository_id: id("legacy"),
+                source_revision: "legacy".into(),
+                coverage: "Complete".into(),
+                published_at_ms: at,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = store(&h);
+    read_snapshot(&*s, &ReadOptions::default(), |read| {
+        let names = |repo: &str| -> Result<Vec<String>, StorageError> {
+            Ok(read
+                .projects()
+                .index_views(&id(repo))?
+                .into_iter()
+                .map(|v| v.view_id.as_str().to_owned())
+                .collect())
+        };
+        assert_eq!(names("repo-a")?, ["view-11", "view-10", "view-9"]);
+        assert_eq!(names("legacy")?, ["legacy-z", "legacy-a", "legacy-old"]);
+        assert_eq!(read.indexing().live_pins(&id("view-9"), T0)?, 0);
+        Ok(())
+    })
+    .unwrap();
+}
