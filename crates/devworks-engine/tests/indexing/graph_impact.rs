@@ -335,6 +335,16 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         0,
         "crate dependents are not affected symbols"
     );
+    assert!(
+        partial
+            .scope_coverage
+            .as_ref()
+            .unwrap()
+            .unavailable_repositories
+            .0
+            .iter()
+            .any(|r| r.repository_id.as_str() == ids["app"])
+    );
     indexed(
         &executor,
         &app,
