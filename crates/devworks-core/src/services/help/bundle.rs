@@ -7,6 +7,20 @@ use std::collections::BTreeSet;
 
 include!(concat!(env!("OUT_DIR"), "/help_bundle.rs"));
 
+/// These bytes and their generated path order are immutable for this executable. Keep the
+/// legacy commitment byte-for-byte, without rehashing the bundle at every document fence.
+pub(super) fn commitment() -> &'static str {
+    static COMMITMENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let mut value = sha256_hex(CATALOG.as_bytes());
+        for (path, body) in FILES {
+            value.push_str(path);
+            value.push_str(&sha256_hex(body.as_bytes()));
+        }
+        value
+    });
+    &COMMITMENT
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Entry {
@@ -74,4 +88,19 @@ pub(super) fn load() -> Result<Vec<Topic>, StorageError> {
     }
     topics.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
     Ok(topics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_bundle_commitment_keeps_the_existing_source_identity_and_order() {
+        let mut expected = sha256_hex(CATALOG.as_bytes());
+        for (path, body) in FILES {
+            expected.push_str(path);
+            expected.push_str(&sha256_hex(body.as_bytes()));
+        }
+        assert_eq!(commitment(), expected);
+    }
 }

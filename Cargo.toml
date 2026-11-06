@@ -16,3 +16,8 @@ semver = "=1.0.28"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 sha2 = "=0.11.1"
+
+# Full-size native source verification uses the same SHA-2 algorithms and passes in
+# dev/test builds; optimize their compression instead of weakening integrity checks.
+[profile.dev.package.sha2]
+opt-level = 3

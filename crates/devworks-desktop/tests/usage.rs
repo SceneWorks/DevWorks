@@ -571,16 +571,19 @@ impl devworks_core::ports::http::HttpTransport for PublicPriceHttp {
         Ok(HttpResponse { status: 200, body: format!("# Pricing\nPrices per 1M tokens.\n| Model | Input | Output |\n| --- | --- | --- |\n| gpt-test | ${rate} | $2 |\n").into_bytes() })
     }
 }
-fn start_native_price_refresh(h: &mut Ui) {
-    // A provider publication precedes the operation's terminal journal write. A quiet GUI
-    // can still display that legitimate earlier status, so confirm it before a new gesture.
+fn finish_native_price_refresh(h: &mut Ui) {
     h.state_mut().usage.last_refresh = None;
     step_until(
         h,
-        "previous price refresh reaches its recorded terminal state",
-        |shell| shell.usage.refresh.is_none(),
+        "the native refresh consumes its real terminal operation",
+        |s| s.usage.refresh.is_none(),
     );
     settle(h);
+}
+fn start_native_price_refresh(h: &mut Ui) {
+    // A provider publication precedes the operation's terminal journal write. A quiet GUI
+    // can still display that legitimate earlier status, so confirm it before a new gesture.
+    finish_native_price_refresh(h);
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .scroll_to_me();
     settle(h);
@@ -674,8 +677,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         first_catalog.snapshots.0[0].source_url.0,
         "https://developers.openai.com/api/docs/pricing"
     );
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     assert!(h.state().usage.refresh.is_none());
     assert!(has_text(&h, "ObservedComplete"));
     let snapshot = first_catalog.snapshots.0[0].id.clone();
@@ -713,8 +715,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         .unwrap()
         .snapshot_id
         .clone();
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     click(&mut h, Role::CheckBox, "Include historical price sources");
     press(&mut h, "Apply price catalog filters");
     assert_eq!(
@@ -788,8 +789,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    h.state_mut().usage.last_refresh = None;
-    settle(&mut h);
+    finish_native_price_refresh(&mut h);
     assert!(h.state().usage.refresh.is_none());
     assert!(has_text(&h, "HTTP 503"));
     assert!(has_text(&h, "Failed"));
@@ -808,6 +808,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
 fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload() {
     let root = Root::new("usage-native-price-paging");
     let engine = start(&root);
+    startup::settled(&engine);
     let b = engine.backend();
     let model = "paged-price-model";
     ops::configured(b.command("router.configure",&ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Paged price model","endpointProfile":"CompatibleChat","upstreamModelId":"fixture/paged-price","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
@@ -1257,6 +1258,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
             tx.usage().insert_usage_origin(&StoredUsageOrigin{source_kind:"SessionUsage".into(),source_id:format!("page-{i:03}"),attempt_id:None,request_id:Some(Id::new(format!("recorded-page-{i:03}")).unwrap()),project_id:Some(project_id.clone()),feature_id:None,work_id:None,session_id:Some(session.clone()),job_run_id:None,payload:json!({"actorId":format!("recorded-user-{i:03}"),"providerId":"openrouter","reportCategory":"Assistant","item":{"purpose":"Conversation","modelId":format!("recorded-model-{i:03}"),"inputTokens":"1","outputTokens":"1"}}),recorded_at_ms:1000,priced_micro_usd:None,classification:"Untracked".into(),monetary_complete:false,incomplete:true,unknown_tail:false})?;
         }Ok(())
     }).unwrap();
+    startup::settled(&engine);
     let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1800.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Usage);
@@ -1308,6 +1310,30 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     assert_eq!(page.items.0.len(), 120);
     assert_eq!(page.totals.legacy_usage_facts.get(), 120);
     assert_eq!(serde_json::to_value(&page.context).unwrap(), context);
+    // A genuinely new event must still expire this full-snapshot cursor. The UI keeps the
+    // loaded result and unsent input instead of silently retrying against a different view.
+    press(&mut h, "Apply usage filters");
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("actual first attempt page")
+    };
+    assert_eq!(page.items.0.len(), 100);
+    let first_context = serde_json::to_value(&page.context).unwrap();
+    replace(&mut h, "Usage user", "retained after refusal");
+    project(&*b, "A real event expires the existing report cursor");
+    press(&mut h, "Load more usage rows");
+    assert!(
+        h.state()
+            .usage
+            .error
+            .as_ref()
+            .is_some_and(|e| e.contains("CursorExpired"))
+    );
+    let UsageQueryResult::Attempts { page } = h.state().usage.data.as_ref().unwrap() else {
+        panic!("retained attempt page")
+    };
+    assert_eq!(page.items.0.len(), 100);
+    assert_eq!(serde_json::to_value(&page.context).unwrap(), first_context);
+    assert_eq!(h.state().usage.draft.user, "retained after refusal");
 }
 
 #[test]
@@ -1524,3 +1550,9 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
 mod official;
 #[path = "usage/refresh.rs"]
 mod refresh;
+
+#[path = "usage/paging.rs"]
+mod paging;
+
+#[path = "usage/startup.rs"]
+mod startup;
