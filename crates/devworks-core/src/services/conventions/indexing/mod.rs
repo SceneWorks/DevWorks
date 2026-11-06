@@ -108,6 +108,21 @@ impl IndexService {
         context: &crate::context::InvocationContext,
         request: embedding::EmbeddingRequest,
     ) -> Result<embedding::EmbeddedBatch, embedding::EmbeddingFailure> {
+        self.embedding_batch(context, request, false)
+    }
+    pub(crate) fn observe_batch(
+        &self,
+        context: &crate::context::InvocationContext,
+        request: embedding::EmbeddingRequest,
+    ) -> Result<embedding::EmbeddedBatch, embedding::EmbeddingFailure> {
+        self.embedding_batch(context, request, true)
+    }
+    fn embedding_batch(
+        &self,
+        context: &crate::context::InvocationContext,
+        request: embedding::EmbeddingRequest,
+        observe: bool,
+    ) -> Result<embedding::EmbeddedBatch, embedding::EmbeddingFailure> {
         let guard = {
             let closed = self.closed.read().unwrap_or_else(|p| p.into_inner());
             if *closed {
@@ -131,7 +146,11 @@ impl IndexService {
             .ok_or_else(|| {
                 embedding::EmbeddingFailure::Unavailable("NoConfiguredEmbeddingRoute".into())
             })?;
-        let result = executor.embed(context, request);
+        let result = if observe {
+            executor.observe(context, request)
+        } else {
+            executor.embed(context, request)
+        };
         drop(guard);
         if self.is_stopped() {
             return Err(embedding::EmbeddingFailure::Cancelled);

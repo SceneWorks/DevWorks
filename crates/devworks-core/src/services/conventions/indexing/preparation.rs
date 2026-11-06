@@ -220,7 +220,7 @@ impl IndexService {
             for (index,text) in texts.iter().enumerate() {
                 bounded()?;
                 staged.push(self.artifacts.stage_host_bytes(self.store.as_ref(),text.as_bytes(),json!({"kind":"ConventionEmbeddingInput","requestId":request_id,"inputIndex":index}))?
-                    .map_err(|reason|StorageError::InvalidRecord(reason))?);
+                    .map_err(StorageError::InvalidRecord)?);
             }
             Ok(())
         });

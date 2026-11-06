@@ -51,6 +51,7 @@ pub struct EmbeddedBatch {
 pub enum EmbeddingFailure {
     Unavailable(String),
     Unknown { request_id: Id, reason: String },
+    NotStarted { request_id: Id },
     Cancelled,
     Storage(StorageError),
 }
@@ -77,6 +78,12 @@ pub trait ConventionEmbeddings: Send + Sync {
     ) -> Result<EmbeddingConfiguration, EmbeddingFailure>;
     /// Called outside any SQL snapshot/writer. At most 32 exact text inputs per native request.
     fn embed(
+        &self,
+        context: &InvocationContext,
+        request: EmbeddingRequest,
+    ) -> Result<EmbeddedBatch, EmbeddingFailure>;
+    /// Observe the exact original native journal only; absence is NotStarted, never a send.
+    fn observe(
         &self,
         context: &InvocationContext,
         request: EmbeddingRequest,
