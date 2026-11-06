@@ -143,7 +143,7 @@ impl UsageRuntime {
             }
         }
         let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
+        owned_thread(move || {
             struct Remove {
                 runtime: Arc<UsageRuntime>,
                 id: Id,
@@ -191,15 +191,16 @@ impl UsageRuntime {
             self.preparing.fetch_add(1, Ordering::SeqCst);
         }
         let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
-            struct Preparing(Arc<UsageRuntime>);
-            impl Drop for Preparing {
-                fn drop(&mut self) {
-                    self.0.preparing.fetch_sub(1, Ordering::SeqCst);
-                    self.0.changed.notify_one();
-                }
+        struct Preparing(Arc<UsageRuntime>);
+        impl Drop for Preparing {
+            fn drop(&mut self) {
+                self.0.preparing.fetch_sub(1, Ordering::SeqCst);
+                self.0.changed.notify_one();
             }
-            let _preparing = Preparing(runtime.clone());
+        }
+        let preparing = Preparing(runtime.clone());
+        owned_thread(move || {
+            let _preparing = preparing;
             let admission = host.admit(context, logical, category, request)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
@@ -483,4 +484,21 @@ impl UsageRuntime {
             }
         }
     }
+}
+
+// External provider close/start may not implement bounded cancellation. They must not occupy
+// Tokio's blocking pool, whose destructor otherwise joins them after the shutdown deadline.
+// Registry guards and the publication fence retain exact custody until actual closure.
+async fn owned_thread<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, ()> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("devworks-inference".into())
+        .spawn(move || {
+            let result = work();
+            let _ = send.send(result);
+        })
+        .map_err(|_| ())?;
+    receive.await.map_err(|_| ())
 }

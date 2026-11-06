@@ -886,3 +886,7 @@ impl Backend for DesktopBackend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "host/usage_shutdown_tests.rs"]
+mod usage_shutdown_tests;
