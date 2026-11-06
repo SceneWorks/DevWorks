@@ -525,16 +525,9 @@ impl OwnedInferenceSource for NativeProviderSource {
                         if parsed.is_err() {
                             self.interrupted(DecodedOutcome::Incomplete, "malformed event stream")?;
                         } else if self.decoder.protocol_ended() {
-                            self.stream
-                                .as_mut()
-                                .expect("started")
-                                .close()
-                                .map_err(|_| {
-                                    StorageError::unavailable(
-                                        Unavailable::UnsupportedRuntime,
-                                        "provider transport closure unconfirmed",
-                                    )
-                                })?;
+                            // Drain visible text/evidence before waiting for physical close.
+                            // Completed native/call items remain private until the terminal
+                            // branch above confirms closure.
                             self.ended = true;
                             let frames = self.decoder.finish();
                             self.frames(frames)?;

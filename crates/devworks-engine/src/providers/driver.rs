@@ -296,7 +296,42 @@ impl NativeProviders {
     /// Trusted native UI read only. The host must authorize the session under its current
     /// user context before serving this preview; generic gateway/tools cannot publish it.
     pub fn text_preview(&self, session: &Id) -> Option<super::live::LiveTurn> {
-        self.live.snapshot(session)
+        if self.usage.accounting_fence().is_closed() {
+            self.live.clear();
+            return None;
+        }
+        self.usage
+            .accounting_fence()
+            .publication(|| {
+                let Some(preview) = self.live.snapshot(session) else {
+                    return Ok(None);
+                };
+                let current = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    let Some(current) = read.sessions().session(session)? else {
+                        return Ok(false);
+                    };
+                    let Some(attempt) = read.usage().inference_attempt(&preview.attempt_id.0)?
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(!current.closed()
+                        && current.context_epoch == preview.context_epoch
+                        && attempt.session_id.as_ref() == Some(session)
+                        && if preview.finalized_through.is_some() {
+                            matches!(attempt.state.as_str(), "Dispatched" | "Settled")
+                        } else {
+                            attempt.state == "Dispatched"
+                        })
+                })
+                .unwrap_or(false);
+                if !current {
+                    self.live.discard(session, &preview.attempt_id);
+                    return Ok(None);
+                }
+                Ok(Some(preview))
+            })
+            .ok()
+            .flatten()
     }
     pub fn schemas(&self) -> &Arc<RegisteredSchemas> {
         &self.schemas

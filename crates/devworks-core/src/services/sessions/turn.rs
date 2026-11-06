@@ -25,6 +25,11 @@
 //!   it — the only empty assistant entry ever written. After a crash mid-stream the runtime
 //!   appends that marker itself, since the turn will never end.
 //!
+//! Native transports can use [`TurnAssembler::positioned`] after restoring the provider's
+//! private item/sub-block ordering. That mode retains tool positions and withholds the whole
+//! canonical batch until the terminal; a separate host-only volatile text preview streams to
+//! the UI and never advances a checkpoint or changes already committed transcript entries.
+//!
 //! Endpoint wire decoding, broker admission and result assembly are the transport and tool-turn
 //! owners'; this assembler only decides what of a normalized turn is durable.
 use crate::protocol::provider::{
