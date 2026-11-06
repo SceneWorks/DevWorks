@@ -11139,6 +11139,7 @@ pub struct PriceCatalogView {
     pub next_cursor: Option<Cursor>,
     pub has_more: bool,
     pub coverage: Coverage,
+    pub models: Rows<ModelPriceView>,
 }
 impl Check for PriceCatalogView {
     fn check(&self) -> Result<(), String> {
@@ -11149,6 +11150,7 @@ impl Check for PriceCatalogView {
         self.next_cursor.check()?;
         self.has_more.check()?;
         self.coverage.check()?;
+        self.models.check()?;
         super::domain_rules::record(
             "PriceCatalogView",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11402,7 +11404,7 @@ impl Check for UsageCacheDiagnostic {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageCostSnapshot {
-    pub price_kind: UsagePriceKind,
+    pub price_kind: UsageCostKind,
     pub price_origin: PriceOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount_micro_usd: Option<Counter>,
@@ -11423,6 +11425,7 @@ pub struct UsageCostSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub untracked_reason: Option<Text>,
     pub tariffs: Rows<PriceTariff>,
+    pub monetary_complete: bool,
 }
 impl Check for UsageCostSnapshot {
     fn check(&self) -> Result<(), String> {
@@ -11439,6 +11442,7 @@ impl Check for UsageCostSnapshot {
         self.incomplete.check()?;
         self.untracked_reason.check()?;
         self.tariffs.check()?;
+        self.monetary_complete.check()?;
         super::domain_rules::record(
             "UsageCostSnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11508,6 +11512,9 @@ pub struct UsageAttemptRecord {
     pub input_semantics: Option<Label>,
     pub cost: UsageCostSnapshot,
     pub cache_diagnostics: Rows<UsageCacheDiagnostic>,
+    pub unknown_tail: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<Counter>,
 }
 impl Check for UsageAttemptRecord {
     fn check(&self) -> Result<(), String> {
@@ -11544,6 +11551,8 @@ impl Check for UsageAttemptRecord {
         self.input_semantics.check()?;
         self.cost.check()?;
         self.cache_diagnostics.check()?;
+        self.unknown_tail.check()?;
+        self.reasoning_tokens.check()?;
         super::domain_rules::record(
             "UsageAttemptRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11564,6 +11573,7 @@ pub struct UsageTotals {
     pub untracked_attempts: Counter,
     pub unknown_tail_attempts: Counter,
     pub incomplete_attempts: Counter,
+    pub monetary_incomplete_attempts: Counter,
 }
 impl Check for UsageTotals {
     fn check(&self) -> Result<(), String> {
@@ -11576,6 +11586,7 @@ impl Check for UsageTotals {
         self.untracked_attempts.check()?;
         self.unknown_tail_attempts.check()?;
         self.incomplete_attempts.check()?;
+        self.monetary_incomplete_attempts.check()?;
         super::domain_rules::record(
             "UsageTotals",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11861,6 +11872,7 @@ pub enum PriceUnit {
     Second,
     Image,
     Request,
+    Character,
 }
 impl Check for PriceUnit {
     fn check(&self) -> Result<(), String> {
@@ -11877,6 +11889,49 @@ pub enum PriceModality {
     Any,
 }
 impl Check for PriceModality {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPriceView {
+    pub model_id: Id,
+    pub revision: Revision,
+    pub price_kind: UsagePriceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untracked_reason: Option<Text>,
+}
+impl Check for ModelPriceView {
+    fn check(&self) -> Result<(), String> {
+        self.model_id.check()?;
+        self.revision.check()?;
+        self.price_kind.check()?;
+        self.snapshot_id.check()?;
+        self.override_revision.check()?;
+        self.untracked_reason.check()?;
+        super::domain_rules::record(
+            "ModelPriceView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum UsageCostKind {
+    Reported,
+    Estimated,
+    Free,
+    Untracked,
+    Unknown,
+}
+impl Check for UsageCostKind {
     fn check(&self) -> Result<(), String> {
         Ok(())
     }
