@@ -1,0 +1,120 @@
+{
+  "types": {
+    "EmbeddingDimensionMode": {
+      "kind": "enum",
+      "values": [
+        "Native",
+        "Parameter"
+      ]
+    },
+    "EmbeddingMetric": {
+      "kind": "enum",
+      "values": [
+        "L2",
+        "Cosine"
+      ]
+    },
+    "EmbeddingSpaceStatus": {
+      "kind": "enum",
+      "values": [
+        "Unqualified",
+        "Qualifying",
+        "Qualified",
+        "Failed",
+        "Unknown",
+        "Cancelled",
+        "Stale",
+        "Unavailable"
+      ]
+    },
+    "EmbeddingSpaceRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "name": "Label",
+        "connection_id": "Id",
+        "account_revision": "Revision",
+        "upstream_model_id": "Label",
+        "dimensions": "PositiveCounter",
+        "dimension_mode": "EmbeddingDimensionMode",
+        "metric": "EmbeddingMetric",
+        "model_digest": "Digest",
+        "configuration_digest": "Digest",
+        "status": "EmbeddingSpaceStatus",
+        "reason": "?Content",
+        "qualification_operation": "?OperationRef",
+        "qualification_request_id": "?Id",
+        "qualification_attempt_id": "?Id",
+        "result_artifact": "?ArtifactRef",
+        "created_at_ms": "Counter",
+        "updated_at_ms": "Counter"
+      }
+    },
+    "EmbeddingSpacePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<EmbeddingSpaceRecord>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "selection_revision": "Revision",
+        "selected_space_id": "?Id"
+      }
+    },
+    "RouterConfigAction": {
+      "variants": {
+        "CreateEmbeddingSpace": {
+          "name": "Label",
+          "connection_id": "Id",
+          "expected_connection_revision": "Revision",
+          "upstream_model_id": "Label",
+          "dimensions": "PositiveCounter",
+          "dimension_mode": "EmbeddingDimensionMode",
+          "metric": "EmbeddingMetric"
+        },
+        "QualifyEmbeddingSpace": {
+          "space_id": "Id",
+          "expected_revision": "Revision"
+        },
+        "SelectEmbeddingSpace": {
+          "space_id": "Id",
+          "expected_revision": "Revision",
+          "expected_selection_revision": "Revision"
+        },
+        "ClearEmbeddingSpace": {
+          "expected_selection_revision": "Revision"
+        }
+      },
+      "introducedVariants": {
+        "CreateEmbeddingSpace": 3,
+        "QualifyEmbeddingSpace": 3,
+        "SelectEmbeddingSpace": 3,
+        "ClearEmbeddingSpace": 3
+      }
+    }
+  },
+  "operations": {
+    "router.embedding_spaces": {
+      "operation": "router.embedding_spaces",
+      "mode": "Query",
+      "fields": {
+        "page": "PageRequest"
+      },
+      "result": "EmbeddingSpacePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Read-only bounded persistent embedding-space inventory and revisioned explicit selection. Status is derived from host-owned qualification evidence and current connection/account/model/endpoint/config identity. No space is inferred from a conversation or first route. Historical identity is retained when unavailable. Cursor binds inventory and selection snapshot. Dimensions are 1..65536; candidate identity excludes display names and pricing metadata."
+    }
+  },
+  "schemaRevisions": {
+    "router.embedding_spaces": [
+      3
+    ]
+  },
+  "notes": {
+    "format": "Merge the new types/operation/schema revision into canonical domain-spec; merge RouterConfigAction.variants and add real whole-variant introducedVariants gating support (name negotiable). Do not replace existing variants/variantSince or rewrite schema1/2.",
+    "configureRules": "Only actual current Human may create candidates, queue qualification, select a current positively qualified candidate, or clear selection. Create validates exact connection revision and complete current discovered Embedding model. Changed semantic config creates new immutable space identity. Qualify persists exact request/operation/source authority before effect; configure.prepare never performs inference. Replays reuse exact original accounted probe; malformed, incomplete, cancelled, unknown, stale or failed outcomes never qualify/select. Positive evidence comes from actual native journals, immutable result manifest/vector hashes, finite dimension-checked output and nonzero Cosine norm. Selection and candidate revisions are separately fenced. No automatic selection/fallback; old vectors never change identity.",
+    "check": "CreateEmbeddingSpace.dimensions must reject >65536 in canonical/native Check, not only in business owner.",
+    "legacy": "Compare all prior schema1/2 bytes including configure input/results and preserve existing56 qualified aliases."
+  }
+}
