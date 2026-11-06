@@ -164,6 +164,8 @@ pub struct StoredProposal {
     pub decided_by: Option<ActorId>,
     pub decided_at_ms: Option<i64>,
     pub summary: String,
+    /// Exact pending plan captured when requested; absent on legacy proposals.
+    pub reviewed_snapshot: Option<Value>,
 }
 
 /// A feature's execution-readiness assessment (the service's JSON body).

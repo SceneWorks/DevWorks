@@ -1036,6 +1036,7 @@ impl WorkService {
             decided_by: None,
             decided_at_ms: None,
             summary: format!("Approve the revised plan of {}", f.title),
+            reviewed_snapshot: s.pending.clone(),
         };
         tx.work().put_proposal(&p, None)?;
         let after = touch(tx, ctx, &f)?;

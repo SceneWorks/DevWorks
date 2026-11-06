@@ -337,10 +337,17 @@ fn plan_of(conn: &Connection, feature: &Id) -> Result<Option<StoredFeaturePlan>,
     .transpose()
 }
 
-const PROPOSAL_COLUMNS: &str = "id,feature_id,revision,plan_revision,plan_digest,state,requested_by,requested_at,decided_by,decided_at,summary";
+const PROPOSAL_COLUMNS: &str = "id,feature_id,revision,plan_revision,plan_digest,state,requested_by,requested_at,decided_by,decided_at,summary,reviewed_snapshot_json";
 type ProposalRaw = (
     (String, String, i64, i64, String, String),
-    (String, i64, Option<String>, Option<i64>, String),
+    (
+        String,
+        i64,
+        Option<String>,
+        Option<i64>,
+        String,
+        Option<String>,
+    ),
 );
 fn proposal_row(r: &Row<'_>) -> rusqlite::Result<ProposalRaw> {
     Ok((
@@ -352,12 +359,21 @@ fn proposal_row(r: &Row<'_>) -> rusqlite::Result<ProposalRaw> {
             r.get(4)?,
             r.get(5)?,
         ),
-        (r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?),
+        (
+            r.get(6)?,
+            r.get(7)?,
+            r.get(8)?,
+            r.get(9)?,
+            r.get(10)?,
+            r.get(11)?,
+        ),
     ))
 }
 fn proposal_of(raw: ProposalRaw) -> Result<StoredProposal, StorageError> {
-    let ((id, feature, rev, plan_rev, digest, state), (by, at, decided_by, decided_at, summary)) =
-        raw;
+    let (
+        (id, feature, rev, plan_rev, digest, state),
+        (by, at, decided_by, decided_at, summary, snapshot),
+    ) = raw;
     Ok(StoredProposal {
         id: id_of(id)?,
         feature_id: id_of(feature)?,
@@ -370,6 +386,7 @@ fn proposal_of(raw: ProposalRaw) -> Result<StoredProposal, StorageError> {
         decided_by: decided_by.map(id_of).transpose()?.map(ActorId),
         decided_at_ms: decided_at,
         summary,
+        reviewed_snapshot: snapshot.as_deref().map(json_of).transpose()?,
     })
 }
 
@@ -872,6 +889,22 @@ impl WorkRepository for Unit<'_> {
         if !PROPOSAL_STATES.contains(&p.state.as_str()) {
             return Err(invalid("unknown approval state"));
         }
+        if let Some(stored) = WorkRead::proposal(self, &p.id)? {
+            let mut content = p.clone();
+            content.revision = stored.revision;
+            content.state = stored.state.clone();
+            content.decided_by = stored.decided_by.clone();
+            content.decided_at_ms = stored.decided_at_ms;
+            if content != stored {
+                return Err(invalid(
+                    "plan proposal reviewed content and binding are immutable",
+                ));
+            }
+        } else if p.reviewed_snapshot.is_none() {
+            return Err(invalid(
+                "new plan proposals retain their exact reviewed snapshot",
+            ));
+        }
         let current: Option<i64> = db(db(self
             .conn
             .prepare_cached("SELECT revision FROM plan_proposals WHERE id=?1"))?
@@ -883,7 +916,7 @@ impl WorkRepository for Unit<'_> {
                     return Err(invalid("a new proposal starts at revision 1"));
                 }
                 db(db(self.conn.prepare_cached(&format!(
-                    "INSERT INTO plan_proposals({PROPOSAL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+                    "INSERT INTO plan_proposals({PROPOSAL_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
                 )))?
                 .execute(params![
                     p.id.as_str(),
@@ -896,7 +929,8 @@ impl WorkRepository for Unit<'_> {
                     p.requested_at_ms,
                     p.decided_by.as_ref().map(|a| a.0.as_str()),
                     p.decided_at_ms,
-                    p.summary
+                    p.summary,
+                    p.reviewed_snapshot.as_ref().map(text_of).transpose()?
                 ]))?;
                 Ok(())
             }

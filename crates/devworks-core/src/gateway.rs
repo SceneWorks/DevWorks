@@ -1720,6 +1720,9 @@ impl WriteTransaction for HandlerTx<'_> {
     fn browser(&mut self) -> &mut dyn crate::ports::storage::BrowserRepository {
         self.inner.get_mut().browser()
     }
+    fn decisions(&mut self) -> &mut dyn crate::ports::storage::DecisionRepository {
+        self.inner.get_mut().decisions()
+    }
     fn evals(&mut self) -> &mut dyn crate::ports::storage::EvalRepository {
         self.inner.get_mut().evals()
     }

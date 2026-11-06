@@ -381,6 +381,9 @@ impl ReadSnapshot for MemSnapshot {
     fn browser(&self) -> &dyn BrowserRead {
         &self.unsupported
     }
+    fn decisions(&self) -> &dyn DecisionRead {
+        &self.unsupported
+    }
     fn evals(&self) -> &dyn EvalRead {
         &self.unsupported
     }
@@ -479,6 +482,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
+        &mut self.unsupported
+    }
+    fn decisions(&mut self) -> &mut dyn DecisionRepository {
         &mut self.unsupported
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
@@ -2767,6 +2773,77 @@ impl EvalRead for Unsupported {
 }
 impl EvalRepository for Unsupported {
     fn insert_eval_run(&mut self, _: &StoredEvalRun) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl DecisionRead for Unsupported {
+    fn list_approval_sources(
+        &self,
+        _: &ApprovalSourceFilter,
+        _: Option<&ApprovalSourcePosition>,
+        _: u16,
+    ) -> Result<Vec<ApprovalSourceRef>, StorageError> {
+        nope()
+    }
+    fn approval(&self, _: &Id) -> Result<Option<StoredApproval>, StorageError> {
+        nope()
+    }
+    fn human_decision(
+        &self,
+        _: ApprovalSource,
+        _: &Id,
+    ) -> Result<Option<StoredHumanDecision>, StorageError> {
+        nope()
+    }
+    fn approval_resume(&self, _: &Id) -> Result<Option<StoredApprovalResume>, StorageError> {
+        nope()
+    }
+    fn pending_approval_resumes(&self, _: u16) -> Result<Vec<StoredApprovalResume>, StorageError> {
+        nope()
+    }
+    fn notification(
+        &self,
+        _: &ActorId,
+        _: &Id,
+    ) -> Result<Option<StoredNotification>, StorageError> {
+        nope()
+    }
+    fn notification_by_source(
+        &self,
+        _: &ActorId,
+        _: &str,
+    ) -> Result<Option<StoredNotification>, StorageError> {
+        nope()
+    }
+    fn notifications(
+        &self,
+        _: &NotificationFilter,
+        _: Option<&NotificationPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredNotification>, StorageError> {
+        nope()
+    }
+}
+impl DecisionRepository for Unsupported {
+    fn put_approval(&mut self, _: &StoredApproval, _: Option<i64>) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_human_decision(&mut self, _: &StoredHumanDecision) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_approval_resume(
+        &mut self,
+        _: &StoredApprovalResume,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_notification(
+        &mut self,
+        _: &StoredNotification,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }

@@ -2249,6 +2249,9 @@ impl WriteTransaction for Lying<'_> {
     fn browser(&mut self) -> &mut dyn BrowserRepository {
         self.inner.browser()
     }
+    fn decisions(&mut self) -> &mut dyn DecisionRepository {
+        self.inner.decisions()
+    }
     fn evals(&mut self) -> &mut dyn EvalRepository {
         self.inner.evals()
     }
