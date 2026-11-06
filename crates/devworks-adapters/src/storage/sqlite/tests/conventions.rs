@@ -144,8 +144,7 @@ fn index(
         generation_id: id(name),
         convention_id: row.id.clone(),
         convention_revision: row.revision,
-        resource_id: None,
-        resource_revision: None,
+        source_ref: row.content_ref.clone().unwrap(),
         operation_id: op,
         state: "Draft".into(),
         status: "Queued".into(),
@@ -171,24 +170,80 @@ fn chunk(
         id: id(&format!("chunk-{}-{number}", index.generation_id.as_str())),
         convention_id: index.convention_id.clone(),
         convention_revision: index.convention_revision,
-        resource_id: index.resource_id.clone(),
-        resource_revision: index.resource_revision,
         index: number,
-        section_path: "Section".into(),
-        section_path_ref: None,
+        section_id: id(&format!("section-{}", index.generation_id.as_str())),
         text: std::iter::repeat_n(word, frequency as usize)
             .collect::<Vec<_>>()
             .join(" "),
-        embedding_text: std::iter::repeat_n(word, frequency as usize)
-            .collect::<Vec<_>>()
-            .join(" "),
         token_count: i64::from(frequency),
-        terms: vec![ConventionTerm {
-            term: word.into(),
-            frequency,
-        }],
         vector,
     }
+}
+// Ranking fixtures deliberately have no breadcrumb lexical contribution; source-bound
+// ancestor/token behavior has a separate exact normalized-source regression below.
+fn stage_chunks(
+    tx: &mut dyn WriteTransaction,
+    generation: &Id,
+    chunks: &[StoredConventionChunk],
+) -> Result<(), StorageError> {
+    let g = tx
+        .conventions()
+        .convention_index_generation(generation)?
+        .unwrap();
+    let scope = tx
+        .conventions()
+        .conventions(
+            &ConventionQuery {
+                scopes: vec![KnowledgeScope::Workspace],
+                ..Default::default()
+            },
+            None,
+            500,
+        )?
+        .into_iter()
+        .find(|r| r.id == g.convention_id)
+        .map(|r| r.scope);
+    // Tests also stage a project-scoped fixture; trusted source header owns the captured title.
+    let title = match scope {
+        Some(scope) => {
+            tx.conventions()
+                .convention(&g.convention_id, Some(g.convention_revision), &[scope])?
+                .unwrap()
+                .title
+        }
+        None => format!("Title {}", g.convention_id.as_str()),
+    };
+    tx.conventions()
+        .stage_convention_section(&StoredConventionSection {
+            generation_id: g.generation_id.clone(),
+            id: id(&format!("section-{}", generation.as_str())),
+            parent_id: None,
+            heading: Some(title),
+            level: 0,
+            source_offset: None,
+            source_length: None,
+            token_count: 0,
+        })?;
+    tx.conventions()
+        .stage_convention_chunks(generation, chunks)?;
+    for c in chunks {
+        let mut terms = std::collections::BTreeMap::<String, u32>::new();
+        for term in c.text.split(' ').filter(|s| !s.is_empty()) {
+            *terms.entry(term.to_owned()).or_default() += 1;
+        }
+        let terms = terms
+            .into_iter()
+            .map(|(term, frequency)| ConventionTerm { term, frequency })
+            .collect::<Vec<_>>();
+        let digest = sha256_hex(
+            devworks_core::jcs::canonicalize(&json!(terms))
+                .unwrap()
+                .as_bytes(),
+        );
+        tx.conventions()
+            .stage_convention_chunk_terms(generation, &c.id, 0, &digest, &terms)?;
+    }
+    Ok(())
 }
 #[test]
 fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
@@ -584,3 +639,6 @@ fn revision_editor_changes_without_rewriting_original_provenance() {
     })
     .unwrap();
 }
+
+#[path = "conventions/imports.rs"]
+mod imports;

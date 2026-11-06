@@ -313,7 +313,7 @@ fn validate_resource(
         return Err(conflict(&owner.id, expected, owner.revision));
     }
     if r.convention_revision != expected
-        || owner.lifecycle == "Deleted"
+        || (owner.lifecycle == "Deleted" && r.lifecycle != "Deleted")
         || !text(&r.name, 1, 255)
         || !(0..=200).contains(&r.media_type.chars().count())
         || r.revision < 1

@@ -1,5 +1,5 @@
 use super::*;
-fn space() -> StoredConventionEmbeddingSpace {
+pub(super) fn space() -> StoredConventionEmbeddingSpace {
     StoredConventionEmbeddingSpace {
         id: "recorded-space".into(),
         provider: "recorded-provider".into(),
@@ -32,11 +32,7 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
         tx.conventions().stage_convention_index(&generation)?;
         let a = chunk(&generation, 0, "alpha", 10, Some(vec![1.0, 0.0]));
         let mut wrong = chunk(&generation, 1, "beta", 1, Some(vec![0.0, 1.0, 0.0]));
-        assert!(
-            tx.conventions()
-                .stage_convention_chunks(&generation.generation_id, &[a.clone(), wrong.clone()])
-                .is_err()
-        );
+        assert!(stage_chunks(tx, &generation.generation_id, &[a.clone(), wrong.clone()]).is_err());
         assert!(
             tx.conventions()
                 .convention_chunks(&generation.generation_id, None, 500)?
@@ -44,7 +40,8 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
             "failed batch leaves no partial chunk"
         );
         wrong.vector = Some(vec![0.0, 1.0]);
-        tx.conventions().stage_convention_chunks(
+        stage_chunks(
+            tx,
             &generation.generation_id,
             &[
                 a.clone(),
@@ -52,25 +49,16 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
                 chunk(&generation, 2, "alpha", 1, Some(vec![1.0, 1.0])),
             ],
         )?;
-        tx.conventions()
-            .stage_convention_chunks(&generation.generation_id, std::slice::from_ref(&a))?;
+        stage_chunks(tx, &generation.generation_id, std::slice::from_ref(&a))?;
         let mut modified = a;
         modified.text = "tampered".into();
-        assert!(
-            tx.conventions()
-                .stage_convention_chunks(&generation.generation_id, &[modified])
-                .is_err()
-        );
+        assert!(stage_chunks(tx, &generation.generation_id, &[modified]).is_err());
         assert!(
             tx.conventions()
                 .publish_convention_index(&generation.generation_id, 1, None, 2)
                 .is_err()
         );
-        assert!(
-            tx.conventions()
-                .convention_index_head(&row.id, None)?
-                .is_none()
-        );
+        assert!(tx.conventions().convention_index_head(&row.id)?.is_none());
         assert_eq!(
             tx.conventions()
                 .convention_lexical_statistics(
@@ -92,7 +80,8 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
         tx.conventions().create_convention(&hidden)?;
         let hg = index(tx, &hidden, "hidden-index", Some("recorded-space"))?;
         tx.conventions().stage_convention_index(&hg)?;
-        tx.conventions().stage_convention_chunks(
+        stage_chunks(
+            tx,
             &hg.generation_id,
             &[chunk(&hg, 0, "alpha", 100, Some(vec![1.0, 0.0]))],
         )?;
@@ -178,10 +167,7 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
         .documents,
         0
     );
-    let saved = read(&store, |r| {
-        r.conventions().convention_index_head(&row.id, None)
-    })
-    .unwrap();
+    let saved = read(&store, |r| r.conventions().convention_index_head(&row.id)).unwrap();
     assert_eq!(saved.status, "Ready");
     let saved_index = generation.clone();
     assert!(
@@ -219,7 +205,8 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
         tx.conventions().create_convention(&row)?;
         let generation = index(tx, &row, "stale-index", None)?;
         tx.conventions().stage_convention_index(&generation)?;
-        tx.conventions().stage_convention_chunks(
+        stage_chunks(
+            tx,
             &generation.generation_id,
             &[
                 chunk(&generation, 0, "alpha", 1, None),
@@ -230,7 +217,8 @@ fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_b
     })
     .unwrap();
     let stale = generation.clone();
-    let revised = next(&row);
+    let mut revised = next(&row);
+    revised.title = "Changed title".into();
     run_write(&store, WriteOptions::default(), move |tx| {
         tx.conventions().revise_convention(&revised, 1)?;
         assert!(
@@ -419,7 +407,7 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
         );
         assert!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .is_none()
         );
         let generation = index(tx, &owner, "status-generation", None)?;
@@ -430,7 +418,7 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
         assert!(queued > 1);
         assert_eq!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .unwrap()
                 .status,
             "Queued"
@@ -451,7 +439,8 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
             .conventions()
             .convention_index_revision(std::slice::from_ref(&scope))?;
         assert!(indexing > queued);
-        tx.conventions().stage_convention_chunks(
+        stage_chunks(
+            tx,
             &generation.generation_id,
             &[chunk(&generation, 0, "alpha", 1, None)],
         )?;
@@ -473,7 +462,7 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
         );
         assert_eq!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .unwrap()
                 .status,
             "LexicalOnly"
@@ -482,7 +471,7 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
         tx.conventions().stage_convention_index(&pending)?;
         assert_eq!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .unwrap()
                 .generation_id,
             pending.generation_id
@@ -496,17 +485,18 @@ fn pending_index_status_and_scoped_revision_track_actual_publication_without_cat
         )?;
         assert_eq!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .unwrap()
                 .generation_id,
             generation.generation_id,
             "actual canceled operation is not queued work"
         );
-        let next = next(&owner);
+        let mut next = next(&owner);
+        next.title = "Changed source title".into();
         tx.conventions().revise_convention(&next, 1)?;
         assert_eq!(
             tx.conventions()
-                .convention_index_status(&owner.id, None)?
+                .convention_index_status(&owner.id)?
                 .unwrap()
                 .status,
             "Stale"

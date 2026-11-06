@@ -381,11 +381,23 @@ fn capture_valid(
             "invalid prospective import artifact/version identity",
         ));
     }
+    if let Some(work) = &a.origin_work_id {
+        let project = a
+            .origin_project_id
+            .as_ref()
+            .ok_or_else(|| invalid("import work origin requires a project"))?;
+        let matches: bool = db(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2)",
+            params![work.0.as_str(), project.0.as_str()],
+            |r| r.get(0),
+        ))?;
+        if !matches {
+            return Err(invalid("import work origin differs from actual project"));
+        }
+    }
     if r.kind == "Resource" {
         if r.resource_id.is_none()
-            || r.resource_key
-                .as_ref()
-                .is_none_or(|k| k.is_empty() || k.chars().count() > 65536)
+            || r.resource_key.as_ref().is_none_or(|k| !text(k, 1, 200))
             || r.resource_name.as_ref().is_none_or(|n| !text(n, 1, 255))
             || r.resource_media_type
                 .as_ref()
