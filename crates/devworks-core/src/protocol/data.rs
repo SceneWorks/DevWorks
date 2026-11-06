@@ -2223,6 +2223,30 @@ fn legacy_nodes<'a>(nodes: impl IntoIterator<Item = &'a CodeNode>) -> Option<Vec
         None
     }
 }
+/// Shared qualified-to-legacy projection. A missing citation/unit remains unrepresentable.
+pub(crate) fn legacy_graph(value: &CodeGraphResult) -> Option<GraphResult> {
+    let nodes = legacy_nodes(&value.nodes.0)?;
+    let edges = value
+        .edges
+        .0
+        .iter()
+        .map(|edge| {
+            Some(EdgeView {
+                edge_id: edge.edge_id.clone(),
+                source_id: edge.source_id.clone(),
+                target_id: edge.target_id.clone(),
+                kind: serde_json::from_value(serde_json::Value::String(edge.edge_kind.0.clone()))
+                    .ok()?,
+                producing_unit: serde_json::from_value(serde_json::Value::String(
+                    edge.producing_unit.as_ref()?.0.clone(),
+                ))
+                .ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(GraphResult::Graph { nodes, edges })
+}
+
 impl Revisioned for GraphPage {
     fn retain_revision(&mut self, revision: u32) {
         if revision >= 3 || self.view.is_none() {
@@ -2255,29 +2279,7 @@ impl Revisioned for GraphPage {
                     .and_then(legacy_nodes)
                     .map(|nodes| GraphResult::Nodes { nodes })
             }
-            GraphResult::CodeGraph { value } => legacy_nodes(&value.nodes.0).and_then(|nodes| {
-                let edges: Option<Vec<_>> = value
-                    .edges
-                    .0
-                    .iter()
-                    .map(|e| {
-                        Some(EdgeView {
-                            edge_id: e.edge_id.clone(),
-                            source_id: e.source_id.clone(),
-                            target_id: e.target_id.clone(),
-                            kind: serde_json::from_value(serde_json::Value::String(
-                                e.edge_kind.0.clone(),
-                            ))
-                            .ok()?,
-                            producing_unit: serde_json::from_value(serde_json::Value::String(
-                                e.producing_unit.as_ref()?.0.clone(),
-                            ))
-                            .ok()?,
-                        })
-                    })
-                    .collect();
-                edges.map(|edges| GraphResult::Graph { nodes, edges })
-            }),
+            GraphResult::CodeGraph { value } => legacy_graph(value),
             GraphResult::SourceText { value } => {
                 value
                     .source
