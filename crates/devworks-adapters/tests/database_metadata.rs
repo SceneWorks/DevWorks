@@ -113,3 +113,75 @@ fn native_postgres_structural_metadata() {
 fn native_sql_server_structural_metadata() {
     qualify("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
 }
+
+#[test]
+#[ignore = "explicit real PostgreSQL fixture with pgx_user schema"]
+fn native_postgres_user_schema_prefix_is_visible() {
+    let endpoint =
+        std::env::var("DEVWORKS_METADATA_POSTGRES").expect("explicit isolated fixture endpoint");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut query = request("Postgres", &endpoint);
+    query.config.schemas = serde_json::from_value(json!(["pgx_user"])).unwrap();
+    let snapshot = runtime.block_on(NetworkMetadataReader.read(query)).unwrap();
+    assert!(
+        snapshot
+            .objects
+            .iter()
+            .any(|o| o.kind == "Table" && o.metadata.name.0 == "visible_metadata"),
+        "user schema pgx_user was silently excluded: {:?}",
+        snapshot.coverage
+    );
+    assert!(
+        snapshot
+            .objects
+            .iter()
+            .filter(|o| o.kind != "Catalog")
+            .all(|o| o.metadata.schema.as_ref().is_none_or(|s| s.0 == "pgx_user"))
+    );
+}
+
+#[test]
+#[ignore = "explicit real PostgreSQL fixture with indexed materialized view"]
+fn native_postgres_materialized_view_indexes_keep_view_parent_identity() {
+    let endpoint =
+        std::env::var("DEVWORKS_METADATA_POSTGRES").expect("explicit isolated fixture endpoint");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut query = request("Postgres", &endpoint);
+    query.config.schemas = serde_json::from_value(json!(["public"])).unwrap();
+    let snapshot = runtime.block_on(NetworkMetadataReader.read(query)).unwrap();
+    let view = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "View" && o.metadata.name.0 == "materialized_parent")
+        .expect("actual materialized view");
+    let index = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "materialized_parent_index")
+        .expect("actual materialized view index");
+    assert_eq!(
+        index.parent_key.as_ref(),
+        Some(&view.key),
+        "index parent must identify the retained view"
+    );
+    let keys = snapshot
+        .objects
+        .iter()
+        .map(|o| o.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        snapshot.objects.iter().all(|o| o
+            .parent_key
+            .as_ref()
+            .is_none_or(|p| keys.contains(p.as_str()))),
+        "metadata contains an orphan parent"
+    );
+}

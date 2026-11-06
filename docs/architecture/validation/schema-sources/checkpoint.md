@@ -54,3 +54,14 @@ engine-declaration, result, pre-revision and null-refusal cases pass independent
 JSON Schema4.25.1 validation; all seven native recorded-contract tests pass0.23s,
 covering1,846 domain fixtures and596 distinct native operation/mode/revision bindings.
 These are wire/admission checks, separate from target-server/runtime qualification.
+
+PostgreSQL edge qualification found two real adapter defects before service publication:
+`NOT LIKE 'pg_%'` treated `_` as a wildcard and silently excluded a legal pgx_user
+schema as Complete/empty; a materialized-view index used the default Table parent
+identity instead of its retained View identity. The new actual-server cases failed
+both assertions. Catalog filters now compare the literal pg_ prefix, and index rows
+carry the correct parent kind. All six explicitly dispatched native network cases
+pass0.24s across MariaDB/MySQL/PostgreSQL and functional-emulated SQL Server;
+core/adapters all-target strict checks pass29.44s. PostgreSQL fixtures still read no
+source rows. The retained edge and SQL Server SQL files are isolated fixture setup,
+not application migrations or commands against a user database.
