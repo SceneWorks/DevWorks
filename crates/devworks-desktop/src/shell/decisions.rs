@@ -123,10 +123,16 @@ impl Shell {
         );
     }
     fn review_page(&mut self, cursor: Option<String>) {
-        let mut body = json!({"page":dops::page(cursor.as_deref())});
-        if let Some(p) = &self.decisions.project {
-            body["projectId"] = json!(p);
-        }
+        let Some(project) = &self.decisions.project else {
+            self.decisions.reviews.clear();
+            self.decisions.review_gathering.clear();
+            self.decisions.reviews_loaded = false;
+            return;
+        };
+        // The retained informational queue requires a project and permits at most 50 per page.
+        let mut page = dops::page(cursor.as_deref());
+        page["limit"] = json!(50);
+        let body = json!({"projectId":project,"page":page});
         self.query(
             Slot::ReviewQueue,
             "Loading Knowledge review queue",
@@ -442,6 +448,9 @@ impl Shell {
                 }
                 Err(e) => self.decisions.decision_error = Some(e.describe()),
             },
+            // Clearing the project may leave an older project's reply in flight. It cannot
+            // restore hidden rows or continue paging without a selected project.
+            (Slot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
             (Slot::ReviewQueue, Reply::Query(q)) => match dops::reviews(q) {
                 Ok((rows, next)) => {
                     self.decisions.review_gathering.extend(rows);
@@ -832,7 +841,9 @@ impl Shell {
                         egui::ScrollArea::vertical()
                             .id_salt("approval-inbox")
                             .show(ui, |ui| {
-                                if tab == 2 {
+                                if tab == 2 && d.project.is_none() {
+                                    ui.label("Select a project to review Knowledge. This informational queue belongs to one project.");
+                                } else if tab == 2 {
                                     if !d.reviews_loaded && online && d.error.is_none() {
                                         ui.label("Loading Knowledge review queue…");
                                     }
@@ -840,6 +851,7 @@ impl Shell {
                                         ui.label("No Knowledge entries need review.");
                                     }
                                     for r in &d.reviews {
+                                        ui.push_id((format!("{:?}",r.kind),r.entry.id.as_str(),r.other.as_ref().map(|row|row.id.as_str())),|ui| {
                                         ui.group(|ui| {
                                             ui.label(format!(
                                                 "{:?} · {} · {} occurrences",
@@ -859,6 +871,7 @@ impl Shell {
                                                     r.entry.id.clone(),
                                                 ));
                                             }
+                                        });
                                         });
                                     }
                                 } else {
