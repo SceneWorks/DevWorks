@@ -13,7 +13,6 @@ pub enum CostClassification {
     SubscriptionApiEquivalent,
     LocalFree,
     Untracked,
-    ReportedPreferred,
 }
 
 /// The route/profile binding resolved by the host before attempt admission.
@@ -28,6 +27,7 @@ pub struct PriceQuery {
     pub input_tokens: Option<i64>,
     pub cache_write_ttl_ms: Option<i64>,
     pub processing_region: Option<String>,
+    pub required_modalities: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +62,7 @@ pub struct PublishedTariff {
     pub units: i64,
     pub amount_usd: String,
     pub region: Option<String>,
+    pub endpoint_profile: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
