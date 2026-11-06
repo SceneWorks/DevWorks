@@ -51,6 +51,16 @@ impl ProbeRuntime {
         let Some(executor) = self.executor.get() else {
             return Ok(());
         };
+        let mut preparation_after = None;
+        loop {
+            if self.is_stopped() {
+                return Err(StorageError::Cancelled);
+            }
+            preparation_after = executor.reconcile_preparations(preparation_after.as_ref())?;
+            if preparation_after.is_none() {
+                break;
+            }
+        }
         let mut after = None;
         loop {
             if self.is_stopped() {

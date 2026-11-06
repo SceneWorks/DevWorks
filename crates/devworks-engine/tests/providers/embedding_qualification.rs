@@ -64,6 +64,7 @@ fn fixed_probe_uses_actual_native_accounting_and_observation_never_resends() {
     let ProbePreparation::Ready(prepared) = service.prepare_probe(&operation).unwrap() else {
         panic!("actual probe not ready")
     };
+    let caller = prepared.context().clone();
     executor.execute_probe(*prepared.clone(), false).unwrap();
     let q = read(f.store.as_ref(), |s| {
         s.router().embedding_qualification(&id("actual-candidate"))
@@ -90,7 +91,11 @@ fn fixed_probe_uses_actual_native_accounting_and_observation_never_resends() {
     .unwrap();
     assert!(balance.local_quiescent && !balance.unknown_tail);
     assert_eq!(
-        accounting::summary(&balance).unwrap().meter.quantities.input_tokens,
+        accounting::summary(&balance)
+            .unwrap()
+            .meter
+            .quantities
+            .input_tokens,
         Some(3)
     );
     executor.execute_probe(*prepared, true).unwrap();
@@ -124,6 +129,86 @@ fn fixed_probe_uses_actual_native_accounting_and_observation_never_resends() {
     assert!(
         body.get("dimensions").is_none(),
         "Native dimension mode preserves fixed-model request semantics"
+    );
+    drop(requests);
+    drop(sent);
+    write(f.store.as_ref(), |tx| {
+        let q = tx
+            .router()
+            .embedding_qualification(&id("actual-candidate"))?
+            .unwrap();
+        tx.router()
+            .select_embedding_candidate(1, Some((&id("actual-candidate"), q.revision)))?;
+        Ok(())
+    })
+    .unwrap();
+    use devworks_core::services::conventions::indexing::{
+        IndexService,
+        embedding::{ConventionEmbeddings, EmbeddingOrigin, EmbeddingRequest},
+        preparation::InputPreparation,
+    };
+    let index = IndexService::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.h.ids.clone(),
+        f.h.clock(),
+    );
+    let configuration = executor.configured_space(&caller).unwrap();
+    let space = configuration.space.unwrap();
+    let registered_space = space.clone();
+    write(f.store.as_ref(), move |tx| {
+        tx.conventions()
+            .put_convention_embedding_space(&registered_space)
+    })
+    .unwrap();
+    let origin = EmbeddingOrigin::Query {
+        query_id: id("actual-query"),
+        fingerprint: "d".repeat(64),
+        scope_digest: "e".repeat(64),
+    };
+    let token = Cancellation::new();
+    let inputs = index
+        .prepare_embedding_inputs(InputPreparation {
+            context: &caller,
+            origin: &origin,
+            embedding_space: &space.id,
+            configuration_source_digest: &configuration.source_digest,
+            texts: &["actual query text"],
+            fences: &[],
+            cancellation: &token,
+            deadline_ms: None,
+        })
+        .unwrap();
+    let request = EmbeddingRequest {
+        request_id: inputs.request_id,
+        origin,
+        space,
+        configuration_source_digest: configuration.source_digest,
+        preparation_operation: inputs.operation_id.clone(),
+        input_refs: inputs.input_refs,
+        fences: vec![],
+        cancellation: token,
+        deadline_ms: None,
+    };
+    assert!(matches!(executor.observe(&caller, request.clone()), Err(devworks_core::services::conventions::indexing::embedding::EmbeddingFailure::NotStarted { .. })));
+    assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+    f.http.lock().unwrap().body.push_back(br#"{"model":"fixture-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":3,"total_tokens":3}}"#.to_vec());
+    let embedded = executor.embed(&caller, request.clone()).unwrap();
+    assert_eq!(embedded.vectors, vec![vec![0.25, 0.75]]);
+    let preparation = read(f.store.as_ref(), |s| {
+        s.operations().operation(&inputs.operation_id)
+    })
+    .unwrap();
+    assert_eq!(preparation.state, OperationState::ObservedComplete);
+    assert_eq!(
+        preparation.payload["sourceContext"]["invocationContext"]["principal"],
+        json!(caller.principal())
+    );
+    executor.observe(&caller, request).unwrap();
+    assert_eq!(
+        f.http.lock().unwrap().requests.lock().unwrap().len(),
+        2,
+        "closed exact query is never resent"
     );
     assert!(f.transcript().is_empty());
 }

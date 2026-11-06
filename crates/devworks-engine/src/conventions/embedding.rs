@@ -488,6 +488,50 @@ impl NativeEmbeddings {
         );
         result.map(|(refs, _)| refs).map_err(Into::into)
     }
+    /// Bounded journal reconciliation never starts transport, including after a lost local ACK.
+    pub fn reconcile_preparations(
+        &self,
+        after: Option<&OperationId>,
+    ) -> Result<Option<OperationId>, StorageError> {
+        let rows = read_snapshot(self.inner.store.as_ref(), &ReadOptions::default(), |read| {
+            read.operations().operations_for_capability(
+                "conventions.embedding_prepare",
+                &[
+                    OperationState::Dispatching,
+                    OperationState::OutcomeUnknown,
+                    OperationState::NeedsInput,
+                ],
+                after,
+                128,
+            )
+        })?;
+        let next = if rows.len() == 128 {
+            rows.last().map(|r| r.id.clone())
+        } else {
+            None
+        };
+        self.publication(|| {
+            let inner = self.inner.clone();
+            run_write(self.inner.store.as_ref(), WriteOptions::default(), move |tx| {
+                if inner.closed.is_closed() { return Err(StorageError::Cancelled); }
+                for row in rows {
+                    devworks_core::services::conventions::indexing::preparation::settle_native_preparation(tx, &row.id)?;
+                }
+                Ok(())
+            })
+        })?;
+        Ok(next)
+    }
+    fn settle_preparation(&self, operation: OperationId) -> Result<(), StorageError> {
+        self.publication(|| {
+            let inner = self.inner.clone();
+            run_write(self.inner.store.as_ref(), WriteOptions::default(), move |tx| {
+                if inner.closed.is_closed() { return Err(StorageError::Cancelled); }
+                devworks_core::services::conventions::indexing::preparation::settle_native_preparation(tx, &operation)?;
+                Ok(())
+            })
+        })
+    }
     pub fn complete_probe(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -638,7 +682,14 @@ impl NativeEmbeddings {
         std::thread::Builder::new()
             .name("devworks-auxiliary-embedding".into())
             .spawn(move || {
+                let operation = request.preparation_operation.clone();
                 let result = worker.embed_owned(&ctx, request, observe);
+                let settlement = worker.settle_preparation(operation);
+                let result = match (result, settlement) {
+                    (Ok(result), Ok(())) => Ok(result),
+                    (Err(error), _) => Err(error),
+                    (Ok(_), Err(error)) => Err(error.into()),
+                };
                 let _ = send.send(result);
             })
             .map_err(|e| {

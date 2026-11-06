@@ -288,3 +288,81 @@ impl IndexService {
         result.map(|(prepared, _)| prepared)
     }
 }
+
+/// Settle the operational preparation from its one actual native journal. This is derived
+/// lifecycle metadata, not another inference result or an authorization to start a source.
+/// No source files or provider bytes are read inside this transaction.
+pub fn settle_native_preparation(
+    tx: &mut dyn WriteTransaction,
+    operation_id: &OperationId,
+) -> Result<bool, StorageError> {
+    let Some(mut preparation) = tx.operations().operation(operation_id)? else {
+        return Ok(false);
+    };
+    if preparation.capability != CAPABILITY {
+        return Err(StorageError::ScopeDenied);
+    }
+    if is_terminal(preparation.state) {
+        return Ok(false);
+    }
+    let request: Id = serde_json::from_value(preparation.payload["requestId"].clone())
+        .map_err(|_| invalid("preparation native request identity"))?;
+    let Some(route) = tx.router().route_request(&request)? else {
+        return Ok(false);
+    };
+    let native = tx
+        .operations()
+        .operation(&route.operation_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if route.purpose != "Embedding"
+        || native.payload["actorId"]
+            != preparation.payload["sourceContext"]["invocationContext"]["principal"]
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let Some(attempt) = native.latest_attempt() else {
+        return Ok(false);
+    };
+    let Some(usage) = tx.usage().inference_attempt(&attempt.id.0)? else {
+        return Ok(false);
+    };
+    if usage.operation_id != native.id
+        || usage.request_id != request
+        || usage.purpose != "Embedding"
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let Some(balance) = tx.usage().attempt_balance(&usage.attempt_id)? else {
+        return Ok(false);
+    };
+    let target = if balance.unknown_tail || !balance.local_quiescent || !is_terminal(native.state) {
+        OperationState::OutcomeUnknown
+    } else if native.state == OperationState::ObservedComplete && usage.state == "Settled" {
+        OperationState::ObservedComplete
+    } else {
+        OperationState::Failed
+    };
+    let Some(fence) = preparation.latest_attempt().map(|a| a.fence()) else {
+        return Ok(false);
+    };
+    if preparation.state == target {
+        return Ok(false);
+    }
+    // NeedsInput intentionally cannot jump straight to successful completion.
+    if preparation.state == OperationState::NeedsInput && target == OperationState::ObservedComplete
+    {
+        preparation = tx.operations().transition(
+            &preparation.id,
+            preparation.revision,
+            Some(&fence),
+            OperationState::OutcomeUnknown,
+            None,
+        )?;
+    }
+    if !transition_allowed(preparation.state, target) {
+        return Ok(false);
+    }
+    tx.operations().transition(&preparation.id, preparation.revision, Some(&fence), target,
+        Some(json!({"kind":"NativeEmbeddingPreparationSettled","requestId":request,"nativeOperationId":native.id,"attemptId":usage.attempt_id,"nativeState":native.state,"localQuiescent":balance.local_quiescent,"unknownTail":balance.unknown_tail})))?;
+    Ok(true)
+}
