@@ -252,6 +252,9 @@ struct GatedStore {
     puts: AtomicUsize,
 }
 impl GatedStore {
+    fn pause_next(&self) {
+        *self.state.lock().unwrap() = (false, false);
+    }
     fn entered(&self) {
         let state = self
             .changed
@@ -300,6 +303,82 @@ impl Drop for Release {
     fn drop(&mut self) {
         self.0.release();
     }
+}
+
+#[test]
+fn reset_controls_wait_for_native_credential_intake_then_allow_explicit_removal() {
+    let _case = native_runtime_case();
+    let root = Root::new("dw91-intake-reset");
+    let secrets = Arc::new(GatedStore::default());
+    secrets.release();
+    let mut c = config(&root.0);
+    c.secrets = Some(secrets.clone());
+    let engine = Engine::start(c).unwrap();
+    let backend = engine.backend();
+    let original = backend
+        .stage_setting_secret(Secret::new("dw91-original-test-key"))
+        .unwrap();
+    set(
+        &*backend,
+        "github.credential",
+        json!({"secretRef": original}),
+    );
+    let mut h = screen(&engine, &root, "github.credential");
+    h.state_mut()
+        .settings
+        .view
+        .as_mut()
+        .unwrap()
+        .edit(
+            devworks_core::settings::catalog::WEB_TIMEOUT_KEY,
+            json!(7000),
+        )
+        .unwrap();
+    settle(&mut h);
+    secrets.pause_next();
+    let label = descriptor("github.credential").unwrap().label;
+    type_into(
+        &mut h,
+        Role::PasswordInput,
+        &format!("Credential for {label}"),
+        "dw91-pending-test-key",
+    );
+    let button = format!("Save credential for {label}");
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, &button)
+        .scroll_to_me();
+    settle(&mut h);
+    let _release = Release(secrets.clone());
+    h.get_by_role_and_label(Role::Button, &button).click();
+    step_until(&mut h, "replacement intake", |_| {
+        secrets.puts.load(Ordering::SeqCst) == 2
+    });
+    secrets.entered();
+    h.step();
+    assert!(
+        h.get_by_role_and_label(Role::Button, &format!("Reset {label} to default"))
+            .accesskit_node()
+            .is_disabled(),
+        "a later reset cannot be silently overwritten by prepared intake"
+    );
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Discard all")
+            .accesskit_node()
+            .is_disabled()
+    );
+    secrets.release();
+    settle(&mut h);
+    assert_ne!(
+        effective(&*backend, "github.credential"),
+        json!({"secretRef":original})
+    );
+    click(&mut h, Role::Button, &format!("Reset {label} to default"));
+    click(&mut h, Role::Button, "Save changes");
+    assert!(effective(&*backend, "github.credential").is_null());
+    assert_eq!(secrets.puts.load(Ordering::SeqCst), 2);
+    drop(h);
+    drop(backend);
+    engine.shutdown();
 }
 
 #[test]

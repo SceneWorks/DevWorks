@@ -46,6 +46,8 @@ pub struct SettingsScreen {
     pub scrolls: crate::virtual_list::Scrolls,
     buffers: HashMap<&'static str, String>,
     secret_inputs: HashMap<&'static str, secrets::Input>,
+    /// Only the key currently entering the native store; excluded from SettingsMemory.
+    pub(crate) secret_intake: Option<String>,
     /// Settings → Provider connections (DW-18).
     pub connections: ConnectionsPanel,
     /// The provider-connections topic is selected instead of a settings category.
@@ -499,7 +501,13 @@ impl SettingsScreen {
                         "{n} unsaved change{}",
                         if n == 1 { "" } else { "s" }
                     ));
-                    if widgets::secondary_button(ui, "Discard all").clicked() {
+                    if ui
+                        .add_enabled_ui(self.secret_intake.is_none(), |ui| {
+                            widgets::secondary_button(ui, "Discard all")
+                        })
+                        .inner
+                        .clicked()
+                    {
                         view.discard_all();
                         // Editor text (model lists) shows drafts too: drop it with them.
                         buffers.clear();
@@ -537,6 +545,7 @@ impl SettingsScreen {
         };
         let d = item.descriptor;
         let explained = self.explained.contains(key);
+        let intake_pending = self.secret_intake.as_deref() == Some(key);
         let mut edit: Option<Value> = None;
         let mut inherit = false;
         let mut discard = false;
@@ -604,14 +613,28 @@ impl SettingsScreen {
                 }
                 ui.horizontal_wrapped(|ui| {
                     if item.is_dirty()
-                        && widgets::secondary_button(ui, &format!("Discard change to {}", d.label))
+                        && ui
+                            .add_enabled_ui(!intake_pending, |ui| {
+                                widgets::secondary_button(
+                                    ui,
+                                    &format!("Discard change to {}", d.label),
+                                )
+                            })
+                            .inner
                             .clicked()
                     {
                         discard = true;
                     }
                     if item.editable
                         && item.status == Status::Overridden
-                        && widgets::secondary_button(ui, &format!("Reset {} to default", d.label))
+                        && ui
+                            .add_enabled_ui(!intake_pending, |ui| {
+                                widgets::secondary_button(
+                                    ui,
+                                    &format!("Reset {} to default", d.label),
+                                )
+                            })
+                            .inner
                             .clicked()
                     {
                         inherit = true;

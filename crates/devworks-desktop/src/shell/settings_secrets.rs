@@ -49,6 +49,7 @@ impl Shell {
         });
         if submitted {
             self.settings.saving = true;
+            self.settings.secret_intake = Some(key.into());
             self.settings.message = None;
         } else {
             self.settings.message =
@@ -61,6 +62,7 @@ impl Shell {
         selected: &str,
         result: Result<TaskOutput, String>,
     ) {
+        self.settings.secret_intake = None;
         if let Some(backend) = self.backend() {
             self.settings.connections.secret_store = Some(backend.secret_store());
         }

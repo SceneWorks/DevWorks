@@ -17,8 +17,8 @@ the prior handle for rollback; DW-88 separately owns reference-aware collection.
 
 ## Native qualification, 2026-11-06
 
-- `cargo test --locked -p devworks-desktop --test settings_secrets`: **3/3 passed,
-  13.08 s** with the shared two-case runtime budget. Real Settings gestures enter,
+- `cargo test --locked -p devworks-desktop --test settings_secrets`: **4/4 passed,
+  12.85 s** with the shared two-case runtime budget. Real Settings gestures enter,
   replace and remove the Brave credential;
   the actual Brave adapter resolves it through the native gateway/SecretStore and
   sends the expected header into a recorded checked-address transport. Removal
@@ -28,8 +28,13 @@ the prior handle for rollback; DW-88 separately owns reference-aware collection.
   refusal. A controlled store intake permits a real concurrent settings commit:
   the captured revision conflicts, both drafts survive, and explicit retry saves
   them with exactly one native secret-store write.
+- Review regression: replacement intake previously left Reset enabled and could
+  overwrite that later draft. Its real controlled-intake test reproduced RED in
+  6.11 s, then passed in 6.32 s. The selected key's reset/discard and global discard
+  wait only during native intake; other edits remain available. After intake,
+  normal editing resumes and explicit reset/save removes the reference.
 - The existing headless categorized/searchable Settings save, validation, draft
-  and conflict regression passed unchanged: **1/1, 6.62 s**.
+  and conflict regression passed unchanged: **1/1, 6.52 s**.
 - Desktop all-target Clippy with `--no-deps -- -D warnings`: passed after the
   affected target was warm.
 
