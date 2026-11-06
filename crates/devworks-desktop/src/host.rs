@@ -359,6 +359,9 @@ async fn compose(
             let root = Id::new(format!("git-root-{}", &digest[..24])).ok()?;
             Some(devworks_engine::git::GitComposition {
                 config: devworks_core::services::git::GitConfig {
+                    transport: Some(Arc::new(
+                        devworks_adapters::git_transport::NativeGitTransportFiles,
+                    )),
                     roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
                     filesystem: Some(Arc::new(NativeFilesystem::new())),
                     github: Some(Arc::new(

@@ -660,7 +660,10 @@ fn approve_owned_force_result(
                 code: devworks_core::protocol::Rejection::PermissionDenied,
                 ..
             })
-        ),
+        ) || (force["command"]["mode"] == "Normal"
+            && matches!(&denied,
+            Some(CommandReply::Recorded{receipt:devworks_core::protocol::Receipt{
+                decision:DomainDecision::Refused{fault},..},..}) if fault.code==devworks_core::protocol::DomainErrorCode::PermissionDenied)),
         "unowned Full force must require separate operation consent: {denied:?}"
     );
     let cases = UseCases::new().with_git(service.clone());

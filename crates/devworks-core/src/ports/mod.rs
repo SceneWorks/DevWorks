@@ -8,6 +8,7 @@
 pub mod browser;
 pub mod diagnostics;
 pub mod files;
+pub mod git_transport;
 pub mod http;
 pub mod indexing;
 pub mod os_notifications;

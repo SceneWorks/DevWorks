@@ -366,12 +366,32 @@ fn native_task_lifecycle_with_create(
     reviewed_case: Option<ReviewedCommitCase>,
     reviewed_create: Option<worktree_hooks::CreateCase>,
 ) {
+    native_task_lifecycle_transport(with_pr, reviewed_case, reviewed_create, false, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_push_isolates_late_repository_transport_configuration_and_preserves_trusted_auth() {
+    native_task_lifecycle_transport(false, None, None, true, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_local_push_trusts_only_the_exact_approved_server_and_never_its_client_hooks() {
+    native_task_lifecycle_transport(false, None, None, true, true);
+}
+fn native_task_lifecycle_transport(
+    with_pr: bool,
+    reviewed_case: Option<ReviewedCommitCase>,
+    reviewed_create: Option<worktree_hooks::CreateCase>,
+    push_case: bool,
+    local_case: bool,
+) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
     use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let store = h.open();
+    let push_state = push_case.then(|| Arc::new(push_transport::State::new(&h.root)));
     let source = h.root.join("source");
     let owned = h.root.join("worktrees");
     std::fs::create_dir_all(&source).unwrap();
@@ -406,8 +426,13 @@ fn native_task_lifecycle_with_create(
     git(&source, &["commit", "-m", "base"]);
     let head = git(&source, &["rev-parse", "HEAD"]);
     let remote = h.root.join("remote.git");
-    let remote_url = remote.to_string_lossy().into_owned();
-    git(&source, &["init", "--bare", &remote_url]);
+    let local_remote_url = remote.to_string_lossy().into_owned();
+    git(&source, &["init", "--bare", &local_remote_url]);
+    let remote_url = if push_state.is_some() && !local_case {
+        format!("ssh://git@fixture{}", remote.display())
+    } else {
+        local_remote_url
+    };
     git(&source, &["remote", "add", "origin", &remote_url]);
     std::fs::write(source.join("a.txt"), "user change\n").unwrap();
     let path = source.to_string_lossy().into_owned();
@@ -471,6 +496,7 @@ fn native_task_lifecycle_with_create(
         store.clone(),
         Arc::new(ReviewedProcessHost {
             case: reviewed_case,
+            push: push_state.clone(),
             injected: std::sync::atomic::AtomicBool::new(false),
         }),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
@@ -509,6 +535,9 @@ fn native_task_lifecycle_with_create(
         h.ids.clone(),
         h.clock(),
         GitConfig {
+            transport: Some(Arc::new(
+                devworks_adapters::git_transport::NativeGitTransportFiles,
+            )),
             roots: vec![RegisteredGitRoot {
                 id: id("owned-root"),
                 path: std::fs::canonicalize(&owned).unwrap(),
@@ -523,21 +552,11 @@ fn native_task_lifecycle_with_create(
             ..GitConfig::default()
         },
     ));
-    let info = store.info();
-    let ctx = HostIngress::new(&*store)
-        .context(
-            info.host_actor,
-            PrincipalKind::Host,
-            id("invoke"),
-            id("git-test"),
-            Counter::new(info.restore_epoch).unwrap(),
-            Revision::new(1).unwrap(),
-        )
-        .with_lineage(
-            Some(ProjectId(id("project"))),
-            Some(RootId(id("task"))),
-            None,
-        );
+    let ctx = principal(&*store, "git-human", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project"))),
+        Some(RootId(id("task"))),
+        None,
+    );
     let authority = HostAuthority {
         store: &*store,
         clock: &*h.clock,
@@ -1094,6 +1113,20 @@ fn native_task_lifecycle_with_create(
             Some(RootId(id("task"))),
             None,
         );
+    if let Some(state) = &push_state {
+        push_transport::exercise(push_transport::Fixture {
+            h: &h,
+            store: store.clone(),
+            service: service.clone(),
+            gateway: &gateway,
+            agent: &agent,
+            tree: &current,
+            remote: &remote,
+            state,
+        });
+        assert!(processes.owned().is_empty());
+        return;
+    }
     git(tree_path, &["commit", "--amend", "-m", "Rebased task"]);
     let rebased = git(tree_path, &["rev-parse", "HEAD"]);
     assert_ne!(rebased, new_head);
@@ -1243,6 +1276,7 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
 /// The requested process policy still runs through the real native adapter and kernel.
 struct ReviewedProcessHost {
     case: Option<ReviewedCommitCase>,
+    push: Option<Arc<push_transport::State>>,
     injected: std::sync::atomic::AtomicBool,
 }
 impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
@@ -1250,7 +1284,11 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         NativeProcessHost.platform()
     }
     fn environment(&self) -> Vec<(String, String)> {
-        NativeProcessHost.environment()
+        let mut environment = NativeProcessHost.environment();
+        if let Some(state) = &self.push {
+            state.environment(&mut environment);
+        }
+        environment
     }
     fn probe(
         &self,
@@ -1271,6 +1309,14 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         Box<dyn devworks_core::ports::process::ProcessTree>,
         devworks_core::ports::process::ProcessError,
     > {
+        if let Some(state) = &self.push {
+            state.before_spawn(spec);
+            if state.refuse_postcondition(spec) {
+                return Err(devworks_core::ports::process::ProcessError::Spawn(
+                    "controlled lost push observation".into(),
+                ));
+            }
+        }
         if matches!(self.case, Some(ReviewedCommitCase::UnavailablePolicy))
             && spec.no_child_processes
             && spec.args == ["--version"]
@@ -1465,3 +1511,6 @@ mod approvals;
 
 #[path = "git/worktree_hooks.rs"]
 mod worktree_hooks;
+
+#[path = "git/push_transport.rs"]
+mod push_transport;
