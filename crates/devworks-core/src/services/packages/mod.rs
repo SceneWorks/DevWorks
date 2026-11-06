@@ -797,13 +797,18 @@ impl PackageService {
         if let Some(binding) = reviewed_binding {
             version.approval = Some(self.approve_reviewed_version(tx, ctx, binding, &i)?);
         }
-        let (mut waits, approval) = Self::waits(
-            ctx,
-            &i,
-            &version,
-            agent_authored,
-            current.as_ref().map(|c| (&p, c)),
-        );
+        let (mut waits, approval) = if reviewed_binding.is_some() {
+            // The exact saved-version receipt also applies when the original actor was Human.
+            (Vec::new(), version.approval.clone())
+        } else {
+            Self::waits(
+                ctx,
+                &i,
+                &version,
+                agent_authored,
+                current.as_ref().map(|c| (&p, c)),
+            )
+        };
         let approval = approval.map(|mut a| {
             if let Value::Object(m) = &mut a {
                 m.entry("by").or_insert(json!(ctx.principal().0.as_str()));
@@ -827,6 +832,7 @@ impl PackageService {
         if let (Some(a), Some(pr)) = (&approval, &proposal)
             && pr.state == "Pending"
             && ctx.principal_kind() == PrincipalKind::Human
+            && reviewed_binding.is_none()
         {
             let mut decided_pr = pr.clone();
             decided_pr.state = "Approved".into();

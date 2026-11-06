@@ -592,7 +592,7 @@ impl PackageService {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
-        let expanded = self.expand_review(tx, human, preview)?;
+        let expanded = self.expand_review_mode(tx.artifacts(), preview, approve)?;
         let preview = &expanded;
         let Some(id) = preview
             .binding
@@ -602,21 +602,31 @@ impl PackageService {
         else {
             return Ok(());
         };
-        let source = tx
-            .packages()
-            .proposal(&id)?
-            .ok_or_else(|| not_found("package_proposal", id.as_str()))?;
+        let Some(source) = tx.packages().proposal(&id)? else {
+            if !approve {
+                return Ok(());
+            }
+            return Err(not_found("package_proposal", id.as_str()).into());
+        };
         let revision = preview.binding["proposal"]["revision"]
             .as_i64()
             .ok_or_else(|| invalid("package_proposal"))?;
-        let version = tx
+        let Some(version) = tx
             .packages()
             .package_version(&source.package_id, &source.manifest_digest)?
-            .ok_or_else(|| not_found("package_version", &source.package_id))?;
+        else {
+            if !approve {
+                return Ok(());
+            }
+            return Err(not_found("package_version", &source.package_id).into());
+        };
         if source.revision != revision
             || source.state != "Pending"
             || version_binding(&version) != preview.binding["version"]
         {
+            if !approve {
+                return Ok(());
+            }
             return Err(
                 Refusal::new(DomainErrorCode::SourceChanged, "package_proposal", Some(id)).into(),
             );
@@ -661,6 +671,14 @@ pub fn draft_from_package_proposal(
     proposal: &StoredPackageProposal,
     version: &StoredPackageVersion,
 ) -> Result<Option<crate::operations::approvals::ProposeInput>, Failure> {
+    draft_from_package_source(tx.packages(), ctx, proposal, version)
+}
+fn draft_from_package_source(
+    read: &dyn PackageRegistryRead,
+    ctx: &InvocationContext,
+    proposal: &StoredPackageProposal,
+    version: &StoredPackageVersion,
+) -> Result<Option<crate::operations::approvals::ProposeInput>, Failure> {
     if proposal.state != "Pending" {
         return Ok(None);
     }
@@ -676,13 +694,12 @@ pub fn draft_from_package_proposal(
         )
         .into());
     }
-    let package = tx
-        .packages()
+    let package = read
         .package(&proposal.package_id)?
         .ok_or_else(|| not_found("package", &proposal.package_id))?;
     let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
         .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-    let registry = tx.packages().registry_revision()?;
+    let registry = read.registry_revision()?;
     let (operation, command) = if package.active_digest.is_some() {
         (
             "addons.update",
@@ -747,6 +764,9 @@ impl PackageService {
             true,
         )
         .map_err(|_| invalid("package_approval_request"))?;
+        if !crate::services::approvals::validate_authority(tx, ctx, &request)? {
+            return Ok(());
+        }
         let inspection = policy::inspection(&version).ok_or_else(|| invalid("package_version"))?;
         let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
@@ -910,6 +930,31 @@ impl PackageService {
                             .ok_or_else(|| {
                                 StorageError::InvalidRecord("package source version missing".into())
                             })?;
+                        let Some(input) =
+                            draft_from_package_source(s.packages(), &context, &source, &version)
+                                .map_err(review_failure)?
+                        else {
+                            return Ok(None);
+                        };
+                        let Some(crate::protocol::records::ApprovalContent::SavedOperation {
+                            schema_revision,
+                            input: args,
+                        }) = input.payload
+                        else {
+                            return Ok(None);
+                        };
+                        let request = crate::services::approvals::requests::decode(
+                            &input.operation_kind.0,
+                            schema_revision.0.parse().unwrap_or(0),
+                            &args.0,
+                            true,
+                        )
+                        .map_err(|_| {
+                            StorageError::InvalidRecord("package review request invalid".into())
+                        })?;
+                        if !crate::services::approvals::prepare_authority(s, &context, &request)? {
+                            return Ok(None);
+                        };
                         let inspection = policy::inspection(&version).ok_or_else(|| {
                             StorageError::InvalidRecord("package inspection missing".into())
                         })?;

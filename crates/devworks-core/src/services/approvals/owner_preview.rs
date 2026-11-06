@@ -160,8 +160,14 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
-        let expanded =
-            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?;
+        if request.descriptor.family != "addons" {
+            return Ok(());
+        }
+        let expanded = if approve {
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?
+        } else {
+            crate::services::approvals::review_evidence::expand_historical(preview)?
+        };
         let preview = &expanded;
         if request.descriptor.family == "addons" {
             return self

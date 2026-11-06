@@ -135,13 +135,21 @@ impl PackageService {
         _ctx: &InvocationContext,
         preview: &OwnerPreview,
     ) -> Result<OwnerPreview, Failure> {
+        self.expand_review_mode(tx.artifacts(), preview, true)
+    }
+    pub(super) fn expand_review_mode(
+        &self,
+        read: &dyn crate::ports::storage::ArtifactRead,
+        preview: &OwnerPreview,
+        current: bool,
+    ) -> Result<OwnerPreview, Failure> {
         let Some(envelope) = preview.binding.get("packageReview") else {
             return Ok(preview.clone());
         };
         let reference: ArtifactRef =
             serde_json::from_value(envelope["artifact"]["reference"].clone())
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-        if artifact_binding(tx.artifacts(), &reference)? != envelope["artifact"] {
+        if current && artifact_binding(read, &reference)? != envelope["artifact"] {
             return Err(Refusal::new(
                 DomainErrorCode::SourceChanged,
                 "package_review_evidence",
