@@ -468,6 +468,7 @@ fn pin(f: &Fx, name: &str) -> StoredGraphReadPin {
                 expires_at_ms: None,
             },
         ],
+        unavailable_repositories: vec![],
         revision: 1,
         created_at_ms: T0,
         expires_at_ms: T0 + 1000,
@@ -961,4 +962,99 @@ fn graph31_read_deadline_also_bounds_waiting_for_the_only_reader() {
         Ok(())
     });
     assert!(read_snapshot(&*s, &ReadOptions::default(), |_| Ok(())).is_ok());
+}
+
+#[test]
+fn graph31_unavailable_selection_stays_immutable_when_repository_becomes_indexed_and_reopens() {
+    let h = Harness::new();
+    let s = h.store();
+    let scope = write(&s, |tx| {
+        repository(tx, "a")?;
+        repository(tx, "b")?;
+        generation(tx, "a-generation", "a", LAYER_BASELINE)?;
+        tx.indexing().put_unit(
+            &unit("a-generation", "a.rs"),
+            &[node("a.rs", "A", "Class")],
+            &[],
+        )?;
+        seal(tx, "a-generation")?;
+        Ok(GraphScope {
+            views: vec![view(tx, "a-view", "a", "a-generation", None)?],
+        })
+    });
+    let pin = StoredGraphReadPin {
+        id: id("partial-selection"),
+        owner_namespace: "owner".into(),
+        store_id: s.info().store_id,
+        restore_epoch: s.info().restore_epoch,
+        scope_digest: "a".repeat(64),
+        intent_digest: "b".repeat(64),
+        scope: scope.clone(),
+        view_witnesses: vec![GraphViewWitness {
+            view_id: id("a-view"),
+            source_revision: 1,
+            overlay_id: None,
+            expires_at_ms: None,
+        }],
+        unavailable_repositories: vec![GraphUnavailableRepository {
+            repository_id: id("b"),
+            reason: "NotIndexedAtSelection".into(),
+        }],
+        revision: 1,
+        created_at_ms: T0,
+        expires_at_ms: T0 + 1000,
+    };
+    let copy = pin.clone();
+    write(&s, move |tx| tx.graph().acquire_graph_pin(&copy));
+    write(&s, |tx| {
+        generation(tx, "b-generation", "b", LAYER_BASELINE)?;
+        tx.indexing().put_unit(
+            &unit("b-generation", "b.rs"),
+            &[node("b.rs", "B", "Class")],
+            &[],
+        )?;
+        seal(tx, "b-generation")?;
+        view(tx, "b-view", "b", "b-generation", None).map(|_| ())
+    });
+    let before = read(&s, |r| r.graph().graph_pin(&id("partial-selection"))).unwrap();
+    assert_eq!(before, pin);
+    assert_eq!(read(&s, |r| r.graph().graph_counts(&before.scope)).nodes, 1);
+    assert_eq!(read(&s, |r| r.indexing().live_pins(&id("b-view"), T0)), 0);
+    let renewed = write(&s, |tx| {
+        tx.graph()
+            .renew_graph_pin(&id("partial-selection"), "owner", 1, T0 + 2000)
+    });
+    assert_eq!(
+        renewed.unavailable_repositories,
+        pin.unavailable_repositories
+    );
+    assert_eq!(renewed.scope, pin.scope);
+    let mut overlapping = pin.clone();
+    overlapping.id = id("bad-partial");
+    overlapping.unavailable_repositories[0].repository_id = id("a");
+    assert!(
+        run_write(&s, WriteOptions::default(), move |tx| tx
+            .graph()
+            .acquire_graph_pin(&overlapping))
+        .is_err()
+    );
+    drop(s);
+    let s = h.store();
+    assert_eq!(
+        read(&s, |r| r.graph().graph_pin(&id("partial-selection"))),
+        Some(renewed)
+    );
+    h.clock
+        .0
+        .store(T0 + 2000, std::sync::atomic::Ordering::SeqCst);
+    let expired = read(&s, |r| r.graph().graph_expired_pins(T0 + 2000, None, 1));
+    assert!(!expired.has_more);
+    assert_eq!(expired.items.len(), 1);
+    let row = expired.items[0].clone();
+    write(&s, move |tx| {
+        tx.graph()
+            .retire_graph_pin(&row.id, &row.owner_namespace, row.revision)
+    });
+    assert!(read(&s, |r| r.graph().graph_pin(&id("partial-selection"))).is_none());
+    assert_eq!(read(&s, |r| r.indexing().live_pins(&id("a-view"), T0)), 0);
 }
