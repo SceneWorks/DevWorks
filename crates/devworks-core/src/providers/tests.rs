@@ -1114,3 +1114,50 @@ fn messages_thinking_keeps_exact_native_budget_adaptive_and_disabled() {
         }
     }
 }
+
+#[test]
+fn adaptive_and_unspecified_effort_keep_target_defaults_and_disabled_local_kwargs_are_exact() {
+    for profile in [
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut c = context();
+        c.parameters.thinking = Some(Thinking::Adaptive);
+        let mut m = Material::new();
+        let r = request(&mut m, &c);
+        let b = binding(profile.clone());
+        let cap = caps(b.clone());
+        let normalized = effort::normalize_effort(&c.parameters, &r.options, &cap).unwrap();
+        assert_eq!(normalized.effective, None);
+        assert!(normalized.encoding.is_none());
+        let prepared = prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap();
+        let body = body(&prepared);
+        assert!(body.pointer("/reasoning/effort").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking").is_none());
+        if profile == EndpointProfile::OpenRouterChat {
+            assert_eq!(body["reasoning"], json!({"enabled":true,"exclude":false}));
+        }
+    }
+    let mut c = context();
+    c.parameters.thinking = Some(Thinking::Disabled);
+    let mut m = Material::new();
+    let r = request(&mut m, &c);
+    let b = binding(EndpointProfile::CompatibleChat);
+    let mut cap = caps(b.clone());
+    cap.efforts = vec!["none".into()];
+    cap.effort_encodings.insert(
+        "none".into(),
+        EffortEncoding::ChatTemplateKwargs {
+            value: json!({"enable_thinking":false}),
+        },
+    );
+    assert_eq!(
+        body(&prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap())["chat_template_kwargs"],
+        json!({"enable_thinking":false})
+    );
+    let embedding = caps(binding(EndpointProfile::Embedding));
+    assert!(effort::normalize_effort(&c.parameters, &r.options, &embedding).is_err());
+}
