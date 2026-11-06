@@ -344,7 +344,7 @@ macro_rules! reads {($ty:ty)=>{impl ConventionIndexRead for $ty {
     fn convention_index_revision(&self,scopes:&[KnowledgeScope])->Result<i64,StorageError>{index_revision(self.conn,scopes)}
     fn convention_embedding_inputs(&self,id:&Id)->Result<Option<StoredConventionEmbeddingInputs>,StorageError>{embedding_inputs(self.conn,id)}
     fn convention_embedding_space(&self,id:&str)->Result<Option<StoredConventionEmbeddingSpace>,StorageError>{space(self.conn,id)}
-    fn convention_index_head(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{head(self.conn,id)}
+    fn convention_index_head(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{published_head(self.conn,id)}
     fn convention_index_generation(&self,id:&Id)->Result<Option<StoredConventionIndex>,StorageError>{generation(self.conn,id)}
     fn convention_index_generations(&self,owner:Option<&Id>,operation:Option<&OperationId>,after:Option<&Id>,limit:u16)->Result<Vec<StoredConventionIndex>,StorageError>{let limit=page(limit)?;let mut s=db(self.conn.prepare_cached(&format!("SELECT {INDEX_COLUMNS} FROM convention_indexes WHERE (?1 IS NULL OR convention_id=?1) AND (?2 IS NULL OR operation_id=?2) AND (?3 IS NULL OR generation_id>?3) ORDER BY generation_id LIMIT ?4")))?;db(db(s.query_map(params![owner.map(Id::as_str),operation.map(|o|o.0.as_str()),after.map(Id::as_str),limit],index_record))?.collect())}
     fn convention_chunks(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredConventionChunk>,StorageError>{let limit=page(limit)?;if after.is_some_and(|v|v<0){return Err(invalid("negative chunk cursor"));}let Some(index)=generation(self.conn,id)?else{return Ok(Vec::new());};let mut s=db(self.conn.prepare_cached("SELECT id FROM convention_chunks WHERE generation_id=?1 AND chunk_index>coalesce(?2,-1) ORDER BY chunk_index LIMIT ?3"))?;let ids=db(db(s.query_map(params![id.as_str(),after,limit],|r|identifier(r,0)))?.collect::<rusqlite::Result<Vec<_>>>())?;ids.into_iter().map(|id|chunk(self.conn,&index,&id)?.ok_or_else(||invalid("chunk disappeared"))).collect()}
@@ -852,6 +852,12 @@ fn index_status(
     if let Some(id) = pending {
         return generation(conn, &id);
     }
+    published_head(conn, owner)
+}
+fn published_head(
+    conn: &Connection,
+    owner: &Id,
+) -> Result<Option<StoredConventionIndex>, StorageError> {
     let Some(mut r) = head(conn, owner)? else {
         return Ok(None);
     };

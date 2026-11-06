@@ -661,3 +661,20 @@ fn small_heading_caches_are_exact_source_segments_once_and_large_or_nul_segments
             .all(|s| s.source_offset.is_some() && s.source_length.is_some())
     );
 }
+#[test]
+fn queued_refresh_keeps_valid_published_coverage_and_old_space_vectors_never_qualify_new_space() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store,WriteOptions::default(),|tx|{
+  let old_space=super::retrieval::space();let mut next_space=old_space.clone();next_space.id="new-exact-space".into();next_space.configuration_digest="d".repeat(64);tx.conventions().put_convention_embedding_space(&old_space)?;tx.conventions().put_convention_embedding_space(&next_space)?;
+  let owner=record("head-owner",KnowledgeScope::Workspace,Some(artifact(tx,"head-source",&KnowledgeScope::Workspace,"alpha")?));tx.conventions().create_convention(&owner)?;
+  let current=index(tx,&owner,"current-head",Some(&old_space.id))?;tx.conventions().stage_convention_index(&current)?;stage_chunks(tx,&current.generation_id,&[chunk(&current,0,"alpha",1,Some(vec![1.0,0.0]))])?;tx.conventions().publish_convention_index(&current.generation_id,1,None,1)?;
+  let pending=index(tx,&owner,"pending-head",Some(&next_space.id))?;tx.conventions().stage_convention_index(&pending)?;
+  assert_eq!(tx.conventions().convention_index_status(&owner.id)?.unwrap().status,"Queued");
+  let head=tx.conventions().convention_index_head(&owner.id)?.unwrap();assert_eq!(head.generation_id,current.generation_id);assert_eq!(head.status,"Ready");assert_eq!(head.embedding_space.as_deref(),Some(old_space.id.as_str()));assert_ne!(head.embedding_space.as_deref(),Some(next_space.id.as_str()),"coverage consumer must compare the actual selected space, not reinterpret captured Ready");
+  let q=query(vec![KnowledgeScope::Workspace]);let found=tx.conventions().convention_ranked_chunks(&q,&[ConventionWeightedTerm{term:"alpha".into(),idf:1.0}],1.0,Some(&next_space.id),Some(&[1.0,0.0]),1)?;assert_eq!(found.len(),1);assert_eq!(found[0].dense_score,0.0);assert!((found[0].score-0.35).abs()<1e-12);
+  tx.artifacts().tombstone_version(&id("version-head-source"),T0+1)?;
+  assert_eq!(tx.conventions().convention_index_head(&owner.id)?.unwrap().status,"Stale");assert_eq!(tx.conventions().convention_lexical_statistics(&q,&["alpha".into()])?.documents,0);
+  assert_eq!(tx.conventions().convention_index_generation(&current.generation_id)?.unwrap().status,"Ready","raw historical production coverage remains immutable");Ok(())
+ }).unwrap();
+}
