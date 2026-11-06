@@ -2,6 +2,13 @@ use super::*;
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use std::{io::Read, path::Path, sync::Condvar};
 
+#[derive(Clone)]
+struct HeldPublication {
+    child: OperationId,
+    generation: Id,
+    staging: OperationId,
+    run: Id,
+}
 struct PublishGate {
     inner: NativeArtifactFiles,
     armed: AtomicBool,
@@ -10,7 +17,7 @@ struct PublishGate {
     wake: Condvar,
     store: Mutex<Option<std::sync::Weak<dyn ApplicationStore>>>,
     job: Mutex<Option<Id>>,
-    held: Mutex<Option<(OperationId, Id, OperationId)>>,
+    held: Mutex<Option<HeldPublication>>,
 }
 impl PublishGate {
     fn new(h: &Harness) -> Arc<Self> {
@@ -91,11 +98,12 @@ impl PublishGate {
                 frame["body"]["expectedHelpRevision"].as_str().unwrap(),
                 owner.payload["expectedHelpRevision"].to_string()
             );
-            Ok(Some((
-                inner,
-                Id::new(source["generationId"].as_str().unwrap()).unwrap(),
-                staging.clone(),
-            )))
+            Ok(Some(HeldPublication {
+                child: inner,
+                generation: Id::new(source["generationId"].as_str().unwrap()).unwrap(),
+                staging: staging.clone(),
+                run: run.id,
+            }))
         });
         if let Some(owned) = owned.filter(|_| self.armed.swap(false, Ordering::SeqCst)) {
             *self.held.lock().unwrap() = Some(owned);
@@ -265,16 +273,24 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
             tokio::task::yield_now().await;
         }
     }));
-    let running = app
-        .runs(&job)
-        .into_iter()
-        .max_by_key(|run| run.seq)
-        .unwrap();
-    let inner = running
-        .inner_operation_id
-        .clone()
-        .expect("actual Accepted Help operation");
-    let (held_child, held_generation, held_staging) = gate.held.lock().unwrap().clone().unwrap();
+    let HeldPublication {
+        child: held_child,
+        generation: held_generation,
+        staging: held_staging,
+        run,
+    } = gate.held.lock().unwrap().clone().unwrap();
+    // Publication is proven to belong to the async child, so its gateway acknowledgment
+    // can finish independently. Wait for this exact run's persisted Accepted link.
+    let running = rt.block_on(within("Help job records its accepted child", async {
+        loop {
+            let run = read(&*app.store, |s| s.jobs().job_run(&run)).unwrap();
+            if run.inner_operation_id.is_some() {
+                break run;
+            }
+            tokio::task::yield_now().await;
+        }
+    }));
+    let inner = running.inner_operation_id.clone().unwrap();
     assert_eq!(
         held_child, inner,
         "the held publication belongs to this accepted child"
