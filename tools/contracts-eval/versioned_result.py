@@ -130,8 +130,8 @@ def convention_conversion(definition):
                     .map(|items| Page { items: BoundedList(items), next_cursor: page.next_cursor.clone(), has_more: page.has_more }),"""
     else:
         helpers = project
-        mapping = 'project(&topic.convention)' if kind == 'convention_search' else 'project(topic)'
-        arm = f'''Self::Current(value) => value.items.0.iter().map(|topic| {mapping}).collect::<Option<Vec<_>>>()
+        mapping = '|topic| project(&topic.convention)' if kind == 'convention_search' else 'project'
+        arm = f'''Self::Current(value) => value.items.0.iter().map({mapping}).collect::<Option<Vec<_>>>()
                     .map(|items| Page {{ items: BoundedList(items), next_cursor: value.next_cursor.clone(), has_more: value.has_more }}),'''
     return f'''        if revision < {revision} {{
 {helpers}            let legacy: Option<{legacy}> = match self {{

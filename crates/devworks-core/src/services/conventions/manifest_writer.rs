@@ -32,7 +32,7 @@ fn invalid(message: &str) -> io::Error {
 fn json(writer: &mut dyn Write, value: &impl serde::Serialize) -> io::Result<()> {
     serde_json::to_writer(writer, value).map_err(io::Error::other)
 }
-fn text(writer: &mut dyn Write, source: &mut EditorText<'_>) -> io::Result<()> {
+fn text(writer: &mut dyn Write, source: &mut EditorText<'_>, required: bool) -> io::Result<()> {
     if source.byte_length > MAX_MARKDOWN_BYTES {
         return Err(invalid("convention text exceeds its retained UTF-8 bound"));
     }
@@ -46,7 +46,9 @@ fn text(writer: &mut dyn Write, source: &mut EditorText<'_>) -> io::Result<()> {
     let mut input = BufReader::new(&mut source.reader);
     let mut hash = Sha256::new();
     let mut bytes = 0_u64;
+    let mut nonblank = false;
     while let Some((ch, raw, count)) = scalar(&mut input)? {
+        nonblank |= !ch.is_whitespace();
         bytes = bytes
             .checked_add(count as u64)
             .ok_or_else(|| invalid("source byte count overflow"))?;
@@ -62,6 +64,9 @@ fn text(writer: &mut dyn Write, source: &mut EditorText<'_>) -> io::Result<()> {
         }
     }
     verify(source, bytes, hash)?;
+    if required && !nonblank {
+        return Err(invalid("Markdown content is required"));
+    }
     writer.write_all(b"\"}")
 }
 fn verify(source: &EditorText<'_>, bytes: u64, hash: Sha256) -> io::Result<()> {
@@ -102,15 +107,11 @@ pub fn write_editor_manifest<'a>(
     mut document: EditorConvention<'_>,
     resources: impl IntoIterator<Item = EditorResource<'a>>,
 ) -> io::Result<()> {
-    if document.title.is_empty()
+    if document.title.trim().is_empty()
         || document.title.chars().count() > 500
-        || document.slug.is_empty()
         || document.slug.chars().count() > 200
         || document.parent_path.len() > super::MAX_DEPTH
-        || document
-            .parent_path
-            .iter()
-            .any(|s| s.is_empty() || s.chars().count() > 200)
+        || document.parent_path.iter().any(|s| s.chars().count() > 200)
         || !matches!(document.lifecycle, "Active" | "Retired")
         || document.applicability.len() > 128
         || document
@@ -135,10 +136,10 @@ pub fn write_editor_manifest<'a>(
     writer.write_all(b",\"applicability\":")?;
     json(writer, &document.applicability)?;
     writer.write_all(b",\"markdown\":")?;
-    text(writer, &mut document.markdown)?;
+    text(writer, &mut document.markdown, true)?;
     if let Some(mut raw) = document.raw_content {
         writer.write_all(b",\"rawContent\":")?;
-        text(writer, &mut raw)?;
+        text(writer, &mut raw, false)?;
     }
     writer.write_all(b",\"resources\":[")?;
     let mut first = true;
@@ -150,6 +151,7 @@ pub fn write_editor_manifest<'a>(
             || resource.name.chars().count() > 255
             || resource.name.contains('\0')
             || resource.media_type.chars().count() > 200
+            || resource.media_type.contains('\0')
             || !matches!(resource.lifecycle, "Active" | "Retired")
         {
             return Err(invalid("invalid portable resource metadata"));

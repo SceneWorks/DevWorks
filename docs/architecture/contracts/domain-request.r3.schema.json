@@ -846,6 +846,16 @@
               "const": "Attach",
               "type": "string"
             },
+            "mediaType": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GraphSourceTextFragment"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "name": {
               "$ref": "#/$defs/Text0To65536"
             }
@@ -881,6 +891,16 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/ConventionLifecycle"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mediaType": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GraphSourceTextFragment"
                 },
                 {
                   "type": "null"
@@ -8548,10 +8568,6 @@
             "kind": {
               "const": "conventions.search",
               "type": "string"
-            },
-            "lifecycles": {
-              "$ref": "#/$defs/List_ConventionLifecycle_0_128",
-              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"

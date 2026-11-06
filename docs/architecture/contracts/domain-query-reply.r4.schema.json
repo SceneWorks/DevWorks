@@ -5600,6 +5600,10 @@
         "name": {
           "$ref": "#/$defs/Text1To256"
         },
+        "pricingModelId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
         "qualificationAttemptId": {
           "anyOf": [
             {
@@ -11260,6 +11264,10 @@
     "ModelPriceView": {
       "additionalProperties": false,
       "properties": {
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointKind",
+          "x-since": 3
+        },
         "modelId": {
           "$ref": "#/$defs/Id"
         },
@@ -11298,6 +11306,10 @@
               "type": "null"
             }
           ]
+        },
+        "upstreamModelId": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 3
         }
       },
       "required": [

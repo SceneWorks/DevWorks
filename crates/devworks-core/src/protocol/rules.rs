@@ -224,7 +224,7 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
             [("title", 500), ("slug", 200)].iter().all(|(key, max)| {
                 v[*key]
                     .as_str()
-                    .is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= *max)
+                    .is_some_and(|s| (*key=="slug" || !s.trim().is_empty()) && s.chars().count() <= *max)
             }),
             "invalid convention title or slug",
         )?;
@@ -263,15 +263,14 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
         }
     }
     if name == "ConventionResourceRecord" {
-        require(v["mediaType"].as_str().is_some_and(|s| s.chars().count() <= 200), "invalid retained resource media type")?;
+        require(v["mediaType"].as_str().is_some_and(|s| s.chars().count() <= 200 && !s.contains('\0')), "invalid retained resource media type")?;
         require(text("name", 255), "invalid convention resource name")?;
         require(
             (v["lifecycle"] == "Deleted") == present(v, "deletedAtMs"),
             "resource deletion state disagrees with its timestamp",
         )?;
     }
-    if name == "ConventionIndexStatus" {
-        if v["status"] == "Ready" || v["status"] == "LexicalOnly" {
+    if name == "ConventionIndexStatus" && (v["status"] == "Ready" || v["status"] == "LexicalOnly") {
             for key in [
                 "generationId",
                 "sourceRevision",
@@ -287,7 +286,6 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
                 (v["status"] == "Ready") == present(v, "embeddingSpace"),
                 "index status must describe actual vector coverage",
             )?;
-        }
     }
     if name == "ConventionResourcesSelection" && v["kind"] == "Document" && present(v, "maxChars") {
         require(v["maxChars"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "document passage limit is 1..65536")?;
@@ -392,7 +390,7 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
         if op == "conventions.edit" && let Some(s) = v[key].as_str() {
             let max = if key == "title" { 500 } else { 200 };
             require(
-                !s.trim().is_empty() && s.chars().count() <= max,
+                (key=="slug" || !s.trim().is_empty()) && s.chars().count() <= max,
                 "invalid convention metadata",
             )?;
         }
@@ -418,6 +416,7 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
                     "invalid resource name",
                 )?;
             }
+            if let Some(media)=row["mediaType"].as_str(){require(media.chars().count()<=200&&!media.contains('\0'),"invalid original resource media type")?;}
             require(
                 row["lifecycle"] != "Deleted",
                 "resource deletion requires its dedicated operation",

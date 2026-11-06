@@ -11302,6 +11302,7 @@ impl Check for PriceCatalogView {
 
 impl Revisioned for PriceCatalogView {
     fn retain_revision(&mut self, revision: u32) {
+        self.models.retain_revision(revision);
         if revision < 3 {
             self.override_history = None;
         } else {
@@ -12153,6 +12154,20 @@ pub struct ModelPriceView {
     pub override_revision: Option<Revision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub untracked_reason: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub upstream_model_id: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "EndpointKind", extend("x-since" = 3))]
+    pub endpoint_profile: Option<EndpointKind>,
 }
 impl Check for ModelPriceView {
     fn check(&self) -> Result<(), String> {
@@ -12162,11 +12177,24 @@ impl Check for ModelPriceView {
         self.snapshot_id.check()?;
         self.override_revision.check()?;
         self.untracked_reason.check()?;
+        self.upstream_model_id.check()?;
+        self.endpoint_profile.check()?;
         super::domain_rules::record(
             "ModelPriceView",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ModelPriceView {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.upstream_model_id = None;
+        }
+        if revision < 3 {
+            self.endpoint_profile = None;
+        }
     }
 }
 
@@ -15481,6 +15509,8 @@ pub enum ConventionResourceChange {
     Attach {
         name: Content,
         content: ArtifactRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<GraphText>,
     },
     Update {
         resource_id: Id,
@@ -15491,14 +15521,21 @@ pub enum ConventionResourceChange {
         content: Option<ArtifactRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lifecycle: Option<ConventionLifecycle>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<GraphText>,
     },
 }
 impl Check for ConventionResourceChange {
     fn check(&self) -> Result<(), String> {
         match self {
-            Self::Attach { name, content } => {
+            Self::Attach {
+                name,
+                content,
+                media_type,
+            } => {
                 name.check()?;
                 content.check()?;
+                media_type.check()?;
             }
             Self::Update {
                 resource_id,
@@ -15506,12 +15543,14 @@ impl Check for ConventionResourceChange {
                 name,
                 content,
                 lifecycle,
+                media_type,
             } => {
                 resource_id.check()?;
                 expected_revision.check()?;
                 name.check()?;
                 content.check()?;
                 lifecycle.check()?;
+                media_type.check()?;
             }
         }
         Ok(())
@@ -15688,7 +15727,7 @@ impl Revisioned for ConventionPageResult {
                     .items
                     .0
                     .iter()
-                    .map(|topic| project(topic))
+                    .map(project)
                     .collect::<Option<Vec<_>>>()
                     .map(|items| Page {
                         items: BoundedList(items),
@@ -16188,6 +16227,13 @@ pub struct EmbeddingSpaceRecord {
     pub updated_at_ms: Counter,
     pub space_id: Id,
     pub can_qualify: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub pricing_model_id: Option<Id>,
 }
 impl Check for EmbeddingSpaceRecord {
     fn check(&self) -> Result<(), String> {
@@ -16212,11 +16258,20 @@ impl Check for EmbeddingSpaceRecord {
         self.updated_at_ms.check()?;
         self.space_id.check()?;
         self.can_qualify.check()?;
+        self.pricing_model_id.check()?;
         super::domain_rules::record(
             "EmbeddingSpaceRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EmbeddingSpaceRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.pricing_model_id = None;
+        }
     }
 }
 
@@ -16251,6 +16306,12 @@ impl Check for EmbeddingSpacePage {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EmbeddingSpacePage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
     }
 }
 
@@ -16864,13 +16925,6 @@ pub enum DomainQuery {
         page: PageRequest,
         applicability: Items<Label>,
         text: Text,
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "gated_member"
-        )]
-        #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
-        lifecycles: Option<Items<ConventionLifecycle>>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -18308,14 +18362,12 @@ impl Check for DomainQuery {
                 page,
                 applicability,
                 text,
-                lifecycles,
                 top_k,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
                 text.check()?;
-                lifecycles.check()?;
                 top_k.check()?;
             }
             Self::ConventionsResources {
@@ -19070,12 +19122,7 @@ impl Revisioned for DomainQuery {
                     *order = None;
                 }
             }
-            Self::ConventionsSearch {
-                lifecycles, top_k, ..
-            } => {
-                if revision < 3 {
-                    *lifecycles = None;
-                }
+            Self::ConventionsSearch { top_k, .. } => {
                 if revision < 3 {
                     *top_k = None;
                 }
@@ -24982,6 +25029,7 @@ impl Revisioned for OperationResult {
             Self::TasksSetFeature { value } => value.retain_revision(revision),
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
+            Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),

@@ -14,19 +14,20 @@
     },
     "slug": {
       "type": "string",
-      "minLength": 1,
+      "minLength": 0,
       "maxLength": 200
     },
     "title": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 500
+      "maxLength": 500,
+      "pattern": "[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
     },
     "parentPath": {
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1,
+        "minLength": 0,
         "maxLength": 200
       },
       "maxItems": 3
@@ -47,7 +48,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 256
+        "maxLength": 256,
+        "pattern": "^[^\\u0000]*$"
       },
       "maxItems": 128,
       "uniqueItems": true
@@ -66,7 +68,8 @@
         },
         "text": {
           "type": "string",
-          "x-maxUtf8Bytes": 16777215
+          "x-maxUtf8Bytes": 16777215,
+          "pattern": "[^\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
         }
       },
       "required": [
@@ -107,17 +110,20 @@
           "key": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 200,
+            "pattern": "^[^\\u0000]*$"
           },
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 255
+            "maxLength": 255,
+            "pattern": "^[^\\u0000]*$"
           },
           "mediaType": {
             "type": "string",
             "minLength": 0,
-            "maxLength": 200
+            "maxLength": 200,
+            "pattern": "^[^\\u0000]*$"
           },
           "sha256": {
             "type": "string",
