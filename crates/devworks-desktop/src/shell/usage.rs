@@ -237,7 +237,7 @@ impl Shell {
             // Official rows belong to an upstream model in an immutable provider snapshot,
             // rather than to a local catalog model ID. Resolve that exact identity before
             // seeding an override; history can contain other snapshots and upstream models.
-            let upstream = if record.snapshot_id.is_some() {
+            let selected = if record.snapshot_id.is_some() {
                 let Some(selected) = self
                     .chat
                     .routing
@@ -250,22 +250,23 @@ impl Shell {
                     );
                     return;
                 };
-                Some(
-                    if matches!(selected.endpoint_profile, EndpointKind::OpenRouterChat) {
-                        selected
-                            .upstream_model_id
-                            .0
-                            .split_once('/')
-                            .map_or(selected.upstream_model_id.0.as_str(), |(_, upstream)| {
-                                upstream
-                            })
-                    } else {
-                        selected.upstream_model_id.0.as_str()
-                    },
-                )
+                Some(selected)
             } else {
                 None
             };
+            let upstream = selected.map(|selected| {
+                if matches!(selected.endpoint_profile, EndpointKind::OpenRouterChat) {
+                    selected
+                        .upstream_model_id
+                        .0
+                        .split_once('/')
+                        .map_or(selected.upstream_model_id.0.as_str(), |(_, upstream)| {
+                            upstream
+                        })
+                } else {
+                    selected.upstream_model_id.0.as_str()
+                }
+            });
             prices
                 .items
                 .0
@@ -280,7 +281,22 @@ impl Shell {
                                 .is_some_and(|id| id.as_str() == current.as_str())
                         })
                 })
-                .map(|e| TariffForm::from_tariff(&e.tariff))
+                .map(|e| {
+                    let mut form = TariffForm::from_tariff(&e.tariff);
+                    if let Some(selected) = selected {
+                        // Provider snapshots use canonical model identities. An override belongs
+                        // to the exact configured model and serving transport selected here.
+                        form.upstream = selected.upstream_model_id.0.clone();
+                        if !form.profile.is_empty() {
+                            form.profile = serde_json::to_value(&selected.endpoint_profile)
+                                .expect("typed endpoint profile")
+                                .as_str()
+                                .expect("endpoint profile is a wire name")
+                                .to_owned();
+                        }
+                    }
+                    form
+                })
                 .collect::<Vec<_>>()
         } else {
             configured
