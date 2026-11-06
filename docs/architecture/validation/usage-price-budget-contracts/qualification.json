@@ -49,8 +49,20 @@
     "allPassed": true
   },
   "nativeCoreChecks": {
-    "status": "awaiting compile-ready owning WorkRecord/feature/connection constructor integration",
-    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures",
+    "status": "passed",
+    "snapshot": "3077220039af3f1e75bb3197677256ac98f2020e",
+    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures --target-dir /Users/michael/Repos/DevWorks/.planning-build/dw71-contracts/core-target",
+    "tests": {
+      "recorded_fixtures": 7,
+      "registry": 5,
+      "schema_revisions": 8
+    },
+    "passed": 20,
+    "failed": 0,
+    "nativeRevisionModeAdmissions": 546,
+    "legacySchemasByteIdentical": 56,
+    "execution": "Detached exact assembled snapshot with real owner constructors/services; no edits or stubs",
+    "scope": "Native contract/admission/schema/receipt tests; full accounting, pricing adapter and UI acceptance remains separate",
     "noStubsOrHandwrittenOwnerEdits": true
   },
   "contractChecksPassed": true,

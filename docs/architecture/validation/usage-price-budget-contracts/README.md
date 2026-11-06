@@ -31,4 +31,4 @@ cargo test --locked -p devworks-core --test registry --test schema_revisions --t
 cargo fmt --all --check
 ```
 
-The final native core command requires the owning WorkRecord/feature constructors from the assembled implementation; its status is recorded explicitly in qualification.json, without substituting probe output for that gate.
+All 20 native core contract tests passed on exact assembled snapshot `3077220039af3f1e75bb3197677256ac98f2020e`: seven recorded-fixture, five registry and eight schema-revision tests. The snapshot contains real owning constructors/services and was tested in a clean detached worktree without edits or stubs, using the existing isolated contract target. These tests admit all 546 registered revision/mode bindings and preserve all 56 legacy schema hashes. Full native accounting, pricing adapter and UI acceptance remains separate.
