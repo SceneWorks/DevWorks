@@ -1682,3 +1682,64 @@ fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope
         ConventionOperationPhase::Unknown
     ));
 }
+
+#[test]
+fn native_section_path_keeps_requested_revision_after_metadata_only_edit() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("conventions-path-metadata-revision");
+    let http = Arc::new(embedding::RecordedEmbedding::default());
+    let engine = embedding::configured(&root, http.clone());
+    let backend = engine.backend();
+    let files = Files::default();
+    let mut h = open(backend.clone(), &root, files.clone());
+    qualify(&mut h, &*backend, &http);
+    let path = manifest(
+        &root,
+        "path-metadata",
+        "Path metadata guide",
+        "# Practices\n## Exact section\nNative alpha guidance.\n",
+        None,
+    );
+    import(&mut h, &files, path);
+    let first = select(&mut h, "Path metadata guide");
+    indexed(&mut h);
+    let frame = cop::command(
+        &*backend,
+        "conventions.edit",
+        serde_json::json!({"scope":first.scope,"conventionId":first.id,"expectedRevision":first.revision,"content":first.content,"slug":"path-after-edit","sortOrder":"91"}),
+    );
+    let change = cop::changed(backend.command("conventions.edit", &frame))
+        .unwrap_or_else(|e| panic!("{}", e.describe()));
+    let cop::Change::Record(updated) = change else {
+        panic!("expected actual edited record")
+    };
+    assert!(updated.revision.get() > first.revision.get());
+    assert_eq!(
+        updated.index.source_revision.as_ref(),
+        Some(&first.revision),
+        "metadata edit preserves an index of the original source revision"
+    );
+    replace(&mut h, "Find convention", "alpha");
+    click(&mut h, Role::Button, "Search conventions");
+    step_until(&mut h, "metadata-edited search result", |s| {
+        s.conventions
+            .state()
+            .unwrap()
+            .hits
+            .first()
+            .is_some_and(|hit| hit.convention.revision == updated.revision)
+    });
+    click(&mut h, Role::Button, "Read section path");
+    step_until(&mut h, "requested path result", |s| {
+        !s.conventions.state().unwrap().reader.loading
+    });
+    let reader = &h.state().conventions.state().unwrap().reader;
+    assert!(
+        reader.error.is_none(),
+        "actual path reply: {:?}",
+        reader.error
+    );
+    let view = reader.view.as_ref().expect("native section path reply");
+    assert_eq!(view.convention.revision, updated.revision);
+    assert!(view.passage.as_ref().unwrap().text.0.contains("Practices"));
+}

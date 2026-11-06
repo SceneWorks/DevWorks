@@ -386,7 +386,9 @@ impl ConventionService {
             BoundedText(cursor.encode(&format!("{next}:{}:{}", reader.piece, reader.offset)))
         });
         Ok(PreparedDocument {
-            owner: path.owner,
+            // Source spans and the lease use the captured indexed owner above. The reply
+            // remains bound to the reader's exact requested metadata revision.
+            owner: request.owner,
             resource: None,
             scope_revision: revision,
             format: ConventionFormat::SectionPath,

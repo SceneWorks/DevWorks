@@ -20,3 +20,12 @@ Fresh Windows CI must qualify the scheduling correction; local success does not
 establish its Windows result or rule out a remaining semantic defect.
 Strict composed checks, review/CI, merge and acceptance remain required.
 No learned inference or OS credential access occurs in these fixtures.
+
+## Requested revision in section paths (PR43 review4498460899)
+
+Metadata-only edits retain the original indexed source revision. Section-path source spans and
+artifact leases continue to use that captured owner, while the response now retains the exact
+owner revision requested by the reader. The actual native manager regression reproduced the
+reported UI refusal before the fix (10.94s) and passes afterward (10.99s). All18 native manager
+cases pass143.08s; strict workspace/all-target checks pass40.55s. Recorded HTTP/vector fixtures
+are used for routed embedding boundaries; no learned inference executes.
