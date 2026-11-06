@@ -1007,6 +1007,38 @@ mod tests {
         ));
     }
     #[test]
+    fn preserves_source_slug_components_but_refuses_blank_authored_title_and_markdown() {
+        let mut value = manifest();
+        value["slug"] = json!("");
+        value["parentPath"] = json!(["", " ", "\0"]);
+        value["rawContent"] = body(b"");
+        let parse = |value: &serde_json::Value| -> Result<(), Error> {
+            let mut reader = io::Cursor::new(serde_json::to_vec(value).unwrap());
+            let mut checkpoint = Checkpoint::default();
+            loop {
+                match Parser::new(&mut reader, &checkpoint, 100, &|| false)?
+                    .next(checkpoint.clone())?
+                {
+                    Step::Entry {
+                        checkpoint: next, ..
+                    } => checkpoint = next,
+                    Step::Complete { metadata, .. } => {
+                        assert_eq!(metadata.slug.as_deref(), Some(""));
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        parse(&value).unwrap();
+        value["title"] = json!(" \u{85}\u{2003}");
+        assert!(parse(&value).is_err());
+        value["title"] = json!("\0");
+        value["markdown"] = body(" \u{85}\u{2003}".as_bytes());
+        assert!(parse(&value).is_err());
+        value["markdown"] = body(b"\0");
+        parse(&value).unwrap();
+    }
+    #[test]
     fn numeric_json_integer_forms_are_exact_without_float_or_token_buffers() {
         let stop = || false;
         for (text, expected) in [

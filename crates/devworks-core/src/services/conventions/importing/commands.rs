@@ -33,6 +33,7 @@ pub(super) struct Job {
     pub fences: Vec<AuthorityFence>,
     pub delivery: Id,
     pub source_generation: String,
+    pub schema: crate::protocol::provider::SchemaRef,
     pub controls: Vec<(RootId, i64)>,
     pub assignment_generation: Option<i64>,
 }
@@ -138,6 +139,7 @@ impl ImportService {
             fences: command.authorization().fences().to_vec(),
             delivery: delivery.clone(),
             source_generation: prepared.version.blob_generation.clone(),
+            schema: input.schema.clone(),
             controls,
             assignment_generation,
         };
@@ -217,6 +219,17 @@ pub(super) fn validate(
         || current.latest_attempt().map(|a| a.fence()) != op.latest_attempt().map(|a| a.fence())
     {
         return Err(StorageError::ScopeDenied);
+    }
+    if !matches!(
+        current.state,
+        crate::protocol::OperationState::Dispatching
+            | crate::protocol::OperationState::OutcomeUnknown
+    ) {
+        return Err(StorageError::ScopeDenied);
+    }
+    if serde_json::to_value(&job.schema).ok() != serde_json::to_value(model::manifest_schema()).ok()
+    {
+        return Err(invalid("registered import schema changed"));
     }
     if op.capability != "conventions.import" || job.kind != KIND {
         return Err(StorageError::ScopeDenied);

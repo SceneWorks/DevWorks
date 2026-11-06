@@ -299,7 +299,7 @@ impl ImportService {
                     crate::protocol::records::ConventionProvenance::Imported {
                         actor_id: d.author_id.clone(),
                         source: reference,
-                        schema: model::manifest_schema(),
+                        schema: j.schema.clone(),
                         imported_at_ms: crate::services::sessions::counter(now),
                     },
                 )
