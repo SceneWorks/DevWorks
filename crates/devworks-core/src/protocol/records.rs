@@ -896,6 +896,7 @@ impl Revisioned for WorkRecord {
         if revision < 3 {
             self.budget = None;
         }
+        self.pending_plan.retain_revision(revision);
     }
 }
 
@@ -8329,17 +8330,33 @@ pub struct PendingFeaturePlan {
     pub draft: PlanDraft,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PlanApproval>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
 }
 impl Check for PendingFeaturePlan {
     fn check(&self) -> Result<(), String> {
         self.revision.check()?;
         self.draft.check()?;
         self.approval.check()?;
+        self.budget.check()?;
         crate::protocol::rules::record(
             "PendingFeaturePlan",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PendingFeaturePlan {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.budget = None;
+        }
     }
 }
 

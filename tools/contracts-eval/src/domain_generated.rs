@@ -867,6 +867,7 @@ impl Check for WorkRecord {
 
 impl Revisioned for WorkRecord {
     fn retain_revision(&mut self, revision: u32) {
+        self.pending_plan.retain_revision(revision);
         if revision < 2 {
             self.readiness = None;
         }
@@ -8327,17 +8328,33 @@ pub struct PendingFeaturePlan {
     pub draft: PlanDraft,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PlanApproval>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
 }
 impl Check for PendingFeaturePlan {
     fn check(&self) -> Result<(), String> {
         self.revision.check()?;
         self.draft.check()?;
         self.approval.check()?;
+        self.budget.check()?;
         super::domain_rules::record(
             "PendingFeaturePlan",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PendingFeaturePlan {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.budget = None;
+        }
     }
 }
 
@@ -14765,6 +14782,13 @@ pub enum DomainCommand {
         feature_id: RootId,
         expected_revision: Revision,
         plan: PlanDraft,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+        budget: Option<FeatureBudgetInput>,
     },
     #[serde(rename = "features.dependencies")]
     FeaturesDependencies {
@@ -16425,10 +16449,12 @@ impl Check for DomainCommand {
                 feature_id,
                 expected_revision,
                 plan,
+                budget,
             } => {
                 feature_id.check()?;
                 expected_revision.check()?;
                 plan.check()?;
+                budget.check()?;
             }
             Self::FeaturesDependencies {
                 feature_id,
@@ -18086,6 +18112,11 @@ impl Revisioned for DomainCommand {
             Self::IssuesPrioritize { placement, .. } => {
                 if revision < 2 {
                     *placement = None;
+                }
+            }
+            Self::FeaturesEditPlan { budget, .. } => {
+                if revision < 3 {
+                    *budget = None;
                 }
             }
             Self::TasksSyncPlan {
