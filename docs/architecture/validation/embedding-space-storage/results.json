@@ -1,6 +1,6 @@
 {
   "date": "2026-11-06",
-  "sourceCommit": "f2cac30f0929936b96de25661ed322be21a826c4",
+  "sourceCommit": "2dececb18edc1b622c75d7ec61bf7c2d571d9df8",
   "scope": "DW-119 SQLite persistence and port invariants; not whole-item/native provider acceptance",
   "confidence": "High for exercised persistence invariants",
   "environment": {
@@ -28,17 +28,19 @@
         "cosmetic_connection_change_preserves_qualification_but_selection_cas_still_applies",
         "existing_vector_identity_is_never_relabelled_by_qualification",
         "late_cancellation_preserves_accounted_native_result_without_qualifying",
-        "durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation"
+        "durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation",
+        "inventory_fence_tracks_non_history_status_and_original_policy_changes",
+        "inventory_fence_tracks_exact_retained_artifact_metadata"
       ],
-      "passed": 11,
+      "passed": 13,
       "failed": 0,
-      "elapsedSeconds": 9.18,
+      "elapsedSeconds": 11.38,
       "log": "/tmp/dw119-embedding-storage-native.log"
     },
     {
       "command": "cargo clippy --locked -p devworks-core -p devworks-adapters --all-targets -- -D warnings",
       "result": "passed",
-      "elapsedSeconds": 19.5,
+      "elapsedSeconds": 13.86,
       "log": "/tmp/dw119-embedding-storage-clippy.log"
     },
     {
@@ -50,16 +52,16 @@
       "result": "passed",
       "migrations1Through31Reference": "901cfb6991e9727ee7fb6f7bebd96d98a9cb1688",
       "migration32Reference": "5780bf36",
-      "migration33Sha256": "dac49ad0877ea02a187b3a4aca9181b850afff10b26d7dc28e5057df7e494db2"
+      "migration33Sha256": "d9859b23d2d5c6d076959787e7a3b78d82eb59f51d0a43b6c550b940b61a8547"
     }
   ],
   "sourceSha256": {
-    "crates/devworks-core/src/ports/storage/embedding.rs": "351ef834968d9f117b38b2cf39b3f3e07823943340ff49c42ae8d2d545c2e8c3",
+    "crates/devworks-core/src/ports/storage/embedding.rs": "b5543374cbbdad50bdafd95b43093cfb66c7277071e8723b3912bf067165e3db",
     "crates/devworks-core/src/ports/storage/router.rs": "f9c9012f9d42070dc10db2680160681737f8bbbfbe745b85e8c983fbc047eb6c",
     "crates/devworks-core/src/ports/storage.rs": "84ebbb77a866ce03dd06f1358281362d1d8bc47cf5d4d0e51f73b61108181962",
-    "crates/devworks-adapters/src/storage/sqlite/embedding.rs": "94e327dc50a3079555b557d8269c6222665b684671ad6eb01b79011915b2e77d",
-    "crates/devworks-adapters/src/storage/sqlite/migrations/0033_embedding_spaces.sql": "dac49ad0877ea02a187b3a4aca9181b850afff10b26d7dc28e5057df7e494db2",
-    "crates/devworks-adapters/src/storage/sqlite/tests/embedding.rs": "d7abd33b41a145fdc38fd32782ed324b9b34efcae8405485bc9b5e3171a39190"
+    "crates/devworks-adapters/src/storage/sqlite/embedding.rs": "fea4f39fe83b82032a704d5189b0b35f2e2dae0c586673da753af0f928b5dd43",
+    "crates/devworks-adapters/src/storage/sqlite/migrations/0033_embedding_spaces.sql": "d9859b23d2d5c6d076959787e7a3b78d82eb59f51d0a43b6c550b940b61a8547",
+    "crates/devworks-adapters/src/storage/sqlite/tests/embedding.rs": "490b5093c486ddd7dbee2ff7bd0d181adb008f89906f024eaac1c6d9c86152b0"
   },
   "migrationPrefixSha256": {
     "0001_initial.sql": "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4",
@@ -98,6 +100,7 @@
   "integrationNotes": [
     "SQL32 remains owned by DW33. This run uses its real 5780bf36 checkpoint, unchanged; its owner has not frozen the final publication prefix yet. Recheck the composed final prefix at integration.",
     "No provider call, network request or inference compute was executed. These are actual SQLite metadata/transaction tests over recorded native facts; finite vector/result parsing is separately owned native executor evidence.",
-    "The host-verified result and vector artifacts must be retained through the owning artifact service. This adapter checks their exact immutable metadata and never writes filesystem bytes or artifact lifecycle policy."
+    "The host-verified result and vector artifacts must be retained through the owning artifact service. This adapter checks their exact immutable metadata and never writes filesystem bytes or artifact lifecycle policy.",
+    "Inventory cursor revision includes indexed current source/journal/artifact dependencies and conservative original-principal/configuration changes, including mutations with no history append. The query additionally binds actual host boot/native availability separately from immutable semantic space identity."
   ]
 }
