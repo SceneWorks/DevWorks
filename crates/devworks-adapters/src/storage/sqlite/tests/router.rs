@@ -2197,3 +2197,68 @@ fn a_pin_never_silently_changes_connection_to_escape_latest_scope_constraints() 
     assert_eq!(changed.connection_id.as_str(), "a-codex");
     assert_ne!(changed.pin_id, pin.pin_id);
 }
+
+#[test]
+fn a_cooling_retained_pin_remains_recoverable_after_latest_loses_its_effort() {
+    for intent in [named("sol-latest"), tier("High")] {
+        let fx = Fx::new();
+        fx.set_members("High", &["sol-latest"]);
+        fx.add_model(versioned("sol-old", "gpt-6.9-sol", CODEX, "conn-codex"));
+        fx.dir.set(
+            CODEX,
+            "conn-codex",
+            ConnectionState::Connected,
+            Some(&["gpt-6.9-sol"]),
+        );
+        let (original, _) = chosen(fx.route("s1", intent.clone(), "High", &[]));
+        let turns = fx.cursor("High");
+        let mut newest = versioned("sol-new", "gpt-6.10-sol", CODEX, "conn-codex");
+        newest.efforts = vec!["Low".into()];
+        fx.add_model(newest);
+        fx.dir.set(
+            CODEX,
+            "conn-codex",
+            ConnectionState::Connected,
+            Some(&["gpt-6.9-sol", "gpt-6.10-sol"]),
+        );
+        let until = T0 + 60_000;
+        fx.cool("sol-old", until);
+        let waiting = refused(fx.route("s1", intent.clone(), "High", &[]));
+        assert_eq!(waiting.code, DomainErrorCode::CapacityWait);
+        assert_eq!(waiting.retry, RetryAdvice::AfterBlockerClears);
+        let availability = fx.availability(intent.clone(), "High", &[], Some("s1"));
+        assert!(!availability.available);
+        assert_eq!(availability.pin_eligible, Some(false));
+        assert_eq!(
+            availability.retry_at_ms.as_ref().map(Counter::get),
+            Some(until)
+        );
+        assert_eq!(codes(&availability), ["Cooling", "EffortUnsupported"]);
+        assert_eq!(fx.pin_row("s1").unwrap().pin_id, original.pin_id);
+        // This recovery belongs only to the retained pin. A fresh allocation cannot call
+        // an older capable release latest, and changing the request cannot drop its effort.
+        let fresh = refused(fx.route("s2", intent.clone(), "High", &[]));
+        assert_eq!(fresh.code, DomainErrorCode::UnsupportedCapability);
+        assert_eq!(fresh.retry, RetryAdvice::Never);
+        let fresh = fx.availability(intent.clone(), "High", &[], None);
+        assert_eq!(fresh.retry_at_ms, None);
+        assert_eq!(codes(&fresh), ["EffortUnsupported"]);
+        let unsupported = refused(fx.route("s1", intent.clone(), "Max", &[]));
+        assert_eq!(unsupported.code, DomainErrorCode::UnsupportedCapability);
+        assert_eq!(unsupported.retry, RetryAdvice::Never);
+        let unsupported = fx.availability(intent.clone(), "Max", &[], Some("s1"));
+        assert_eq!(unsupported.retry_at_ms, None);
+        assert_eq!(codes(&unsupported), ["EffortUnsupported"]);
+        let explicit = refused(fx.pin("s1", original.pin_revision.get(), named("sol-new"), "High"));
+        assert_eq!(explicit.code, DomainErrorCode::UnsupportedCapability);
+        assert_eq!(explicit.retry, RetryAdvice::Never);
+        assert_eq!(fx.cursor("High"), turns);
+        fx.h.clock.0.store(until + 1, Ordering::SeqCst);
+        let (recovered, wrote) = chosen(fx.route("s1", intent.clone(), "High", &[]));
+        assert!(!wrote);
+        assert_eq!(recovered.pin_id, original.pin_id);
+        assert_eq!(recovered.pin_revision, original.pin_revision);
+        assert_eq!(recovered.model_id.as_str(), "sol-old");
+        assert_eq!(fx.cursor("High"), turns);
+    }
+}

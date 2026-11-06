@@ -574,6 +574,21 @@ fn catalog_tier_members(
         .collect()
 }
 
+/// A retained pin may recover even after promotion removes it from the allocation pool.
+/// Include only dynamic blockers in diagnostics; this must never add an allocation candidate
+/// or make an older pin a substitute for capabilities or effort it does not support.
+fn include_recoverable_pin(pool: &mut Vec<Assessed>, pin: Option<&Assessed>) {
+    if let Some(pin) = pin
+        && !pin.eligible()
+        && pin.blocks.iter().all(|b| !b.is_static())
+        && !pool
+            .iter()
+            .any(|a| a.model_id == pin.model_id && a.blocks == pin.blocks)
+    {
+        pool.push(pin.clone());
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Refusals
 
@@ -732,9 +747,10 @@ impl InferenceRouter {
         let pinned_assessment = current
             .as_ref()
             .filter(|_| same_intent)
-            .and_then(|p| f.assess_pin(intent, p, &connections, need))
-            .filter(Assessed::eligible);
-        let pinned = current.as_ref().zip(pinned_assessment.as_ref());
+            .and_then(|p| f.assess_pin(intent, p, &connections, need));
+        let pinned = current
+            .as_ref()
+            .zip(pinned_assessment.as_ref().filter(|a| a.eligible()));
         // The pinned model still serves this intent and need.
         if let Some((p, a)) = pinned {
             let connection = a.connection.clone().expect("eligible");
@@ -782,7 +798,9 @@ impl InferenceRouter {
         }
         let eligible: Vec<&Assessed> = pool.iter().filter(|a| a.eligible()).collect();
         if eligible.is_empty() {
-            return Err(blocked(intent, &pool, Some(&session.id)));
+            let mut diagnostics = pool.clone();
+            include_recoverable_pin(&mut diagnostics, pinned_assessment.as_ref());
+            return Err(blocked(intent, &diagnostics, Some(&session.id)));
         }
         let chosen = match intent {
             RouteIntent::Tier { tier } => {
@@ -1171,17 +1189,18 @@ impl InferenceRouter {
             .map_err(|_| invalid(CAPABILITY))?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
         let connections = self.connections.connections(snapshot.router())?;
-        let pool = f.assess_pool(intent, &connections, &need, None);
+        let mut pool = f.assess_pool(intent, &connections, &need, None);
         let mut eligible: Vec<Id> = pool
             .iter()
             .filter(|a| a.eligible())
             .map(|a| a.model_id.clone())
             .collect();
+        let pinned_assessment = pin
+            .filter(|p| p.intent == intent_key(intent))
+            .and_then(|p| f.assess_pin(intent, p, &connections, &need));
         let pin_eligible = pin.map(|p| {
-            p.intent == intent_key(intent)
-                && p.requested_effort == need.effort
-                && f.assess_pin(intent, p, &connections, &need)
-                    .is_some_and(|a| a.eligible())
+            p.requested_effort == need.effort
+                && pinned_assessment.as_ref().is_some_and(Assessed::eligible)
         });
         if pin_eligible == Some(true)
             && let Some(pin) = pin
@@ -1190,6 +1209,9 @@ impl InferenceRouter {
             eligible.push(pin.model_id.clone());
         }
         let available = !eligible.is_empty();
+        if !available {
+            include_recoverable_pin(&mut pool, pinned_assessment.as_ref());
+        }
         let retry_at_ms = if available {
             None
         } else {
