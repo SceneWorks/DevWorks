@@ -2,9 +2,8 @@
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{
-    ArtifactRef, Id, OperationId, OperationState, Revision, RevisionDimension,
-};
+use devworks_core::protocol::provider::ArtifactRef;
+use devworks_core::protocol::{Id, OperationId, OperationState, Revision, RevisionDimension};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -64,7 +63,7 @@ fn digest(value: &str) -> bool {
 }
 fn validate(c: &StoredEmbeddingCandidate) -> Result<(), StorageError> {
     if c.name.is_empty()
-        || c.name.chars().count() > 128
+        || c.name.chars().count() > 256
         || c.name.contains('\0')
         || c.upstream_model_id.is_empty()
         || c.upstream_model_id.chars().count() > 4096

@@ -3,7 +3,9 @@
 //! have independent revisions. No storage method performs provider work or reads vector bytes.
 use super::{AttemptFence, StorageError};
 use crate::ports::AuthorityFence;
-use crate::protocol::{ActorId, ArtifactRef, DataScope, Id, OperationId, StoreId};
+use crate::protocol::data::DataScope;
+use crate::protocol::provider::ArtifactRef;
+use crate::protocol::{ActorId, Id, OperationId, StoreId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
