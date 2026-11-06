@@ -5162,3 +5162,132 @@ fn approval_review_queue_is_informational_scoped_and_retains_bounded_open_challe
         DomainQueryReply::Rejected { .. }
     ));
 }
+
+#[test]
+fn approval_review_queue_cursor_expires_on_challenge_and_recurrence_changes() {
+    struct Roles;
+    impl devworks_core::settings::service::PrincipalRoles for Roles {
+        fn role(&self, _: &InvocationContext) -> Option<AgentRole> {
+            None
+        }
+    }
+    let mut fx = Fx::new();
+    fx.cases = fx.cases.clone().with_approvals(Arc::new(
+        devworks_core::services::approvals::ApprovalService::new(
+            fx.h.ids.clone(),
+            fx.h.clock.clone(),
+            Arc::new(Roles),
+            Arc::new(devworks_core::services::runs::ControlService::new(
+                fx.h.ids.clone(),
+            )),
+        ),
+    ));
+    let user = fx.user();
+    let agent = fx.agent("agent-a", Some("project-a"));
+    let mut lessons = Vec::new();
+    for n in 0..52 {
+        let claim = lesson_in_a(
+            &fx,
+            &agent,
+            &format!("review-{n}"),
+            "Agent",
+            &format!("source-{n}"),
+        );
+        receipt(fx.cmd(&user, "knowledge.challenge", json!({
+            "scope":proj("project-a"), "claimId":claim,
+            "expectedRevision":fx.revision(&claim).to_string(), "reason":"review", "evidenceIds":[]
+        })));
+        lessons.push(claim);
+    }
+    // More than the source cap of foreign candidates must not displace project rows.
+    let source = fx
+        .read(|s| s.knowledge().knowledge_claim(&lessons[0]))
+        .unwrap();
+    fx.write(move |tx| {
+        for n in 0..501 {
+            let mut foreign = source.clone();
+            foreign.id = id(&format!("aaa-foreign-{n:04}"));
+            foreign.scope = KnowledgeScope::Workspace;
+            foreign.lesson.as_mut().unwrap().rule_state = "Proposed".into();
+            tx.knowledge().put_knowledge_claim(&foreign, None)?;
+        }
+        Ok(())
+    });
+    let page = |cursor: Option<&str>| {
+        let mut input = json!({"projectId":"project-a","page":{"limit":50}});
+        if let Some(cursor) = cursor {
+            input["page"]["cursor"] = json!(cursor);
+        }
+        fx.q(&user, "approvals.review_queue", input)
+    };
+    let first = || {
+        let OperationResult::ApprovalsReviewQueue { value } = result(page(None)) else {
+            panic!("queue")
+        };
+        assert_eq!(value.items.0.len(), 50);
+        assert!(value.has_more);
+        value
+    };
+    let assert_expired = |cursor: &str| {
+        assert!(
+            matches!(page(Some(cursor)), DomainQueryReply::Rejected { fault, .. }
+            if fault.code == DomainErrorCode::CursorExpired)
+        );
+    };
+    let before = first();
+    let cursor = &before.next_cursor.as_ref().unwrap().0;
+    // Unrelated Workspace writes do not invalidate this exact-project population.
+    fx.claim_id(
+        &user,
+        ws(),
+        "unrelated",
+        draft("Fact", "unrelated workspace write"),
+    );
+    let OperationResult::ApprovalsReviewQueue { value: next } = result(page(Some(cursor))) else {
+        panic!("queue")
+    };
+    assert_eq!(next.items.0.len(), 2);
+    assert!(!next.has_more);
+    assert!(next.items.0.iter().all(|item| {
+        before
+            .items
+            .0
+            .iter()
+            .all(|old| old.entry.id != item.entry.id)
+    }));
+
+    // Resolving a challenge removes a row ahead of the next offset.
+    let target = &before.items.0[0].entry.id;
+    let target_id = target.clone();
+    let challenge = fx.read(move |s| {
+        s.knowledge()
+            .knowledge_open_challenge_records(&target_id, 1)
+    })[0]
+        .id
+        .clone();
+    receipt(fx.cmd(&user, "knowledge.challenge", json!({
+        "scope":proj("project-a"), "claimId":target,
+        "expectedRevision":fx.revision(target).to_string(), "reason":"review resolved", "evidenceIds":[],
+        "resolveChallengeId":challenge, "outcome":"Uphold"
+    })));
+    assert_expired(cursor);
+
+    // Adding another challenge changes the returned historical evidence.
+    let before = first();
+    let target = &lessons[1];
+    receipt(fx.cmd(&user, "knowledge.challenge", json!({
+        "scope":proj("project-a"), "claimId":target,
+        "expectedRevision":fx.revision(target).to_string(), "reason":"new evidence", "evidenceIds":[]
+    })));
+    assert_expired(&before.next_cursor.as_ref().unwrap().0);
+
+    // A recurrence changes rank even when the set of challenged claims is unchanged.
+    let before = first();
+    recur_in_a(&fx, &agent, &lessons[51], "Agent", "new-recurrence");
+    assert_expired(&before.next_cursor.as_ref().unwrap().0);
+
+    // Effective thresholds can change projected rule state without a knowledge write.
+    let before = first();
+    fx.set_threshold(4);
+    assert_expired(&before.next_cursor.as_ref().unwrap().0);
+}

@@ -21,6 +21,8 @@ pub(crate) fn query(
         .clone()
         .or_else(|| ctx.project_id().cloned())
         .ok_or_else(|| super::service::invalid("project_required"))?;
+    let policy_digest =
+        crate::authority::policy::resolve_policy(s.configuration(), Some(&project_id))?.digest();
     let requested = DataScope::Project { project_id };
     let scoped = knowledge::resolve_scope(s.artifacts(), s.authority(), ctx, &requested, false)?;
     let scopes = vec![scoped.exact.clone()];
@@ -139,8 +141,11 @@ pub(crate) fn query(
         &[
             &serde_json::to_string(&requested).unwrap(),
             &revision.to_string(),
+            ctx.policy_revision().as_str(),
+            &policy_digest,
+            &serde_json::to_string(&thresholds).expect("knowledge thresholds"),
         ],
-        1,
+        s.knowledge().knowledge_scope_revision(&scoped.exact)?,
     );
     let offset = i
         .page
