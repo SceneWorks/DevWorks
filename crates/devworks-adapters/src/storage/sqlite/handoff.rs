@@ -3,7 +3,7 @@ use super::conn::db;
 use super::repos::Unit;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{Id, Revision, RevisionDimension};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
@@ -23,9 +23,10 @@ fn conflict(
     ))
 }
 fn preserved_checkpoint(old: &StoredAssignment) -> Result<Option<serde_json::Value>, StorageError> {
-    let Some(value) = &old.checkpoint else {
-        return Ok(None);
-    };
+    let value = old
+        .checkpoint
+        .as_ref()
+        .ok_or_else(|| invalid("membership handoff requires its service checkpoint marker"))?;
     if value.get("kind").and_then(|v| v.as_str()) != Some("DevWorksMembershipHandoff")
         || value.get("version").and_then(|v| v.as_i64()) != Some(1)
     {
@@ -69,7 +70,6 @@ pub(super) fn reparent(
         || a.slot_held
         || a.work_id != old.work_id
         || a.session_id != old.session_id
-        || a.root_id == old.root_id
         || a.created_at_ms != old.created_at_ms
         || a.revision
             != expected
@@ -175,19 +175,9 @@ pub(super) fn reparent(
             "handoff conversation belongs only to its source session",
         ));
     }
-    // The service fences descendants and cancels only undispatched owned deliveries. The
-    // adapter refuses any remaining in-flight or uncertain effect, including descendants.
-    let unsafe_subtree:bool=db(unit.conn.query_row(
-        "WITH RECURSIVE tree(id,session_id,state,slot_held) AS (SELECT id,session_id,state,slot_held FROM assignments WHERE id=?1 UNION SELECT a.id,a.session_id,a.state,a.slot_held FROM assignments a JOIN tree t ON a.parent_id=t.id)
-         SELECT EXISTS(SELECT 1 FROM tree WHERE state IN ('Ready','Active','Waiting') OR slot_held=1)
-         OR EXISTS(SELECT 1 FROM session_turns WHERE session_id IN (SELECT session_id FROM tree))
-         OR EXISTS(SELECT 1 FROM owned_processes WHERE assignment_id IN (SELECT id FROM tree) AND state NOT IN ('Reaped','Failed'))
-         OR EXISTS(SELECT 1 FROM operations WHERE assignment_id IN (SELECT id FROM tree) AND state IN ('Dispatching','OutcomeUnknown','RetryPending'))
-         OR EXISTS(SELECT 1 FROM queue_entries q JOIN operations o ON o.id=q.operation_id WHERE o.assignment_id IN (SELECT id FROM tree) AND q.state IN ('Ready','Claimed','Reconciling'))",
-        [old.id.0.as_str()],|row|row.get(0),
-    ))?;
-    if unsafe_subtree {
-        return Err(invalid("membership handoff subtree has not quiesced"));
+    // The read fact and mutation use the same canonical operation-state rule.
+    if !quiescent(unit.conn, &a.id)? {
+        return Err(StorageError::Busy);
     }
     // A caller may catch a repository error and continue its write. Keep this multi-row
     // primitive atomic even then (for example if moving a blocker hits a uniqueness guard).
@@ -209,4 +199,52 @@ pub(super) fn reparent(
             Err(error)
         }
     }
+}
+
+/// Shared by read snapshots and the mutation: callers may retire an abandoned handoff only
+/// after the same boundary the reparent primitive enforces.
+pub(super) fn quiescent(
+    conn: &Connection,
+    assignment: &devworks_core::protocol::AssignmentId,
+) -> Result<bool, StorageError> {
+    let exists: bool = db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM assignments WHERE id=?1)",
+        [assignment.0.as_str()],
+        |row| row.get(0),
+    ))?;
+    if !exists {
+        return Err(StorageError::NotFound {
+            kind: "assignment",
+            id: assignment.0.as_str().into(),
+        });
+    }
+    let unsafe_subtree:bool=db(conn.query_row(
+        "WITH RECURSIVE tree(id,session_id,state,slot_held) AS (SELECT id,session_id,state,slot_held FROM assignments WHERE id=?1 UNION SELECT a.id,a.session_id,a.state,a.slot_held FROM assignments a JOIN tree t ON a.parent_id=t.id)
+         SELECT EXISTS(SELECT 1 FROM tree WHERE state IN ('Ready','Active','Waiting') OR slot_held=1)
+         OR EXISTS(SELECT 1 FROM session_turns WHERE session_id IN (SELECT session_id FROM tree))
+         OR EXISTS(SELECT 1 FROM owned_processes WHERE assignment_id IN (SELECT id FROM tree) AND state NOT IN ('Reaped','Failed'))
+         OR EXISTS(SELECT 1 FROM queue_entries q JOIN operations o ON o.id=q.operation_id WHERE o.assignment_id IN (SELECT id FROM tree) AND q.state IN ('Ready','Claimed','Reconciling'))",
+        [assignment.0.as_str()],|row|row.get(0),
+    ))?;
+    if unsafe_subtree {
+        return Ok(false);
+    }
+    // DISTINCT is bounded by the operation-state vocabulary. Parsing and the canonical core
+    // predicate keep this check aligned when states are added or their meaning changes.
+    let mut statement=db(conn.prepare_cached(
+        "WITH RECURSIVE tree(id) AS (SELECT id FROM assignments WHERE id=?1 UNION SELECT a.id FROM assignments a JOIN tree t ON a.parent_id=t.id) SELECT DISTINCT state FROM operations WHERE assignment_id IN (SELECT id FROM tree)",
+    ))?;
+    let states = db(db(
+        statement.query_map([assignment.0.as_str()], |row| row.get::<_, String>(0))
+    )?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
+    for state in states {
+        let state = serde_json::from_value(serde_json::Value::String(state)).map_err(|_| {
+            StorageError::unavailable(Unavailable::Corrupt, "unknown handoff operation state")
+        })?;
+        if possibly_dispatched(state) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

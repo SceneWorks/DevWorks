@@ -364,7 +364,7 @@ fn handoff_savepoint_rolls_back_assignment_and_epoch_when_hold_move_fails() {
 
 #[test]
 fn handoff_refuses_live_descendants_turns_uncertain_effects_and_processes() {
-    for hazard in 0..5 {
+    for hazard in 0..6 {
         let h = Harness::new();
         let (s, moved) = fixture(&h, None);
         let info = s.info();
@@ -375,18 +375,16 @@ fn handoff_refuses_live_descendants_turns_uncertain_effects_and_processes() {
                 1=>{db(c.execute("INSERT INTO session_turns(session_id,turn_id,assignment_id,execution_id,owner_epoch,boot_id,started_at) VALUES('session-descendant','turn','descendant','execution-feature',0,?1,?2)",rusqlite::params![info.boot_id.unwrap().as_str(),T0]))?;},
                 2=>{db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','descendant','test',1,'digest','{}','OutcomeUnknown',1,?1)",[T0]))?;},
                 3=>{db(c.execute("INSERT INTO owned_processes(id,boot_id,state,platform,program,argv_sha256,actor_id,session_id,project_id,root_id,assignment_id,created_at,updated_at,revision) VALUES('process',?1,'Uncertain','unix','worker',?2,?3,'session-descendant','project','feature','descendant',?4,?4,1)",rusqlite::params![info.boot_id.unwrap().as_str(),"a".repeat(64),info.host_actor.0.as_str(),T0]))?;},
-                _=>{
+                4=>{
                     db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','worker','test',1,'digest','{}','IntentRecorded',1,?1)",[T0]))?;
                     db(c.execute("INSERT INTO queue_entries(id,consumer,event_id,root_id,operation_id,priority,ready_at,state,payload_json) VALUES('queued','test','prior-event','feature','unsafe',0,?1,'Ready','{}')",[T0]))?;
                 }
+                _=>{db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('unsafe','feature','worker','test',1,'digest','{}','NeedsInput',1,?1)",[T0]))?;}
             }
             Ok(())
         }).unwrap();
         assert!(
-            matches!(
-                reparent(&s, moved.clone(), 1, 1),
-                Err(StorageError::InvalidRecord(_))
-            ),
+            matches!(reparent(&s, moved.clone(), 1, 1), Err(StorageError::Busy)),
             "hazard {hazard}"
         );
         read_snapshot(&s, &ReadOptions::default(), |r| {
@@ -416,7 +414,7 @@ fn handoff_refuses_live_descendants_turns_uncertain_effects_and_processes() {
                 1 => {
                     db(c.execute("DELETE FROM session_turns WHERE turn_id='turn'", []))?;
                 }
-                2 => {
+                2 | 5 => {
                     db(c.execute(
                         "UPDATE operations SET state='ObservedComplete' WHERE id='unsafe'",
                         [],
@@ -472,4 +470,188 @@ fn global_assignment_lookup_finds_worker_under_old_membership_using_existing_ind
         ),
         "a live source must first be fenced"
     );
+}
+
+#[test]
+fn aba_reassociation_restores_marked_worker_only_after_quiescence_and_both_cas() {
+    let h = Harness::new();
+    let (s, mut restored) = fixture(&h, Some(json!({"saved":"checkpoint"})));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut task = tx.work().work(&id("task-a"))?.unwrap();
+        task.parent_feature_id = Some(id("feature"));
+        task.revision += 1;
+        tx.work().update_work(&task, 2)
+    })
+    .unwrap();
+    restored.root_id = RootId(id("feature"));
+    restored.parent_id = Some(AssignmentId(id("coord-a")));
+    let boot = s.info().boot_id.unwrap();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.runs().insert_turn(&StoredTurn {
+            session_id: id("session-worker"),
+            turn_id: id("aba-turn"),
+            assignment_id: AssignmentId(id("worker")),
+            execution_id: id("execution-feature"),
+            owner_epoch: 0,
+            boot_id: boot,
+            started_at_ms: T0,
+        })
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&restored.id))
+        .unwrap()
+    );
+    assert!(matches!(
+        reparent(&s, restored.clone(), 1, 1),
+        Err(StorageError::Busy)
+    ));
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.runs()
+            .delete_turn(&id("session-worker"), &id("aba-turn"))
+    })
+    .unwrap();
+    assert!(matches!(
+        reparent(&s, restored.clone(), 2, 1),
+        Err(StorageError::RevisionConflict(_))
+    ));
+    assert!(matches!(
+        reparent(&s, restored.clone(), 1, 2),
+        Err(StorageError::RevisionConflict(_))
+    ));
+    reparent(&s, restored.clone(), 1, 1).unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let assignment = r.runs().assignment(&restored.id)?.unwrap();
+        assert_eq!(assignment, restored);
+        assert_eq!(assignment.generation, 3);
+        assert_eq!(assignment.checkpoint, Some(json!({"saved":"checkpoint"})));
+        let session = r.sessions().session(&assignment.session_id)?.unwrap();
+        assert_eq!(
+            (session.root_id, session.context_epoch, session.revision),
+            (Some(RootId(id("feature"))), 1, 2)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        reparent(&s, restored, 1, 1),
+        Err(StorageError::RevisionConflict(_))
+    ));
+}
+
+#[test]
+fn operation_handoff_read_fact_uses_canonical_uncertainty_without_queue_entries() {
+    for state in [
+        "Dispatching",
+        "OutcomeUnknown",
+        "NeedsInput",
+        "RetryPending",
+    ] {
+        let h = Harness::new();
+        let (s, moved) = fixture(&h, None);
+        s.with_writer_connection(move|c|{super::super::super::conn::db(c.execute("INSERT INTO operations(id,root_id,assignment_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES('direct','feature','worker','test',1,'digest','{}',?1,1,?2)",rusqlite::params![state,T0]))?;Ok(())}).unwrap();
+        let quiescent = read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.runs().assignment_handoff_quiescent(&moved.id)
+        })
+        .unwrap();
+        if state == "RetryPending" {
+            assert!(quiescent);
+            reparent(&s, moved, 1, 1).unwrap();
+        } else {
+            assert!(!quiescent, "{state}");
+            assert!(
+                matches!(reparent(&s, moved, 1, 1), Err(StorageError::Busy)),
+                "{state}"
+            );
+        }
+    }
+}
+
+#[test]
+fn inherited_requirement_read_fact_keeps_all_ids_and_refuses_invalid_stored_shapes() {
+    let h = Harness::new();
+    let (s, _) = fixture(&h, None);
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert!(
+            r.runs()
+                .work_inherited_requirements(&RootId(id("task-a")))?
+                .is_empty()
+        );
+        Ok(())
+    })
+    .unwrap();
+    for (references, valid) in [
+        (json!(["E1", "E2"]), true),
+        (json!(["E1", "E1"]), false),
+        (json!(["E1", 2]), false),
+        (
+            json!((0..129).map(|n| format!("E{n}")).collect::<Vec<_>>()),
+            false,
+        ),
+    ] {
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let mut w = tx.work().work(&id("task-a"))?.unwrap();
+            let expected = w.revision;
+            w.revision += 1;
+            w.brief["inherits"] = references;
+            tx.work().update_work(&w, expected)
+        })
+        .unwrap();
+        let result = read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.runs().work_inherited_requirements(&RootId(id("task-a")))
+        });
+        if valid {
+            assert_eq!(result.unwrap(), vec![id("E1"), id("E2")]);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn same_root_restoration_never_revives_an_unmarked_ended_assignment() {
+    let h = Harness::new();
+    let (s, mut moved) = fixture(&h, None);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut task = tx.work().work(&id("task-a"))?.unwrap();
+        task.parent_feature_id = Some(id("feature"));
+        task.revision += 1;
+        tx.work().update_work(&task, 2)
+    })
+    .unwrap();
+    moved.root_id = RootId(id("feature"));
+    moved.parent_id = Some(AssignmentId(id("coord-a")));
+    moved.checkpoint = None;
+    s.with_writer_connection(|c| {
+        super::super::super::conn::db(c.execute(
+            "UPDATE assignments SET checkpoint_json=NULL WHERE id='worker'",
+            [],
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        reparent(&s, moved, 1, 1),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(
+            r.runs()
+                .assignment(&AssignmentId(id("worker")))?
+                .unwrap()
+                .state,
+            AssignmentState::Superseded
+        );
+        assert_eq!(
+            r.sessions()
+                .session(&id("session-worker"))?
+                .unwrap()
+                .context_epoch,
+            0
+        );
+        Ok(())
+    })
+    .unwrap();
 }

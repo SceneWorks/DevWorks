@@ -536,6 +536,11 @@ pub trait RunRead {
         &self,
         work: &RootId,
     ) -> Result<Option<StoredAssignment>, StorageError>;
+    /// Shared safe-boundary check, including assignment-owned effects without queue entries.
+    fn assignment_handoff_quiescent(&self, assignment: &AssignmentId)
+    -> Result<bool, StorageError>;
+    /// Current task inheritance; dispatch checks every referenced requirement, not only one unit.
+    fn work_inherited_requirements(&self, work: &RootId) -> Result<Vec<Id>, StorageError>;
     /// The root's assignments in ID order after `after` (only live ones when `live_only`).
     fn assignments(
         &self,

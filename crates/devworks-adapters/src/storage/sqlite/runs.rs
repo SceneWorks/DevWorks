@@ -72,6 +72,40 @@ fn bounded(field: &str, s: &str, max: usize) -> Result<(), StorageError> {
     Ok(())
 }
 
+fn inherited_requirements(conn: &Connection, work: &RootId) -> Result<Vec<Id>, StorageError> {
+    let value: Option<String> = db(conn
+        .query_row(
+            "SELECT brief_json FROM work_items WHERE id=?1",
+            [work.0.as_str()],
+            |row| row.get(0),
+        )
+        .optional())?;
+    let value = value.ok_or_else(|| StorageError::NotFound {
+        kind: "work",
+        id: work.0.as_str().into(),
+    })?;
+    let brief: Value = json_of(&value)?;
+    let Some(inherits) = brief.get("inherits") else {
+        return Ok(Vec::new());
+    };
+    let references: Vec<String> = serde_json::from_value(inherits.clone())
+        .map_err(|_| corrupt("stored work inheritance is an ID array"))?;
+    if references.len() > 128 {
+        return Err(corrupt("stored work inheritance exceeds 128 references"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    references
+        .into_iter()
+        .map(|value| {
+            let value = id_of(value)?;
+            if !seen.insert(value.clone()) {
+                return Err(corrupt("stored work inheritance repeats an ID"));
+            }
+            Ok(value)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------------------------
 // Root controls
 
@@ -704,6 +738,12 @@ macro_rules! run_reads {
                     &format!("{cond} AND state='Active' AND id>?2 ORDER BY id LIMIT ?3"),
                     params![subject, after, n],
                 )
+            }
+            fn assignment_handoff_quiescent(&self,assignment:&AssignmentId)->Result<bool,StorageError>{
+                super::handoff::quiescent(self.conn,assignment)
+            }
+            fn work_inherited_requirements(&self,work:&RootId)->Result<Vec<Id>,StorageError>{
+                inherited_requirements(self.conn,work)
             }
             fn live_assignment_for_work(&self,work:&RootId)->Result<Option<StoredAssignment>,StorageError>{
                 Ok(assignments(self.conn,&format!("work_id=?1 AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())

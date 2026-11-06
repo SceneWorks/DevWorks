@@ -2241,6 +2241,12 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn assignment_handoff_quiescent(&self, _: &AssignmentId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn work_inherited_requirements(&self, _: &RootId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
     fn live_assignment_for_work(
         &self,
         _: &RootId,
