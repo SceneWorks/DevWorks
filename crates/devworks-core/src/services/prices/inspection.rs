@@ -242,6 +242,18 @@ fn facts(s: &dyn ReadSnapshot, m: &StoredRouteModel) -> Result<ModelFacts, Stora
 fn snapshot_value(s: &StoredPriceSnapshot) -> Value {
     json!({"id":s.id,"providerId":s.provider,"revision":s.revision.to_string(),"sourceUrl":s.source_url,"sourceDigest":s.source_digest,"parserVersion":s.parser_version,"fetchedAtMs":s.fetched_at_ms.to_string(),"verifiedAtMs":s.verified_at_ms.to_string(),"effectiveDate":s.effective_date})
 }
+fn provider_value(
+    service: &PriceService,
+    s: &dyn ReadSnapshot,
+    provider: &str,
+) -> Result<Value, StorageError> {
+    let status = s.usage().price_status(provider)?;
+    let now = service.clock.now_ms().get();
+    Ok(
+        json!({"providerId":provider,"revision":status.as_ref().map_or(1,|v|v.revision).to_string(),"snapshotId":status.as_ref().and_then(|v|v.current_snapshot_id.clone()),"stale":refresh::official(provider).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=now)),"lastCheckedAtMs":status.as_ref().and_then(|v|v.last_attempt_ms).map(|v|v.to_string()),"nextCheckAtMs":status.as_ref().and_then(|v|v.next_refresh_ms).map(|v|v.to_string()),"refreshOperationId":status.as_ref().and_then(|v|v.refresh_operation_id.clone()),"error":status.as_ref().and_then(|v|v.last_error.clone()).or_else(||(!service.source_available && refresh::official(provider).is_some()).then(||"official price source adapter unavailable".into()))}),
+    )
+}
+
 struct Slice {
     skip: usize,
     limit: usize,
@@ -252,6 +264,7 @@ struct Slice {
     snapshots: Vec<Value>,
     items: Vec<Value>,
     gaps: Vec<Id>,
+    gaps_truncated: bool,
 }
 impl Slice {
     fn push(&mut self, kind: u8, value: Value) -> bool {
@@ -329,6 +342,7 @@ pub(crate) fn query(
         snapshots: vec![],
         items: vec![],
         gaps: vec![],
+        gaps_truncated: false,
     };
     let mut relevant = BTreeSet::new();
     for id in &snapshot_filter {
@@ -351,8 +365,14 @@ pub(crate) fn query(
         if !provider_filter.is_empty() && !provider_filter.iter().any(|id| id == &f.source) {
             return Ok(true);
         }
-        relevant.insert(f.source.clone());
-        upstreams.insert((f.source.clone(), upstream(&m).to_owned()));
+        if snapshot_filter.is_empty()
+            && (!model_filter.is_empty() || refresh::official(&f.source).is_some())
+        {
+            relevant.insert(f.source.clone());
+        }
+        if !model_filter.is_empty() {
+            upstreams.insert((f.source.clone(), upstream(&m).to_owned()));
+        }
         if !snapshot_filter.is_empty()
             && f.snapshot
                 .as_ref()
@@ -361,7 +381,7 @@ pub(crate) fn query(
             return Ok(true);
         }
         if schema < 3 {
-            let price = if f.tariffs.is_empty() {
+            let price = if f.kind == "Free" || f.tariffs.is_empty() {
                 None
             } else {
                 match legacy_price(
@@ -392,7 +412,7 @@ pub(crate) fn query(
             };
             let status = s.usage().price_status(&f.source)?;
             let row = wire::<ModelPriceStatus>(
-                json!({"modelId":m.id,"priceKind":f.kind,"price":price,"stale":status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=service.clock.now_ms().get())),"nextCheckAtMs":status.and_then(|v|v.next_refresh_ms).map(|v|v.to_string())}),
+                json!({"modelId":m.id,"priceKind":f.kind,"price":price,"stale":f.override_.is_none()&&refresh::official(&f.source).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=service.clock.now_ms().get())),"nextCheckAtMs":status.and_then(|v|v.next_refresh_ms).map(|v|v.to_string())}),
             )?;
             if legacy >= page.skip && legacy < page.skip + page.limit + 1 {
                 page.models
@@ -401,9 +421,13 @@ pub(crate) fn query(
             legacy += 1;
             return Ok(legacy <= page.skip + page.limit);
         }
-        let view = json!({"modelId":m.id,"revision":m.revision.to_string(),"priceKind":f.kind,"snapshotId":f.snapshot.as_ref().map(|s|s.id.clone()),"overrideRevision":s.usage().price_override_revision(&m.id)?.to_string(),"untrackedReason":f.reason});
-        if f.kind == "Untracked" && page.gaps.len() < 128 {
-            page.gaps.push(m.id.clone());
+        let view = json!({"modelId":m.id,"revision":s.usage().price_override_revision(&m.id)?.to_string(),"priceKind":f.kind,"snapshotId":f.snapshot.as_ref().map(|s|s.id.clone()),"overrideRevision":s.usage().price_override_revision(&m.id)?.to_string(),"untrackedReason":f.reason});
+        if f.kind == "Untracked" {
+            if page.gaps.len() < 128 {
+                page.gaps.push(m.id.clone());
+            } else {
+                page.gaps_truncated = true;
+            }
         }
         let keep = page.push(0, view);
         if !keep {
@@ -444,17 +468,42 @@ pub(crate) fn query(
     }
     if !page.more {
         let configured = refresh::configured(s.router())?;
-        if model_filter.is_empty() {
+        if model_filter.is_empty() && snapshot_filter.is_empty() {
             relevant.extend(configured.into_keys());
         }
         for provider in &relevant {
             if !provider_filter.is_empty() && !provider_filter.iter().any(|id| id == provider) {
                 continue;
             }
-            let status = s.usage().price_status(provider)?;
-            let now = service.clock.now_ms().get();
-            let row = json!({"providerId":provider,"revision":status.as_ref().map_or(1,|v|v.revision).to_string(),"snapshotId":status.as_ref().and_then(|v|v.current_snapshot_id.clone()),"stale":refresh::official(provider).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=now)),"lastCheckedAtMs":status.as_ref().and_then(|v|v.last_attempt_ms).map(|v|v.to_string()),"nextCheckAtMs":status.as_ref().and_then(|v|v.next_refresh_ms).map(|v|v.to_string()),"refreshOperationId":status.as_ref().and_then(|v|v.refresh_operation_id.clone()),"error":status.as_ref().and_then(|v|v.last_error.clone()).or_else(||(!service.source_available && refresh::official(provider).is_some()).then(||"official price source adapter unavailable".into()))});
+            let row = provider_value(service, s, provider)?;
             if !page.push(1, row) {
+                break;
+            }
+        }
+    }
+    if !page.more && model_filter.is_empty() && snapshot_filter.is_empty() {
+        // Custom/local publishers stream from the configured connection keyset. Keeping them
+        // out of `relevant` bounds query memory independently of the number of models/sources.
+        let mut after = None;
+        loop {
+            let rows = s.router().connections(after.as_deref(), 64)?;
+            let n = rows.len();
+            for connection in rows {
+                after = Some(connection.id.as_str().to_owned());
+                if !connection.local_free
+                    && refresh::profile_source(&connection.profile, "").is_some()
+                {
+                    continue;
+                }
+                let provider = connection.id.as_str();
+                if !provider_filter.is_empty() && !provider_filter.contains(provider) {
+                    continue;
+                }
+                if !page.push(1, provider_value(service, s, provider)?) {
+                    break;
+                }
+            }
+            if page.more || n < 64 {
                 break;
             }
         }
@@ -514,7 +563,7 @@ pub(crate) fn query(
             .push(Id::new("additional-price-pages").expect("static"));
     }
     let value = wire(
-        json!({"catalogRevision":revision.to_string(),"items":page.items,"snapshots":page.snapshots,"providers":page.providers,"models":page.models,"nextCursor":next,"hasMore":page.more,"coverage":{"state":if partial{"Partial"}else{"Complete"},"gaps":page.gaps,"moreGaps":page.more}}),
+        json!({"catalogRevision":revision.to_string(),"items":page.items,"snapshots":page.snapshots,"providers":page.providers,"models":page.models,"nextCursor":next,"hasMore":page.more,"coverage":{"state":if partial{"Partial"}else{"Complete"},"gaps":page.gaps,"moreGaps":page.more||page.gaps_truncated}}),
     )?;
     Ok(PriceCatalogResult::Current(value))
 }
