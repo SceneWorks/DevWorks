@@ -19,13 +19,28 @@ impl Entropy for EntropyFixture {
         b.fill(1);
     }
 }
+#[derive(Default)]
 struct Wire {
     calls: AtomicUsize,
+    next_block: Mutex<Option<Arc<BlockedRead>>>,
+}
+#[derive(Default)]
+struct BlockedRead {
+    entered: AtomicBool,
+    released: AtomicBool,
+    closed: AtomicBool,
+}
+struct ReleaseBlocked(Arc<BlockedRead>);
+impl Drop for ReleaseBlocked {
+    fn drop(&mut self) {
+        self.0.released.store(true, Ordering::SeqCst);
+    }
 }
 struct Body {
     head: ResponseHead,
     bytes: Cursor<Vec<u8>>,
     closed: Arc<AtomicBool>,
+    blocked: Option<Arc<BlockedRead>>,
 }
 struct Closer(Arc<AtomicBool>);
 impl StreamCloser for Closer {
@@ -42,6 +57,12 @@ impl HttpStream for Body {
         Arc::new(Closer(self.closed.clone()))
     }
     fn read(&mut self, b: &mut [u8], c: &Cancellation) -> Result<usize, TransportError> {
+        if let Some(blocked) = &self.blocked {
+            blocked.entered.store(true, Ordering::SeqCst);
+            while !blocked.released.load(Ordering::SeqCst) && !c.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
         if c.is_cancelled() {
             return Err(TransportError {
                 phase: SendPhase::AfterSend,
@@ -55,6 +76,9 @@ impl HttpStream for Body {
     }
     fn close(&mut self) -> Result<(), TransportError> {
         self.closed.store(true, Ordering::SeqCst);
+        if let Some(blocked) = &self.blocked {
+            blocked.closed.store(true, Ordering::SeqCst);
+        }
         Ok(())
     }
 }
@@ -67,7 +91,7 @@ impl StreamingHttp for Wire {
     ) -> Result<Box<dyn HttpStream>, TransportError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let body: Value = serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
-        Ok(Box::new(Body{head:ResponseHead{status:200,headers:vec![("content-type".into(),"application/json".into())]},bytes:Cursor::new(serde_json::to_vec(&json!({"model":body["model"],"data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":7,"total_tokens":7}})).unwrap()),closed:Arc::new(AtomicBool::new(false))}))
+        Ok(Box::new(Body{head:ResponseHead{status:200,headers:vec![("content-type".into(),"application/json".into())]},bytes:Cursor::new(serde_json::to_vec(&json!({"model":body["model"],"data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":7,"total_tokens":7}})).unwrap()),closed:Arc::new(AtomicBool::new(false)),blocked:self.next_block.lock().unwrap().take()}))
     }
 }
 fn boot_paid(rt: &tokio::runtime::Runtime, h: &Harness, wire: Arc<Wire>) -> HelpApp {
@@ -290,9 +314,7 @@ fn paid_native_index_waits_for_actual_accepted_job_link_and_accounts_seven_token
     drop(h.open());
     seed(&h);
     let rt = runtime();
-    let wire = Arc::new(Wire {
-        calls: AtomicUsize::new(0),
-    });
+    let wire = Arc::new(Wire::default());
     let app = boot_paid(&rt, &h, wire.clone());
     let owner = imported_body(&app, &rt);
     configure(&app, &rt);
@@ -436,3 +458,6 @@ fn paid_native_index_waits_for_actual_accepted_job_link_and_accounts_seven_token
     );
     rt.block_on(reopened.runtime.shutdown());
 }
+
+#[path = "conventions_paid_cancel.rs"]
+mod cancellation;

@@ -113,6 +113,16 @@ impl Effects {
                     JobLink::Pending => Ok(IndexOutcome::Unknown(
                         "Awaiting the actual native job's accepted child link".into(),
                     )),
+                    // Loss of current dispatch eligibility cannot establish the outcome
+                    // of an already-sent child. Keep the existing operation and native
+                    // custody unknown; observation must not enter the publisher/send path.
+                    JobLink::Refused
+                        if operation.state == devworks_core::protocol::OperationState::OutcomeUnknown =>
+                    {
+                        Ok(IndexOutcome::Unknown(
+                            "The native job is no longer eligible; original effect custody remains unknown".into(),
+                        ))
+                    }
                     JobLink::Refused => Err(StorageError::ScopeDenied),
                     JobLink::Unrelated | JobLink::Ready => {
                         service.run_index(&operation, &worker_token, None)
