@@ -106,6 +106,21 @@ impl IndexService {
         &self,
         input: InputPreparation<'_>,
     ) -> Result<PreparedInputs, StorageError> {
+        self.embedding_inputs(input, false)
+    }
+    /// Observation is read-only: an absent original capture expires the cursor without
+    /// staging files, creating a preparation operation or changing any cache fact.
+    pub fn existing_embedding_inputs(
+        &self,
+        input: InputPreparation<'_>,
+    ) -> Result<PreparedInputs, StorageError> {
+        self.embedding_inputs(input, true)
+    }
+    fn embedding_inputs(
+        &self,
+        input: InputPreparation<'_>,
+        existing_only: bool,
+    ) -> Result<PreparedInputs, StorageError> {
         let _local_preparation = self.closed.enter()?;
         let InputPreparation {
             context,
@@ -198,6 +213,7 @@ impl IndexService {
             if let Some(row)=tx.conventions().convention_embedding_inputs(&request)? {
                 return captured(tx,&ctx,&row,&op_id,&args).map(Some);
             }
+            if existing_only { return Err(StorageError::CursorExpired); }
             let op = match tx.operations().operation(&op_id)? {
                 Some(op) => { if op.capability != CAPABILITY || op.args_digest != args { return Err(StorageError::ScopeDenied); } op },
                 None => tx.operations().record_intent(NewOperation {id:op_id.clone(),root_id:ctx.root_id().cloned(),assignment_id:ctx.assignment_id().cloned(),capability:CAPABILITY.into(),schema_version:1,args_digest:args.clone(),
