@@ -1,4 +1,6 @@
 //! Native HTTP -> trusted response head -> source -> owned sink -> router feedback.
+//! Build the SQLite fixture before starting the server's bounded request wait: unrelated
+//! parallel store initialization is not a provider transport timeout.
 use super::*;
 use devworks_adapters::provider_stream::NativeStreamingHttp;
 use std::{
@@ -139,8 +141,9 @@ fn real_http_subscription_windows_create_exact_router_cooldown_without_fallback_
             ("CodexSubscriptionResponses",vec![("x-codex-primary-used-percent","100"),("x-codex-primary-reset-after-seconds","37")],T0+37_000),
             ("ClaudeSubscriptionMessages",vec![("anthropic-ratelimit-unified-5h-status","rejected"),("anthropic-ratelimit-unified-5h-reset","1700000041")],T0+41_000),
         ]{
+            let mut f=Fx::new(profile,Script::sse(""),false);
             let server=LocalHttp::new(429,&headers,r#"{"error":{"code":"rate_limit_error","message":"subscription window exhausted"}}"#);
-            let mut f=Fx::new(profile,Script::sse(""),false);native(&mut f,&server.endpoint);
+            native(&mut f,&server.endpoint);
             let result=f.produce(f.generation(vec![])).await.unwrap();assert_eq!(result.result.outcome,Some(AttemptEnd::Failed));
             assert_eq!(result.result.retry_at_ms,Some(until),"{profile}: only actual HTTP subscription headers can provide this reset");
             let cooldowns=read(f.store.as_ref(),|s|s.router().cooldowns());assert_eq!(cooldowns.len(),1);assert_eq!(cooldowns[0].model_id,f.model);assert_eq!(cooldowns[0].until_ms,until);
@@ -273,8 +276,9 @@ fn model_specific_403_preserves_current_credential_and_another_model_really_disp
             for code in ["usage_not_included","unsupported_model"] {
                 let headers=if profile=="CodexSubscriptionResponses"{vec![("x-codex-primary-used-percent","100"),("x-codex-primary-reset-after-seconds","37")]}else{vec![("anthropic-ratelimit-unified-5h-status","rejected"),("anthropic-ratelimit-unified-5h-reset","1700000041")]};
                 let body=json!({"error":{"code":code,"message":"model entitlement missing despite rate limit wording"}}).to_string();
+                let mut f=Fx::new(profile,Script::sse(""),false);
                 let server=LocalHttp::sequence(vec![response(403,"application/json",&headers,&body),response(200,"text/event-stream",&[],&success(profile))]);
-                let mut f=Fx::new(profile,Script::sse(""),false);native(&mut f,&server.endpoint);other_model(&f);
+                native(&mut f,&server.endpoint);other_model(&f);
                 let before=read(f.store.as_ref(),|s|s.router().connection(&id("connection"))).unwrap();
                 let first=f.produce(f.generation(vec![])).await.unwrap();assert_eq!(first.result.outcome,Some(AttemptEnd::Failed));assert!(first.result.faults.contains(&format!("ModelUnavailable:{code}")),"{:?}",first.result.faults);
                 let after=read(f.store.as_ref(),|s|s.router().connection(&id("connection"))).unwrap();
@@ -293,12 +297,12 @@ fn model_specific_403_preserves_current_credential_and_another_model_really_disp
 fn genuine_http_401_and_403_still_reject_the_current_api_credential_without_replaying() {
     runtime().block_on(async {
         for status in [401, 403] {
+            let mut f = Fx::new("OpenAiResponses", Script::aggregate(""), false);
             let server = LocalHttp::new(
                 status,
                 &[],
                 r#"{"error":{"type":"authentication_error","message":"invalid credential"}}"#,
             );
-            let mut f = Fx::new("OpenAiResponses", Script::aggregate(""), false);
             native(&mut f, &server.endpoint);
             other_model(&f);
             let result = f.produce(f.generation(vec![])).await.unwrap();
@@ -359,11 +363,6 @@ impl devworks_core::ports::http::HttpTransport for RefreshOwner {
 fn actual_http_oauth_401_refreshes_once_but_genuine_403_requires_reauthentication() {
     runtime().block_on(async {
         for status in [401, 403] {
-            let server = LocalHttp::new(
-                status,
-                &[],
-                r#"{"error":{"type":"authentication_error","message":"credential rejected"}}"#,
-            );
             let refresh = Arc::new(RefreshOwner(AtomicUsize::new(0)));
             let mut f = Fx::with_access(
                 "ClaudeSubscriptionMessages",
@@ -371,6 +370,11 @@ fn actual_http_oauth_401_refreshes_once_but_genuine_403_requires_reauthenticatio
                 false,
                 refresh.clone(),
                 Arc::new(SessionSecrets::new()),
+            );
+            let server = LocalHttp::new(
+                status,
+                &[],
+                r#"{"error":{"type":"authentication_error","message":"credential rejected"}}"#,
             );
             native(&mut f, &server.endpoint);
             let result = f.produce(f.generation(vec![])).await.unwrap();
