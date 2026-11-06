@@ -1489,3 +1489,74 @@ fn a_drop_decision_upload_pending_at_close_finishes_after_relaunch() {
     assert!(h.state().work.plan_saving.is_empty());
     assert!(h.state().work.plan.is_none());
 }
+
+#[test]
+fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() {
+    let root = Root::new("work-native-next-feature-task");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let spy = LoseAcks::over(backend.clone(), "next_work.claim_feature_task", 0);
+    let mut h = harness(
+        shell_with(Ok(spy.clone()), &root, Script::default(), None),
+        1800.0,
+        1500.0,
+    );
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    let card = command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId":feature.project_id,"parentId":feature.id,
+        "title":"Selected feature task","description":"Implement the approved pay-by-card requirement.","repositoryIds":[],
+        "statusId":default_status_id(&feature.project_id,"ready"),"priority":10}),
+    );
+    let mut requirements = serde_json::to_value(&feature.requirements).unwrap();
+    requirements[0]["coveredByTaskIds"] = json!([card.id]);
+    let feature = command(
+        &*backend,
+        "features.edit_plan",
+        json!({"featureId":feature.id,"expectedRevision":feature.revision,
+        "plan":{"content":feature.plan,"goals":feature.goals,"repositoryIds":feature.repository_ids,"requirements":requirements,
+        "acceptance":feature.acceptance,"acceptanceTests":feature.acceptance_tests.map(|a|a.0).unwrap_or_default()}}),
+    );
+    let feature = approve_plan(&engine, &*backend, &feature);
+    let approval = feature.approval.as_ref().unwrap();
+    let feature = command(
+        &*backend,
+        "features.edit",
+        json!({"workId":feature.id,"expectedRevision":feature.revision,
+        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
+        "summary":"Ready to implement the approved feature","findings":[]}}}),
+    );
+    h.state_mut()
+        .work
+        .detail
+        .insert(feature.id.as_str().into(), feature.clone());
+    click(&mut h, Role::Button, "Refresh");
+    h.get_by_role_and_label(Role::Button, "Next task")
+        .click_accesskit();
+    settle(&mut h);
+    let claim = h
+        .state()
+        .work
+        .allocation_claims
+        .values()
+        .find(|claim| claim.work_id == card.id)
+        .unwrap();
+    assert_eq!(claim.root_id.as_ref().unwrap().0, feature.id);
+    let frames = spy.frames.lock().unwrap();
+    let frame: serde_json::Value = serde_json::from_slice(&frames[0]).unwrap();
+    assert_eq!(frame["body"]["rootId"], json!(feature.id));
+    assert_eq!(frame["schemaRevision"], 3);
+    let card = wops::work_record(backend.query(
+        "tasks.get",
+        &wops::work_get(&*backend, "tasks.get", card.id.as_str()),
+    ))
+    .unwrap();
+    assert!(
+        card.attempts.0.is_empty(),
+        "selection does not dispatch the task"
+    );
+    assert!(has_text(&h, "Open feature controls"));
+}
