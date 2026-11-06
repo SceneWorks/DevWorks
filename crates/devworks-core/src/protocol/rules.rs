@@ -442,6 +442,12 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "Help passage limit is 1..65536 characters",
         )?;
     }
+    if op == "help.topic_for_screen" {
+        require(
+            present(v, "capabilityRevision") != present(v, "current"),
+            "Help screen query needs exactly one revision selector",
+        )?;
+    }
     if op == "help.topic_for_screen" && present(v, "current") {
         require(v["current"] == true, "Help current selector must be true")?;
     }

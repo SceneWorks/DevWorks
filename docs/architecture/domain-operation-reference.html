@@ -2046,23 +2046,23 @@
 </thead>
 <tbody><tr>
 <td><code>help.search</code></td>
-<td><strong>Query</strong><br><code>query</code>: <code>Text</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>query</code>: <code>Text</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.read</code></td>
-<td><strong>Query</strong><br><code>topicId</code>: <code>Id</code><br><code>version</code>: <code>Label</code></td>
-<td><code>HelpTopic</code></td>
+<td><strong>Query</strong><br><code>topicId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>cursor</code>: <code>?Cursor</code><br><code>maxChars</code>: <code>?PositiveCounter</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpReadResult</code></td>
 </tr>
 <tr>
 <td><code>help.topic_for_screen</code></td>
-<td><strong>Query</strong><br><code>screenId</code>: <code>Id</code><br><code>capabilityRevision</code>: <code>Revision</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>screenId</code>: <code>Id</code><br><code>capabilityRevision</code>: <code>?Revision</code><br><code>current</code>: <code>?bool</code><br><code>page</code>: <code>?PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.package_guides</code></td>
-<td><strong>Query</strong><br><code>packageId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>page</code>: <code>PageRequest</code></td>
-<td><code>Page&lt;HelpTopic&gt;</code></td>
+<td><strong>Query</strong><br><code>packageId</code>: <code>Id</code><br><code>version</code>: <code>Label</code><br><code>page</code>: <code>PageRequest</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><code>HelpTopicPageResult</code></td>
 </tr>
 <tr>
 <td><code>help.generate_capability_docs</code></td>
@@ -11711,6 +11711,247 @@
 <td><code>Counter</code></td>
 </tr>
 </tbody></table>
+<h3 id="helpavailability">HelpAvailability</h3>
+<p><code>Available</code>, <code>Missing</code>, <code>Stale</code>, <code>Unavailable</code>.</p>
+<h3 id="helpsnapshot">HelpSnapshot</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>appVersion</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>helpRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>registryRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>canGenerate</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>cannotGenerateReason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>generationOperation</code></td>
+<td><code>?OperationRef</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpprovenance">HelpProvenance</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Bundled</code></td>
+<td><code>appVersion</code>: <code>Label</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+<tr>
+<td><code>Package</code></td>
+<td><code>packageId</code>: <code>Id</code><br><code>packageVersion</code>: <code>Label</code><br><code>manifestDigest</code>: <code>Digest</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+<tr>
+<td><code>Generated</code></td>
+<td><code>appVersion</code>: <code>Label</code><br><code>registryRevision</code>: <code>Revision</code><br><code>contentDigest</code>: <code>Digest</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpcapabilitymetadata">HelpCapabilityMetadata</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>operation</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>owner</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>authority</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>effect</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>schemaRevision</code></td>
+<td><code>Revision</code></td>
+</tr>
+<tr>
+<td><code>inputType</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>resultType</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>inputSchemaDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>resultSchemaDigest</code></td>
+<td><code>Digest</code></td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>unavailableReason</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="helptopicsummary">HelpTopicSummary</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td><code>?ArtifactRef</code></td>
+</tr>
+<tr>
+<td><code>relatedCapabilityIds</code></td>
+<td><code>Items&lt;Id&gt;</code></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>HelpAvailability</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>provenance</code></td>
+<td><code>?HelpProvenance</code></td>
+</tr>
+<tr>
+<td><code>capabilities</code></td>
+<td><code>Rows&lt;HelpCapabilityMetadata&gt;</code></td>
+</tr>
+<tr>
+<td><code>relatedCapabilities</code></td>
+<td><code>Rows&lt;Label&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="helppassage">HelpPassage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>text</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpreadview">HelpReadView</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Available</code></td>
+<td><code>topic</code>: <code>HelpTopicSummary</code><br><code>passage</code>: <code>HelpPassage</code><br><code>snapshot</code>: <code>HelpSnapshot</code></td>
+</tr>
+<tr>
+<td><code>Unavailable</code></td>
+<td><code>topicId</code>: <code>Id</code><br><code>requestedVersion</code>: <code>Label</code><br><code>availability</code>: <code>HelpAvailability</code><br><code>reason</code>: <code>Content</code><br><code>currentVersion</code>: <code>?Label</code><br><code>snapshot</code>: <code>HelpSnapshot</code></td>
+</tr>
+</tbody></table>
+<h3 id="helptopicpage">HelpTopicPage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>items</code></td>
+<td><code>Rows&lt;HelpTopicSummary&gt;</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>availability</code></td>
+<td><code>HelpAvailability</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Content</code></td>
+</tr>
+<tr>
+<td><code>snapshot</code></td>
+<td><code>HelpSnapshot</code></td>
+</tr>
+</tbody></table>
+<h3 id="helpreadresult">HelpReadResult</h3>
+<p>Before revision 3: exact legacy <code>HelpTopic</code>. Revision 3 and later: <code>HelpReadView</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
+<h3 id="helptopicpageresult">HelpTopicPageResult</h3>
+<p>Before revision 3: exact legacy <code>Page&lt;HelpTopic&gt;</code>. Revision 3 and later: <code>HelpTopicPage</code>. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.</p>
 <h2 id="machine-sources">Machine sources</h2>
 <ul>
 <li><a href="contracts/family-coverage.json">Input/result/mode/authority/effect/recovery bindings</a></li>

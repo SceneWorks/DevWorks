@@ -610,10 +610,10 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `help.search` | **Query**<br>`query`: `Text`<br>`page`: `PageRequest` | `Page<HelpTopic>` |
-| `help.read` | **Query**<br>`topicId`: `Id`<br>`version`: `Label` | `HelpTopic` |
-| `help.topic_for_screen` | **Query**<br>`screenId`: `Id`<br>`capabilityRevision`: `Revision` | `Page<HelpTopic>` |
-| `help.package_guides` | **Query**<br>`packageId`: `Id`<br>`version`: `Label`<br>`page`: `PageRequest` | `Page<HelpTopic>` |
+| `help.search` | **Query**<br>`query`: `Text`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
+| `help.read` | **Query**<br>`topicId`: `Id`<br>`version`: `Label`<br>`cursor`: `?Cursor`<br>`maxChars`: `?PositiveCounter`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpReadResult` |
+| `help.topic_for_screen` | **Query**<br>`screenId`: `Id`<br>`capabilityRevision`: `?Revision`<br>`current`: `?bool`<br>`page`: `?PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
+| `help.package_guides` | **Query**<br>`packageId`: `Id`<br>`version`: `Label`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `HelpTopicPageResult` |
 | `help.generate_capability_docs` | **Command**<br>`registryRevision`: `Revision`<br>`expectedHelpRevision`: `Revision` | `OperationRef` |
 
 ### Workspace
@@ -4099,6 +4099,96 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `unit` | `Label` |
 | `cacheWriteTtlMs` | `?Counter` |
 | `quantity` | `Counter` |
+
+### HelpAvailability
+
+`Available`, `Missing`, `Stale`, `Unavailable`.
+
+### HelpSnapshot
+
+| Field | Type |
+| --- | --- |
+| `appVersion` | `Label` |
+| `helpRevision` | `Revision` |
+| `registryRevision` | `Revision` |
+| `canGenerate` | `bool` |
+| `cannotGenerateReason` | `?Content` |
+| `generationOperation` | `?OperationRef` |
+
+### HelpProvenance
+
+| Kind | Fields |
+| --- | --- |
+| `Bundled` | `appVersion`: `Label`<br>`contentDigest`: `Digest` |
+| `Package` | `packageId`: `Id`<br>`packageVersion`: `Label`<br>`manifestDigest`: `Digest`<br>`contentDigest`: `Digest` |
+| `Generated` | `appVersion`: `Label`<br>`registryRevision`: `Revision`<br>`contentDigest`: `Digest` |
+
+### HelpCapabilityMetadata
+
+| Field | Type |
+| --- | --- |
+| `operation` | `Label` |
+| `mode` | `Label` |
+| `owner` | `Label` |
+| `authority` | `Label` |
+| `effect` | `Label` |
+| `schemaRevision` | `Revision` |
+| `inputType` | `Label` |
+| `resultType` | `Label` |
+| `inputSchemaDigest` | `Digest` |
+| `resultSchemaDigest` | `Digest` |
+| `available` | `bool` |
+| `unavailableReason` | `?Content` |
+
+### HelpTopicSummary
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `version` | `Label` |
+| `title` | `Label` |
+| `content` | `?ArtifactRef` |
+| `relatedCapabilityIds` | `Items<Id>` |
+| `availability` | `HelpAvailability` |
+| `reason` | `?Content` |
+| `provenance` | `?HelpProvenance` |
+| `capabilities` | `Rows<HelpCapabilityMetadata>` |
+| `relatedCapabilities` | `Rows<Label>` |
+
+### HelpPassage
+
+| Field | Type |
+| --- | --- |
+| `text` | `Content` |
+| `offset` | `Counter` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### HelpReadView
+
+| Kind | Fields |
+| --- | --- |
+| `Available` | `topic`: `HelpTopicSummary`<br>`passage`: `HelpPassage`<br>`snapshot`: `HelpSnapshot` |
+| `Unavailable` | `topicId`: `Id`<br>`requestedVersion`: `Label`<br>`availability`: `HelpAvailability`<br>`reason`: `Content`<br>`currentVersion`: `?Label`<br>`snapshot`: `HelpSnapshot` |
+
+### HelpTopicPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<HelpTopicSummary>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `availability` | `HelpAvailability` |
+| `reason` | `?Content` |
+| `snapshot` | `HelpSnapshot` |
+
+### HelpReadResult
+
+Before revision 3: exact legacy `HelpTopic`. Revision 3 and later: `HelpReadView`. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.
+
+### HelpTopicPageResult
+
+Before revision 3: exact legacy `Page<HelpTopic>`. Revision 3 and later: `HelpTopicPage`. Available Help backed by real published artifact references projects to its legacy topic/page; unavailable or inline-only views never fabricate an artifact.
 
 ## Machine sources
 
