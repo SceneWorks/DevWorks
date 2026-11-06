@@ -24,7 +24,7 @@ use crate::protocol::records::{
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Label, Page};
-use crate::protocol::{EventId, Id, ProjectId, RevisionDimension, RootId};
+use crate::protocol::{DomainErrorCode, EventId, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::cursor::CursorBinding;
 use crate::services::runs::{control_of, ensure_control};
 use crate::services::sessions::{Failure, rev};
