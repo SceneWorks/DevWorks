@@ -168,6 +168,86 @@ fn import(h: &mut Ui, files: &Files, path: PathBuf) {
 }
 
 #[test]
+fn native_passage_continuations_keep_slug_path_and_refreshed_id_intents() {
+    let _case = native_runtime_case();
+    let root = Root::new("conventions-cursor-intent");
+    let engine = start(&root);
+    let files = Files::default();
+    let mut h = open(engine.backend(), &root, files.clone());
+    let source = format!("{}END_NATIVE", "λ-native-source\r\n".repeat(3000));
+    import(
+        &mut h,
+        &files,
+        manifest(&root, "cursor-source", "Cursor source", &source, None),
+    );
+    for selector in ["slug", "path", "refresh"] {
+        match selector {
+            "slug" => {
+                click(
+                    &mut h,
+                    Role::DisclosureTriangle,
+                    "Open a convention by slug",
+                );
+                replace(&mut h, "Convention slug lookup", "cursor-source");
+                click(&mut h, Role::Button, "Open convention slug");
+            }
+            "path" => {
+                click(&mut h, Role::DisclosureTriangle, "Open an exact hierarchy");
+                click(&mut h, Role::Button, "Add Hierarchy component");
+                replace(&mut h, "Hierarchy component 1", "cursor-source");
+                click(&mut h, Role::Button, "Open exact convention hierarchy");
+            }
+            _ => {
+                select(&mut h, "Cursor source");
+                click(&mut h, Role::Button, "Refresh conventions");
+            }
+        }
+        let first = h
+            .state()
+            .conventions
+            .state()
+            .unwrap()
+            .reader
+            .view
+            .as_ref()
+            .unwrap();
+        assert!(
+            first.passage.as_ref().unwrap().has_more,
+            "real multi-passage {selector}"
+        );
+        click(&mut h, Role::Button, "Next convention passage");
+        let reader = &h.state().conventions.state().unwrap().reader;
+        assert!(reader.error.is_none(), "{selector}: {:?}", reader.error);
+        let passage = reader.view.as_ref().unwrap().passage.as_ref().unwrap();
+        assert!(
+            passage.offset.get() > 0,
+            "continuation advances for {selector}"
+        );
+        let expected = source
+            .chars()
+            .skip(passage.offset.get() as usize)
+            .take(passage.text.0.chars().count())
+            .collect::<String>();
+        assert_eq!(passage.text.0, expected);
+        click(&mut h, Role::Button, "Previous convention passage");
+        let reader = &h.state().conventions.state().unwrap().reader;
+        assert!(reader.error.is_none());
+        assert_eq!(
+            reader
+                .view
+                .as_ref()
+                .unwrap()
+                .passage
+                .as_ref()
+                .unwrap()
+                .offset
+                .get(),
+            0
+        );
+    }
+}
+
+#[test]
 fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
     let root = Root::new("conventions-real-source");
     let engine = start(&root);

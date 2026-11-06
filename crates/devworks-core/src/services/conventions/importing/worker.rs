@@ -404,19 +404,32 @@ impl ImportService {
                 actor: ctx.principal().clone(),
                 project_id: d.scope.project().cloned(),
                 root_id: ctx.root_id().cloned(),
-                operation_id: Some(d.operation_id),
+                operation_id: Some(d.operation_id.clone()),
                 aggregate_kind: "convention".into(),
                 aggregate_id: row.id.as_str().into(),
                 aggregate_revision: 1,
                 kind: "ConventionImported".into(),
                 payload: json!({"resourceCount":resources}),
             })?;
-            Ok(OperationResult::ConventionsImport {
+            let result = OperationResult::ConventionsImport {
                 value: ConventionRecordResult::Current(model::record(
                     &row,
                     index.status_in(tx, &row)?,
                 )?),
-            })
+            };
+            // Publication and its exact result share one transaction. Later edits, index
+            // progress and scope moves must not change an interrupted import's outcome.
+            let attempt = op
+                .latest_attempt()
+                .ok_or_else(|| invalid("import attempt missing"))?;
+            let saved =
+                serde_json::to_value(&result).map_err(|_| invalid("import publication result"))?;
+            tx.operations().observe(
+                &d.operation_id,
+                attempt.attempt_no,
+                json!({"conventionImportPublished":saved}),
+            )?;
+            Ok(result)
         })
     }
     fn result(
@@ -426,23 +439,38 @@ impl ImportService {
     ) -> Result<OperationResult, StorageError> {
         let id = draft.convention_id.clone();
         let scope = draft.scope.clone();
-        let index = self
-            .index
-            .as_ref()
-            .ok_or_else(|| invalid("index unavailable"))?;
         Preparation::new(self.store.as_ref(), None, None).read(|read| {
             super::super::access::scope(read, ctx, Some(&model::scope(&scope)), false)
                 .map_err(failure)?;
-            let row = read
-                .conventions()
-                .convention(&id, None, &[scope])?
-                .ok_or(StorageError::ScopeDenied)?;
-            Ok(OperationResult::ConventionsImport {
-                value: ConventionRecordResult::Current(model::record(
-                    &row,
-                    index.status(read, &row)?,
-                )?),
-            })
+            let operation = read
+                .operations()
+                .operation(&draft.operation_id)?
+                .ok_or_else(|| invalid("import journal missing"))?;
+            let saved = operation
+                .attempts
+                .iter()
+                .flat_map(|a| &a.observations)
+                .find_map(|value| value.get("conventionImportPublished"))
+                .ok_or(StorageError::CommitUnknown)?;
+            let result: OperationResult = serde_json::from_value(saved.clone())
+                .map_err(|_| invalid("invalid import publication result"))?;
+            let OperationResult::ConventionsImport {
+                value: ConventionRecordResult::Current(record),
+            } = &result
+            else {
+                return Err(invalid("import publication result kind"));
+            };
+            let expected_scope = serde_json::to_value(model::scope(&scope))
+                .map_err(|_| invalid("import publication scope"))?;
+            if record.id != id
+                || record.revision.get() != 1
+                || serde_json::to_value(&record.scope)
+                    .map_err(|_| invalid("import publication scope"))?
+                    != expected_scope
+            {
+                return Err(invalid("import publication result identity"));
+            }
+            Ok(result)
         })
     }
     pub fn recover_pending(&self) -> Result<usize, StorageError> {

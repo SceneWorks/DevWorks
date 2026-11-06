@@ -92,6 +92,73 @@ fn command(f: &Fx, key: &str, body: serde_json::Value) -> DomainDecision {
         other => panic!("expected actual durable decision: {other:?}"),
     }
 }
+
+fn publication_after_head_change(move_scope: bool) {
+    use devworks_core::services::conventions::importing::ImportOutcome;
+    let mut f = Fx::new();
+    let destination = project(&f, "publication-destination");
+    let source = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
+    let op = f.admit(&source, "publication-before-head-change");
+    f.store = Arc::new(LostAckStore {
+        inner: f.store.clone(),
+        target: op.clone(),
+        phase: "Published",
+        armed: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+    let index = Arc::new(IndexService::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.h.ids.clone(),
+        f.h.clock(),
+    ));
+    f.service = Arc::new(
+        ImportService::new(
+            f.store.clone(),
+            f.artifacts.clone(),
+            f.h.ids.clone(),
+            f.h.clock(),
+        )
+        .with_index(index),
+    );
+    let record = f.dispatch(&op);
+    assert_eq!(record.state, OperationState::OutcomeUnknown);
+    let ImportOutcome::Completed(original) = f.service.observe(&record) else {
+        panic!("original published result")
+    };
+    let draft = read(&*f.store, |r| r.conventions().convention_import(&op)).unwrap();
+    let owner = read(&*f.store, |r| {
+        r.conventions()
+            .convention(&draft.convention_id, None, &[KnowledgeScope::Workspace])
+    })
+    .unwrap();
+    let change = if move_scope {
+        move_body(&owner, &destination)
+    } else {
+        json!({"kind":"conventions.edit","scope":{"kind":"Workspace"},"conventionId":owner.id,"expectedRevision":owner.revision.to_string(),"title":"Later title","content":owner.content_ref})
+    };
+    assert!(matches!(
+        command(&f, "head-change-after-publication", change),
+        DomainDecision::Applied { .. }
+    ));
+    let observed = f.service.observe(&record);
+    let ImportOutcome::Completed(recovered) = observed else {
+        panic!("published import still completes after head change: {observed:?}")
+    };
+    assert_eq!(
+        serde_json::to_value(recovered).unwrap(),
+        serde_json::to_value(original).unwrap(),
+        "the exact publication result survives later edits/moves"
+    );
+}
+
+#[test]
+fn actual_import_publication_result_is_immutable_after_edit() {
+    publication_after_head_change(false);
+}
+#[test]
+fn actual_import_publication_result_is_immutable_after_scope_move() {
+    publication_after_head_change(true);
+}
 fn capacity(decision: DomainDecision, destination: &ProjectId) {
     let DomainDecision::Refused { fault } = decision else {
         panic!("destination quota must refuse retention: {decision:?}");

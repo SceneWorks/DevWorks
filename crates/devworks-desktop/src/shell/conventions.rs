@@ -100,6 +100,7 @@ impl Shell {
             state.history.push(previous);
         }
         state.reader.target = Some(target);
+        state.reader.intent = None;
         state.reader.cursors = vec![None];
         state.reader.view = None;
         state.reader.error = None;
@@ -138,11 +139,20 @@ impl Shell {
             if let Some(revision) = target.revision {
                 body["revision"] = serde_json::json!(revision.to_string());
             }
-            if let Some(cursor) = state.reader.cursors.last().cloned().flatten() {
-                body["cursor"] = serde_json::json!(cursor);
-            }
             if let Some(section) = &target.section {
                 body["sectionPath"] = serde_json::json!(section);
+            }
+            if let Some(cursor) = state.reader.cursors.last().cloned().flatten() {
+                let Some(intent) = &state.reader.intent else {
+                    state.reader.loading = false;
+                    state.reader.error =
+                        Some("Refresh the source before continuing its passages.".into());
+                    return;
+                };
+                body = intent.clone();
+                body["cursor"] = serde_json::json!(cursor);
+            } else {
+                state.reader.intent = Some(body.clone());
             }
             (state.reader.generation, body)
         };

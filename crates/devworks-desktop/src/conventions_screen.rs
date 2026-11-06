@@ -51,6 +51,8 @@ pub struct Target {
 #[derive(Default)]
 pub struct Reader {
     pub target: Option<Target>,
+    /// Cursor-free first-page request, independent of the returned canonical identity.
+    pub intent: Option<serde_json::Value>,
     pub view: Option<ConventionReadView>,
     pub cursors: Vec<Option<String>>,
     pub loading: bool,
