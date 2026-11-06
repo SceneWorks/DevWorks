@@ -4355,7 +4355,10 @@
         "untracked_attempts": "Counter",
         "unknown_tail_attempts": "Counter",
         "incomplete_attempts": "Counter",
-        "monetary_incomplete_attempts": "Counter"
+        "monetary_incomplete_attempts": "Counter",
+        "legacy_usage_facts": "Counter",
+        "legacy_untracked_facts": "Counter",
+        "legacy_observation_micro_usd": "Counter"
       }
     },
     "UsageAttemptPage": {
@@ -4460,7 +4463,8 @@
         "untracked_attempts": "Counter",
         "unknown_tail_attempts": "Counter",
         "accounting_ready": "bool",
-        "monetary_incomplete_attempts": "Counter"
+        "monetary_incomplete_attempts": "Counter",
+        "legacy_usage_facts": "Counter"
       }
     },
     "PriceChargeKind": {

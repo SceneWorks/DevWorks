@@ -11576,6 +11576,9 @@ pub struct UsageTotals {
     pub unknown_tail_attempts: Counter,
     pub incomplete_attempts: Counter,
     pub monetary_incomplete_attempts: Counter,
+    pub legacy_usage_facts: Counter,
+    pub legacy_untracked_facts: Counter,
+    pub legacy_observation_micro_usd: Counter,
 }
 impl Check for UsageTotals {
     fn check(&self) -> Result<(), String> {
@@ -11589,6 +11592,9 @@ impl Check for UsageTotals {
         self.unknown_tail_attempts.check()?;
         self.incomplete_attempts.check()?;
         self.monetary_incomplete_attempts.check()?;
+        self.legacy_usage_facts.check()?;
+        self.legacy_untracked_facts.check()?;
+        self.legacy_observation_micro_usd.check()?;
         crate::protocol::rules::record(
             "UsageTotals",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11836,6 +11842,7 @@ pub struct FeatureBudgetView {
     pub unknown_tail_attempts: Counter,
     pub accounting_ready: bool,
     pub monetary_incomplete_attempts: Counter,
+    pub legacy_usage_facts: Counter,
 }
 impl Check for FeatureBudgetView {
     fn check(&self) -> Result<(), String> {
@@ -11849,6 +11856,7 @@ impl Check for FeatureBudgetView {
         self.unknown_tail_attempts.check()?;
         self.accounting_ready.check()?;
         self.monetary_incomplete_attempts.check()?;
+        self.legacy_usage_facts.check()?;
         crate::protocol::rules::record(
             "FeatureBudgetView",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
