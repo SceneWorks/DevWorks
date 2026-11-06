@@ -30,6 +30,15 @@ impl NativeOwnerPreviews {
             jobs,
         }
     }
+    pub fn with_control(self, control: Arc<crate::services::runs::ControlService>) -> Self {
+        if let Some(git) = &self.git {
+            git.set_approval_control(control.clone());
+        }
+        if let Some(packages) = &self.packages {
+            packages.set_approval_control(control);
+        }
+        self
+    }
 }
 fn unsupported() -> Failure {
     Refusal::new(
@@ -106,6 +115,23 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             _ => Err(unsupported()),
         }
     }
+    fn decide_source(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        human: &InvocationContext,
+        request: &DecodedRequest,
+        preview: &OwnerPreview,
+        approve: bool,
+    ) -> Result<(), Failure> {
+        if request.descriptor.family == "addons" {
+            return self
+                .packages
+                .as_ref()
+                .ok_or_else(unsupported)?
+                .decide_approval_source(tx, human, request, preview, approve);
+        }
+        Ok(())
+    }
 }
 
 /// Exact retained artifact identity shared by the owners' read and transaction checks. The
@@ -156,6 +182,52 @@ pub(crate) fn approved_binding(
     ctx: &InvocationContext,
     command: &crate::gateway::AdmittedCommand,
 ) -> Result<Option<serde_json::Value>, Failure> {
+    if let Some(evidence) = ctx.reviewed_operation() {
+        let denied = || {
+            Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "reviewed_operation",
+                Some(evidence.approval_id().clone()),
+            )
+        };
+        let outbox = tx
+            .decisions()
+            .approval_resume(evidence.approval_id())?
+            .ok_or_else(denied)?;
+        if !matches!(outbox.state.as_str(), "Pending" | "Unknown")
+            || outbox.principal != *ctx.principal()
+            || outbox.principal_kind != ctx.principal_kind()
+            || outbox.operation != command.descriptor().name
+            || outbox.schema_revision != i64::from(command.schema_revision().0)
+            || outbox.request_digest != command.fingerprint().as_str()
+            || outbox.request_key != command.identity().request_key().0
+            || !outbox.grant_id.as_ref().is_some_and(|id| {
+                command
+                    .authorization()
+                    .authority_grants()
+                    .iter()
+                    .any(|grant| &grant.grant_id == id)
+            })
+        {
+            return Err(denied().into());
+        }
+    }
+    approved_binding_for(
+        tx,
+        ctx,
+        command.descriptor().name,
+        command.schema_revision().0,
+        command.fingerprint().as_str(),
+    )
+}
+
+pub(crate) fn approved_binding_for(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    operation: &str,
+    schema_revision: u32,
+    request_digest: &str,
+) -> Result<Option<serde_json::Value>, Failure> {
     use crate::context::PrincipalKind;
     use crate::ports::storage::ApprovalSource;
     let Some(evidence) = ctx.reviewed_operation() else {
@@ -168,9 +240,9 @@ pub(crate) fn approved_binding(
             Some(evidence.approval_id().clone()),
         )
     };
-    if evidence.operation() != command.descriptor().name
-        || evidence.schema_revision() != command.schema_revision().0
-        || evidence.request_digest() != command.fingerprint().as_str()
+    if evidence.operation() != operation
+        || evidence.schema_revision() != schema_revision
+        || evidence.request_digest() != request_digest
     {
         return Err(denied().into());
     }
@@ -183,7 +255,7 @@ pub(crate) fn approved_binding(
         .human_decision(ApprovalSource::Generic, evidence.approval_id())?
         .ok_or_else(denied)?;
     let scope_digest = crate::fingerprint::sha256_hex(
-        crate::jcs::canonicalize(evidence.owner_binding())
+        crate::jcs::canonicalize(&serde_json::json!({"owner":evidence.owner_binding(),"authority":proposal.payload.get("authority")}))
             .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?
             .as_bytes(),
     );
@@ -193,6 +265,7 @@ pub(crate) fn approved_binding(
         || proposal.operation_kind != evidence.operation()
         || proposal.content_digest != evidence.request_digest()
         || proposal.payload["binding"] != *evidence.owner_binding()
+        || crate::services::approvals::authority_binding(tx, ctx)? != proposal.payload["authority"]
         || proposal.scope_digest != scope_digest
         || proposal.decided_by.as_ref() != Some(evidence.approver())
         || proposal.restore_epoch != tx.store().restore_epoch
@@ -207,4 +280,148 @@ pub(crate) fn approved_binding(
         return Err(denied().into());
     }
     Ok(Some(evidence.owner_binding().clone()))
+}
+
+/// Full immutable source material is paged through the ordinary artifact owner; previews retain
+/// compact effect bindings rather than truncating source data to a protocol JSON bound.
+pub(crate) fn publish_review_evidence(
+    artifacts: &crate::services::artifacts::ArtifactService,
+    store: &dyn crate::ports::storage::ApplicationStore,
+    ctx: &InvocationContext,
+    env: &Preparation<'_>,
+    kind: &str,
+    title: &str,
+    value: &serde_json::Value,
+) -> Result<crate::protocol::provider::ArtifactRef, Failure> {
+    use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
+    use serde_json::json;
+    let bytes = crate::jcs::canonicalize(value)
+        .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?
+        .into_bytes();
+    let digest = crate::fingerprint::sha256_hex(&bytes);
+    let tags = vec![
+        "owner-review-evidence".to_owned(),
+        kind.to_owned(),
+        digest.clone(),
+    ];
+    let existing = env.read(|snapshot| {
+        let mut after = None;
+        loop {
+            let artifacts = match ctx.project_id() {
+                Some(project) => snapshot
+                    .artifacts()
+                    .list(project, &tags, after.as_ref(), 500)?,
+                None => snapshot.artifacts().list_workspace(
+                    Some(ctx.principal()),
+                    &tags,
+                    after.as_ref(),
+                    500,
+                )?,
+            };
+            for artifact in &artifacts {
+                if let Some(version) = artifact
+                    .current_version_id
+                    .as_ref()
+                    .map(|id| snapshot.artifacts().version(id))
+                    .transpose()?
+                    .flatten()
+                    && version.live()
+                    && version.blob_digest == digest
+                {
+                    let reference = crate::services::artifacts::version_ref(&version);
+                    if artifact_binding(snapshot.artifacts(), &reference).is_ok() {
+                        return Ok(Some(reference));
+                    }
+                }
+            }
+            if artifacts.len() < 500 {
+                return Ok(None);
+            }
+            let last = artifacts.last().expect("full artifact page");
+            after = Some(crate::ports::storage::ListPosition {
+                created_at_ms: last.created_at_ms,
+                id: last.id.clone(),
+            });
+        }
+    })?;
+    if let Some(reference) = existing {
+        return Ok(reference);
+    }
+    let evidence = Evidence {
+        scope: ctx.project_id().cloned().map_or(
+            crate::ports::storage::ArtifactScope::Workspace,
+            crate::ports::storage::ArtifactScope::Project,
+        ),
+        producer: ctx.principal().clone(),
+        principal_kind: format!("{:?}", ctx.principal_kind()),
+        agent_session: ctx.session_id().cloned(),
+        root: ctx.root_id().cloned(),
+        assignment: ctx.assignment_id().cloned(),
+        title: title.into(),
+        media_type: "application/json".into(),
+        tags,
+        source: json!({"kind":kind,"sha256":digest}),
+    };
+    let context = ctx.clone();
+    let cancellation = env.cancellation.cloned();
+    let deadline = env.deadline_ms;
+    artifacts
+        .publish_evidence(store, evidence, &bytes, move |tx, _| {
+            if cancellation.as_ref().is_some_and(|c| c.is_cancelled())
+                || deadline.is_some_and(|d| tx.now_ms() >= d)
+            {
+                return Err(crate::ports::storage::StorageError::Cancelled);
+            }
+            crate::services::artifacts::authorized_scope(tx.authority(), &context)
+                .map_err(|_| crate::ports::storage::StorageError::ScopeDenied)?;
+            Ok(())
+        })
+        .map(|(reference, ())| reference)
+        .map_err(|e| match e {
+            EvidenceFailure::Storage(e) => Failure::Storage(e),
+            EvidenceFailure::Refused(r) => {
+                Refusal::new(r.code, "commit_review_evidence", None).into()
+            }
+        })
+}
+
+/// Actual readmission, not recording a human decision, is fenced by current independent work
+/// holds inside the owner's serialized unit of work. Busy rolls back without a receipt or
+/// grant spend, so the same saved command can be retried after an authorized Continue.
+pub(crate) fn recheck_control(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    control: Option<&crate::services::runs::ControlService>,
+) -> Result<(), Failure> {
+    let Some(id) = ctx.root_id() else {
+        return Ok(());
+    };
+    let root = tx
+        .sessions()
+        .work_root(id)?
+        .ok_or_else(|| Refusal::new(DomainErrorCode::NotFound, "root", Some(id.0.clone())))?;
+    let target = ctx
+        .assignment_id()
+        .map_or(crate::services::runs::Target::Root, |id| {
+            crate::services::runs::Target::Assignment(id.clone())
+        });
+    let control = control.ok_or_else(|| {
+        Refusal::new(
+            DomainErrorCode::UnsupportedCapability,
+            "reviewed_control",
+            Some(id.0.clone()),
+        )
+    })?;
+    if !control
+        .evaluate(
+            tx.runs(),
+            &root,
+            &target,
+            crate::ports::storage::ActivationPurpose::Implementation,
+        )?
+        .eligible
+    {
+        return Err(crate::ports::storage::StorageError::Busy.into());
+    }
+    Ok(())
 }

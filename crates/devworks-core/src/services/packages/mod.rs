@@ -156,7 +156,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-mod approval;
+pub mod approval;
 pub mod index;
 pub mod policy;
 pub mod view;
@@ -254,6 +254,7 @@ pub struct PackageService {
     files_gate: Arc<Mutex<()>>,
     /// Bound on waiting for a running package to quiesce inside an update or rollback command.
     pub quiesce_wait: Duration,
+    approval_control: Arc<RwLock<Option<Arc<crate::services::runs::ControlService>>>>,
 }
 
 /// A configuration refused by its schema: the diagnostic that carries the field errors, written
@@ -419,7 +420,14 @@ impl PackageService {
             publishing: Arc::new(Mutex::new(BTreeMap::new())),
             files_gate: Arc::new(Mutex::new(())),
             quiesce_wait: QUIESCE_WAIT,
+            approval_control: Arc::new(RwLock::new(None)),
         }
+    }
+    pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
+        *self
+            .approval_control
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Some(control);
     }
     /// Registers the consumers that receive availability announcements (composition root).
     pub fn set_availability_consumers(&self, consumers: Vec<String>) {
@@ -682,6 +690,7 @@ impl PackageService {
         target: Option<&Id>,
         expected_registry: i64,
         update: bool,
+        reviewed_binding: Option<&Value>,
     ) -> Result<DomainDecision, Failure> {
         let Some(prep) = prep else {
             return Err(
@@ -780,6 +789,9 @@ impl PackageService {
                 v
             }
         };
+        if let Some(binding) = reviewed_binding {
+            version.approval = Some(self.approve_reviewed_version(tx, ctx, binding, &i)?);
+        }
         let (mut waits, approval) = Self::waits(
             ctx,
             &i,
@@ -1562,6 +1574,7 @@ impl PackageService {
             .proposal_for(&p.package_id, &candidate.manifest_digest)?
             .filter(|pr| pr.state == "Pending")
         {
+            self.stage_package_review(tx, ctx, &pending)?;
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::AddonsPropose {
                     value: view::proposal_record(&pending, p.revision, p.active_digest.is_some()),
@@ -1696,6 +1709,7 @@ impl PackageService {
             created_at_ms: now,
         };
         tx.packages().insert_proposal(&proposal)?;
+        self.stage_package_review(tx, ctx, &proposal)?;
         event(
             tx,
             ctx.principal(),
@@ -2165,123 +2179,160 @@ impl PackageService {
         );
         let svc = self.clone_ports();
         run_write(&*self.store, WriteOptions::default(), move |tx| {
-            let Some(pr) = tx.packages().proposal(&proposal_id)? else {
-                return Ok(Err(not_found("package_proposal", proposal_id.as_str())));
-            };
-            if pr.revision != expected_revision {
-                return Ok(Err(Refusal::new(
-                    DomainErrorCode::RevisionConflict,
-                    "package_proposal",
-                    Some(proposal_id.clone()),
-                )));
-            }
-            if pr.manifest_digest != digest {
-                return Ok(Err(Refusal::new(
-                    DomainErrorCode::SourceChanged,
-                    "package_proposal",
-                    Some(proposal_id.clone()),
-                )));
-            }
-            if pr.state != "Pending" {
-                return Ok(Err(conflict("package_proposal", proposal_id.as_str())));
-            }
-            // A rejection never reaches contents that are active (they were approved since).
-            if !approve
-                && tx.packages().package(&pr.package_id)?.is_some_and(|p| {
-                    p.active_digest.as_deref() == Some(pr.manifest_digest.as_str())
-                })
+            svc.decide_package_proposal_in(
+                tx,
+                &ctx,
+                approval::PackageProposalDecision {
+                    proposal_id: &proposal_id,
+                    expected_revision,
+                    digest: &digest,
+                    approve,
+                    rationale: &rationale,
+                },
+            )
+        })
+    }
+
+    fn decide_package_proposal_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        decision: approval::PackageProposalDecision<'_>,
+    ) -> Result<Result<StoredPackageProposal, Refusal>, StorageError> {
+        let approval::PackageProposalDecision {
+            proposal_id,
+            expected_revision,
+            digest,
+            approve,
+            rationale,
+        } = decision;
+        if ctx.principal_kind() != PrincipalKind::Human
+            || tx.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
+        {
+            return Ok(Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "package_proposal",
+                Some(proposal_id.clone()),
+            )));
+        }
+
+        let Some(pr) = tx.packages().proposal(proposal_id)? else {
+            return Ok(Err(not_found("package_proposal", proposal_id.as_str())));
+        };
+        if pr.revision != expected_revision {
+            return Ok(Err(Refusal::new(
+                DomainErrorCode::RevisionConflict,
+                "package_proposal",
+                Some(proposal_id.clone()),
+            )));
+        }
+        if pr.manifest_digest != digest {
+            return Ok(Err(Refusal::new(
+                DomainErrorCode::SourceChanged,
+                "package_proposal",
+                Some(proposal_id.clone()),
+            )));
+        }
+        if pr.state != "Pending" {
+            return Ok(Err(conflict("package_proposal", proposal_id.as_str())));
+        }
+        // A rejection never reaches contents that are active (they were approved since).
+        if !approve
+            && tx
+                .packages()
+                .package(&pr.package_id)?
+                .is_some_and(|p| p.active_digest.as_deref() == Some(pr.manifest_digest.as_str()))
+        {
+            return Ok(Err(conflict("package_version", pr.package_id.as_str())));
+        }
+        let now = tx.now_ms();
+        let mut d = pr.clone();
+        d.state = if approve {
+            "Approved".into()
+        } else {
+            "Rejected".into()
+        };
+        d.decided_by = Some(ctx.principal().clone());
+        d.decided_at_ms = Some(now);
+        d.decision = Some(
+            json!({"decision": if approve { "Approve" } else { "Reject" }, "rationale": rationale}),
+        );
+        let d = tx.packages().update_proposal(&d, pr.revision)?;
+        let Some(mut p) = tx.packages().package(&pr.package_id)? else {
+            return Ok(Ok(d));
+        };
+        if approve {
+            let approval = json!({"kind": "Person", "by": ctx.principal().0.as_str(), "atMs": now, "proposalId": pr.id.as_str()});
+            if let Some(v) = tx
+                .packages()
+                .package_version(&pr.package_id, &pr.manifest_digest)?
             {
-                return Ok(Err(conflict("package_version", pr.package_id.as_str())));
-            }
-            let now = tx.now_ms();
-            let mut d = pr.clone();
-            d.state = if approve {
-                "Approved".into()
-            } else {
-                "Rejected".into()
-            };
-            d.decided_by = Some(ctx.principal().clone());
-            d.decided_at_ms = Some(now);
-            d.decision = Some(
-                json!({"decision": if approve { "Approve" } else { "Reject" }, "rationale": rationale}),
-            );
-            let d = tx.packages().update_proposal(&d, pr.revision)?;
-            let Some(mut p) = tx.packages().package(&pr.package_id)? else {
-                return Ok(Ok(d));
-            };
-            if approve {
-                let approval = json!({"kind": "Person", "by": ctx.principal().0.as_str(), "atMs": now, "proposalId": pr.id.as_str()});
-                if let Some(v) = tx
-                    .packages()
-                    .package_version(&pr.package_id, &pr.manifest_digest)?
+                let mut waits: Vec<String> = v
+                    .waits
+                    .iter()
+                    .filter(|w| {
+                        !matches!(
+                            w.as_str(),
+                            "ExactVersionApproval" | "TrustApproval" | "AccessApproval"
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                // Nothing else to wait for: the host activates the pending version at its
+                // next quiescent boundary (rechecking compatibility then).
+                if waits.is_empty()
+                    && v.phase == VersionPhase::Staged
+                    && p.pending_digest.as_deref() == Some(pr.manifest_digest.as_str())
                 {
-                    let mut waits: Vec<String> = v
-                        .waits
-                        .iter()
-                        .filter(|w| {
-                            !matches!(
-                                w.as_str(),
-                                "ExactVersionApproval" | "TrustApproval" | "AccessApproval"
-                            )
-                        })
-                        .cloned()
-                        .collect();
-                    // Nothing else to wait for: the host activates the pending version at its
-                    // next quiescent boundary (rechecking compatibility then).
-                    if waits.is_empty()
-                        && v.phase == VersionPhase::Staged
-                        && p.pending_digest.as_deref() == Some(pr.manifest_digest.as_str())
-                    {
-                        waits.push("Quiescence".into());
-                    }
-                    tx.packages().update_version(
-                        &pr.package_id,
-                        &pr.manifest_digest,
-                        v.phase,
-                        &waits,
-                        Some(&approval),
-                    )?;
+                    waits.push("Quiescence".into());
                 }
-                event(
-                    tx,
-                    ctx.principal(),
-                    &p,
-                    "PackageProposalApproved",
-                    json!({"proposalId": pr.id.as_str(), "digest": pr.manifest_digest}),
-                )?;
-            } else {
                 tx.packages().update_version(
                     &pr.package_id,
                     &pr.manifest_digest,
-                    VersionPhase::Rejected,
-                    &[],
-                    None,
-                )?;
-                if p.pending_digest.as_deref() == Some(pr.manifest_digest.as_str()) {
-                    p.pending_digest = None;
-                    Self::save(tx, &mut p, false)?;
-                }
-                event(
-                    tx,
-                    ctx.principal(),
-                    &p,
-                    "PackageProposalRejected",
-                    json!({"proposalId": pr.id.as_str(), "digest": pr.manifest_digest}),
-                )?;
-                svc.log_in(
-                    tx,
-                    &pr.package_id,
-                    Severity::Info,
-                    "PackageProposalRejected",
-                    &format!(
-                        "Proposed version {} was rejected; the active version is unchanged",
-                        pr.version
-                    ),
-                    None,
+                    v.phase,
+                    &waits,
+                    Some(&approval),
                 )?;
             }
-            Ok(Ok(d))
-        })
+            event(
+                tx,
+                ctx.principal(),
+                &p,
+                "PackageProposalApproved",
+                json!({"proposalId": pr.id.as_str(), "digest": pr.manifest_digest}),
+            )?;
+        } else {
+            tx.packages().update_version(
+                &pr.package_id,
+                &pr.manifest_digest,
+                VersionPhase::Rejected,
+                &[],
+                None,
+            )?;
+            if p.pending_digest.as_deref() == Some(pr.manifest_digest.as_str()) {
+                p.pending_digest = None;
+                Self::save(tx, &mut p, false)?;
+            }
+            event(
+                tx,
+                ctx.principal(),
+                &p,
+                "PackageProposalRejected",
+                json!({"proposalId": pr.id.as_str(), "digest": pr.manifest_digest}),
+            )?;
+            self.log_in(
+                tx,
+                &pr.package_id,
+                Severity::Info,
+                "PackageProposalRejected",
+                &format!(
+                    "Proposed version {} was rejected; the active version is unchanged",
+                    pr.version
+                ),
+                None,
+            )?;
+        }
+        Ok(Ok(d))
     }
 
     /// A cheap clone of the ports for use inside a write job.
@@ -2301,6 +2352,7 @@ impl PackageService {
             publishing: self.publishing.clone(),
             files_gate: self.files_gate.clone(),
             quiesce_wait: self.quiesce_wait,
+            approval_control: self.approval_control.clone(),
         })
     }
 
@@ -2581,82 +2633,92 @@ impl CommandHandler for PackageService {
             _ => None,
         };
         let sp = tx.savepoint()?;
-        let outcome = match command.input() {
-            OperationInput::Addons(ops::Input::Configure(i)) => self.configure(tx, ctx, i, refusal),
-            OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
-            input => match lifecycle(input) {
-                Some((
-                    _,
-                    AddonCommand::Install {
-                        expected_registry_revision,
-                        ..
-                    },
-                )) => self.install_or_update(
-                    tx,
-                    ctx,
-                    bundle,
-                    None,
-                    expected_registry_revision.get(),
-                    false,
-                ),
-                Some((
-                    _,
-                    AddonCommand::Update {
+        let outcome = (|| {
+            let reviewed_binding = self.reviewed_package_binding(tx, ctx, command)?;
+            match command.input() {
+                OperationInput::Addons(ops::Input::Configure(i)) => {
+                    self.configure(tx, ctx, i, refusal)
+                }
+                OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
+                input => match lifecycle(input) {
+                    Some((
+                        _,
+                        AddonCommand::Install {
+                            expected_registry_revision,
+                            ..
+                        },
+                    )) => self.install_or_update(
+                        tx,
+                        ctx,
+                        bundle,
+                        None,
+                        expected_registry_revision.get(),
+                        false,
+                        reviewed_binding.as_ref(),
+                    ),
+                    Some((
+                        _,
+                        AddonCommand::Update {
+                            package_id,
+                            expected_registry_revision,
+                            ..
+                        },
+                    )) => self.install_or_update(
+                        tx,
+                        ctx,
+                        bundle,
+                        Some(package_id),
+                        expected_registry_revision.get(),
+                        true,
+                        reviewed_binding.as_ref(),
+                    ),
+                    Some((
+                        _,
+                        AddonCommand::Enable {
+                            package_id,
+                            expected_registry_revision,
+                        },
+                    )) => self.enable(tx, ctx, package_id, expected_registry_revision.get()),
+                    Some((
+                        _,
+                        AddonCommand::Disable {
+                            package_id,
+                            expected_registry_revision,
+                        },
+                    )) => self.disable(tx, ctx, package_id, expected_registry_revision.get()),
+                    Some((
+                        _,
+                        AddonCommand::Uninstall {
+                            package_id,
+                            expected_registry_revision,
+                        },
+                    )) => self.uninstall(tx, ctx, package_id, expected_registry_revision.get()),
+                    Some((
+                        _,
+                        AddonCommand::Rollback {
+                            package_id,
+                            target_manifest_digest,
+                            expected_registry_revision,
+                            expected_state_generation,
+                        },
+                    )) => self.rollback(
+                        tx,
+                        ctx,
                         package_id,
-                        expected_registry_revision,
-                        ..
-                    },
-                )) => self.install_or_update(
-                    tx,
-                    ctx,
-                    bundle,
-                    Some(package_id),
-                    expected_registry_revision.get(),
-                    true,
-                ),
-                Some((
-                    _,
-                    AddonCommand::Enable {
-                        package_id,
-                        expected_registry_revision,
-                    },
-                )) => self.enable(tx, ctx, package_id, expected_registry_revision.get()),
-                Some((
-                    _,
-                    AddonCommand::Disable {
-                        package_id,
-                        expected_registry_revision,
-                    },
-                )) => self.disable(tx, ctx, package_id, expected_registry_revision.get()),
-                Some((
-                    _,
-                    AddonCommand::Uninstall {
-                        package_id,
-                        expected_registry_revision,
-                    },
-                )) => self.uninstall(tx, ctx, package_id, expected_registry_revision.get()),
-                Some((
-                    _,
-                    AddonCommand::Rollback {
-                        package_id,
-                        target_manifest_digest,
-                        expected_registry_revision,
-                        expected_state_generation,
-                    },
-                )) => self.rollback(
-                    tx,
-                    ctx,
-                    package_id,
-                    &String::from(target_manifest_digest.clone()),
-                    expected_registry_revision.get(),
-                    expected_state_generation.get(),
-                    guard,
-                ),
-                _ => Err(
-                    Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into(),
-                ),
-            },
-        };
+                        &String::from(target_manifest_digest.clone()),
+                        expected_registry_revision.get(),
+                        expected_state_generation.get(),
+                        guard,
+                    ),
+                    _ => {
+                        Err(
+                            Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None)
+                                .into(),
+                        )
+                    }
+                },
+            }
+        })();
         // The gateway undoes every write of a refused decision; this savepoint also undoes the
         // writes before a storage failure the use case reports.
         let outcome = match outcome {

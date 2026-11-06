@@ -1810,15 +1810,24 @@ fn job_approval_preview(
     route: Value,
 ) -> crate::services::approvals::OwnerPreview {
     let before = candidate.before.as_ref().map(job_approval_config);
-    crate::services::approvals::OwnerPreview {
+    let mut preview = crate::services::approvals::OwnerPreview {
         scope: candidate.scope,
         target_id: candidate.target,
         target_revision: candidate.revision,
         summary: format!("Review job {}", candidate.title),
-        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before}),
+        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before,"artifact":match &candidate.definition {JobDefinition::Inference {prompt,..}=>Some(prompt),_=>None}}),
         binding: json!({"prior":before,"project":project,"prompt":prompt,"route":route}),
+    };
+    if preview.reviewed["artifact"].is_null() {
+        preview
+            .reviewed
+            .as_object_mut()
+            .expect("owner preview")
+            .remove("artifact");
     }
+    preview
 }
+
 impl JobService {
     pub(crate) fn approval_preview(
         &self,

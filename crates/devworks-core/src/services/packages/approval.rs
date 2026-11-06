@@ -8,6 +8,13 @@ use crate::services::approvals::OwnerPreview;
 use crate::services::approvals::owner_preview::artifact_binding;
 
 pub(super) type BundleInspection = Result<(InspectedBundle, Value), (String, String, Value)>;
+pub(super) struct PackageProposalDecision<'a> {
+    pub proposal_id: &'a Id,
+    pub expected_revision: i64,
+    pub digest: &'a str,
+    pub approve: bool,
+    pub rationale: &'a str,
+}
 impl PackageService {
     /// Shared by ordinary install/proposal preparation and approval review, before publication.
     pub(super) fn inspect_bundle_source(
@@ -241,7 +248,7 @@ impl PackageService {
             .and_then(|i| policy::static_incompatibility(i, &self.platform));
         let source = inspected
             .map(|(_, provenance, bundle)| json!({"bundle":bundle,"provenance":provenance}));
-        Ok(OwnerPreview {
+        let mut preview = OwnerPreview {
             scope: ctx
                 .project_id()
                 .cloned()
@@ -250,10 +257,19 @@ impl PackageService {
             target_revision: prior.as_ref().map_or(1, |p| p.revision),
             summary: format!("Review {} for {}", request.descriptor.name, package_id),
             reviewed: json!({"operation":request.descriptor.name,"input":request.normalized,"inspection":inspected_json,
-                "source":source,"current":package,"storedVersion":stored_version,"proposal":proposal,"compatibility":compatibility}),
-            binding: json!({"registryRevision":registry,"package":package,"version":stored_version,"proposal":proposal,"artifact":artifact}),
-        })
+                "source":source,"current":package,"storedVersion":stored_version,"proposal":proposal,"compatibility":compatibility,"artifact":source.as_ref().map(|s|&s["bundle"])}),
+            binding: json!({"registryRevision":registry,"package":package,"version":stored_version,"proposal":proposal,"artifact":artifact,"candidate":inspected_json,"source":source}),
+        };
+        if preview.reviewed["artifact"].is_null() {
+            preview
+                .reviewed
+                .as_object_mut()
+                .expect("owner preview")
+                .remove("artifact");
+        }
+        Ok(preview)
     }
+
     fn check_approval_configuration(
         &self,
         ctx: &InvocationContext,
@@ -369,4 +385,489 @@ fn package_binding(p: &StoredPackage) -> Value {
 fn version_binding(v: &StoredPackageVersion) -> Value {
     json!({"manifestDigest":v.manifest_digest,"bundleDigest":v.bundle_digest,"version":v.version,"publisherId":v.publisher_id,
         "signerKey":v.signer_key,"inspection":v.inspection,"phase":v.phase.as_str(),"waits":v.waits,"approval":v.approval,"provenance":v.provenance})
+}
+
+impl PackageService {
+    /// Actual dispatch validates the full approved owner snapshot before any business write.
+    /// Normal owner preparation has just re-read/verified the signed bundle; receipt minting
+    /// below is limited to that exact inspected version and never establishes publisher trust.
+    pub(super) fn reviewed_package_binding(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+    ) -> Result<Option<Value>, Failure> {
+        let Some(binding) =
+            crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?
+        else {
+            return Ok(None);
+        };
+        let control = self
+            .approval_control
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        crate::services::approvals::owner_preview::recheck_control(tx, ctx, control.as_deref())?;
+        let input = match command.input() {
+            OperationInput::Addons(ops::Input::Configure(i)) => {
+                serde_json::to_value(i).map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+            }
+            input => match lifecycle(input) {
+                Some((_, cmd)) => json!({"command":cmd}),
+                None => return Err(invalid("saved_package_operation").into()),
+            },
+        };
+        let request = crate::services::approvals::requests::decode(
+            command.descriptor().name,
+            command.schema_revision().0,
+            &input,
+            true,
+        )
+        .map_err(|_| invalid("saved_package_operation"))?;
+        if request.fingerprint.as_str() != command.fingerprint().as_str() {
+            return Err(invalid("saved_package_operation").into());
+        }
+        let inspected = command.prepared::<Prep>().and_then(|p| match p {
+            Prep::Bundle(b) => Some(b.as_ref()),
+            _ => None,
+        });
+        let source = inspected
+            .map(|b| {
+                let i = b.outcome.as_ref().map_err(|_| invalid("package_bundle"))?;
+                Ok::<_, Failure>((i.clone(), b.provenance.clone(), b.bundle.clone()))
+            })
+            .transpose()?;
+        let artifact = source
+            .as_ref()
+            .map(|(_, _, reference)| artifact_binding(tx.artifacts(), reference))
+            .transpose()?;
+        let current =
+            self.package_approval(tx.packages(), ctx, &request, source.as_ref(), artifact)?;
+        if current.binding != binding {
+            return Err(Refusal::new(
+                DomainErrorCode::SourceChanged,
+                "saved_package_operation",
+                Some(current.target_id),
+            )
+            .into());
+        }
+        Ok(Some(binding))
+    }
+
+    pub(super) fn approve_reviewed_version(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        binding: &Value,
+        inspection: &Inspection,
+    ) -> Result<Value, Failure> {
+        let evidence = ctx.reviewed_operation().ok_or_else(|| {
+            Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "package_version_approval",
+                None,
+            )
+        })?;
+        if !matches!(evidence.operation(), "addons.install" | "addons.update")
+            || binding != evidence.owner_binding()
+            || binding["candidate"]
+                != serde_json::to_value(inspection)
+                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "package_version_approval",
+                None,
+            )
+            .into());
+        }
+        let checked = crate::services::approvals::owner_preview::approved_binding_for(
+            tx,
+            ctx,
+            evidence.operation(),
+            evidence.schema_revision(),
+            evidence.request_digest(),
+        )?;
+        if checked.as_ref() != Some(binding) {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "package_version_approval",
+                None,
+            )
+            .into());
+        }
+        let now = tx.now_ms();
+        let mut receipt = json!({"kind":"Person","by":evidence.approver(),"atMs":now,"approvalId":evidence.approval_id(),
+            "manifestDigest":inspection.manifest_digest,"bundleDigest":inspection.bundle_digest,"signerKey":inspection.signer_key});
+        if let Some(proposal_id) = binding
+            .pointer("/proposal/id")
+            .and_then(Value::as_str)
+            .and_then(|s| Id::new(s).ok())
+        {
+            let proposal = tx
+                .packages()
+                .proposal(&proposal_id)?
+                .ok_or_else(|| not_found("package_proposal", proposal_id.as_str()))?;
+            if proposal.state != "Pending"
+                || proposal.manifest_digest != inspection.manifest_digest
+                || proposal.bundle_digest != inspection.bundle_digest
+                || proposal.revision != binding["proposal"]["revision"].as_i64().unwrap_or(-1)
+            {
+                return Err(conflict("package_proposal", proposal_id.as_str()).into());
+            }
+            let mut approved = proposal.clone();
+            approved.state = "Approved".into();
+            approved.decided_by = Some(evidence.approver().clone());
+            approved.decided_at_ms = Some(now);
+            approved.decision = Some(
+                json!({"decision":"Approve","approvalId":evidence.approval_id(),"by":evidence.approver()}),
+            );
+            tx.packages()
+                .update_proposal(&approved, proposal.revision)?;
+            receipt["proposalId"] = json!(proposal_id);
+        }
+        Ok(receipt)
+    }
+}
+
+impl PackageService {
+    pub(crate) fn decide_approval_source(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        human: &InvocationContext,
+        _request: &DecodedRequest,
+        preview: &OwnerPreview,
+        approve: bool,
+    ) -> Result<(), Failure> {
+        let Some(id) = preview
+            .binding
+            .pointer("/proposal/id")
+            .and_then(Value::as_str)
+            .and_then(|s| Id::new(s).ok())
+        else {
+            return Ok(());
+        };
+        let source = tx
+            .packages()
+            .proposal(&id)?
+            .ok_or_else(|| not_found("package_proposal", id.as_str()))?;
+        let revision = preview.binding["proposal"]["revision"]
+            .as_i64()
+            .ok_or_else(|| invalid("package_proposal"))?;
+        let version = tx
+            .packages()
+            .package_version(&source.package_id, &source.manifest_digest)?
+            .ok_or_else(|| not_found("package_version", &source.package_id))?;
+        if source.revision != revision
+            || source.state != "Pending"
+            || version_binding(&version) != preview.binding["version"]
+        {
+            return Err(
+                Refusal::new(DomainErrorCode::SourceChanged, "package_proposal", Some(id)).into(),
+            );
+        }
+        if human.principal_kind() != PrincipalKind::Human
+            || tx.actors().actor_kind(human.principal())? != Some(PrincipalKind::Human)
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "package_proposal",
+                Some(source.id),
+            )
+            .into());
+        }
+        if !approve {
+            self.decide_package_proposal_in(
+                tx,
+                human,
+                PackageProposalDecision {
+                    proposal_id: &source.id,
+                    expected_revision: source.revision,
+                    digest: &source.manifest_digest,
+                    approve: false,
+                    rationale: "Rejected through the exact global approval review",
+                },
+            )?
+            .map_err(Failure::from)?;
+        }
+        // Approval itself deliberately writes no version receipt. The saved command retains
+        // its original actor and must pass current root holds/authority before the owner mints
+        // that receipt in its actual install/update unit of work. retry_pending cannot bypass
+        // a paused root merely because its human decision was recorded.
+        Ok(())
+    }
+}
+
+/// Build a source-reference request from an actual staged owner proposal. No caller's summary,
+/// claimed signer or fabricated inspection can become the reviewed package contents.
+pub fn draft_from_package_proposal(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    proposal: &StoredPackageProposal,
+    version: &StoredPackageVersion,
+) -> Result<Option<crate::operations::approvals::ProposeInput>, Failure> {
+    if proposal.state != "Pending" {
+        return Ok(None);
+    }
+    if proposal.package_id != version.package_id
+        || proposal.manifest_digest != version.manifest_digest
+        || proposal.bundle_digest != version.bundle_digest
+        || version.phase == VersionPhase::Rejected
+    {
+        return Err(Refusal::new(
+            DomainErrorCode::SourceChanged,
+            "package_proposal",
+            Some(proposal.id.clone()),
+        )
+        .into());
+    }
+    let package = tx
+        .packages()
+        .package(&proposal.package_id)?
+        .ok_or_else(|| not_found("package", &proposal.package_id))?;
+    let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
+        .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+    let registry = tx.packages().registry_revision()?;
+    let (operation, command) = if package.active_digest.is_some() {
+        (
+            "addons.update",
+            json!({"kind":"Update","packageId":package.package_id,"bundle":bundle,"expectedRegistryRevision":rev(registry)}),
+        )
+    } else {
+        (
+            "addons.install",
+            json!({"kind":"Install","bundle":bundle,"expectedRegistryRevision":rev(registry)}),
+        )
+    };
+    let input = json!({"command":command});
+    let decoded = crate::services::approvals::requests::decode(operation, 1, &input, true)
+        .map_err(|_| {
+            Refusal::new(
+                DomainErrorCode::UnsupportedCapability,
+                "package_approval_request",
+                Some(proposal.id.clone()),
+            )
+        })?;
+    let scope = ctx.project_id().map_or(
+        json!({"kind":"Workspace"}),
+        |id| json!({"kind":"Project","projectId":id}),
+    );
+    let input=serde_json::from_value(json!({"scope":scope,"operationKind":operation,
+        "target":{"id":proposal.package_id,"revision":rev(package.revision.max(1))},
+        "contentDigest":decoded.fingerprint.as_str(),"summary":format!("Review {} version {}",proposal.package_id,proposal.version),
+        "artifact":bundle,"payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}))
+        .map_err(|e|StorageError::InvalidRecord(e.to_string()))?;
+    Ok(Some(input))
+}
+impl PackageService {
+    pub(super) fn stage_package_review(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        _ctx: &InvocationContext,
+        proposal: &StoredPackageProposal,
+    ) -> Result<(), Failure> {
+        let source_context = package_source_context(tx, proposal)?;
+        let ctx = &source_context;
+        let version = tx
+            .packages()
+            .package_version(&proposal.package_id, &proposal.manifest_digest)?
+            .ok_or_else(|| not_found("package_version", &proposal.package_id))?;
+        let Some(input) = draft_from_package_proposal(tx, ctx, proposal, &version)? else {
+            return Ok(());
+        };
+        let crate::protocol::records::ApprovalContent::SavedOperation {
+            schema_revision,
+            input: args,
+        } = input.payload.as_ref().expect("owner draft payload")
+        else {
+            unreachable!("saved package source")
+        };
+        let request = crate::services::approvals::requests::decode(
+            &input.operation_kind.0,
+            schema_revision.0.parse().unwrap_or(0),
+            &args.0,
+            true,
+        )
+        .map_err(|_| invalid("package_approval_request"))?;
+        let inspection = policy::inspection(&version).ok_or_else(|| invalid("package_version"))?;
+        let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        let artifact = artifact_binding(tx.artifacts(), &bundle)?;
+        let source = (
+            inspection,
+            version.provenance["artifactProvenance"].clone(),
+            bundle,
+        );
+        let preview =
+            self.package_approval(tx.packages(), ctx, &request, Some(&source), Some(artifact))?;
+        // Repeated source reconciliation must not create another human decision for one exact
+        // package proposal. It may be Pending, Approved-awaiting-readmission, or terminal.
+        let mut after = None;
+        loop {
+            let rows = tx.decisions().list_approval_sources(
+                &crate::ports::storage::ApprovalSourceFilter {
+                    scope: preview.scope.clone(),
+                    state: None,
+                },
+                after.as_ref(),
+                500,
+            )?;
+            let digest = crate::fingerprint::sha256_hex(
+                crate::jcs::canonicalize(&json!({"owner":preview.binding,"authority":crate::services::approvals::authority_binding(tx,ctx)?}))
+                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+                    .as_bytes(),
+            );
+            for row in &rows {
+                if row.source == crate::ports::storage::ApprovalSource::Generic
+                    && let Some(existing) = tx.decisions().approval(&row.id)?
+                    && existing
+                        .payload
+                        .pointer("/binding/proposal/id")
+                        .and_then(Value::as_str)
+                        == Some(proposal.id.as_str())
+                {
+                    if matches!(existing.state.as_str(), "Pending" | "Approved")
+                        && existing.content_digest == request.fingerprint.as_str()
+                        && existing.scope_digest == digest
+                    {
+                        return Ok(());
+                    }
+                    if existing.state == "Pending" {
+                        let mut superseded = existing.clone();
+                        superseded.revision += 1;
+                        superseded.state = "Superseded".into();
+                        tx.decisions()
+                            .put_approval(&superseded, Some(existing.revision))?;
+                    }
+                }
+            }
+            if rows.len() < 500 {
+                break;
+            }
+            let last = rows.last().expect("full page");
+            after = Some(crate::ports::storage::ApprovalSourcePosition {
+                created_at_ms: last.created_at_ms,
+                id: last.id.clone(),
+                source: last.source,
+            });
+        }
+        crate::services::approvals::stage_saved(tx, ctx, &input, &request, &preview)?;
+        Ok(())
+    }
+}
+
+fn package_source_context(
+    tx: &mut dyn WriteTransaction,
+    proposal: &StoredPackageProposal,
+) -> Result<InvocationContext, Failure> {
+    let kind = tx
+        .actors()
+        .actor_kind(&proposal.originator)?
+        .ok_or_else(|| {
+            Refusal::new(
+                DomainErrorCode::NotFound,
+                "package_proposal_author",
+                Some(proposal.originator.0.clone()),
+            )
+        })?;
+    if proposal.origin["kind"].as_str() != Some(kind_name(kind)) {
+        return Err(Refusal::new(
+            DomainErrorCode::SourceChanged,
+            "package_proposal_author",
+            Some(proposal.originator.0.clone()),
+        )
+        .into());
+    }
+    let optional_id = |key: &str| -> Result<Option<Id>, Failure> {
+        proposal
+            .origin
+            .get(key)
+            .filter(|v| !v.is_null())
+            .map(|v| {
+                v.as_str().and_then(|s| Id::new(s).ok()).ok_or_else(|| {
+                    Refusal::new(
+                        DomainErrorCode::InvalidArgument,
+                        "package_proposal_origin",
+                        Some(proposal.id.clone()),
+                    )
+                    .into()
+                })
+            })
+            .transpose()
+    };
+    let info = tx.store();
+    let mut context = InvocationContext::new(
+        proposal.originator.clone(),
+        kind,
+        proposal.id.clone(),
+        Id::new("package-review-source").expect("namespace"),
+        info.store_id.clone(),
+        crate::protocol::Counter::new(info.restore_epoch).map_err(|_| invalid("restore_epoch"))?,
+        rev(1),
+    )
+    .with_lineage(
+        optional_id("projectId")?.map(crate::protocol::ProjectId),
+        optional_id("rootId")?.map(crate::protocol::RootId),
+        optional_id("assignmentId")?.map(crate::protocol::AssignmentId),
+    );
+    if let Some(session) = optional_id("sessionId")? {
+        context = context.with_session(session);
+    }
+    Ok(context)
+}
+impl PackageService {
+    /// Bootstrap the current owner proposal inventory through the same source-reference
+    /// producer as addons.propose. Old pending work is visible without running or approving it.
+    /// Each source gets its own bounded unit of work; no arbitrary host authority is inherited.
+    pub fn sync_pending_reviews(&self) -> Result<usize, StorageError> {
+        let mut after = None;
+        let mut count = 0usize;
+        loop {
+            let page = crate::ports::storage::read_snapshot(
+                &*self.store,
+                &crate::ports::storage::ReadOptions::default(),
+                |s| s.packages().packages(after.as_deref(), 500),
+            )?;
+            let more = page.len() == 500;
+            for package in &page {
+                let Some(digest) = &package.pending_digest else {
+                    continue;
+                };
+                let package_id = package.package_id.clone();
+                let digest = digest.clone();
+                let service = self.clone_ports();
+                let produced = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                    let Some(source) = tx
+                        .packages()
+                        .proposal_for(&package_id, &digest)?
+                        .filter(|p| p.state == "Pending")
+                    else {
+                        return Ok(false);
+                    };
+                    let context = package_source_context(tx, &source).map_err(|e| match e {
+                        Failure::Storage(e) => e,
+                        Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                            "pending package review refused: {:?} {}",
+                            r.code, r.target_kind
+                        )),
+                    })?;
+                    service
+                        .stage_package_review(tx, &context, &source)
+                        .map_err(|e| match e {
+                            Failure::Storage(e) => e,
+                            Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                                "pending package review refused: {:?} {}",
+                                r.code, r.target_kind
+                            )),
+                        })?;
+                    Ok(true)
+                })?;
+                count += usize::from(produced);
+            }
+            after = page.last().map(|p| p.package_id.clone());
+            if !more {
+                return Ok(count);
+            }
+        }
+    }
 }

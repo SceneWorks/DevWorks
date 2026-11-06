@@ -166,6 +166,17 @@ impl GitService {
                 ));
             }
         };
+        if let Some(evidence) = ctx.reviewed_operation() {
+            let current = json!({"tree":destination.tree,"repositoryRevision":destination.repository_revision,
+                "url":destination.url,"head":destination.observed.head,"branch":destination.observed.branch});
+            if evidence.owner_binding()["native"] != current {
+                return Err(refuse(
+                    DomainErrorCode::SourceChanged,
+                    "git_push_destination",
+                    remote_id,
+                ));
+            }
+        }
         if destination.tree != tree
             || destination.repository_revision != repository.revision
             || target_ref != &tree.branch
