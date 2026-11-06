@@ -848,8 +848,16 @@ impl JobService {
                     )?;
                     return Ok(None);
                 };
-                if operation == super::native_help::OPERATION
-                    && super::native_help::is_empty(&arguments.value.0)
+                if super::native_help::supports(
+                    operation,
+                    crate::registry::SchemaRevision(
+                        u32::try_from(arguments.schema.revision.get()).map_err(|_| {
+                            StorageError::InvalidRecord(
+                                "invalid current job schema revision".into(),
+                            )
+                        })?,
+                    ),
+                ) && super::native_help::is_empty(&arguments.value.0)
                 {
                     let revision = arguments.schema.revision.get();
                     let schema = super::native_help::argument_schema(
@@ -867,12 +875,12 @@ impl JobService {
                         fail_before(
                             tx,
                             &started,
-                            "Help job arguments do not match the current-generation adapter; nothing ran",
+                            "Native job arguments do not match the current-generation adapter; nothing ran",
                         )?;
                         return Ok(None);
                     }
                     let (invocation, frame) =
-                        super::native_help::invocation(tx, &mut started, revision)?;
+                        super::native_help::invocation(tx, &mut started, operation, revision)?;
                     let ctx = host_ctx(
                         tx,
                         native_namespace(&run.job_id),

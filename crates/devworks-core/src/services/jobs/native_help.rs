@@ -1,12 +1,16 @@
-//! The retained RegenerateMcpDocsJob accepts EmptyJobRequest and resolves current metadata
-//! for each execution. This adapter belongs to job arguments, never to manual Help commands.
+//! Retained empty maintenance-job arguments capture current owner metadata once per actual run.
+//! Manual commands retain their own explicit argument contracts.
 use super::*;
-use crate::ports::storage::WriteTransaction;
+use crate::ports::storage::{KnowledgeScope, WriteTransaction};
 use crate::protocol::ActorId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub(super) const OPERATION: &str = "help.generate_capability_docs";
+pub(super) const CONVENTION_INDEX: &str = "conventions.index";
+pub(super) fn supports(operation: &str, revision: SchemaRevision) -> bool {
+    operation == OPERATION || operation == CONVENTION_INDEX && revision.0 >= 3
+}
 
 #[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -14,7 +18,7 @@ struct EmptyJobRequest {}
 
 /// Additive schema identity: existing explicit command-argument references remain immutable.
 pub(super) fn argument_schema(operation: &str, revision: SchemaRevision) -> Option<SchemaRef> {
-    if operation != OPERATION {
+    if !supports(operation, revision) {
         return None;
     }
     let descriptor = registry::find(operation)?;
@@ -53,6 +57,11 @@ pub(super) fn cancel_accepted(
     {
         crate::services::help::request_generation_cancel(tx, operation)?;
     }
+    if matches!(definition,JobDefinition::Native{capability_id:ref id,..} if id==&super::capability_id(CONVENTION_INDEX))
+        && let Some(operation) = &run.inner_operation_id
+    {
+        crate::services::conventions::indexing::cancellation::request_cancel(tx, operation)?;
+    }
     Ok(())
 }
 
@@ -75,6 +84,7 @@ struct CapturedInvocation {
 pub(super) fn invocation(
     tx: &mut dyn WriteTransaction,
     run: &mut StoredJobRun,
+    operation: &str,
     revision: i64,
 ) -> Result<(Id, Vec<u8>), StorageError> {
     let invalid = || StorageError::InvalidRecord("invalid captured Help job invocation".into());
@@ -95,17 +105,34 @@ pub(super) fn invocation(
             || frame["mode"] != "Command"
             || frame["requestKey"] != json!(run.id)
             || frame["schemaRevision"] != revision
-            || frame["body"]["kind"] != OPERATION
+            || frame["body"]["kind"] != operation
         {
             return Err(invalid());
         }
         return Ok((saved.invocation_id, saved.frame.into_bytes()));
     }
-    let args = crate::services::help::current_generation_args_in(tx)?;
-    let mut body = serde_json::to_value(args).map_err(|_| invalid())?;
+    let mut body = if operation == OPERATION {
+        serde_json::to_value(crate::services::help::current_generation_args_in(tx)?)
+            .map_err(|_| invalid())?
+    } else if operation == CONVENTION_INDEX && revision >= 3 {
+        let scope = run
+            .project_id
+            .clone()
+            .map_or(crate::protocol::data::DataScope::Workspace, |project_id| {
+                crate::protocol::data::DataScope::Project { project_id }
+            });
+        let stored = run
+            .project_id
+            .clone()
+            .map_or(KnowledgeScope::Workspace, KnowledgeScope::Project);
+        let current = tx.conventions().convention_scope_revision(&stored)?;
+        json!({"allScope":scope,"expectedRevision":current})
+    } else {
+        return Err(invalid());
+    };
     body.as_object_mut()
         .ok_or_else(invalid)?
-        .insert("kind".into(), json!(OPERATION));
+        .insert("kind".into(), json!(operation));
     let frame = json!({"protocol":crate::protocol::CONTRACT,"mode":"Command",
         "requestKey":run.id,"schemaRevision":revision,"body":body})
     .to_string();
