@@ -197,7 +197,7 @@ impl Shell {
         );
     }
     fn edit_price(&mut self, model: String) {
-        if self.usage.price_busy || self.usage.prices_loading || self.usage.price_update_available {
+        if self.usage.price_busy || self.usage.price_update_available {
             return;
         }
         let Some(prices) = &self.usage.prices else {

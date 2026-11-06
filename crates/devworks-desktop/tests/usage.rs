@@ -27,6 +27,14 @@ fn replace(h: &mut Ui, label: &str, value: &str) {
     }
     h.step();
     h.step();
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, label)
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some(value),
+        "native input {label} retains the entered value across frame updates"
+    );
 }
 fn project(b: &dyn Backend, name: &str) -> String {
     ops::project_changed(b.command("projects.create", &ops::project_create(b, name, "", &[])))
@@ -334,6 +342,16 @@ fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative
         ["amountUsd"]
         == json!("3.25")));
     press(&mut h, &format!("Edit tariff override for {model}"));
+    assert!(
+        h.state().usage.price_draft.is_some(),
+        "editor open: busy={}, loading={}, update={}, pages={}, more={}, error={:?}",
+        h.state().usage.price_busy,
+        h.state().usage.prices_loading,
+        h.state().usage.price_update_available,
+        h.state().usage.price_pages,
+        h.state().usage.prices.as_ref().is_some_and(|p| p.has_more),
+        h.state().usage.price_error
+    );
     press(&mut h, "Clear tariff override");
     let cleared = price_catalog(&*b, model);
     assert_eq!(cleared.models.0[0].revision.as_str(), "5");
