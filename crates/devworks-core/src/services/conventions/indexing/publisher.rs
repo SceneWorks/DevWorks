@@ -172,6 +172,72 @@ fn recorded(operation: &OperationRecord) -> Option<Value> {
         .flat_map(|a| a.observations.iter().rev())
         .find_map(|v| v.get("conventionPublication").cloned())
 }
+fn completion(op: &crate::protocol::OperationId, chunks: u64, conventions: u64) -> Value {
+    json!({"operationId":op,"indexed":chunks,"conventions":conventions})
+}
+fn captured_count(op: &OperationRecord, job: &IndexJob) -> Option<u64> {
+    op.attempts
+        .iter()
+        .flat_map(|a| &a.observations)
+        .find_map(|v| {
+            let value = v.get("conventionCapture")?;
+            if value["configurationSourceDigest"] != job.configuration_source_digest
+                || value["target"] != json!(job.target)
+            {
+                return None;
+            }
+            value.get("count")?.as_u64()
+        })
+}
+fn completed_headers(
+    read: &dyn ConventionIndexRead,
+    op: &OperationRecord,
+    job: &IndexJob,
+    stopped: &mut dyn FnMut() -> bool,
+) -> Result<Option<Value>, StorageError> {
+    let expected = match &job.target {
+        IndexTarget::One { .. } => 1,
+        IndexTarget::All { .. } => match captured_count(op, job) {
+            Some(count) => count,
+            None => return Ok(None),
+        },
+    };
+    let mut after = None;
+    let mut count = 0u64;
+    let mut chunks = 0u64;
+    loop {
+        if stopped() {
+            return Err(StorageError::Cancelled);
+        }
+        let rows = read.convention_index_generations(None, Some(&op.id), after.as_ref(), 32)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in &rows {
+            if row.state != "Published" {
+                return Ok(None);
+            }
+            if let IndexTarget::One {
+                convention_id,
+                revision,
+            } = &job.target
+                && (&row.convention_id != convention_id || row.convention_revision != *revision)
+            {
+                return Err(invalid(
+                    "published target differs from original index intent",
+                ));
+            }
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| invalid("index target count overflow"))?;
+            chunks = chunks
+                .checked_add(read.convention_chunk_count(&row.generation_id)?)
+                .ok_or_else(|| invalid("index chunk count overflow"))?;
+        }
+        after = rows.last().map(|r| r.generation_id.clone());
+    }
+    Ok((count == expected).then(|| completion(&op.id, chunks, count)))
+}
 impl IndexService {
     fn index_write<T: Send + 'static>(
         &self,
@@ -318,11 +384,11 @@ impl IndexService {
         run: &Publish<'_>,
         ctx: &InvocationContext,
         owner: &StoredConvention,
-    ) -> Result<Result<(), String>, StorageError> {
+    ) -> Result<Result<u64, String>, StorageError> {
         let (op, job, cancel, deadline) = (run.op, run.job, run.cancel, run.deadline);
         self.index_bounded(cancel, deadline)?;
         if owner.lifecycle != "Active" {
-            return Ok(Ok(()));
+            return Ok(Ok(0));
         }
         let mut candidate = header(&op.id, job, owner, self.clock.now_ms().get())?;
         let (existing, head) = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
@@ -335,7 +401,14 @@ impl IndexService {
             ))
         })?;
         if existing.as_ref().is_some_and(|g| g.state == "Published") {
-            return Ok(Ok(()));
+            return Ok(Ok(read_snapshot(
+                &*self.store,
+                &ReadOptions::default(),
+                |read| {
+                    read.conventions()
+                        .convention_chunk_count(&candidate.generation_id)
+                },
+            )?));
         }
         if let Some(existing) = existing {
             candidate = existing;
@@ -566,11 +639,69 @@ impl IndexService {
         let revision = owner.revision;
         let lexical = space.is_none() || !dense;
         let operation_id = op.id.clone();
+        let actual = op.clone();
+        let one = matches!(job.target, IndexTarget::One { .. });
         self.index_write(run, move |tx| {
             if lexical {tx.conventions().set_convention_index_status(&generation,&operation_id,"Indexing","Indexing",Some("Compatible native vectors are unavailable; the full lexical index is published."))?;}
-            tx.conventions().publish_convention_index(&generation, revision, head.as_ref(), count)
+            tx.conventions().publish_convention_index(&generation, revision, head.as_ref(), count)?;
+            if one {let attempt=actual.latest_attempt().ok_or_else(||invalid("index attempt missing"))?;tx.operations().observe(&actual.id,attempt.attempt_no,json!({"conventionPublication":completion(&actual.id,count as u64,1)}))?;}
+            Ok(())
         })?;
-        Ok(Ok(()))
+        Ok(Ok(count as u64))
+    }
+    fn capture_all(&self, run: &Publish<'_>, ctx: &InvocationContext) -> Result<u64, StorageError> {
+        let mut after = None;
+        let mut count = 0u64;
+        loop {
+            self.index_bounded(run.cancel, run.deadline)?;
+            let owners = read_snapshot(
+                &*self.store,
+                &ReadOptions {
+                    cancellation: Some(run.cancel.clone()),
+                    deadline_ms: run.deadline,
+                    ..Default::default()
+                },
+                |read| {
+                    let scope = access::scope(read, ctx, Some(&run.job.scope), false)
+                        .map_err(|_| StorageError::ScopeDenied)?;
+                    read.conventions().conventions(
+                        &ConventionQuery {
+                            scopes: vec![scope.exact],
+                            lifecycles: vec!["Active".into()],
+                            ..Default::default()
+                        },
+                        after.as_ref(),
+                        32,
+                    )
+                },
+            )?;
+            if owners.is_empty() {
+                break;
+            }
+            let headers = owners
+                .iter()
+                .map(|owner| header(&run.op.id, run.job, owner, self.clock.now_ms().get()))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.index_write(run, move |tx| {
+                for header in headers {
+                    if tx
+                        .conventions()
+                        .convention_index_generation(&header.generation_id)?
+                        .is_none()
+                    {
+                        tx.conventions().stage_convention_index(&header)?;
+                    }
+                }
+                Ok(())
+            })?;
+            count = count
+                .checked_add(owners.len() as u64)
+                .ok_or_else(|| invalid("index capture count overflow"))?;
+            after = owners.last().map(StoredConvention::position);
+        }
+        let (op, job) = (run.op.clone(), run.job.clone());
+        self.index_write(run,move|tx|{let attempt=op.latest_attempt().ok_or_else(||invalid("index attempt missing"))?;tx.operations().observe(&op.id,attempt.attempt_no,json!({"conventionCapture":{"count":count,"target":job.target,"configurationSourceDigest":job.configuration_source_digest}}))})?;
+        Ok(count)
     }
     pub fn run_index(
         &self,
@@ -585,11 +716,31 @@ impl IndexService {
         if let Some(result) = recorded(&actual) {
             return Ok(IndexOutcome::Completed(result));
         }
-        if operation.capability != "conventions.index" || operation.payload["kind"] != JOB_KIND {
+        if actual.capability != "conventions.index"
+            || actual.schema_version != 1
+            || actual.payload["kind"] != JOB_KIND
+        {
             return Err(invalid("unsupported index journal"));
         }
-        let job: IndexJob = serde_json::from_value(operation.payload.clone())
+        let job: IndexJob = serde_json::from_value(actual.payload.clone())
             .map_err(|_| invalid("invalid index journal"))?;
+        // Observe immutable publication before fresh source/config admission. A later edit or
+        // selection cannot erase a completed effect, and this path performs no provider work.
+        if let Some(result) = read_snapshot(
+            &*self.store,
+            &ReadOptions {
+                cancellation: Some(cancellation.clone()),
+                deadline_ms,
+                ..Default::default()
+            },
+            |read| {
+                completed_headers(read.conventions(), &actual, &job, &mut || {
+                    self.is_stopped() || cancellation.is_cancelled()
+                })
+            },
+        )? {
+            return Ok(IndexOutcome::Completed(result));
+        }
         let run = Publish {
             op: operation,
             job: &job,
@@ -598,68 +749,109 @@ impl IndexService {
         };
         let (op, j, available) = (operation.clone(), job.clone(), self.native_available());
         let ctx = self.index_write(&run, move |tx| current(tx, &op, &j, available))?;
+        let expected = match job.target {
+            IndexTarget::One { .. } => None,
+            IndexTarget::All { .. } => Some(match captured_count(&actual, &job) {
+                Some(count) => count,
+                None => self.capture_all(&run, &ctx)?,
+            }),
+        };
         let mut after = None;
-        let mut processed = 0;
+        let mut processed = 0u64;
+        let mut chunks = 0u64;
         loop {
             self.index_bounded(cancellation, deadline_ms)?;
-            let owners = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                let scope = access::scope(read, &ctx, Some(&job.scope), false)
-                    .map_err(|_| StorageError::ScopeDenied)?;
-                match &job.target {
-                    IndexTarget::One {
-                        convention_id,
-                        revision,
-                    } => Ok(read
-                        .conventions()
-                        .convention(convention_id, Some(*revision), &scope.readable)?
-                        .into_iter()
-                        .collect::<Vec<_>>()),
-                    IndexTarget::All { .. } => read.conventions().conventions(
-                        &ConventionQuery {
-                            scopes: vec![scope.exact],
-                            lifecycles: vec!["Active".into()],
-                            ..Default::default()
-                        },
+            let headers = read_snapshot(
+                &*self.store,
+                &ReadOptions {
+                    cancellation: Some(cancellation.clone()),
+                    deadline_ms,
+                    ..Default::default()
+                },
+                |read| {
+                    read.conventions().convention_index_generations(
+                        None,
+                        Some(&operation.id),
                         after.as_ref(),
                         32,
-                    ),
-                }
-            })?;
-            if owners.is_empty() {
+                    )
+                },
+            )?;
+            if headers.is_empty() {
                 break;
             }
-            for owner in &owners {
-                if let Err(reason) = self.index_owner(
-                    &Publish {
-                        op: operation,
-                        job: &job,
-                        cancel: cancellation,
-                        deadline: deadline_ms,
-                    },
-                    &ctx,
-                    owner,
-                )? {
-                    return Ok(IndexOutcome::Unknown(reason));
-                }
-                processed += 1;
+            for header in &headers {
+                let count = if header.state == "Published" {
+                    read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                        read.conventions()
+                            .convention_chunk_count(&header.generation_id)
+                    })?
+                } else {
+                    let owner = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+                        let scope = access::scope(read, &ctx, Some(&job.scope), false)
+                            .map_err(|_| StorageError::ScopeDenied)?;
+                        read.conventions()
+                            .convention(
+                                &header.convention_id,
+                                Some(header.convention_revision),
+                                &scope.readable,
+                            )?
+                            .ok_or(StorageError::ScopeDenied)
+                    })?;
+                    match self.index_owner(&run, &ctx, &owner)? {
+                        Ok(count) => count,
+                        Err(reason) => return Ok(IndexOutcome::Unknown(reason)),
+                    }
+                };
+                chunks = chunks
+                    .checked_add(count)
+                    .ok_or_else(|| invalid("index chunk count overflow"))?;
+                processed = processed
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("index target count overflow"))?;
             }
-            if matches!(job.target, IndexTarget::One { .. }) {
-                break;
-            }
-            after = owners.last().map(StoredConvention::position);
+            after = headers.last().map(|h| h.generation_id.clone());
         }
-        let result = json!({"operationId":operation.id,"indexed":processed});
-        let value = result.clone();
-        let op = operation.clone();
-        self.index_write(&run, move |tx| {
-            let attempt = op
-                .latest_attempt()
-                .ok_or_else(|| invalid("index attempt missing"))?;
-            tx.operations().observe(
-                &op.id,
-                attempt.attempt_no,
-                json!({"conventionPublication":value}),
-            )
+        if expected.is_some_and(|count| count != processed) {
+            return Err(invalid("captured index target population changed"));
+        }
+        let result = completion(&operation.id, chunks, processed);
+        if matches!(job.target, IndexTarget::One { .. }) && processed == 1 {
+            return Ok(IndexOutcome::Completed(result));
+        }
+        // All target headers were captured before any provider work. Published headers and
+        // their chunks are immutable while this operation is active. Record the observed
+        // completion under its owner fence, without re-admitting the already applied effect.
+        let (op, value) = (operation.clone(), result.clone());
+        self.write(move |tx| {
+            let current = tx
+                .operations()
+                .operation(&op.id)?
+                .ok_or_else(|| invalid("index operation missing"))?;
+            if current.payload != op.payload
+                || current.latest_attempt().map(|a| a.fence())
+                    != op.latest_attempt().map(|a| a.fence())
+                || !matches!(
+                    current.state,
+                    OperationState::Dispatching | OperationState::OutcomeUnknown
+                )
+            {
+                return Err(StorageError::LeaseLost {
+                    kind: "convention_index",
+                    id: op.id.0.as_str().into(),
+                });
+            }
+            if recorded(&current).is_none() {
+                let attempt = op
+                    .latest_attempt()
+                    .ok_or_else(|| invalid("index attempt missing"))?;
+                tx.operations().observe(
+                    &op.id,
+                    attempt.attempt_no,
+                    json!({"conventionPublication":value}),
+                )?;
+            }
+            Ok(())
         })?;
         Ok(IndexOutcome::Completed(result))
     }

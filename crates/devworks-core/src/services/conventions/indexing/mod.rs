@@ -29,7 +29,6 @@ use std::{
 pub struct IndexService {
     pub(crate) store: Arc<dyn ApplicationStore>,
     pub(crate) artifacts: Arc<ArtifactService>,
-    pub(crate) ids: Arc<dyn IdSource>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) embeddings: RwLock<Option<Arc<dyn embedding::ConventionEmbeddings>>>,
     closed: Arc<lifecycle::PublicationFence>,
@@ -40,13 +39,12 @@ impl IndexService {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         artifacts: Arc<ArtifactService>,
-        ids: Arc<dyn IdSource>,
+        _ids: Arc<dyn IdSource>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             store,
             artifacts,
-            ids,
             clock,
             embeddings: RwLock::new(None),
             closed: Arc::new(lifecycle::PublicationFence::default()),

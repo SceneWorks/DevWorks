@@ -147,10 +147,11 @@ fn accepted_body_has_queued_metadata_and_publishes_complete_lexical_terms_once()
     .unwrap();
     assert_eq!(queued.status, "Queued");
     assert!(queued.embedding_space.is_none());
-    assert!(matches!(
-        f.index.run_index(&op, &Cancellation::new(), None).unwrap(),
-        IndexOutcome::Completed(_)
-    ));
+    let IndexOutcome::Completed(completion) =
+        f.index.run_index(&op, &Cancellation::new(), None).unwrap()
+    else {
+        panic!("complete authored index")
+    };
     let (head, count) = read(&*f.store, |s| {
         let head = s.conventions().convention_index_head(&owner.id)?.unwrap();
         let count = s
@@ -160,6 +161,11 @@ fn accepted_body_has_queued_metadata_and_publishes_complete_lexical_terms_once()
     });
     assert_eq!(head.status, "LexicalOnly");
     assert!(count > 4);
+    assert_eq!(
+        completion["indexed"], count,
+        "retained ingestion result counts chunks rather than pages"
+    );
+    assert_eq!(completion["conventions"], 1);
     assert!(head.error.is_some());
     let stats = read(&*f.store, |s| {
         s.conventions().convention_lexical_statistics(
@@ -576,5 +582,119 @@ fn cancellation_while_waiting_for_sql_writer_cannot_publish() {
             .conventions()
             .convention_index_head(&owner.id))
         .is_none()
+    );
+}
+fn completion_failure(f: &Fixture, enabled: bool) {
+    let connection = rusqlite::Connection::open(f.h.root.join("workspace.sqlite")).unwrap();
+    if enabled {
+        connection.execute_batch("CREATE TRIGGER fail_index_completion BEFORE UPDATE OF observations_json ON operation_attempts WHEN EXISTS(SELECT 1 FROM json_each(NEW.observations_json) WHERE json_type(value,'$.conventionPublication') IS NOT NULL) BEGIN SELECT RAISE(ABORT,'controlled index completion failure');END;").unwrap();
+    } else {
+        connection
+            .execute_batch("DROP TRIGGER fail_index_completion;")
+            .unwrap();
+    }
+}
+#[test]
+fn one_head_and_completion_are_one_atomic_transaction() {
+    let f = Fixture::new();
+    let (owner, op) = f.source("atomic-one", "# Policy\nalpha");
+    completion_failure(&f, true);
+    assert!(f.index.run_index(&op, &Cancellation::new(), None).is_err());
+    completion_failure(&f, false);
+    assert!(
+        read(&*f.store, |r| r
+            .conventions()
+            .convention_index_head(&owner.id))
+        .is_none(),
+        "head must roll back if immutable completion cannot be recorded"
+    );
+    assert!(matches!(
+        f.index.run_index(&op, &Cancellation::new(), None).unwrap(),
+        IndexOutcome::Completed(_)
+    ));
+    let actual = read(&*f.store, |r| r.operations().operation(&op.id)).unwrap();
+    assert_eq!(
+        actual
+            .attempts
+            .iter()
+            .flat_map(|a| &a.observations)
+            .filter(|v| v.get("conventionPublication").is_some())
+            .count(),
+        1
+    );
+}
+#[test]
+fn captured_all_applied_facts_survive_lost_ack_and_changed_catalogue() {
+    let f = Fixture::new();
+    for n in 0..3 {
+        f.source(&format!("original-{n}"), "alpha");
+    }
+    let revision = read(&*f.store, |r| {
+        r.conventions()
+            .convention_scope_revision(&KnowledgeScope::Workspace)
+    });
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &Authority,
+        store: &*f.store,
+        ids: f.h.ids.as_ref(),
+    };
+    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"all-crash","schemaRevision":3,"body":{"kind":"conventions.index","allScope":{"kind":"Workspace"},"expectedRevision":revision.to_string()}});
+    let devworks_core::protocol::CommandReply::Recorded { receipt, .. } = gateway
+        .command(
+            &f.ctx,
+            "conventions.index",
+            frame.to_string().as_bytes(),
+            Arc::new(IndexCommand(f.index.clone())),
+        )
+        .unwrap()
+    else {
+        panic!("durable originalAll")
+    };
+    let id = receipt.operation_id.unwrap();
+    let op = dispatch(&*f.store, &id);
+    completion_failure(&f, true);
+    assert!(f.index.run_index(&op, &Cancellation::new(), None).is_err());
+    completion_failure(&f, false);
+    let actual = read(&*f.store, |r| r.operations().operation(&id)).unwrap();
+    assert!(
+        actual
+            .attempts
+            .iter()
+            .flat_map(|a| &a.observations)
+            .any(|v| v["conventionCapture"]["count"] == 3)
+    );
+    let headers = read(&*f.store, |r| {
+        r.conventions()
+            .convention_index_generations(None, Some(&id), None, 32)
+    });
+    assert_eq!(headers.len(), 3);
+    assert!(headers.iter().all(|h| h.state == "Published"));
+    let (new, _) = f.source("new-after-completion", "beta");
+    let unknown = write(&*f.store, move |tx| {
+        let current = tx.operations().operation(&id)?.unwrap();
+        tx.operations().transition(
+            &id,
+            current.revision,
+            current.latest_attempt().map(|a| a.fence()).as_ref(),
+            devworks_core::protocol::OperationState::OutcomeUnknown,
+            None,
+        )
+    })
+    .unwrap();
+    let IndexOutcome::Completed(value) = f
+        .index
+        .run_index(&unknown, &Cancellation::new(), None)
+        .unwrap()
+    else {
+        panic!("observe completed originaltargetset")
+    };
+    assert_eq!(value["indexed"], 3);
+    assert_eq!(value["conventions"], 3);
+    assert!(
+        read(&*f.store, |r| r
+            .conventions()
+            .convention_index_head(&new.id))
+        .is_none(),
+        "recovery must not silentlyexpand the captured targetset"
     );
 }
