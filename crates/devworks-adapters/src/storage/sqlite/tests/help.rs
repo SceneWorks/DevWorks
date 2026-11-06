@@ -22,7 +22,10 @@ fn claim(s: &SqliteStore, name: &str, revision: i64, registry: i64) -> Operation
             id: saved.clone(),
             root_id: None,
             assignment_id: None,
-            capability: "help.generate".into(),
+            capability: devworks_core::registry::find("help.generate_capability_docs")
+                .unwrap()
+                .name
+                .into(),
             schema_version: 3,
             args_digest: "a".repeat(64),
             payload: json!({"generationId":generation}),
@@ -453,6 +456,18 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     assert_eq!(got.revision, 2);
     assert_eq!(got.generation_id, initial.generation_id);
     assert_eq!(got.generation_operation_id, Some(op.clone()));
+    assert_eq!(
+        read(&s, |r| r
+            .help()
+            .help_generation_operation(&id("initial-generation"))),
+        Some(OperationId(id("initial-op")))
+    );
+    assert_eq!(
+        read(&s, |r| r
+            .help()
+            .help_generation_operation(&id("missing-generation"))),
+        None
+    );
     let mut staged_same = publication("same-generation", &op, 3, 1, "initial-source");
     staged_same.source_digest = initial.source_digest.clone();
     let same_op = op.clone();

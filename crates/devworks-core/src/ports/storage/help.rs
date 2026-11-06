@@ -76,6 +76,11 @@ pub trait HelpRead {
         limit: u16,
     ) -> Result<Vec<StoredHelpDraft>, StorageError>;
     fn help_head(&self) -> Result<StoredHelpHead, StorageError>;
+    /// Immutable original publisher of a published generation; drafts remain invisible.
+    fn help_generation_operation(
+        &self,
+        generation: &Id,
+    ) -> Result<Option<OperationId>, StorageError>;
     /// Published generations only, including historical generations; drafts are invisible.
     fn help_topic(&self, generation: &Id, id: &Id)
     -> Result<Option<StoredHelpTopic>, StorageError>;
