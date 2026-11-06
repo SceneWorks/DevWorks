@@ -1788,6 +1788,30 @@ impl PackageService {
         view::load(read)
     }
 
+    /// Help reports the same current runtime/prerequisite/enablement status as addons.catalog.
+    /// Only this status leaves the owner; configuration and secret bindings are never returned.
+    pub fn help_availability(
+        &self,
+        read: &dyn PackageRegistryRead,
+        package: &StoredPackage,
+        project: Option<&str>,
+    ) -> Result<(String, String), StorageError> {
+        let row = view::package_record(
+            read,
+            &self.registry(read)?,
+            package,
+            &self.platform,
+            &*self.runtimes,
+            project,
+        )?;
+        Ok((
+            row.availability
+                .map_or("Unknown".into(), |state| format!("{state:?}")),
+            row.availability_reason
+                .map_or(String::new(), |reason| reason.0),
+        ))
+    }
+
     /// Reads the guide of this exact installed inspection through the package file owner.
     /// It never activates or launches the package and never consults a remote documentation URL.
     pub fn verified_help(

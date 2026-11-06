@@ -130,8 +130,18 @@ impl HelpService {
             }
         } else if row.source_kind == "Generated" {
             let head = read.help().help_head()?;
+            let owner = read
+                .help()
+                .help_generation_operation(&row.generation_id)?
+                .map(|id| read.operations().operation(&id))
+                .transpose()?
+                .flatten();
+            let input = self.source_digest(read.packages().registry_revision()?);
             if head.app_version != APP_VERSION
-                || head.source_digest != self.source_digest(read.packages().registry_revision()?)
+                || owner.as_ref().is_none_or(|operation| {
+                    operation.payload["kind"] != super::JOB_KIND
+                        || operation.payload["inputDigest"].as_str() != Some(&input)
+                })
             {
                 return Ok((HelpAvailability::Stale,Some("Capability documentation was generated from an older app or registry snapshot.".into())));
             }
@@ -145,8 +155,27 @@ impl HelpService {
         Ok((availability, row.reason.clone()))
     }
 
-    fn summary(&self, read: &dyn ReadSnapshot, row: &StoredHelpTopic) -> R<HelpTopicSummary> {
-        let (availability, reason) = self.state(read, row)?;
+    fn summary(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        row: &StoredHelpTopic,
+    ) -> R<HelpTopicSummary> {
+        let (availability, mut reason) = self.state(read, row)?;
+        if row.source_kind == "Package"
+            && let (Some(owner), Some(package_id)) = (&self.packages, &row.package_id)
+            && let Some(package) = read.packages().package(package_id.as_str())?
+        {
+            let (state, detail) = owner.help_availability(
+                read.packages(),
+                &package,
+                ctx.project_id().map(|id| id.0.as_str()),
+            )?;
+            let current = format!(
+                "Current package availability: {state}. {detail} Documentation is an installed declaration and does not prove activation or grant authority."
+            );
+            reason = Some(reason.map_or(current.clone(), |reason| format!("{reason} {current}")));
+        }
         let content = row
             .content_ref
             .as_ref()
@@ -250,7 +279,7 @@ impl HelpService {
                 {
                     continue;
                 }
-                let summary = self.summary(read, row)?;
+                let summary = self.summary(read, ctx, row)?;
                 if items.len() >= usize::from(limit) {
                     has_more = true;
                     break 'pages;
@@ -332,7 +361,7 @@ impl HelpService {
                 Some(row.version),
             ));
         }
-        let summary = self.summary(read, &row)?;
+        let summary = self.summary(read, ctx, &row)?;
         if !matches!(summary.availability, HelpAvailability::Available) {
             return Ok(unavailable(
                 summary.availability,

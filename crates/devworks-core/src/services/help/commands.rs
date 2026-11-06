@@ -37,15 +37,24 @@ impl HelpService {
     ) -> Result<Decided, Failure> {
         let head = tx.help().help_head()?;
         let registry = tx.packages().registry_revision()?;
-        if head.revision != input.expected_help_revision.get()
-            || registry != input.registry_revision.get()
-        {
-            return Err(Refusal::new(
-                DomainErrorCode::RevisionConflict,
-                "help_generation_source",
-                None,
+        if head.revision != input.expected_help_revision.get() {
+            return Err(StorageError::conflict(
+                crate::protocol::RevisionDimension::Source,
+                "help_catalog",
+                Id::new("help").expect("owned ID"),
+                input.expected_help_revision.clone(),
+                crate::services::sessions::rev(head.revision),
             )
-            .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+            .into());
+        }
+        if registry != input.registry_revision.get() {
+            return Err(StorageError::conflict(
+                crate::protocol::RevisionDimension::Registry,
+                "capability_registry",
+                Id::new("registry").expect("owned ID"),
+                input.registry_revision.clone(),
+                crate::services::sessions::rev(registry),
+            )
             .into());
         }
         if let Some(id) = head.generation_operation_id.as_ref()
