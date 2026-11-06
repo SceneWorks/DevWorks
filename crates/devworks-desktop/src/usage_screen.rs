@@ -679,7 +679,15 @@ impl UsageScreen {
                         model.price_kind,
                         model.revision.as_str()
                     ));
-                    if ui.button("Edit tariff override").clicked() {
+                    let edit = ui.button("Edit tariff override");
+                    edit.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            true,
+                            format!("Edit tariff override for {}", model.model_id.as_str()),
+                        )
+                    });
+                    if edit.clicked() {
                         actions.push(Action::EditPrice(model.model_id.as_str().into()));
                     }
                 });
@@ -982,15 +990,15 @@ fn attempt_ui(ui: &mut Ui, r: &UsageAttemptRecord, actions: &mut Vec<Action>) {
                 .map_or(String::new(), |d| format!(": {}", d.0))
         ));
     }
-    if let Some(work) = &r.work_id {
-        if ui.button("Open attributed work").clicked() {
-            actions.push(Action::OpenWork(work.as_str().into()));
-        }
+    if let Some(work) = &r.work_id
+        && ui.button("Open attributed work").clicked()
+    {
+        actions.push(Action::OpenWork(work.as_str().into()));
     }
-    if let Some(session) = &r.session_id {
-        if ui.button("Open attributed chat").clicked() {
-            actions.push(Action::OpenSession(session.as_str().into()));
-        }
+    if let Some(session) = &r.session_id
+        && ui.button("Open attributed chat").clicked()
+    {
+        actions.push(Action::OpenSession(session.as_str().into()));
     }
     ui.collapsing("Recorded attribution and price provenance", |ui| {
         record_fields(ui, &serde_json::to_value(r).expect("typed attempt"));
