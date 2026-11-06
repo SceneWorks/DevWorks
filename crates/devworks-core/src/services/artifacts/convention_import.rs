@@ -4,11 +4,7 @@ use super::lifecycle::ReaderGuard;
 use super::{ArtifactService, StagedFile, Viewer, complete_operation, visible};
 use crate::{
     context::InvocationContext,
-    ports::{
-        IdKind,
-        files::ArtifactFiles,
-        storage::*,
-    },
+    ports::{IdKind, files::ArtifactFiles, storage::*},
     protocol::{DomainErrorCode, provider::ArtifactRef},
     services::{
         conventions::importing::parser::{Entry, ReadSeek},
@@ -104,13 +100,40 @@ fn matches_reference(version: &StoredVersion, reference: &ArtifactRef) -> bool {
         && version.media_type == reference.media_type
 }
 impl ArtifactService {
-    pub(crate) fn check_import_quota(&self,tx:&mut dyn WriteTransaction,draft:&StoredConventionImport)->Result<(),StorageError> {
-        let pending=tx.conventions().convention_import_storage_usage(&draft.operation_id)?;
-        let maximum=super::setting_i64(tx.configuration(),None,crate::settings::catalog::ARTIFACT_MAX_FILE_KEY).map_err(|_|StorageError::ScopeDenied)?;
-        let quota=super::setting_i64(tx.configuration(),draft.scope.project(),crate::settings::catalog::ARTIFACT_QUOTA_KEY).map_err(|_|StorageError::ScopeDenied)?;
-        let scope=draft.scope.project().cloned().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
-        let total=super::usage(tx.artifacts(),&scope)?.checked_add(pending.additional_scope_bytes).ok_or_else(||StorageError::InvalidRecord("import quota overflow".into()))?;
-        if (maximum>0 && pending.max_entry_bytes>maximum)||(quota>0 && total>quota){return Err(StorageError::InvalidRecord("import exceeds current artifact quota".into()))}Ok(())
+    pub(crate) fn check_import_quota(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        draft: &StoredConventionImport,
+    ) -> Result<(), StorageError> {
+        let pending = tx
+            .conventions()
+            .convention_import_storage_usage(&draft.operation_id)?;
+        let maximum = super::setting_i64(
+            tx.configuration(),
+            None,
+            crate::settings::catalog::ARTIFACT_MAX_FILE_KEY,
+        )
+        .map_err(|_| StorageError::ScopeDenied)?;
+        let quota = super::setting_i64(
+            tx.configuration(),
+            draft.scope.project(),
+            crate::settings::catalog::ARTIFACT_QUOTA_KEY,
+        )
+        .map_err(|_| StorageError::ScopeDenied)?;
+        let scope = draft
+            .scope
+            .project()
+            .cloned()
+            .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let total = super::usage(tx.artifacts(), &scope)?
+            .checked_add(pending.additional_scope_bytes)
+            .ok_or_else(|| StorageError::InvalidRecord("import quota overflow".into()))?;
+        if (maximum > 0 && pending.max_entry_bytes > maximum) || (quota > 0 && total > quota) {
+            return Err(StorageError::InvalidRecord(
+                "import exceeds current artifact quota".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn import_source(

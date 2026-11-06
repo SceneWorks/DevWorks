@@ -68,6 +68,7 @@ pub struct Payload {
     pub sha256: String,
     pub byte_length: u64,
     pub base64: bool,
+    pub non_whitespace: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -116,7 +117,7 @@ impl<'a> Parser<'a> {
         })
     }
     fn peek(&mut self) -> Result<Option<u8>, Error> {
-        if (self.stop)() {
+        if self.reader.buffer().is_empty() && (self.stop)() {
             return Err(Error::Stopped);
         }
         Ok(self.reader.fill_buf()?.first().copied())
@@ -264,7 +265,7 @@ impl<'a> Parser<'a> {
             if values.len() >= max_items {
                 return Err(Error::Invalid("manifest array bound"));
             }
-            let value = self.small(max_chars, false)?;
+            let value = self.small(max_chars, !unique)?;
             if unique && value.contains('\0') {
                 return Err(Error::Invalid("applicability contains NUL"));
             }
@@ -370,8 +371,14 @@ impl<'a> Parser<'a> {
                         return Err(Error::Invalid("unsupported manifest version"));
                     }
                 }
-                "slug" => state.metadata.slug = Some(self.small(200, false)?),
-                "title" => state.metadata.title = Some(self.small(500, false)?),
+                "slug" => state.metadata.slug = Some(self.small(200, true)?),
+                "title" => {
+                    let title = self.small(500, false)?;
+                    if title.chars().all(char::is_whitespace) {
+                        return Err(Error::Invalid("blank title"));
+                    }
+                    state.metadata.title = Some(title);
+                }
                 "parentPath" => {
                     state.metadata.parent_path = Some(self.string_array(3, 200, false)?)
                 }
@@ -387,6 +394,9 @@ impl<'a> Parser<'a> {
                 }
                 "markdown" | "rawContent" => {
                     let payload = self.body(false, super::super::model::MAX_MARKDOWN_BYTES)?;
+                    if key == "markdown" && !payload.non_whitespace {
+                        return Err(Error::Invalid("blank Markdown"));
+                    }
                     let entry = Entry {
                         ordinal: if key == "markdown" { 0 } else { 1 },
                         kind: if key == "markdown" { "Markdown" } else { "Raw" },
@@ -542,6 +552,8 @@ impl<'a> Parser<'a> {
             hash: Sha256::new(),
             bytes: 0,
             max,
+            text: !encoded,
+            non_whitespace: false,
         };
         if encoded {
             let mut decoded = Base64Sink {
@@ -572,6 +584,7 @@ impl<'a> Parser<'a> {
             sha256,
             byte_length: sink.bytes,
             base64: encoded,
+            non_whitespace: sink.non_whitespace,
         })
     }
     /// Decode exactly a previously validated payload into a bounded staging reader's sink.
@@ -708,6 +721,8 @@ struct HashSink {
     hash: Sha256,
     bytes: u64,
     max: u64,
+    text: bool,
+    non_whitespace: bool,
 }
 impl Write for HashSink {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -721,6 +736,12 @@ impl Write for HashSink {
                     "decoded resource exceeds configured byte bound",
                 )
             })?;
+        if self.text {
+            self.non_whitespace |= std::str::from_utf8(bytes)
+                .map_err(|_| io::Error::other("invalid UTF-8"))?
+                .chars()
+                .any(|c| !c.is_whitespace());
+        }
         self.hash.update(bytes);
         Ok(bytes.len())
     }
