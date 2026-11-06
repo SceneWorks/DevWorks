@@ -11,12 +11,16 @@ struct Material {
     blobs: BTreeMap<String, Vec<u8>>,
     schema: Value,
     reads: std::cell::Cell<usize>,
+    tool_reads: std::cell::Cell<usize>,
+    tool_description: String,
 }
 impl Material {
     fn new() -> Self {
         Self {
             blobs: BTreeMap::new(),
             reads: std::cell::Cell::new(0),
+            tool_reads: std::cell::Cell::new(0),
+            tool_description: "Look up the exact current record.".into(),
             schema: json!({"type":"object","properties":{"x":{"type":"string"}},"additionalProperties":false}),
         }
     }
@@ -67,12 +71,13 @@ impl Materials for Material {
         Ok(self.schema.clone())
     }
     fn tool(&self, alias: &ToolSchema) -> Result<PreparedTool, ProviderError> {
+        self.tool_reads.set(self.tool_reads.get() + 1);
         Ok(PreparedTool {
             wire_name: alias.wire_name.clone(),
             capability_id: alias.capability_id.clone(),
             input_schema: alias.input_schema.clone(),
             schema: self.schema.clone(),
-            description: Some("Look up the exact current record.".into()),
+            description: Some(self.tool_description.clone()),
         })
     }
 }
@@ -624,7 +629,7 @@ fn current_registered_tool_metadata_is_required_and_descriptions_reach_each_prof
         input_schema: m.schema_ref(),
     };
     assert!(matches!(
-        materialize::tools(&Bare, &[alias]),
+        materialize::tools(&Bare, &[alias], |_| Ok(())),
         Err(ProviderError::MaterialUnavailable)
     ));
 }
@@ -1315,4 +1320,73 @@ fn embedding_input_artifacts_also_share_the_request_expansion_budget() {
     );
     assert!(matches!(result, Err(ProviderError::TooLarge)));
     assert!(materials.reads.get() <= 4);
+}
+
+#[test]
+fn registered_tool_schemas_and_descriptions_stop_materializing_at_the_request_budget() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for large_schema in [true, false] {
+            let mut materials = Material::new();
+            if large_schema {
+                materials.schema = json!({"type":"object","description":"s".repeat(16*1024)});
+            } else {
+                materials.tool_description = "d".repeat(16 * 1024);
+            }
+            let schema = materials.schema_ref();
+            let mut request = request(&mut materials, &context());
+            let InferenceInput::Generation { tools, .. } = &mut request.input else {
+                unreachable!()
+            };
+            *tools = (0..256)
+                .map(|i| ToolSchema {
+                    capability_id: format!("test/tool-{i}").try_into().unwrap(),
+                    wire_name: format!("tool_{i}"),
+                    input_schema: schema.clone(),
+                })
+                .collect();
+            let binding = binding(profile.clone());
+            let limits = PreparationLimits {
+                request_bytes: 48 * 1024,
+                ..limits()
+            };
+            let result = prepare(
+                identity(binding.clone()),
+                &request,
+                &caps(binding.clone()),
+                &materials,
+                None,
+                &limits,
+            );
+            assert!(matches!(result, Err(ProviderError::TooLarge)));
+            assert!(
+                materials.tool_reads.get() <= 4,
+                "{profile:?} large_schema={large_schema}: resolved {} tools before rejecting a48KiB request",
+                materials.tool_reads.get()
+            );
+            let InferenceInput::Generation { tools, .. } = &mut request.input else {
+                unreachable!()
+            };
+            tools.truncate(2);
+            materials.tool_reads.set(0);
+            let accepted = prepare(
+                identity(binding.clone()),
+                &request,
+                &caps(binding),
+                &materials,
+                None,
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(materials.tool_reads.get(), 2);
+            assert_eq!(accepted.tools.len(), 2);
+            assert!(accepted.body.len() <= limits.request_bytes);
+        }
+    }
 }

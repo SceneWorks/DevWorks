@@ -104,6 +104,7 @@ impl Materials for OwnedMaterials<'_> {
 pub fn tools(
     materials: &dyn Materials,
     aliases: &[ToolSchema],
+    mut charge: impl FnMut(&PreparedTool) -> Result<(), ProviderError>,
 ) -> Result<Vec<PreparedTool>, ProviderError> {
     aliases
         .iter()
@@ -117,6 +118,9 @@ pub fn tools(
             {
                 return Err(ProviderError::InvalidInput("tool_registration_binding"));
             }
+            // Charge before canonical verification and retaining another resolved schema.
+            // The encoder shares this budget with artifact expansion and the final wire bound.
+            charge(&tool)?;
             verify_schema(&alias.input_schema, &tool.schema)?;
             Ok(tool)
         })
