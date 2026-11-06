@@ -51,6 +51,8 @@ struct Job {
     fences: Vec<AuthorityFence>,
     tree: StoredGitWorktree,
     action: Action,
+    #[serde(default)]
+    reviewed_binding: Option<Value>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 enum Action {
@@ -137,7 +139,7 @@ fn oid(head: String) -> GitOid {
 }
 
 impl GitService {
-    fn root_path(&self, id: &Id) -> Result<PathBuf, Failure> {
+    pub(super) fn root_path(&self, id: &Id) -> Result<PathBuf, Failure> {
         let root = self
             .config
             .roots
@@ -171,7 +173,7 @@ impl GitService {
         Ok(root.path.clone())
     }
 
-    fn owned_command(
+    pub(super) fn owned_command(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
@@ -199,7 +201,7 @@ impl GitService {
         Ok((tree, repository, work))
     }
 
-    fn check_work(
+    pub(super) fn check_work(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
@@ -272,6 +274,8 @@ impl GitService {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, Failure> {
+        let reviewed_binding =
+            crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?;
         let op = OperationId(tx.new_id(IdKind::Operation));
         let (mut tree, repository, work, action) = match command.input() {
             OperationInput::Git(ops::Input::Worktree(input)) => {
@@ -506,6 +510,7 @@ impl GitService {
             root_epochs,
             assignment_generation,
             fences,
+            reviewed_binding,
             tree: tree.clone(),
             action,
         };
@@ -979,6 +984,12 @@ impl GitService {
             }
             Action::Push { .. } => return self.execute_push(&job, operation, &git, path),
             Action::Commit { message, expected } => {
+                if let Some(binding) = &job.reviewed_binding {
+                    match git.commit_manifest(path, &expected.hex) {
+                        Ok(manifest) if binding["commitManifest"] == manifest => {}
+                        _ => return changed("reviewed commit contents changed before staging"),
+                    }
+                }
                 match git.revision_observation(path) {
                     Ok(o)
                         if o.head == expected.hex
@@ -991,13 +1002,25 @@ impl GitService {
                     _ => return changed("worktree head or branch changed"),
                 }
                 match git.mutation(path, &["add", "--all", "--"], None, &operation.id, false) {
-                    Ok(_) => git.mutation(
-                        path,
-                        &["commit", "--cleanup=verbatim", "--file=-"],
-                        Some(message.as_bytes().to_vec()),
-                        &operation.id,
-                        false,
-                    ),
+                    Ok(_) => {
+                        if let Some(binding) = &job.reviewed_binding {
+                            match git.staged_commit_manifest(path, &expected.hex) {
+                                Ok(manifest) if binding["commitManifest"] == manifest => {}
+                                _ => {
+                                    return changed(
+                                        "staged commit differs from the reviewed contents",
+                                    );
+                                }
+                            }
+                        }
+                        git.mutation(
+                            path,
+                            &["commit", "--cleanup=verbatim", "--file=-"],
+                            Some(message.as_bytes().to_vec()),
+                            &operation.id,
+                            false,
+                        )
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -1164,28 +1187,10 @@ impl CommandHandler for GitService {
         if env.stopped(self.clock.now_ms().get()) {
             return Err(StorageError::Cancelled);
         }
-        let text = match self
-            .artifacts
-            .open_exact_version(&*self.store, ctx, message)
-        {
-            Err(e) => Err(e.code),
-            Ok(mut version) => {
-                let mut bytes = Vec::new();
-                version
-                    .reader
-                    .by_ref()
-                    .take(64 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| StorageError::unavailable(Unavailable::Io, e.to_string()))?;
-                if bytes.len() > 64 * 1024 || bytes.contains(&0) {
-                    Err(DomainErrorCode::InvalidArgument)
-                } else {
-                    String::from_utf8(bytes)
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                        .ok_or(DomainErrorCode::InvalidArgument)
-                }
-            }
+        let text = match self.commit_message_text(ctx, message) {
+            Ok(text) => Ok(text),
+            Err(Failure::Refused(r)) => Err(r.code),
+            Err(Failure::Storage(e)) => return Err(e),
         };
         Ok(Some(Prepared::new(StagedMessage(text))))
     }

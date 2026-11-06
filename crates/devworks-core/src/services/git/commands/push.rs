@@ -331,3 +331,34 @@ mod tests {
         }
     }
 }
+
+impl GitService {
+    /// The ordinary push preparation is read-only and already verifies physical source and
+    /// registered destination. Review exposes those exact facts, never a guessed remote name.
+    pub(crate) fn approval_push_preflight(
+        &self,
+        ctx: &InvocationContext,
+        input: &GitCommand,
+        env: &Preparation<'_>,
+    ) -> Result<Value, Failure> {
+        let prepared = self
+            .prepare_push(ctx, input, env)?
+            .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "git_push", None))?;
+        let staged = prepared
+            .get::<StagedPush>()
+            .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "git_push", None))?;
+        match &staged.0 {
+            Ok(d) => Ok(
+                json!({"tree":d.tree,"repositoryRevision":d.repository_revision,"url":d.url,
+                "head":d.observed.head,"branch":d.observed.branch}),
+            ),
+            Err(Failure::Refused(r)) => Err(r.clone().into()),
+            Err(_) => {
+                Err(
+                    Refusal::new(DomainErrorCode::ExternalFailure, "git_push_preflight", None)
+                        .into(),
+                )
+            }
+        }
+    }
+}

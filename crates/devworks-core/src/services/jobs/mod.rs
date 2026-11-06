@@ -1620,3 +1620,292 @@ impl JobService {
         Ok(())
     }
 }
+
+// Owner-derived saved-operation review (DW-14). This deliberately shares check_definition,
+// scope_of, plan_of and the occurrence validator with ordinary job commands.
+struct JobApprovalCandidate {
+    scope: crate::ports::storage::ConfigScope,
+    target: Id,
+    revision: i64,
+    title: String,
+    schedule: Schedule,
+    definition: JobDefinition,
+    enabled: bool,
+    before: Option<StoredJob>,
+}
+fn job_approval_candidate(
+    read: &dyn JobRead,
+    ctx: &InvocationContext,
+    input: &OperationInput,
+) -> Result<JobApprovalCandidate, Failure> {
+    use crate::ports::storage::ConfigScope;
+    let (before, title, schedule, definition, enabled, scope) = match input {
+        OperationInput::Jobs(ops::Input::Create(i)) => {
+            let scope = match &i.scope {
+                DataScope::Workspace => ConfigScope::Workspace,
+                DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
+            };
+            (
+                None,
+                i.title.0.clone(),
+                i.schedule.clone(),
+                i.definition.clone(),
+                i.enabled,
+                scope,
+            )
+        }
+        OperationInput::Jobs(ops::Input::Edit(i)) => {
+            let before = visible_job(read, ctx, &i.job_id)?;
+            if before.revision != i.expected_revision.get() {
+                return Err(conflict(
+                    JOB,
+                    &before.id,
+                    i.expected_revision.get(),
+                    before.revision,
+                ));
+            }
+            let scope = before
+                .project_id
+                .clone()
+                .map_or(ConfigScope::Workspace, ConfigScope::Project);
+            let enabled = before.enabled;
+            (
+                Some(before),
+                i.title.0.clone(),
+                i.schedule.clone(),
+                i.definition.clone(),
+                enabled,
+                scope,
+            )
+        }
+        OperationInput::Jobs(ops::Input::Enable(i)) => {
+            let before = visible_job(read, ctx, &i.job_id)?;
+            if before.revision != i.expected_revision.get() {
+                return Err(conflict(
+                    JOB,
+                    &before.id,
+                    i.expected_revision.get(),
+                    before.revision,
+                ));
+            }
+            let scope = before
+                .project_id
+                .clone()
+                .map_or(ConfigScope::Workspace, ConfigScope::Project);
+            (
+                Some(before.clone()),
+                before.title.clone(),
+                parse(&before.schedule)?,
+                parse(&before.definition)?,
+                true,
+                scope,
+            )
+        }
+        OperationInput::Jobs(ops::Input::RunNow(i)) => {
+            let before = visible_job(read, ctx, &i.job_id)?;
+            if before.revision != i.expected_revision.get() {
+                return Err(conflict(
+                    JOB,
+                    &before.id,
+                    i.expected_revision.get(),
+                    before.revision,
+                ));
+            }
+            let scope = before
+                .project_id
+                .clone()
+                .map_or(ConfigScope::Workspace, ConfigScope::Project);
+            (
+                Some(before.clone()),
+                before.title.clone(),
+                parse(&before.schedule)?,
+                parse(&before.definition)?,
+                before.enabled,
+                scope,
+            )
+        }
+        _ => {
+            return Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "saved_job_operation",
+                None,
+            ));
+        }
+    };
+    let title = title.trim().to_owned();
+    if title.is_empty() {
+        return Err(invalid("title"));
+    }
+    let (plan, _) = plan_of(&schedule)?;
+    // The actual command recomputes its future occurrence at dispatch time; absolute time is
+    // intentionally not a review binding (reviewing a schedule must not make it stale by aging).
+    let _ = plan;
+    if let Some(other) = read.job_titled(scope.project_id(), &title)?
+        && before.as_ref().is_none_or(|prior| prior.id != other.id)
+    {
+        return Err(refuse(
+            DomainErrorCode::Conflict,
+            "job_title",
+            Some(&other.id),
+        ));
+    }
+    let (target, revision) = before
+        .as_ref()
+        .map_or_else(|| (scope.target_id(), 1), |j| (j.id.clone(), j.revision));
+    Ok(JobApprovalCandidate {
+        scope,
+        target,
+        revision,
+        title,
+        schedule,
+        definition,
+        enabled,
+        before,
+    })
+}
+fn job_approval_config(job: &StoredJob) -> Value {
+    // Scheduler bookkeeping does not advance configuration revision and is not authorized by
+    // a saved operation. Independent holds and authorization generations DO belong here.
+    json!({"id":job.id,"revision":job.revision,"projectId":job.project_id,"title":job.title,
+        "kind":job.kind,"schedule":job.schedule,"definition":job.definition,"enabled":job.enabled,
+        "authorized":job.authorized,"authorizedBy":job.authorized_by,"hold":job.hold,
+        "activatedEpoch":job.activated_epoch,"projectEpoch":job.project_epoch,"deletedAtMs":job.deleted_at_ms})
+}
+fn job_approval_project(
+    read: &dyn crate::ports::storage::ProjectRead,
+    project: Option<&ProjectId>,
+) -> Result<Value, Failure> {
+    let Some(id) = project else {
+        return Ok(Value::Null);
+    };
+    let p = read
+        .project(id)?
+        .ok_or_else(|| not_found("project", &id.0))?;
+    if p.lifecycle != "Active" {
+        return Err(refuse(
+            DomainErrorCode::Conflict,
+            "project_closed",
+            Some(&id.0),
+        ));
+    }
+    Ok(
+        json!({"id":p.id,"revision":p.revision,"scopeRevision":p.scope_revision,"archiveEpoch":p.archive_epoch,"lifecycle":p.lifecycle}),
+    )
+}
+fn job_approval_prompt(
+    read: &dyn crate::ports::storage::ArtifactRead,
+    definition: &JobDefinition,
+) -> Result<Value, Failure> {
+    match definition {
+        JobDefinition::Inference { prompt, .. } => {
+            crate::services::approvals::owner_preview::artifact_binding(read, prompt)
+        }
+        _ => Ok(Value::Null),
+    }
+}
+fn job_approval_route(
+    read: &dyn crate::ports::storage::RouterRead,
+    definition: &JobDefinition,
+) -> Result<Value, Failure> {
+    match definition {
+        JobDefinition::Inference {
+            route: RouteIntent::Model { model_id },
+            ..
+        } => {
+            if crate::services::router::latest::alias_family(model_id.as_str()).is_some() {
+                return Ok(json!({"latestAlias":model_id}));
+            }
+            let model = read
+                .route_model(model_id)?
+                .ok_or_else(|| not_found("route_model", model_id))?;
+            Ok(
+                json!({"id":model.id,"revision":model.revision,"enabled":model.enabled,
+                "upstreamModelId":model.upstream_model_id,"endpointProfile":model.endpoint_profile,
+                "connectionId":model.connection_id,"efforts":model.efforts}),
+            )
+        }
+        JobDefinition::Inference { route, .. } => Ok(json!({"route":route})),
+        _ => Ok(Value::Null),
+    }
+}
+fn job_approval_preview(
+    candidate: JobApprovalCandidate,
+    project: Value,
+    prompt: Value,
+    route: Value,
+) -> crate::services::approvals::OwnerPreview {
+    let before = candidate.before.as_ref().map(job_approval_config);
+    crate::services::approvals::OwnerPreview {
+        scope: candidate.scope,
+        target_id: candidate.target,
+        target_revision: candidate.revision,
+        summary: format!("Review job {}", candidate.title),
+        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before}),
+        binding: json!({"prior":before,"project":project,"prompt":prompt,"route":route}),
+    }
+}
+impl JobService {
+    pub(crate) fn approval_preview(
+        &self,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<crate::services::approvals::OwnerPreview, Failure> {
+        env.read(|snapshot| {
+            let result = (|| {
+                let candidate = job_approval_candidate(snapshot.jobs(), ctx, &request.input)?;
+                match candidate.scope.project_id() {
+                    Some(p) => crate::services::sessions::require_project(ctx, p)?,
+                    None if ctx.project_id().is_some() => {
+                        return Err(refuse(DomainErrorCode::PermissionDenied, "scope", None));
+                    }
+                    _ => {}
+                }
+                let target = target_project(
+                    candidate.scope.project_id(),
+                    &canonical(&candidate.definition),
+                );
+                let project = job_approval_project(snapshot.projects(), target.as_ref())?;
+                let prompt = job_approval_prompt(snapshot.artifacts(), &candidate.definition)?;
+                let route = job_approval_route(snapshot.router(), &candidate.definition)?;
+                Ok(job_approval_preview(candidate, project, prompt, route))
+            })();
+            Ok(result)
+        })?
+    }
+    pub(crate) fn validate_approval_preview(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
+        preview: &crate::services::approvals::OwnerPreview,
+    ) -> Result<(), Failure> {
+        let candidate = job_approval_candidate(tx.jobs(), ctx, &request.input)?;
+        let scope = match &candidate.scope {
+            crate::ports::storage::ConfigScope::Workspace => DataScope::Workspace,
+            crate::ports::storage::ConfigScope::Project(project_id) => DataScope::Project {
+                project_id: project_id.clone(),
+            },
+        };
+        let project = self.scope_of(tx, ctx, &scope)?;
+        self.check_definition(tx, ctx, project.as_ref(), &candidate.definition)?;
+        let (plan, _) = plan_of(&candidate.schedule)?;
+        Self::first_occurrence(&plan, tx.now_ms(), tx.now_ms())?;
+        let target = target_project(
+            candidate.scope.project_id(),
+            &canonical(&candidate.definition),
+        );
+        let project = job_approval_project(tx.projects(), target.as_ref())?;
+        let prompt = job_approval_prompt(tx.artifacts(), &candidate.definition)?;
+        let route = job_approval_route(tx.router(), &candidate.definition)?;
+        let current = job_approval_preview(candidate, project, prompt, route);
+        if &current != preview {
+            return Err(refuse(
+                DomainErrorCode::SourceChanged,
+                "saved_job_operation",
+                Some(&preview.target_id),
+            ));
+        }
+        Ok(())
+    }
+}

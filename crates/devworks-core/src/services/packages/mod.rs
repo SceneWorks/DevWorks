@@ -156,6 +156,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+mod approval;
 pub mod index;
 pub mod policy;
 pub mod view;
@@ -498,44 +499,13 @@ impl PackageService {
         bundle: &ArtifactRef,
         quiesce: Option<&str>,
     ) -> BundlePrep {
-        let read = self
-            .artifacts
-            .read_exact(&*self.store, ctx, bundle, MAX_BUNDLE_BYTES);
         let guard = GuardCell::new(None);
-        let (bytes, provenance) = match read {
-            Ok(b) => b,
-            Err(e) => {
-                let (code, detail) = match e {
-                    ExactReadRefusal::NotFound => (
-                        "BundleUnavailable",
-                        "The bundle artifact is not available".into(),
-                    ),
-                    ExactReadRefusal::TooLarge { bytes, max } => (
-                        "BundleTooLarge",
-                        format!("The bundle is {bytes} bytes; the limit is {max}"),
-                    ),
-                    ExactReadRefusal::Unreadable => (
-                        "BundleUnavailable",
-                        "The bundle artifact cannot be read".into(),
-                    ),
-                    ExactReadRefusal::Storage(e) => ("BundleUnavailable", format!("{e:?}")),
-                };
+        let (inspected, provenance) = match self.inspect_bundle_source(ctx, bundle) {
+            Ok(result) => result,
+            Err((code, detail, provenance)) => {
                 return BundlePrep {
                     target: quiesce.map(str::to_owned),
-                    outcome: Err((code.into(), detail)),
-                    provenance: Value::Null,
-                    bundle: bundle.clone(),
-                    guard,
-                    _held: None,
-                };
-            }
-        };
-        let inspected = match self.inspector.inspect(&bytes) {
-            Ok(i) => i,
-            Err(e) => {
-                return BundlePrep {
-                    target: quiesce.map(str::to_owned),
-                    outcome: Err((e.code().into(), e.detail().to_owned())),
+                    outcome: Err((code, detail)),
                     provenance,
                     bundle: bundle.clone(),
                     guard,
