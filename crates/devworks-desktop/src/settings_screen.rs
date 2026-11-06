@@ -17,6 +17,7 @@ use devworks_core::settings::view::{Health, Item, SettingsView, Source, Status};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+mod secrets;
 
 /// The keys whose runtime health is checked: configured directories and keep-awake.
 pub const KEEP_AWAKE: &str = "power.keepAwake";
@@ -44,6 +45,9 @@ pub struct SettingsScreen {
     pub explained: BTreeSet<String>,
     pub scrolls: crate::virtual_list::Scrolls,
     buffers: HashMap<&'static str, String>,
+    secret_inputs: HashMap<&'static str, secrets::Input>,
+    /// Only the key currently entering the native store; excluded from SettingsMemory.
+    pub(crate) secret_intake: Option<String>,
     /// Settings → Provider connections (DW-18).
     pub connections: ConnectionsPanel,
     /// The provider-connections topic is selected instead of a settings category.
@@ -58,6 +62,11 @@ pub enum SettingsAction {
     Reload,
     Validate,
     Save,
+    /// Native user input only; the worker stages it before preparing the reference-only save.
+    StoreSecret {
+        key: String,
+        value: Option<devworks_core::ports::secrets::Secret>,
+    },
     Explain(String),
     ChooseDirectory(String),
     OpenAddOns,
@@ -495,6 +504,7 @@ impl SettingsScreen {
             return;
         }
         let buffers = &mut self.buffers;
+        let secret_inputs = &mut self.secret_inputs;
         let n = view.dirty_keys().len();
         let blocked = view.has_blocking_issues();
         egui::Frame::new()
@@ -509,10 +519,17 @@ impl SettingsScreen {
                         "{n} unsaved change{}",
                         if n == 1 { "" } else { "s" }
                     ));
-                    if widgets::secondary_button(ui, "Discard all").clicked() {
+                    if ui
+                        .add_enabled_ui(self.secret_intake.is_none(), |ui| {
+                            widgets::secondary_button(ui, "Discard all")
+                        })
+                        .inner
+                        .clicked()
+                    {
                         view.discard_all();
                         // Editor text (model lists) shows drafts too: drop it with them.
                         buffers.clear();
+                        secret_inputs.clear();
                     }
                     if ui
                         .add_enabled(!self.validating, egui::Button::new("Validate"))
@@ -546,6 +563,7 @@ impl SettingsScreen {
         };
         let d = item.descriptor;
         let explained = self.explained.contains(key);
+        let intake_pending = self.secret_intake.as_deref() == Some(key);
         let mut edit: Option<Value> = None;
         let mut inherit = false;
         let mut discard = false;
@@ -571,7 +589,18 @@ impl SettingsScreen {
                 ui.label(RichText::new(d.description).color(theme::MUTED));
                 let enabled = item.editable;
                 ui.add_enabled_ui(enabled, |ui| {
-                    edit = self_editor(ui, &mut self.buffers, &item, actions);
+                    if d.kind == ValueKind::SecretRef {
+                        secrets::editor(
+                            ui,
+                            self.secret_inputs.entry(d.key).or_default(),
+                            &item,
+                            self.saving,
+                            self.connections.secret_store.as_ref(),
+                            actions,
+                        );
+                    } else {
+                        edit = self_editor(ui, &mut self.buffers, &item, actions);
+                    }
                 });
                 ui.horizontal_wrapped(|ui| {
                     widgets::caption(
@@ -602,14 +631,28 @@ impl SettingsScreen {
                 }
                 ui.horizontal_wrapped(|ui| {
                     if item.is_dirty()
-                        && widgets::secondary_button(ui, &format!("Discard change to {}", d.label))
+                        && ui
+                            .add_enabled_ui(!intake_pending, |ui| {
+                                widgets::secondary_button(
+                                    ui,
+                                    &format!("Discard change to {}", d.label),
+                                )
+                            })
+                            .inner
                             .clicked()
                     {
                         discard = true;
                     }
                     if item.editable
                         && item.status == Status::Overridden
-                        && widgets::secondary_button(ui, &format!("Reset {} to default", d.label))
+                        && ui
+                            .add_enabled_ui(!intake_pending, |ui| {
+                                widgets::secondary_button(
+                                    ui,
+                                    &format!("Reset {} to default", d.label),
+                                )
+                            })
+                            .inner
                             .clicked()
                     {
                         inherit = true;
@@ -624,9 +667,11 @@ impl SettingsScreen {
         if discard {
             view.discard(key);
             self.buffers.remove(key);
+            self.secret_inputs.remove(key);
         } else if inherit {
             let _ = view.inherit(key);
             self.buffers.remove(key);
+            self.secret_inputs.remove(key);
         } else if let Some(v) = edit {
             let _ = view.edit(key, v);
         }
@@ -816,20 +861,8 @@ fn self_editor(
                 )
             })
         }
-        ValueKind::SecretRef => {
-            let configured = shown.get("secretRef").is_some();
-            ui.label(if configured {
-                "A stored credential is referenced."
-            } else {
-                "No credential configured."
-            });
-            widgets::caption(
-                ui,
-                "Credentials are entered through the native secure credential flow (DW-18); \
-                 Settings never shows or accepts a raw secret.",
-            );
-            None
-        }
+        // Secret input uses the dedicated transient native-intake editor in item_ui.
+        ValueKind::SecretRef => None,
     }
 }
 
