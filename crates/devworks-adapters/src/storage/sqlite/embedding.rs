@@ -289,7 +289,10 @@ impl EmbeddingRepository for Unit<'_> {
                 .as_ref()
                 != Some(fence)
         {
-            return Err(StorageError::LeaseLost);
+            return Err(StorageError::LeaseLost {
+                kind: "embedding_probe",
+                id: id.as_str().into(),
+            });
         }
         check_evidence(self, id, &p, evidence)?;
         if let Some(previous) = q.evidence.as_ref() {
@@ -338,7 +341,10 @@ impl EmbeddingRepository for Unit<'_> {
             .as_ref()
             != Some(fence)
         {
-            return Err(StorageError::LeaseLost);
+            return Err(StorageError::LeaseLost {
+                kind: "embedding_probe",
+                id: id.as_str().into(),
+            });
         }
         let valid_state = match state {
             EmbeddingQualificationState::Qualified => {
