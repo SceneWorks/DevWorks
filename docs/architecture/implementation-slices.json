@@ -1807,7 +1807,8 @@
       "mcp_server_access",
       "session_auto_routing",
       "model_latest",
-      "work_item_metadata"
+      "work_item_metadata",
+      "embedding_spaces"
     ],
     "eval_acceptance": [
       "eval_recorded",
@@ -1883,5 +1884,49 @@
     ],
     "newOperation": "next_work.inspect_queue",
     "scope": "Preserve existing primary operation ownership and all 377 source requirements; restore frozen type/label authoring and full allocation result/filter semantics."
-  }
+  },
+  "nativeExtensions": [
+    {
+      "key": "embedding_spaces",
+      "id": "DW-119",
+      "type": "Feature",
+      "title": "Configure and qualify persistent native embedding spaces",
+      "operations": [
+        "router.embedding_spaces"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "credentials",
+        "transports",
+        "usage"
+      ],
+      "acceptance": "Explicit persistent candidate setup, accounted native positive qualification and separately revisioned selection; no automatic paid/first-conversation route. Current connection/account/model/config identity fences use without rewriting historical spaces. Scoped status, cancellation/replay and native UI/SQLite/transport evidence remain required.",
+      "gates": [
+        "G03",
+        "G06",
+        "G11"
+      ],
+      "status": "Native extension in progress; no acceptance claimed",
+      "supportingOperations": [
+        "router.configure"
+      ],
+      "configurationActions": [
+        "CreateEmbeddingSpace",
+        "QualifyEmbeddingSpace",
+        "SelectEmbeddingSpace",
+        "ClearEmbeddingSpace"
+      ],
+      "sourceKind": "Explicit native extension tracked in DW-119; not a fabricated retained source entry",
+      "additionalPrimaryRequirements": [
+        "ROUTE-09",
+        "ROUTE-10",
+        "RAG-04",
+        "RAG-07",
+        "RAG-08"
+      ],
+      "additionalCapabilityCases": [
+        "CAP-ROUTER"
+      ]
+    }
+  ]
 }

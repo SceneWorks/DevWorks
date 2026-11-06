@@ -429,7 +429,7 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // add 23 operation/mode/revision admissions. Two new eval operations bring the
     // revision-1 bindings to 361 and the complete revision/mode coverage to 498. Router catalog revision 3 adds one admission; route/pin/availability revision 3 add three more. DW13 adds eight result revisions and inspect_queue at3; DW109 adds21 related metadata revisions, for532 total. DW14 adds seven existing revision3 surfaces and two new revision3-only operations, for541. DW21 adds usage/status/override revision3 for544. Explicit connection billing authoring/query adds two revision3 admissions for546.
     // Help adds four revision-3 queries; all twenty graph operations add revision 3.
-    // These add24 to546. Conventions adds fourteen revision-3 mode bindings;
+    // These add24 to546. Conventions and embedding spaces add fourteen revision-3 bindings;
     // fixture admission independently verifies all584 bindings.
     assert_eq!(admitted.len(), 584);
 }

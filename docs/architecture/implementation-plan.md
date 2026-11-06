@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 377 requirements, 359 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 78 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 377 requirements, 360 operations across 49 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 79 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -18,13 +18,13 @@ The dependency order is a valid topological order, not a timeline or resource es
 
 Unit and integration suites use deterministic fixtures without inference compute. Real inference compatibility and end-to-end runs retain their separate, later authorized entry point. Workload IDs describe unexecuted production measurements.
 
-DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 78 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.
+DW-038 (conditional external HelixDB reader) was removed by explicit user decision on 2 November 2026. Its ID is retired, not reassigned; 79 planned slices are now represented, including the separately approved EVAL feature. No HelixDB source adapter or engine is an app dependency.
 
 ![Coverage and qualification gates](architecture-diagrams/41-implementation-coverage.svg)
 
 ## Dependency order
 
-DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-109 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-108 → DW-107 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082
+DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-008 → DW-009 → DW-010 → DW-011 → DW-012 → DW-109 → DW-013 → DW-014 → DW-015 → DW-017 → DW-016 → DW-018 → DW-019 → DW-020 → DW-021 → DW-022 → DW-023 → DW-044 → DW-045 → DW-024 → DW-025 → DW-026 → DW-027 → DW-028 → DW-029 → DW-030 → DW-031 → DW-032 → DW-033 → DW-034 → DW-035 → DW-036 → DW-037 → DW-039 → DW-041 → DW-042 → DW-040 → DW-043 → DW-046 → DW-047 → DW-048 → DW-049 → DW-050 → DW-051 → DW-052 → DW-053 → DW-054 → DW-055 → DW-056 → DW-057 → DW-058 → DW-059 → DW-060 → DW-061 → DW-064 → DW-063 → DW-108 → DW-107 → DW-119 → DW-062 → DW-071 → DW-072 → DW-073 → DW-074 → DW-075 → DW-076 → DW-077 → DW-078 → DW-079 → DW-080 → DW-081 → DW-082
 
 ## Slice register
 
@@ -90,7 +90,7 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-059](#dw-059) | Discover and install approved signed app updates | DW-058, DW-044, DW-014 | G10 |
 | [DW-060](#dw-060) | Qualify native target installers and optional assets | DW-010, DW-018, DW-047, DW-048, DW-050, DW-058, DW-059 | G02, G04, G08, G09, G10 |
 | [DW-061](#dw-061) | Measure all representative workloads without inference | DW-060, DW-057 | G12 |
-| [DW-062](#dw-062) | Reconcile full retained behavior and release readiness | DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064, DW-107, DW-108, DW-109 | G11 |
+| [DW-062](#dw-062) | Reconcile full retained behavior and release readiness | DW-001, DW-002, DW-003, DW-004, DW-005, DW-006, DW-007, DW-008, DW-009, DW-010, DW-011, DW-012, DW-013, DW-014, DW-015, DW-016, DW-017, DW-018, DW-019, DW-020, DW-021, DW-022, DW-023, DW-024, DW-025, DW-026, DW-027, DW-028, DW-029, DW-030, DW-031, DW-032, DW-033, DW-034, DW-035, DW-036, DW-037, DW-039, DW-040, DW-041, DW-042, DW-043, DW-044, DW-045, DW-046, DW-047, DW-048, DW-049, DW-050, DW-051, DW-052, DW-053, DW-054, DW-055, DW-056, DW-057, DW-058, DW-059, DW-060, DW-061, DW-063, DW-064, DW-107, DW-108, DW-109, DW-119 | G11 |
 | [DW-063](#dw-063) | Expose indexed code, planned work and Knowledge to MCP clients | DW-001, DW-028, DW-029, DW-012, DW-013, DW-030, DW-033, DW-035, DW-007, DW-008, DW-064 | G04, G06, G10, G11 |
 | [DW-064](#dw-064) | Authorize external MCP clients and selected work or Knowledge commands | DW-005, DW-018, DW-004, DW-010, DW-009, DW-014 | G04, G10, G11 |
 | [DW-071](#dw-071) | Grade recorded work end to end | None | G11 |
@@ -108,6 +108,7 @@ DW-001 → DW-002 → DW-003 → DW-004 → DW-005 → DW-006 → DW-007 → DW-
 | [DW-107](#dw-107) | Choose and pin DevWorks Auto once per new session | DW-016, DW-020, DW-022, DW-108 | G03, G11 |
 | [DW-108](#dw-108) | Keep latest model aliases and catalog availability current | DW-017, DW-018 | G03, G11 |
 | [DW-109](#dw-109) | Restore task type and labels for retained work allocation filters | DW-012 | G01, G11 |
+| [DW-119](#dw-119) | Configure and qualify persistent native embedding spaces | DW-007, DW-018, DW-019, DW-021 | G03, G06, G11 |
 
 ## Concrete outcomes and acceptance
 
@@ -1400,6 +1401,22 @@ Implement the recorded strict input/result/error schemas and selected-operation/
 **Supporting requirements:** WORK-02, WORK-03, WORK-04, WORK-10, WORK-11, WORK-12
 
 **Behavior/workload obligations:** Slice-specific acceptance above.. Frozen source entries bound: 0. Pending input schemas: 0.
+
+### DW-119
+
+**Configure and qualify persistent native embedding spaces** · Feature · Native extension in progress; no acceptance claimed.
+
+Explicit persistent candidate setup, accounted native positive qualification and separately revisioned selection; no automatic paid/first-conversation route. Current connection/account/model/config identity fences use without rewriting historical spaces. Scoped status, cancellation/replay and native UI/SQLite/transport evidence remain required.
+
+Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
+
+**Operations:** `router.embedding_spaces`
+
+**Primary requirement cases:** AT-ROUTE-09, AT-ROUTE-10, AT-RAG-04, AT-RAG-07, AT-RAG-08
+
+**Supporting requirements:** None assigned.
+
+**Behavior/workload obligations:** CAP-ROUTER. Frozen source entries bound: 0. Pending input schemas: 0.
 
 ## Acceptance group ownership
 

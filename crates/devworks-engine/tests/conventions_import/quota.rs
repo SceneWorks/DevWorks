@@ -106,6 +106,7 @@ struct RetainedState {
     artifacts: [Vec<StoredArtifact>; 2],
     usage: [i64; 2],
     revisions: [i64; 2],
+    index_revisions: [i64; 2],
 }
 fn retained(f: &Fx, source: &ProjectId, destination: &ProjectId) -> RetainedState {
     read(&*f.store, |r| {
@@ -143,6 +144,12 @@ fn retained(f: &Fx, source: &ProjectId, destination: &ProjectId) -> RetainedStat
             revisions: [
                 r.conventions().convention_scope_revision(&scopes[0])?,
                 r.conventions().convention_scope_revision(&scopes[1])?,
+            ],
+            index_revisions: [
+                r.conventions()
+                    .convention_index_source_revision(&scopes[0])?,
+                r.conventions()
+                    .convention_index_source_revision(&scopes[1])?,
             ],
         })
     })

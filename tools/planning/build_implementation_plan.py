@@ -14,7 +14,8 @@ SOURCES = ['implementation-slices.json', 'devworks-capability-catalog.json',
 def read(name): return json.loads((BASE / name).read_text())
 def write(name, value): (BASE / name).write_text(json.dumps(value, indent=2) + '\n')
 
-slices = read('implementation-slices.json')['slices']
+slice_source = read('implementation-slices.json')
+slices = slice_source['slices'] + slice_source.get('nativeExtensions', [])
 bykey = {s['key']: s for s in slices}
 assert len(bykey) == len(slices), 'Duplicate slice key'
 # Each approved feature retains its terminal acceptance scope; the native baseline does not
@@ -157,11 +158,17 @@ workloads = [{**w, 'measurementSlice':'performance', 'domainSlices':workowners[w
              for w in read('validation-workloads.json')['workloads']]
 for s in slices:
     key = s['key']
+    # Native extensions retain their explicitly tracked requirement/capability obligations
+    # without changing the frozen retained-source ownership or fabricating source entries.
+    extra_requirements = s.get('additionalPrimaryRequirements', [])
+    extra_cases = s.get('additionalCapabilityCases', [])
+    assert set(extra_requirements) <= {r['requirement'] for r in requirements}
+    assert set(extra_cases) <= {c['id'] for c in capcases}
     s['dependsOn'] = [bykey[k]['id'] for k in s['dependsOnKeys']]
     s['ownedOperations'] = [o['operation'] for o in operations if o['primarySlice'] == key]
-    s['primaryRequirements'] = [r['requirement'] for r in requirements if r['primarySlice'] == key]
+    s['primaryRequirements'] = list(dict.fromkeys([r['requirement'] for r in requirements if r['primarySlice'] == key] + extra_requirements))
     s['supportingRequirements'] = [r['requirement'] for r in requirements if key in r['supportingSlices']]
-    s['capabilityCases'] = [c['id'] for c in capcases if key in [c['primarySlice'],*c['supportingSlices']]]
+    s['capabilityCases'] = list(dict.fromkeys([c['id'] for c in capcases if key in [c['primarySlice'],*c['supportingSlices']]] + extra_cases))
     s['sourceEntryIds'] = [e['id'] for e in entries if key in e['implementationSlices']]
     s['workloads'] = [w['id'] for w in workloads if key in [w['measurementSlice'],*w['domainSlices']]]
     s['pendingInputSchemas'] = [o['operation'] for o in operations if o['primarySlice'] == key and not o['inputSchema']]
