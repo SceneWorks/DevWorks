@@ -212,6 +212,7 @@ impl ArtifactFiles for PublishGate {
 }
 #[test]
 fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalog_publication() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);

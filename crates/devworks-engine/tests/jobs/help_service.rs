@@ -81,6 +81,7 @@ fn finish(rt: &tokio::runtime::Runtime, app: HelpApp) {
 
 #[test]
 fn help_only_agent_reads_inline_and_allowed_legacy_audiences_can_read_the_real_artifact() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -182,6 +183,7 @@ fn help_only_agent_reads_inline_and_allowed_legacy_audiences_can_read_the_real_a
 
 #[test]
 fn help_pages_and_unicode_passages_are_exact_and_cursors_reject_cross_query_or_principal() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -262,6 +264,7 @@ fn help_pages_and_unicode_passages_are_exact_and_cursors_reject_cross_query_or_p
 
 #[test]
 fn current_help_binds_real_screens_and_reports_missing_versions_and_packages_without_fake_refs() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -343,6 +346,7 @@ fn public_workspace_artifacts(
 
 #[test]
 fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the_host_marker() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -571,6 +575,7 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
 
 #[test]
 fn concurrent_generation_never_reports_someone_elses_pending_effect_as_completed() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -625,6 +630,7 @@ fn concurrent_generation_never_reports_someone_elses_pending_effect_as_completed
 
 #[test]
 fn unchanged_regeneration_preserves_topic_references_and_exact_receipt_replay() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let app = boot_help(&rt, &h);
@@ -705,6 +711,7 @@ fn unchanged_regeneration_preserves_topic_references_and_exact_receipt_replay() 
 
 #[test]
 fn missing_or_corrupt_generated_source_can_be_rebuilt_without_losing_other_help() {
+    let _native_case = crate::common::native_runtime_case();
     for missing in [true, false] {
         let rt = runtime();
         let h = Harness::new();
@@ -891,6 +898,7 @@ impl ApplicationStore for PublicationAckLoss {
 }
 #[test]
 fn lost_catalog_publication_ack_recovers_from_one_exact_durable_observation() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let loss = Arc::new(PublicationAckLoss {
@@ -1061,6 +1069,7 @@ fn core_help(
 }
 #[test]
 fn a_restart_resumes_only_the_original_invisible_draft_and_preserves_prepared_refs() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let (operation_id, generation, prepared) = {
@@ -1135,6 +1144,7 @@ fn a_restart_resumes_only_the_original_invisible_draft_and_preserves_prepared_re
 
 #[test]
 fn a_cold_source_change_does_not_strand_the_next_generation_behind_a_failed_partition() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let store = h.open();
@@ -1208,6 +1218,7 @@ fn a_cold_source_change_does_not_strand_the_next_generation_behind_a_failed_part
 
 #[test]
 fn cancelled_unpublished_drafts_are_cleaned_in_bounded_pages_without_touching_published_refs() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let store: Arc<dyn ApplicationStore> = Arc::new(PublicationAckLoss {
@@ -1289,6 +1300,7 @@ fn cancelled_unpublished_drafts_are_cleaned_in_bounded_pages_without_touching_pu
 
 #[test]
 fn composed_capability_changes_remove_only_orphan_auto_topics_and_keep_authored_guides() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let store = h.open();

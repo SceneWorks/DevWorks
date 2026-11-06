@@ -263,6 +263,7 @@ fn transient_help_fault_case(
 
 #[test]
 fn transient_help_open_and_mid_read_faults_preserve_source_and_recover_the_same_operations() {
+    let _native_case = crate::common::native_runtime_case();
     let rt = runtime();
     let h = Harness::new();
     let files = Arc::new(FaultFiles {
