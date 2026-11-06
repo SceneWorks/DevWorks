@@ -50,8 +50,6 @@ pub fn unindexed() -> ConventionIndexStatus {
         status: ConventionIndexPhase::NotIndexed,
         generation_id: None,
         source_revision: None,
-        resource_id: None,
-        resource_revision: None,
         source_digest: None,
         embedding_space: None,
         indexed_chunks: None,
@@ -97,7 +95,6 @@ pub fn record(
 pub fn resource(
     row: &StoredConventionResource,
     owner: &StoredConvention,
-    index: ConventionIndexStatus,
 ) -> Result<ConventionResourceRecord, StorageError> {
     let result = ConventionResourceRecord {
         id: row.id.clone(),
@@ -120,7 +117,7 @@ pub fn resource(
         author_id: row.author_id.clone(),
         created_at_ms: counter(row.created_at_ms),
         deleted_at_ms: row.deleted_at_ms.map(counter),
-        index,
+        media_type: GraphText(row.media_type.clone()),
     };
     result.check().map_err(StorageError::InvalidRecord)?;
     Ok(result)

@@ -14,7 +14,7 @@ use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision};
+use crate::protocol::{Counter, Id, OperationId, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,13 @@ pub struct ListInput {
     )]
     #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
     pub lifecycles: Option<Items<ConventionLifecycle>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ConventionOrder", extend("x-since" = 3))]
+    pub order: Option<ConventionOrder>,
 }
 impl Check for ListInput {
     fn check(&self) -> Result<(), String> {
@@ -40,6 +47,7 @@ impl Check for ListInput {
         self.page.check()?;
         self.applicability.check()?;
         self.lifecycles.check()?;
+        self.order.check()?;
         Ok(())
     }
 }
@@ -48,13 +56,16 @@ impl Revisioned for ListInput {
         if revision < 3 {
             self.lifecycles = None;
         }
+        if revision < 3 {
+            self.order = None;
+        }
     }
 }
 
 /// `conventions.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["conventionId"]}, {"required": ["slug"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["conventionId"]}, {"required": ["slug"], "x-since": 3}, {"required": ["operationId"], "x-since": 3}]))]
 pub struct ReadInput {
     #[serde(
         default,
@@ -107,6 +118,27 @@ pub struct ReadInput {
     )]
     #[schemars(with = "ConventionIndexedPath", extend("x-since" = 3))]
     pub section_path: Option<ConventionIndexedPath>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 3))]
+    pub operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub resource_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub max_bytes: Option<Counter>,
 }
 impl Check for ReadInput {
     fn check(&self) -> Result<(), String> {
@@ -118,6 +150,9 @@ impl Check for ReadInput {
         self.cursor.check()?;
         self.max_chars.check()?;
         self.section_path.check()?;
+        self.operation_id.check()?;
+        self.resource_id.check()?;
+        self.max_bytes.check()?;
         Ok(())
     }
 }
@@ -140,6 +175,15 @@ impl Revisioned for ReadInput {
         }
         if revision < 3 {
             self.section_path = None;
+        }
+        if revision < 3 {
+            self.operation_id = None;
+        }
+        if revision < 3 {
+            self.resource_id = None;
+        }
+        if revision < 3 {
+            self.max_bytes = None;
         }
     }
 }
@@ -318,8 +362,15 @@ impl Revisioned for ApplicabilityInput {
 /// `conventions.retire` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["conventionId", "expectedRevision"]}, {"required": ["expectedRevision", "operationId"], "x-since": 3}]))]
 pub struct RetireInput {
-    pub convention_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id")]
+    pub convention_id: Option<Id>,
     pub expected_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<Id>,
@@ -330,6 +381,13 @@ pub struct RetireInput {
     )]
     #[schemars(with = "DataScope", extend("x-since" = 3))]
     pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 3))]
+    pub operation_id: Option<OperationId>,
 }
 impl Check for RetireInput {
     fn check(&self) -> Result<(), String> {
@@ -337,6 +395,7 @@ impl Check for RetireInput {
         self.expected_revision.check()?;
         self.resource_id.check()?;
         self.scope.check()?;
+        self.operation_id.check()?;
         Ok(())
     }
 }
@@ -344,6 +403,9 @@ impl Revisioned for RetireInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.scope = None;
+        }
+        if revision < 3 {
+            self.operation_id = None;
         }
     }
 }
@@ -518,44 +580,22 @@ pub struct ResourcesInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Id", extend("x-since" = 3))]
-    pub convention_id: Option<Id>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "gated_member"
-    )]
-    #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
-    pub lifecycles: Option<Items<ConventionLifecycle>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "gated_member"
-    )]
-    #[schemars(with = "Revision", extend("x-since" = 3))]
-    pub convention_revision: Option<Revision>,
+    #[schemars(with = "ConventionResourcesSelection", extend("x-since" = 3))]
+    pub selection: Option<ConventionResourcesSelection>,
 }
 impl Check for ResourcesInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
         self.page.check()?;
         self.applicability.check()?;
-        self.convention_id.check()?;
-        self.lifecycles.check()?;
-        self.convention_revision.check()?;
+        self.selection.check()?;
         Ok(())
     }
 }
 impl Revisioned for ResourcesInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
-            self.convention_id = None;
-        }
-        if revision < 3 {
-            self.lifecycles = None;
-        }
-        if revision < 3 {
-            self.convention_revision = None;
+            self.selection = None;
         }
     }
 }
@@ -608,6 +648,13 @@ pub struct SearchInput {
     )]
     #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
     pub lifecycles: Option<Items<ConventionLifecycle>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+    pub top_k: Option<SignedCounter>,
 }
 impl Check for SearchInput {
     fn check(&self) -> Result<(), String> {
@@ -616,6 +663,7 @@ impl Check for SearchInput {
         self.applicability.check()?;
         self.text.check()?;
         self.lifecycles.check()?;
+        self.top_k.check()?;
         Ok(())
     }
 }
@@ -623,6 +671,9 @@ impl Revisioned for SearchInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.lifecycles = None;
+        }
+        if revision < 3 {
+            self.top_k = None;
         }
     }
 }

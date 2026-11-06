@@ -121,10 +121,16 @@ def convention_conversion(definition):
         arm = 'Self::Current(value) => project(value),'
     elif kind == 'convention_read':
         helpers = project
-        arm = 'Self::Current(value) if matches!(value.format, ConventionFormat::Markdown) => project(&value.convention),'
+        arm = 'Self::Current(ConventionReadOutcome::Document { view }) if matches!(view.format, ConventionFormat::Markdown) => project(&view.convention),'
+    elif kind == 'convention_resources':
+        helpers = project + resource
+        arm = """Self::Current(ConventionResourcesView::Catalog { page }) => page.items.0.iter().map(project).collect::<Option<Vec<_>>>()
+                    .map(|items| Page { items: BoundedList(items), next_cursor: page.next_cursor.clone(), has_more: page.has_more }),
+                Self::Current(ConventionResourcesView::Attachments { page }) => page.items.0.iter().map(resource).collect::<Option<Vec<_>>>()
+                    .map(|items| Page { items: BoundedList(items), next_cursor: page.next_cursor.clone(), has_more: page.has_more }),"""
     else:
-        helpers = resource if kind == 'convention_resources' else project + (resource if kind == 'convention_search' else '')
-        mapping = 'resource(topic)' if kind == 'convention_resources' else 'topic.resource.as_ref().map_or_else(|| project(&topic.convention), resource)' if kind == 'convention_search' else 'project(topic)'
+        helpers = project
+        mapping = 'project(&topic.convention)' if kind == 'convention_search' else 'project(topic)'
         arm = f'''Self::Current(value) => value.items.0.iter().map(|topic| {mapping}).collect::<Option<Vec<_>>>()
                     .map(|items| Page {{ items: BoundedList(items), next_cursor: value.next_cursor.clone(), has_more: value.has_more }}),'''
     return f'''        if revision < {revision} {{

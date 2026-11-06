@@ -730,7 +730,8 @@
         "Markdown",
         "Raw",
         "Manifest",
-        "SectionPath"
+        "SectionPath",
+        "Resource"
       ],
       "type": "string"
     },
@@ -755,6 +756,13 @@
         "Active",
         "Retired",
         "Deleted"
+      ],
+      "type": "string"
+    },
+    "ConventionOrder": {
+      "enum": [
+        "Title",
+        "Organization"
       ],
       "type": "string"
     },
@@ -897,6 +905,97 @@
             "kind",
             "resourceId",
             "expectedRevision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConventionResourcesSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Catalog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To4096"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "Document",
+              "type": "string"
+            },
+            "maxChars": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rootSlug": {
+              "$ref": "#/$defs/GraphSourceTextFragment"
+            }
+          },
+          "required": [
+            "kind",
+            "rootSlug"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "conventionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "conventionRevision": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Revision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "Attachments",
+              "type": "string"
+            },
+            "lifecycles": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/List_ConventionLifecycle_0_128"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "conventionId"
           ],
           "type": "object"
         }
@@ -4098,6 +4197,23 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "conventionId",
+                "expectedRevision"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "expectedRevision",
+                "operationId"
+              ],
+              "x-since": 3
+            }
+          ],
           "properties": {
             "conventionId": {
               "$ref": "#/$defs/Id"
@@ -4108,6 +4224,10 @@
             "kind": {
               "const": "conventions.retire",
               "type": "string"
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
             },
             "resourceId": {
               "anyOf": [
@@ -4126,7 +4246,6 @@
           },
           "required": [
             "kind",
-            "conventionId",
             "expectedRevision"
           ],
           "type": "object"
@@ -8401,6 +8520,10 @@
               "$ref": "#/$defs/List_ConventionLifecycle_0_128",
               "x-since": 3
             },
+            "order": {
+              "$ref": "#/$defs/ConventionOrder",
+              "x-since": 3
+            },
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
@@ -8438,6 +8561,10 @@
             },
             "text": {
               "$ref": "#/$defs/Text1To4096"
+            },
+            "topK": {
+              "$ref": "#/$defs/SignedCounter",
+              "x-since": 3
             }
           },
           "required": [
@@ -8455,27 +8582,19 @@
             "applicability": {
               "$ref": "#/$defs/List_Text1To256_0_128"
             },
-            "conventionId": {
-              "$ref": "#/$defs/Id",
-              "x-since": 3
-            },
-            "conventionRevision": {
-              "$ref": "#/$defs/Revision",
-              "x-since": 3
-            },
             "kind": {
               "const": "conventions.resources",
               "type": "string"
-            },
-            "lifecycles": {
-              "$ref": "#/$defs/List_ConventionLifecycle_0_128",
-              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "selection": {
+              "$ref": "#/$defs/ConventionResourcesSelection",
+              "x-since": 3
             }
           },
           "required": [
@@ -8501,6 +8620,13 @@
                 "slug"
               ],
               "x-since": 3
+            },
+            {
+              "required": [
+                "kind",
+                "operationId"
+              ],
+              "x-since": 3
             }
           ],
           "properties": {
@@ -8519,8 +8645,20 @@
               "const": "conventions.read",
               "type": "string"
             },
+            "maxBytes": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
             "maxChars": {
               "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
+            "operationId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
+            "resourceId": {
+              "$ref": "#/$defs/Id",
               "x-since": 3
             },
             "revision": {
@@ -10654,6 +10792,24 @@
           ],
           "type": "object",
           "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "router.embedding_spaces",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            }
+          },
+          "required": [
+            "kind",
+            "page"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },
@@ -10696,6 +10852,20 @@
         "High",
         "XHigh",
         "Max"
+      ],
+      "type": "string"
+    },
+    "EmbeddingDimensionMode": {
+      "enum": [
+        "Native",
+        "Parameter"
+      ],
+      "type": "string"
+    },
+    "EmbeddingMetric": {
+      "enum": [
+        "L2",
+        "Cosine"
       ],
       "type": "string"
     },
@@ -14068,6 +14238,114 @@
             "accepted"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "dimensionMode": {
+              "$ref": "#/$defs/EmbeddingDimensionMode"
+            },
+            "dimensions": {
+              "$ref": "#/$defs/PositiveCounter"
+            },
+            "expectedConnectionRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "CreateEmbeddingSpace",
+              "type": "string"
+            },
+            "metric": {
+              "$ref": "#/$defs/EmbeddingMetric"
+            },
+            "name": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "upstreamModelId": {
+              "$ref": "#/$defs/Text1To4096"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "connectionId",
+            "expectedConnectionRevision",
+            "upstreamModelId",
+            "dimensions",
+            "dimensionMode",
+            "metric"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "candidateId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "QualifyEmbeddingSpace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedRevision",
+            "candidateId"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "candidateId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "expectedSelectionRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "SelectEmbeddingSpace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedRevision",
+            "expectedSelectionRevision",
+            "candidateId"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSelectionRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "ClearEmbeddingSpace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedSelectionRevision"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },

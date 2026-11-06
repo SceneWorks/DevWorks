@@ -103,11 +103,28 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
     }
     if name == "ConventionSectionPath" {
         require(
-            present(v, "text") != present(v, "artifact"),
-            "convention section path needs inline text or its actual artifact",
+            present(v, "text") != present(v, "source"),
+            "convention section path needs inline text or exact source-backed headings",
         )?;
     }
+    if name == "ConventionHeadingSpan" {
+        require(v["level"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=3).contains(&n)), "retained headings are levels 1..3")?;
+    }
+    if name == "ConventionPathSource" {
+        let spans = v["headings"].as_array().ok_or("heading spans are absent")?;
+        require(spans.len() <= 3, "path has at most three captured ancestor headings")?;
+        let limit = v["artifact"]["byteLength"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("source length absent")?;
+        let mut previous_level = 0;
+        for span in spans {
+            let level = span["level"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("heading level absent")?;
+            let start = span["firstByte"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("heading start absent")?;
+            let count = span["byteLength"].as_str().and_then(|s| s.parse::<u64>().ok()).ok_or("heading length absent")?;
+            require(level > previous_level && start.checked_add(count).is_some_and(|end| end <= limit), "heading ancestors/ranges disagree with exact source")?;
+            previous_level = level;
+        }
+    }
     if name == "ConventionResourceRecord" {
+        require(v["mediaType"].as_str().is_some_and(|s| s.chars().count() <= 200), "invalid retained resource media type")?;
         require(text("name", 255), "invalid convention resource name")?;
         require(
             (v["lifecycle"] == "Deleted") == present(v, "deletedAtMs"),
@@ -115,10 +132,6 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
         )?;
     }
     if name == "ConventionIndexStatus" {
-        require(
-            present(v, "resourceId") == present(v, "resourceRevision"),
-            "resource index needs an exact identity pair",
-        )?;
         if v["status"] == "Ready" || v["status"] == "LexicalOnly" {
             for key in [
                 "generationId",
@@ -137,19 +150,24 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
             )?;
         }
     }
+    if name == "ConventionResourcesSelection" && v["kind"] == "Document" && present(v, "maxChars") {
+        require(v["maxChars"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "document passage limit is 1..65536")?;
+    }
     if name == "ConventionPassage" {
         require(v["text"].as_str().is_some_and(|text| text.len() <= 65_536), "convention passage exceeds its UTF-8 byte ceiling")?;
     }
     if matches!(
         name,
-        "ConventionPassage" | "ConventionPage" | "ConventionResourcePage" | "ConventionSearchPage"
+        "ConventionPassage" | "ConventionBinaryPassage" | "ConventionPage" | "ConventionResourcePage" | "ConventionSearchPage"
     ) {
         require(
             v["hasMore"] == present(v, "nextCursor"),
             "convention continuation mismatch",
         )?;
     }
+    if name == "ConventionBinaryPassage" {require(v["hasMore"] == present(v, "nextCursor"), "resource continuation mismatch")?;}
     if name == "ConventionReadView" {
+        require(v["format"] != "Resource", "resource bytes use their dedicated byte-page outcome")?;
         require(
             (v["availability"] == "Available") == present(v, "passage"),
             "available convention read needs an actual passage",
@@ -175,8 +193,8 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
 fn convention_input(op: &str, v: &Value) -> Result<(), String> {
     if op == "conventions.read" {
         require(
-            present(v, "conventionId") != present(v, "slug"),
-            "read requires an ID or scoped slug",
+            ["conventionId", "slug", "operationId"].iter().filter(|key| present(v, key)).count() == 1,
+            "read requires one convention, scoped slug or actual operation",
         )?;
         require(
             !present(v, "slug") || present(v, "scope"),
@@ -196,6 +214,22 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
             )?;
         }
     }
+    if op == "conventions.read" && present(v, "operationId") {
+        require(["revision", "format", "cursor", "maxChars", "sectionPath", "resourceId", "maxBytes"].iter().all(|key| !present(v, key)), "operation status cannot select document bytes")?;
+    }
+    if op == "conventions.retire" {
+        require(present(v, "conventionId") != present(v, "operationId"), "retire requires one convention or actual operation")?;
+        require(!present(v, "operationId") || !present(v, "resourceId"), "operation cancellation cannot select a resource")?;
+    }
+    if op == "conventions.search" && present(v, "topK") {
+        require(v["topK"].as_str().and_then(|s| s.parse::<i32>().ok()).is_some(), "topK must fit the retained signed integer")?;
+    }
+    if op == "conventions.read" {
+        require((v["format"] == "Resource") == present(v, "resourceId"), "resource read requires its exact owning resource")?;
+        require(!present(v, "maxBytes") || v["format"] == "Resource", "byte limit applies only to resource bytes")?;
+        require(v["format"] != "Resource" || !present(v, "maxChars"), "resource byte pages cannot select character limits")?;
+        if present(v, "maxBytes") {require(v["maxBytes"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=49152).contains(&n)), "resource page is 1..49152 bytes")?;}
+    }
     if op == "conventions.index" {
         require(
             present(v, "conventionId") != present(v, "allScope"),
@@ -206,12 +240,6 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
             "scoped indexing cannot select one resource",
         )?;
     }
-    if op == "conventions.resources" {
-        require(
-            !present(v, "conventionRevision") || present(v, "conventionId"),
-            "resource history requires its owning convention",
-        )?;
-    }
     if op == "conventions.applicability" {
         require(
             v["lifecycle"] != "Deleted",
@@ -219,7 +247,7 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
         )?;
     }
     for key in ["title", "slug"] {
-        if let Some(s) = v[key].as_str() {
+        if op == "conventions.edit" && let Some(s) = v[key].as_str() {
             let max = if key == "title" { 500 } else { 200 };
             require(
                 !s.trim().is_empty() && s.chars().count() <= max,
@@ -258,6 +286,15 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
 }
 
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "EmbeddingSpaceRecord" {
+        require(v["dimensions"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "embedding dimensions are 1..65536")?;
+        if v["status"] == "Qualified" {require(["qualificationOperation", "qualificationRequestId", "qualificationAttemptId", "resultArtifact"].iter().all(|key| present(v, key)), "qualification requires actual native evidence")?;}
+    }
+    if name == "EmbeddingSpacePage" {
+        require(v["qualificationAvailable"] == true || present(v, "availabilityReason"), "qualification unavailability needs its actual reason")?;
+        require(v["hasMore"] == present(v, "nextCursor") && present(v, "selectedSpaceId") == present(v, "selectedCandidateId"), "embedding page continuation/selection mismatch")?;
+    }
+
     convention_record(name, v)?;
     if name.starts_with("Code") { code_record(name,v)?; }
 
@@ -499,6 +536,10 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "router.configure" && v["action"]["kind"] == "CreateEmbeddingSpace" {
+        require(v["action"]["dimensions"].as_str().and_then(|s| s.parse::<u32>().ok()).is_some_and(|n| (1..=65536).contains(&n)), "embedding dimensions are 1..65536")?;
+    }
+
     if op.starts_with("conventions.") { convention_input(op, v)?; }
     if op=="repositories.nodes" {require(present(v,"views")!=present(v,"current")&&v.get("current").is_none_or(|v|v==true),"repository nodes requires explicit or current views")?;}
 

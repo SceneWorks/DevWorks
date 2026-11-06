@@ -46,7 +46,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
-            'router.route', 'router.pin', 'router.usage', 'router.price_status', 'router.price_override',
+            'router.embedding_spaces', 'router.route', 'router.pin', 'router.usage', 'router.price_status', 'router.price_override',
             'projects.create', 'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
             'next_work.claim_project_queue', 'next_work.claim_feature_task',
             'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',

@@ -601,7 +601,8 @@
         "price_override",
         "configure",
         "decision_models",
-        "decide"
+        "decide",
+        "embedding_spaces"
       ],
       "effectAndAuthority": "All inference through host-bound router; inspect routes/cost coverage, permissioned native connection and price controls; no secret disclosure or reviewer config writes; SystemOne discovery/structured decisions share host inference authority, attribution and capability checks and never join chat tiers",
       "status": "Proposed; exact command/tool schemas require review"

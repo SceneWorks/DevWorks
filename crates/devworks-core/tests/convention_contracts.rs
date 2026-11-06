@@ -79,8 +79,8 @@ fn full_source_title_is_not_truncated_to_the_legacy_label_bound() {
 fn section_path_has_one_real_representation_and_rejects_null_erasure() {
     for wire in [
         json!({}),
-        json!({"text":"Path","artifact":artifact()}),
-        json!({"text":"Path","artifact":null}),
+        json!({"text":"Path","source":{"artifact":artifact(),"conventionRevision":"2","headings":[]}}),
+        json!({"text":"Path","source":null}),
     ] {
         let valid =
             serde_json::from_value::<ConventionSectionPath>(wire).is_ok_and(|v| v.check().is_ok());
@@ -88,7 +88,7 @@ fn section_path_has_one_real_representation_and_rejects_null_erasure() {
     }
     for wire in [
         json!({"text":"λ".repeat(65536)}),
-        json!({"artifact":artifact()}),
+        json!({"source":{"artifact":artifact(),"conventionRevision":"2","headings":[{"level":"1","firstByte":"2","byteLength":"3"}]}}),
     ] {
         serde_json::from_value::<ConventionSectionPath>(wire)
             .unwrap()
@@ -131,4 +131,18 @@ fn verbatim_source_preserves_nul_and_obeys_the_actual_utf8_passage_ceiling() {
         .check()
         .is_err()
     );
+}
+
+#[test]
+fn virtual_documents_and_attachments_have_distinct_closed_selectors() {
+    let base = json!({"kind":"conventions.resources","scope":{"kind":"Workspace"},"page":{"limit":10},"applicability":[]});
+    assert!(decode("conventions.resources", Mode::Query, 1, base.clone()));
+    let mut body=base;
+    body["selection"]=json!({"kind":"Document","rootSlug":"exact-root","maxChars":"12"});
+    assert!(decode("conventions.resources", Mode::Query, 3, body.clone()));
+    assert!(!decode("conventions.resources", Mode::Query, 1, body.clone()));
+    body["selection"]=json!({"kind":"Attachments","conventionId":"owner","conventionRevision":"2"});
+    assert!(decode("conventions.resources", Mode::Query, 3, body.clone()));
+    body["selection"]["rootSlug"]=json!("not-an-attachment");
+    assert!(!decode("conventions.resources", Mode::Query, 3, body));
 }

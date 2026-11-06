@@ -6676,6 +6676,31 @@ pub enum RouterConfigAction {
         notice_sha256: Digest,
         accepted: bool,
     },
+    #[schemars(extend("x-since" = 3))]
+    CreateEmbeddingSpace {
+        name: Label,
+        connection_id: Id,
+        expected_connection_revision: Revision,
+        upstream_model_id: Text,
+        dimensions: PositiveCounter,
+        dimension_mode: EmbeddingDimensionMode,
+        metric: EmbeddingMetric,
+    },
+    #[schemars(extend("x-since" = 3))]
+    QualifyEmbeddingSpace {
+        expected_revision: Revision,
+        candidate_id: Id,
+    },
+    #[schemars(extend("x-since" = 3))]
+    SelectEmbeddingSpace {
+        expected_revision: Revision,
+        expected_selection_revision: Revision,
+        candidate_id: Id,
+    },
+    #[schemars(extend("x-since" = 3))]
+    ClearEmbeddingSpace {
+        expected_selection_revision: Revision,
+    },
 }
 impl Check for RouterConfigAction {
     fn check(&self) -> Result<(), String> {
@@ -6751,6 +6776,44 @@ impl Check for RouterConfigAction {
                 notice_sha256.check()?;
                 accepted.check()?;
             }
+            Self::CreateEmbeddingSpace {
+                name,
+                connection_id,
+                expected_connection_revision,
+                upstream_model_id,
+                dimensions,
+                dimension_mode,
+                metric,
+            } => {
+                name.check()?;
+                connection_id.check()?;
+                expected_connection_revision.check()?;
+                upstream_model_id.check()?;
+                dimensions.check()?;
+                dimension_mode.check()?;
+                metric.check()?;
+            }
+            Self::QualifyEmbeddingSpace {
+                expected_revision,
+                candidate_id,
+            } => {
+                expected_revision.check()?;
+                candidate_id.check()?;
+            }
+            Self::SelectEmbeddingSpace {
+                expected_revision,
+                expected_selection_revision,
+                candidate_id,
+            } => {
+                expected_revision.check()?;
+                expected_selection_revision.check()?;
+                candidate_id.check()?;
+            }
+            Self::ClearEmbeddingSpace {
+                expected_selection_revision,
+            } => {
+                expected_selection_revision.check()?;
+            }
         }
         Ok(())
     }
@@ -6780,6 +6843,24 @@ impl Revisioned for RouterConfigAction {
             }
             _ => {}
         }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::CreateEmbeddingSpace { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: CreateEmbeddingSpace".into());
+            }
+            Self::QualifyEmbeddingSpace { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: QualifyEmbeddingSpace".into());
+            }
+            Self::SelectEmbeddingSpace { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: SelectEmbeddingSpace".into());
+            }
+            Self::ClearEmbeddingSpace { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: ClearEmbeddingSpace".into());
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -14929,6 +15010,7 @@ pub enum ConventionFormat {
     Raw,
     Manifest,
     SectionPath,
+    Resource,
 }
 impl Check for ConventionFormat {
     fn check(&self) -> Result<(), String> {
@@ -15021,10 +15103,6 @@ pub struct ConventionIndexStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<Revision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_revision: Option<Revision>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<Digest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_space: Option<Content>,
@@ -15040,8 +15118,6 @@ impl Check for ConventionIndexStatus {
         self.status.check()?;
         self.generation_id.check()?;
         self.source_revision.check()?;
-        self.resource_id.check()?;
-        self.resource_revision.check()?;
         self.source_digest.check()?;
         self.embedding_space.check()?;
         self.indexed_chunks.check()?;
@@ -15122,7 +15198,7 @@ pub struct ConventionResourceRecord {
     pub created_at_ms: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at_ms: Option<Counter>,
-    pub index: ConventionIndexStatus,
+    pub media_type: GraphText,
 }
 impl Check for ConventionResourceRecord {
     fn check(&self) -> Result<(), String> {
@@ -15138,7 +15214,7 @@ impl Check for ConventionResourceRecord {
         self.author_id.check()?;
         self.created_at_ms.check()?;
         self.deleted_at_ms.check()?;
-        self.index.check()?;
+        self.media_type.check()?;
         super::domain_rules::record(
             "ConventionResourceRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15276,23 +15352,22 @@ impl Check for ConventionRetrieval {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConventionSearchHit {
     pub convention: ConventionRecord,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource: Option<ConventionResourceRecord>,
     pub chunk_id: Id,
     pub chunk_index: Counter,
     pub section_path: ConventionSectionPath,
     pub excerpt: GraphText,
     pub score: Finite,
+    pub indexed_path: ConventionIndexedPath,
 }
 impl Check for ConventionSearchHit {
     fn check(&self) -> Result<(), String> {
         self.convention.check()?;
-        self.resource.check()?;
         self.chunk_id.check()?;
         self.chunk_index.check()?;
         self.section_path.check()?;
         self.excerpt.check()?;
         self.score.check()?;
+        self.indexed_path.check()?;
         super::domain_rules::record(
             "ConventionSearchHit",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15336,6 +15411,8 @@ pub struct ConventionMutation {
     pub convention: Option<ConventionRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<ConventionResourceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<ConventionOperationStatus>,
 }
 impl Check for ConventionMutation {
     fn check(&self) -> Result<(), String> {
@@ -15344,6 +15421,7 @@ impl Check for ConventionMutation {
         self.changed.check()?;
         self.convention.check()?;
         self.resource.check()?;
+        self.operation.check()?;
         super::domain_rules::record(
             "ConventionMutation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15499,7 +15577,7 @@ pub enum ConventionReadResult {
     #[schemars(extend("x-until" = 3))]
     Legacy(InstructionRecord),
     #[schemars(extend("x-since" = 3))]
-    Current(ConventionReadView),
+    Current(ConventionReadOutcome),
 }
 impl Check for ConventionReadResult {
     fn check(&self) -> Result<(), String> {
@@ -15532,8 +15610,10 @@ impl Revisioned for ConventionReadResult {
                 row.check().ok().map(|()| row)
             };
             let legacy: Option<InstructionRecord> = match self {
-                Self::Current(value) if matches!(value.format, ConventionFormat::Markdown) => {
-                    project(&value.convention)
+                Self::Current(ConventionReadOutcome::Document { view })
+                    if matches!(view.format, ConventionFormat::Markdown) =>
+                {
+                    project(&view.convention)
                 }
                 _ => None,
             };
@@ -15633,7 +15713,7 @@ pub enum ConventionResourcePageResult {
     #[schemars(extend("x-until" = 3))]
     Legacy(Page<InstructionRecord>),
     #[schemars(extend("x-since" = 3))]
-    Current(ConventionResourcePage),
+    Current(ConventionResourcesView),
 }
 impl Check for ConventionResourcePageResult {
     fn check(&self) -> Result<(), String> {
@@ -15646,6 +15726,25 @@ impl Check for ConventionResourcePageResult {
 impl Revisioned for ConventionResourcePageResult {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
+            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count())
+                    || topic.title.0.contains('\0')
+                {
+                    return None;
+                }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()),
+                    scope: topic.scope.clone(),
+                    content,
+                    source_path: None,
+                    approved: topic.legacy_approved,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
             let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
                 if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\0')
                 {
@@ -15664,16 +15763,27 @@ impl Revisioned for ConventionResourcePageResult {
                 row.check().ok().map(|()| row)
             };
             let legacy: Option<Page<InstructionRecord>> = match self {
-                Self::Current(value) => value
+                Self::Current(ConventionResourcesView::Catalog { page }) => page
                     .items
                     .0
                     .iter()
-                    .map(|topic| resource(topic))
+                    .map(project)
                     .collect::<Option<Vec<_>>>()
                     .map(|items| Page {
                         items: BoundedList(items),
-                        next_cursor: value.next_cursor.clone(),
-                        has_more: value.has_more,
+                        next_cursor: page.next_cursor.clone(),
+                        has_more: page.has_more,
+                    }),
+                Self::Current(ConventionResourcesView::Attachments { page }) => page
+                    .items
+                    .0
+                    .iter()
+                    .map(resource)
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| Page {
+                        items: BoundedList(items),
+                        next_cursor: page.next_cursor.clone(),
+                        has_more: page.has_more,
                     }),
                 _ => None,
             };
@@ -15734,34 +15844,12 @@ impl Revisioned for ConventionSearchPageResult {
                 };
                 row.check().ok().map(|()| row)
             };
-            let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
-                if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\0')
-                {
-                    return None;
-                }
-                let row = InstructionRecord {
-                    id: topic.id.clone(),
-                    revision: topic.revision.clone(),
-                    name: BoundedText(topic.name.0.clone()),
-                    scope: topic.scope.clone(),
-                    content: topic.content.clone(),
-                    source_path: None,
-                    approved: false,
-                    applicability: topic.applicability.clone(),
-                };
-                row.check().ok().map(|()| row)
-            };
             let legacy: Option<Page<InstructionRecord>> = match self {
                 Self::Current(value) => value
                     .items
                     .0
                     .iter()
-                    .map(|topic| {
-                        topic
-                            .resource
-                            .as_ref()
-                            .map_or_else(|| project(&topic.convention), resource)
-                    })
+                    .map(|topic| project(&topic.convention))
                     .collect::<Option<Vec<_>>>()
                     .map(|items| Page {
                         items: BoundedList(items),
@@ -15836,7 +15924,7 @@ impl Revisioned for ConventionMutationResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["text"]}, {"required": ["artifact"]}]))]
+#[schemars(extend("oneOf" = [{"required": ["text"]}, {"required": ["source"]}]))]
 pub struct ConventionSectionPath {
     #[serde(
         default,
@@ -15850,13 +15938,13 @@ pub struct ConventionSectionPath {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "ArtifactRef")]
-    pub artifact: Option<ArtifactRef>,
+    #[schemars(with = "ConventionPathSource")]
+    pub source: Option<ConventionPathSource>,
 }
 impl Check for ConventionSectionPath {
     fn check(&self) -> Result<(), String> {
         self.text.check()?;
-        self.artifact.check()?;
+        self.source.check()?;
         super::domain_rules::record(
             "ConventionSectionPath",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15879,6 +15967,390 @@ impl Check for ConventionIndexedPath {
             "ConventionIndexedPath",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionOperationKind {
+    Import,
+    Index,
+}
+impl Check for ConventionOperationKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionOperationPhase {
+    Queued,
+    Preparing,
+    Publishing,
+    Completed,
+    Failed,
+    Cancelled,
+    Unknown,
+}
+impl Check for ConventionOperationPhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionOperationStatus {
+    pub operation: OperationRef,
+    pub revision: Revision,
+    pub kind: ConventionOperationKind,
+    pub scope: DataScope,
+    pub phase: ConventionOperationPhase,
+    pub processed_items: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_items: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convention_id: Option<Id>,
+    pub can_cancel: bool,
+    pub cancel_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for ConventionOperationStatus {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.revision.check()?;
+        self.kind.check()?;
+        self.scope.check()?;
+        self.phase.check()?;
+        self.processed_items.check()?;
+        self.total_items.check()?;
+        self.convention_id.check()?;
+        self.can_cancel.check()?;
+        self.cancel_requested.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "ConventionOperationStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionReadOutcome {
+    Document {
+        view: ConventionReadView,
+    },
+    Operation {
+        status: ConventionOperationStatus,
+    },
+    Resource {
+        convention: ConventionRecord,
+        resource: ConventionResourceRecord,
+        passage: ConventionBinaryPassage,
+    },
+}
+impl Check for ConventionReadOutcome {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Document { view } => {
+                view.check()?;
+            }
+            Self::Operation { status } => {
+                status.check()?;
+            }
+            Self::Resource {
+                convention,
+                resource,
+                passage,
+            } => {
+                convention.check()?;
+                resource.check()?;
+                passage.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionBinaryPassage {
+    pub base64: Content,
+    pub first_byte: Counter,
+    pub byte_length: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for ConventionBinaryPassage {
+    fn check(&self) -> Result<(), String> {
+        self.base64.check()?;
+        self.first_byte.check()?;
+        self.byte_length.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "ConventionBinaryPassage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionOrder {
+    Title,
+    Organization,
+}
+impl Check for ConventionOrder {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EmbeddingDimensionMode {
+    Native,
+    Parameter,
+}
+impl Check for EmbeddingDimensionMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EmbeddingMetric {
+    L2,
+    Cosine,
+}
+impl Check for EmbeddingMetric {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EmbeddingSpaceStatus {
+    Unqualified,
+    Qualifying,
+    Qualified,
+    Failed,
+    Unknown,
+    Cancelled,
+    Stale,
+    Unavailable,
+}
+impl Check for EmbeddingSpaceStatus {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbeddingSpaceRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub name: Label,
+    pub connection_id: Id,
+    pub account_revision: Revision,
+    pub upstream_model_id: Text,
+    pub dimensions: PositiveCounter,
+    pub dimension_mode: EmbeddingDimensionMode,
+    pub metric: EmbeddingMetric,
+    pub model_digest: Digest,
+    pub configuration_digest: Digest,
+    pub status: EmbeddingSpaceStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_operation: Option<OperationRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_request_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_attempt_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_artifact: Option<ArtifactRef>,
+    pub created_at_ms: Counter,
+    pub updated_at_ms: Counter,
+    pub space_id: Id,
+    pub can_qualify: bool,
+}
+impl Check for EmbeddingSpaceRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.name.check()?;
+        self.connection_id.check()?;
+        self.account_revision.check()?;
+        self.upstream_model_id.check()?;
+        self.dimensions.check()?;
+        self.dimension_mode.check()?;
+        self.metric.check()?;
+        self.model_digest.check()?;
+        self.configuration_digest.check()?;
+        self.status.check()?;
+        self.reason.check()?;
+        self.qualification_operation.check()?;
+        self.qualification_request_id.check()?;
+        self.qualification_attempt_id.check()?;
+        self.result_artifact.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.space_id.check()?;
+        self.can_qualify.check()?;
+        super::domain_rules::record(
+            "EmbeddingSpaceRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbeddingSpacePage {
+    pub items: Rows<EmbeddingSpaceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub selection_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_space_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_candidate_id: Option<Id>,
+    pub qualification_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_reason: Option<Text>,
+}
+impl Check for EmbeddingSpacePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.selection_revision.check()?;
+        self.selected_space_id.check()?;
+        self.selected_candidate_id.check()?;
+        self.qualification_available.check()?;
+        self.availability_reason.check()?;
+        super::domain_rules::record(
+            "EmbeddingSpacePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionHeadingSpan {
+    pub level: Counter,
+    pub first_byte: Counter,
+    pub byte_length: Counter,
+}
+impl Check for ConventionHeadingSpan {
+    fn check(&self) -> Result<(), String> {
+        self.level.check()?;
+        self.first_byte.check()?;
+        self.byte_length.check()?;
+        super::domain_rules::record(
+            "ConventionHeadingSpan",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionPathSource {
+    pub artifact: ArtifactRef,
+    pub convention_revision: Revision,
+    pub headings: Items<ConventionHeadingSpan>,
+}
+impl Check for ConventionPathSource {
+    fn check(&self) -> Result<(), String> {
+        self.artifact.check()?;
+        self.convention_revision.check()?;
+        self.headings.check()?;
+        super::domain_rules::record(
+            "ConventionPathSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionResourcesSelection {
+    Catalog {},
+    Document {
+        root_slug: GraphText,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<Cursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_chars: Option<Counter>,
+    },
+    Attachments {
+        convention_id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        convention_revision: Option<Revision>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lifecycles: Option<Items<ConventionLifecycle>>,
+    },
+}
+impl Check for ConventionResourcesSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Catalog {} => {}
+            Self::Document {
+                root_slug,
+                cursor,
+                max_chars,
+            } => {
+                root_slug.check()?;
+                cursor.check()?;
+                max_chars.check()?;
+            }
+            Self::Attachments {
+                convention_id,
+                convention_revision,
+                lifecycles,
+            } => {
+                convention_id.check()?;
+                convention_revision.check()?;
+                lifecycles.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionResourcesView {
+    Catalog { page: ConventionPage },
+    Document { view: ConventionReadView },
+    Attachments { page: ConventionResourcePage },
+}
+impl Check for ConventionResourcesView {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Catalog { page } => {
+                page.check()?;
+            }
+            Self::Document { view } => {
+                view.check()?;
+            }
+            Self::Attachments { page } => {
+                page.check()?;
+            }
+        }
         Ok(())
     }
 }
@@ -16369,6 +16841,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
         lifecycles: Option<Items<ConventionLifecycle>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionOrder", extend("x-since" = 3))]
+        order: Option<ConventionOrder>,
     },
     #[serde(rename = "conventions.search")]
     ConventionsSearch {
@@ -16383,6 +16862,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
         lifecycles: Option<Items<ConventionLifecycle>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+        top_k: Option<SignedCounter>,
     },
     #[serde(rename = "conventions.resources")]
     ConventionsResources {
@@ -16394,25 +16880,11 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Id", extend("x-since" = 3))]
-        convention_id: Option<Id>,
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "gated_member"
-        )]
-        #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
-        lifecycles: Option<Items<ConventionLifecycle>>,
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "gated_member"
-        )]
-        #[schemars(with = "Revision", extend("x-since" = 3))]
-        convention_revision: Option<Revision>,
+        #[schemars(with = "ConventionResourcesSelection", extend("x-since" = 3))]
+        selection: Option<ConventionResourcesSelection>,
     },
     #[serde(rename = "conventions.read")]
-    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId"]}, {"required": ["kind", "slug"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId"]}, {"required": ["kind", "slug"], "x-since": 3}, {"required": ["kind", "operationId"], "x-since": 3}]))]
     ConventionsRead {
         #[serde(
             default,
@@ -16465,6 +16937,27 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "ConventionIndexedPath", extend("x-since" = 3))]
         section_path: Option<ConventionIndexedPath>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OperationId", extend("x-since" = 3))]
+        operation_id: Option<OperationId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        resource_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        max_bytes: Option<Counter>,
     },
     #[serde(rename = "conventions.version")]
     ConventionsVersion {
@@ -17155,6 +17648,9 @@ pub enum DomainQuery {
         project_id: Option<ProjectId>,
         page: PageRequest,
     },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "router.embedding_spaces")]
+    RouterEmbeddingSpaces { page: PageRequest },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -17300,6 +17796,7 @@ impl DomainQuery {
             Self::EvalsResults { .. } => "evals.results",
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
+            Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
         }
     }
 }
@@ -17789,11 +18286,13 @@ impl Check for DomainQuery {
                 page,
                 applicability,
                 lifecycles,
+                order,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
                 lifecycles.check()?;
+                order.check()?;
             }
             Self::ConventionsSearch {
                 scope,
@@ -17801,27 +18300,25 @@ impl Check for DomainQuery {
                 applicability,
                 text,
                 lifecycles,
+                top_k,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
                 text.check()?;
                 lifecycles.check()?;
+                top_k.check()?;
             }
             Self::ConventionsResources {
                 scope,
                 page,
                 applicability,
-                convention_id,
-                lifecycles,
-                convention_revision,
+                selection,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
-                convention_id.check()?;
-                lifecycles.check()?;
-                convention_revision.check()?;
+                selection.check()?;
             }
             Self::ConventionsRead {
                 convention_id,
@@ -17832,6 +18329,9 @@ impl Check for DomainQuery {
                 cursor,
                 max_chars,
                 section_path,
+                operation_id,
+                resource_id,
+                max_bytes,
             } => {
                 convention_id.check()?;
                 revision.check()?;
@@ -17841,6 +18341,9 @@ impl Check for DomainQuery {
                 cursor.check()?;
                 max_chars.check()?;
                 section_path.check()?;
+                operation_id.check()?;
+                resource_id.check()?;
+                max_bytes.check()?;
             }
             Self::ConventionsVersion {
                 convention_id,
@@ -18431,6 +18934,9 @@ impl Check for DomainQuery {
                 project_id.check()?;
                 page.check()?;
             }
+            Self::RouterEmbeddingSpaces { page } => {
+                page.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -18545,30 +19051,29 @@ impl Revisioned for DomainQuery {
                     *view = None;
                 }
             }
-            Self::ConventionsList { lifecycles, .. } => {
-                if revision < 3 {
-                    *lifecycles = None;
-                }
-            }
-            Self::ConventionsSearch { lifecycles, .. } => {
-                if revision < 3 {
-                    *lifecycles = None;
-                }
-            }
-            Self::ConventionsResources {
-                convention_id,
-                lifecycles,
-                convention_revision,
-                ..
+            Self::ConventionsList {
+                lifecycles, order, ..
             } => {
                 if revision < 3 {
-                    *convention_id = None;
+                    *lifecycles = None;
                 }
+                if revision < 3 {
+                    *order = None;
+                }
+            }
+            Self::ConventionsSearch {
+                lifecycles, top_k, ..
+            } => {
                 if revision < 3 {
                     *lifecycles = None;
                 }
                 if revision < 3 {
-                    *convention_revision = None;
+                    *top_k = None;
+                }
+            }
+            Self::ConventionsResources { selection, .. } => {
+                if revision < 3 {
+                    *selection = None;
                 }
             }
             Self::ConventionsRead {
@@ -18578,6 +19083,9 @@ impl Revisioned for DomainQuery {
                 cursor,
                 max_chars,
                 section_path,
+                operation_id,
+                resource_id,
+                max_bytes,
                 ..
             } => {
                 if revision < 3 {
@@ -18597,6 +19105,15 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *section_path = None;
+                }
+                if revision < 3 {
+                    *operation_id = None;
+                }
+                if revision < 3 {
+                    *resource_id = None;
+                }
+                if revision < 3 {
+                    *max_bytes = None;
                 }
             }
             Self::ConventionsVersion { scope, .. } => {
@@ -18796,6 +19313,9 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
@@ -19635,8 +20155,15 @@ pub enum DomainCommand {
         scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.retire")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId", "expectedRevision"]}, {"required": ["kind", "expectedRevision", "operationId"], "x-since": 3}]))]
     ConventionsRetire {
-        convention_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id")]
+        convention_id: Option<Id>,
         expected_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource_id: Option<Id>,
@@ -19647,6 +20174,13 @@ pub enum DomainCommand {
         )]
         #[schemars(with = "DataScope", extend("x-since" = 3))]
         scope: Option<DataScope>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "OperationId", extend("x-since" = 3))]
+        operation_id: Option<OperationId>,
     },
     #[serde(rename = "conventions.index")]
     #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId", "expectedRevision"]}, {"required": ["kind", "expectedRevision", "allScope"], "x-since": 3}]))]
@@ -21529,11 +22063,13 @@ impl Check for DomainCommand {
                 expected_revision,
                 resource_id,
                 scope,
+                operation_id,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 resource_id.check()?;
                 scope.check()?;
+                operation_id.check()?;
             }
             Self::ConventionsIndex {
                 convention_id,
@@ -22637,9 +23173,16 @@ impl Revisioned for DomainCommand {
                     *scope = None;
                 }
             }
-            Self::ConventionsRetire { scope, .. } => {
+            Self::ConventionsRetire {
+                scope,
+                operation_id,
+                ..
+            } => {
                 if revision < 3 {
                     *scope = None;
+                }
+                if revision < 3 {
+                    *operation_id = None;
                 }
             }
             Self::ConventionsIndex {
@@ -22783,6 +23326,10 @@ impl Revisioned for DomainCommand {
         match self {
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
+            }
+            Self::RouterConfigure { action, .. } => {
+                action.check_revision(revision)?;
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -23442,6 +23989,9 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "notifications.mark_read")]
     NotificationsMarkRead { value: NotificationRecord },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "router.embedding_spaces")]
+    RouterEmbeddingSpaces { value: EmbeddingSpacePage },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -23867,6 +24417,7 @@ impl OperationResult {
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
+            Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -24232,6 +24783,7 @@ impl Check for OperationResult {
             Self::NextWorkInspectQueue { value } => value.check()?,
             Self::ApprovalsReviewQueue { value } => value.check()?,
             Self::NotificationsMarkRead { value } => value.check()?,
+            Self::RouterEmbeddingSpaces { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -24462,6 +25014,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

@@ -624,6 +624,9 @@ pub enum OperationResult {
     RouterDecisionModels { value: Page<DecisionModel> },
     #[serde(rename = "router.decide")]
     RouterDecide { value: DecisionResult },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "router.embedding_spaces")]
+    RouterEmbeddingSpaces { value: EmbeddingSpacePage },
     #[serde(rename = "mcp.servers")]
     McpServers { value: Page<McpServer> },
     #[serde(rename = "mcp.configure")]
@@ -1050,6 +1053,7 @@ impl OperationResult {
             Self::RouterConfigure { .. } => "router.configure",
             Self::RouterDecisionModels { .. } => "router.decision_models",
             Self::RouterDecide { .. } => "router.decide",
+            Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
             Self::McpServers { .. } => "mcp.servers",
             Self::McpConfigure { .. } => "mcp.configure",
             Self::McpConnect { .. } => "mcp.connect",
@@ -1415,6 +1419,7 @@ impl Check for OperationResult {
             Self::RouterConfigure { value } => value.check()?,
             Self::RouterDecisionModels { value } => value.check()?,
             Self::RouterDecide { value } => value.check()?,
+            Self::RouterEmbeddingSpaces { value } => value.check()?,
             Self::McpServers { value } => value.check()?,
             Self::McpConfigure { value } => value.check()?,
             Self::McpConnect { value } => value.check()?,
@@ -1646,6 +1651,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

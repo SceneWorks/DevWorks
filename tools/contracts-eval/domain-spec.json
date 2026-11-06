@@ -2408,6 +2408,27 @@
           "expected_revision": "Revision",
           "notice_sha256": "Digest",
           "accepted": "bool"
+        },
+        "CreateEmbeddingSpace": {
+          "name": "Label",
+          "connection_id": "Id",
+          "expected_connection_revision": "Revision",
+          "upstream_model_id": "Text",
+          "dimensions": "PositiveCounter",
+          "dimension_mode": "EmbeddingDimensionMode",
+          "metric": "EmbeddingMetric"
+        },
+        "QualifyEmbeddingSpace": {
+          "expected_revision": "Revision",
+          "candidate_id": "Id"
+        },
+        "SelectEmbeddingSpace": {
+          "expected_revision": "Revision",
+          "expected_selection_revision": "Revision",
+          "candidate_id": "Id"
+        },
+        "ClearEmbeddingSpace": {
+          "expected_selection_revision": "Revision"
         }
       },
       "variantSince": {
@@ -2416,6 +2437,12 @@
           "open_router": 2,
           "local_free": 3
         }
+      },
+      "introducedVariants": {
+        "CreateEmbeddingSpace": 3,
+        "QualifyEmbeddingSpace": 3,
+        "SelectEmbeddingSpace": 3,
+        "ClearEmbeddingSpace": 3
       }
     },
     "RootSnapshot": {
@@ -5453,7 +5480,8 @@
         "Markdown",
         "Raw",
         "Manifest",
-        "SectionPath"
+        "SectionPath",
+        "Resource"
       ]
     },
     "ConventionAvailability": {
@@ -5505,8 +5533,6 @@
         "status": "ConventionIndexPhase",
         "generation_id": "?Id",
         "source_revision": "?Revision",
-        "resource_id": "?Id",
-        "resource_revision": "?Revision",
         "source_digest": "?Digest",
         "embedding_space": "?Content",
         "indexed_chunks": "?Counter",
@@ -5551,7 +5577,7 @@
         "author_id": "ActorId",
         "created_at_ms": "Counter",
         "deleted_at_ms": "?Counter",
-        "index": "ConventionIndexStatus"
+        "media_type": "GraphText"
       }
     },
     "ConventionPassage": {
@@ -5607,12 +5633,12 @@
       "kind": "record",
       "fields": {
         "convention": "ConventionRecord",
-        "resource": "?ConventionResourceRecord",
         "chunk_id": "Id",
         "chunk_index": "Counter",
         "section_path": "ConventionSectionPath",
         "excerpt": "GraphText",
-        "score": "Finite"
+        "score": "Finite",
+        "indexed_path": "ConventionIndexedPath"
       }
     },
     "ConventionSearchPage": {
@@ -5632,7 +5658,8 @@
         "revision": "Revision",
         "changed": "bool",
         "convention": "?ConventionRecord",
-        "resource": "?ConventionResourceRecord"
+        "resource": "?ConventionResourceRecord",
+        "operation": "?ConventionOperationStatus"
       }
     },
     "ConventionParentChange": {
@@ -5679,7 +5706,7 @@
     "ConventionReadResult": {
       "kind": "versioned",
       "legacy": "InstructionRecord",
-      "current": "ConventionReadView",
+      "current": "ConventionReadOutcome",
       "revision": 3,
       "projection": "convention_read"
     },
@@ -5694,7 +5721,7 @@
     "ConventionResourcePageResult": {
       "kind": "versioned",
       "legacy": "Page<InstructionRecord>",
-      "current": "ConventionResourcePage",
+      "current": "ConventionResourcesView",
       "revision": 3,
       "projection": "convention_resources",
       "earlierName": "Page"
@@ -5718,11 +5745,11 @@
       "kind": "record",
       "fields": {
         "text": "?Content",
-        "artifact": "?ArtifactRef"
+        "source": "?ConventionPathSource"
       },
       "exactlyOne": [
         "text",
-        "artifact"
+        "source"
       ]
     },
     "ConventionIndexedPath": {
@@ -5730,6 +5757,186 @@
       "fields": {
         "generation_id": "Id",
         "chunk_id": "Id"
+      }
+    },
+    "ConventionOperationKind": {
+      "kind": "enum",
+      "values": [
+        "Import",
+        "Index"
+      ]
+    },
+    "ConventionOperationPhase": {
+      "kind": "enum",
+      "values": [
+        "Queued",
+        "Preparing",
+        "Publishing",
+        "Completed",
+        "Failed",
+        "Cancelled",
+        "Unknown"
+      ]
+    },
+    "ConventionOperationStatus": {
+      "kind": "record",
+      "fields": {
+        "operation": "OperationRef",
+        "revision": "Revision",
+        "kind": "ConventionOperationKind",
+        "scope": "DataScope",
+        "phase": "ConventionOperationPhase",
+        "processed_items": "Counter",
+        "total_items": "?Counter",
+        "convention_id": "?Id",
+        "can_cancel": "bool",
+        "cancel_requested": "bool",
+        "reason": "?Content"
+      }
+    },
+    "ConventionReadOutcome": {
+      "kind": "union",
+      "variants": {
+        "Document": {
+          "view": "ConventionReadView"
+        },
+        "Operation": {
+          "status": "ConventionOperationStatus"
+        },
+        "Resource": {
+          "convention": "ConventionRecord",
+          "resource": "ConventionResourceRecord",
+          "passage": "ConventionBinaryPassage"
+        }
+      }
+    },
+    "ConventionBinaryPassage": {
+      "kind": "record",
+      "fields": {
+        "base64": "Content",
+        "first_byte": "Counter",
+        "byte_length": "Counter",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "ConventionOrder": {
+      "kind": "enum",
+      "values": [
+        "Title",
+        "Organization"
+      ]
+    },
+    "EmbeddingDimensionMode": {
+      "kind": "enum",
+      "values": [
+        "Native",
+        "Parameter"
+      ]
+    },
+    "EmbeddingMetric": {
+      "kind": "enum",
+      "values": [
+        "L2",
+        "Cosine"
+      ]
+    },
+    "EmbeddingSpaceStatus": {
+      "kind": "enum",
+      "values": [
+        "Unqualified",
+        "Qualifying",
+        "Qualified",
+        "Failed",
+        "Unknown",
+        "Cancelled",
+        "Stale",
+        "Unavailable"
+      ]
+    },
+    "EmbeddingSpaceRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "name": "Label",
+        "connection_id": "Id",
+        "account_revision": "Revision",
+        "upstream_model_id": "Text",
+        "dimensions": "PositiveCounter",
+        "dimension_mode": "EmbeddingDimensionMode",
+        "metric": "EmbeddingMetric",
+        "model_digest": "Digest",
+        "configuration_digest": "Digest",
+        "status": "EmbeddingSpaceStatus",
+        "reason": "?Content",
+        "qualification_operation": "?OperationRef",
+        "qualification_request_id": "?Id",
+        "qualification_attempt_id": "?Id",
+        "result_artifact": "?ArtifactRef",
+        "created_at_ms": "Counter",
+        "updated_at_ms": "Counter",
+        "space_id": "Id",
+        "can_qualify": "bool"
+      }
+    },
+    "EmbeddingSpacePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<EmbeddingSpaceRecord>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "selection_revision": "Revision",
+        "selected_space_id": "?Id",
+        "selected_candidate_id": "?Id",
+        "qualification_available": "bool",
+        "availability_reason": "?Text"
+      }
+    },
+    "ConventionHeadingSpan": {
+      "kind": "record",
+      "fields": {
+        "level": "Counter",
+        "first_byte": "Counter",
+        "byte_length": "Counter"
+      }
+    },
+    "ConventionPathSource": {
+      "kind": "record",
+      "fields": {
+        "artifact": "ArtifactRef",
+        "convention_revision": "Revision",
+        "headings": "Items<ConventionHeadingSpan>"
+      }
+    },
+    "ConventionResourcesSelection": {
+      "kind": "union",
+      "variants": {
+        "Catalog": {},
+        "Document": {
+          "root_slug": "GraphText",
+          "cursor": "?Cursor",
+          "max_chars": "?Counter"
+        },
+        "Attachments": {
+          "convention_id": "Id",
+          "convention_revision": "?Revision",
+          "lifecycles": "?Items<ConventionLifecycle>"
+        }
+      }
+    },
+    "ConventionResourcesView": {
+      "kind": "union",
+      "variants": {
+        "Catalog": {
+          "page": "ConventionPage"
+        },
+        "Document": {
+          "view": "ConventionReadView"
+        },
+        "Attachments": {
+          "page": "ConventionResourcePage"
+        }
       }
     }
   },
@@ -7673,14 +7880,16 @@
         "scope": "DataScope",
         "page": "PageRequest",
         "applicability": "Items<Label>",
-        "lifecycles": "?Items<ConventionLifecycle>"
+        "lifecycles": "?Items<ConventionLifecycle>",
+        "order": "?ConventionOrder"
       },
       "result": "ConventionPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "",
       "since": {
-        "lifecycles": 3
+        "lifecycles": 3,
+        "order": 3
       }
     },
     "conventions.search": {
@@ -7691,14 +7900,16 @@
         "page": "PageRequest",
         "applicability": "Items<Label>",
         "text": "Text",
-        "lifecycles": "?Items<ConventionLifecycle>"
+        "lifecycles": "?Items<ConventionLifecycle>",
+        "top_k": "?SignedCounter"
       },
       "result": "ConventionSearchPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "",
       "since": {
-        "lifecycles": 3
+        "lifecycles": 3,
+        "top_k": 3
       }
     },
     "conventions.resources": {
@@ -7708,18 +7919,14 @@
         "scope": "DataScope",
         "page": "PageRequest",
         "applicability": "Items<Label>",
-        "convention_id": "?Id",
-        "lifecycles": "?Items<ConventionLifecycle>",
-        "convention_revision": "?Revision"
+        "selection": "?ConventionResourcesSelection"
       },
       "result": "ConventionResourcePageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "",
       "since": {
-        "convention_id": 3,
-        "lifecycles": 3,
-        "convention_revision": 3
+        "selection": 3
       }
     },
     "conventions.read": {
@@ -7733,7 +7940,10 @@
         "format": "?ConventionFormat",
         "cursor": "?Cursor",
         "max_chars": "?Counter",
-        "section_path": "?ConventionIndexedPath"
+        "section_path": "?ConventionIndexedPath",
+        "operation_id": "?OperationId",
+        "resource_id": "?Id",
+        "max_bytes": "?Counter"
       },
       "result": "ConventionReadResult",
       "effect": "Local",
@@ -7745,11 +7955,15 @@
         "format": 3,
         "cursor": 3,
         "max_chars": 3,
-        "section_path": 3
+        "section_path": 3,
+        "operation_id": 3,
+        "resource_id": 3,
+        "max_bytes": 3
       },
       "exactlyOne": [
         "convention_id",
-        "slug"
+        "slug",
+        "operation_id"
       ]
     },
     "conventions.version": {
@@ -7820,18 +8034,24 @@
       "operation": "conventions.retire",
       "mode": "Command",
       "fields": {
-        "convention_id": "Id",
+        "convention_id": "?Id",
         "expected_revision": "Revision",
         "resource_id": "?Id",
-        "scope": "?DataScope"
+        "scope": "?DataScope",
+        "operation_id": "?OperationId"
       },
       "result": "ConventionMutationResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "rules": "Retires the exact convention or cancels its owned pending operation. Attachment content is never a RAG target.",
       "since": {
-        "scope": 3
-      }
+        "scope": 3,
+        "operation_id": 3
+      },
+      "exactlyOne": [
+        "convention_id",
+        "operation_id"
+      ]
     },
     "conventions.index": {
       "operation": "conventions.index",
@@ -7846,7 +8066,7 @@
       "result": "ConventionMutationResult",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "rules": "Indexes convention page bodies only; attachment targets are unsupported. Exact captured content and current source/authority fences govern publication.",
       "since": {
         "all_scope": 3,
         "scope": 3
@@ -7899,7 +8119,7 @@
         "schema": "SchemaRef"
       },
       "result": "ConventionRecordResult",
-      "effect": "Local",
+      "effect": "Journaled",
       "authority": "Scoped",
       "rules": "Explicit user-authored import only; excluded legacy conventions migration remains excluded."
     },
@@ -9234,7 +9454,7 @@
       "result": "MutationSummary",
       "effect": "External",
       "authority": "HumanConfiguration",
-      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value). Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag."
+      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value). Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag. Only actual current Human may create candidates, queue qualification, select a current positively qualified candidate, or clear selection. Create validates exact connection revision and complete current discovered Embedding model. Changed semantic config creates new immutable space identity. Qualify persists exact request/operation/source authority before effect; configure.prepare never performs inference. Replays reuse exact original accounted probe; malformed, incomplete, cancelled, unknown, stale or failed outcomes never qualify/select. Positive evidence comes from actual native journals, immutable result manifest/vector hashes, finite dimension-checked output and nonzero Cosine norm. Selection and candidate revisions are separately fenced. No automatic selection/fallback; old vectors never change identity."
     },
     "router.decision_models": {
       "operation": "router.decision_models",
@@ -10137,6 +10357,18 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Explicit per-recipient revisioned read/unread mutation. Does not acknowledge, dismiss, resolve a linked decision or resume work."
+    },
+    "router.embedding_spaces": {
+      "operation": "router.embedding_spaces",
+      "mode": "Query",
+      "fields": {
+        "page": "PageRequest"
+      },
+      "result": "EmbeddingSpacePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Read-only bounded persistent embedding-space inventory and revisioned explicit selection. Status is derived from host-owned qualification evidence and current connection/account/model/endpoint/config identity. No space is inferred from a conversation or first route. Historical identity is retained when unavailable. Cursor binds inventory and selection snapshot. Dimensions are 1..65536; candidate identity excludes display names and pricing metadata.",
+      "introducedRevision": 3
     }
   },
   "earlierInputResults": {
@@ -10910,6 +11142,9 @@
     ],
     "conventions.move": [
       1,
+      3
+    ],
+    "router.embedding_spaces": [
       3
     ]
   },
