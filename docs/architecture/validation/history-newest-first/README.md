@@ -34,3 +34,11 @@ The added native fixture takes 7.08 s on the development host plus shared compil
 platform CI costs are not yet measured. Existing watchdogs remain. It executes no inference,
 network calls, real Keychain operations or live provider requests. Final remote review,
 all-platform CI, merge and tracker acceptance remain separate gates.
+
+CI correctly caught missing revision-3 recorded admission/gated-member fixtures. The source
+fixture generator now adds seven positive/negative cases (root/project newest, explicit forward,
+before-revision refusal, null and string refusal), preserving every pre-existing case. The full
+native recorded-contract suite passes 7/7 in 0.14 s, covering all 1,519 domain fixtures and all
+542 operation/mode/revision admissions. The independent DTO probe passes the same recorded
+corpus; JSON Schema validation separately checks the seven new shapes. Native API/UI paging
+proofs remain unchanged. The expected gated-member list now names newestFirst explicitly.
