@@ -150,6 +150,12 @@ fn start(s: &SqliteStore) -> AttemptFence {
                 .revision,
             2
         );
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: "embedding-qualification".into(),
+            owner: id("fixture-worker"),
+            lease_ms: 60000,
+            limit: 1,
+        })?;
         let attempt = tx
             .operations()
             .begin_attempt(&op.id, 1, AttemptBinding::default())?;
@@ -542,6 +548,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
     let h = Harness::new();
     let s = seeded(&h);
     let fence = start(&s);
+    let evidence = native_facts(&s);
     let f = fence.clone();
     run_write(&s, WriteOptions::default(), move |tx| {
         tx.operations().transition(
@@ -589,7 +596,8 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
         0
     );
     // Same-attempt recovery can stage verified native facts without allocating another request.
-    let evidence = native_facts(&s);
+    drop(s);
+    let s = h.store();
     let f = fence.clone();
     let staged = run_write(&s, WriteOptions::default(), move |tx| {
         tx.router().stage_embedding_probe_evidence(
@@ -745,4 +753,84 @@ fn existing_vector_identity_is_never_relabelled_by_qualification() {
         .state,
         OperationState::Dispatching
     );
+}
+
+#[test]
+fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
+    for staged in [false, true] {
+        let h = Harness::new();
+        let s = seeded(&h);
+        let fence = start(&s);
+        let evidence = native_facts(&s);
+        let revision = if staged {
+            stage(&s, fence.clone(), evidence.clone());
+            3
+        } else {
+            2
+        };
+        run_write(&s, WriteOptions::default(), |tx| {
+            tx.queue().cancel(&id("qualification-delivery"))
+        })
+        .unwrap();
+        let f = fence.clone();
+        let e = evidence.clone();
+        assert!(matches!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .router()
+                .stage_embedding_probe_evidence(
+                    &id("candidate"),
+                    revision,
+                    &OperationId(id("qualification-operation")),
+                    &f,
+                    &e
+                )),
+            Err(StorageError::Cancelled)
+        ));
+        let q = run_write(&s, WriteOptions::default(), move |tx| {
+            tx.operations().transition(
+                &OperationId(id("qualification-operation")),
+                3,
+                Some(&fence),
+                OperationState::ObservedComplete,
+                None,
+            )?;
+            assert!(matches!(
+                tx.router().finish_embedding_qualification(
+                    &id("candidate"),
+                    revision,
+                    &OperationId(id("qualification-operation")),
+                    &fence,
+                    EmbeddingQualificationState::Qualified,
+                    None
+                ),
+                Err(StorageError::Cancelled)
+            ));
+            tx.router().finish_embedding_qualification(
+                &id("candidate"),
+                revision,
+                &OperationId(id("qualification-operation")),
+                &fence,
+                EmbeddingQualificationState::Cancelled,
+                Some("configuration intent cancelled after native completion"),
+            )
+        })
+        .unwrap();
+        assert_eq!(q.state, EmbeddingQualificationState::Cancelled);
+        assert_eq!(
+            h.raw()
+                .query_row("SELECT count(*) FROM embedding_spaces", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_snapshot(&s, &ReadOptions::default(), |r| r
+                .operations()
+                .operation(&evidence.native_operation_id))
+            .unwrap()
+            .unwrap()
+            .state,
+            OperationState::ObservedComplete
+        );
+    }
 }

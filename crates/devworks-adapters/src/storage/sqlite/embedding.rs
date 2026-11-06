@@ -311,6 +311,9 @@ impl EmbeddingRepository for Unit<'_> {
                 id: id.as_str().into(),
             });
         }
+        if probe_cancelled(self, &p)? {
+            return Err(StorageError::Cancelled);
+        }
         check_evidence(self, id, &p, evidence, true)?;
         if let Some(previous) = q.evidence.as_ref() {
             if encode(previous)? != encode(evidence)? {
@@ -363,6 +366,10 @@ impl EmbeddingRepository for Unit<'_> {
                 id: id.as_str().into(),
             });
         }
+        let cancelled = probe_cancelled(self, &p)?;
+        if state == EmbeddingQualificationState::Qualified && cancelled {
+            return Err(StorageError::Cancelled);
+        }
         let valid_state = match state {
             EmbeddingQualificationState::Qualified => {
                 operation.state == OperationState::ObservedComplete
@@ -374,6 +381,7 @@ impl EmbeddingRepository for Unit<'_> {
             ),
             EmbeddingQualificationState::Cancelled => {
                 operation.state == OperationState::CancelledBeforeDispatch
+                    || (operation.state == OperationState::ObservedComplete && cancelled)
             }
             _ => false,
         };
@@ -569,4 +577,14 @@ fn check_evidence(
         return Err(invalid("embedding vector byte length mismatch"));
     }
     Ok(())
+}
+
+fn probe_cancelled(unit: &Unit<'_>, p: &StoredEmbeddingProbe) -> Result<bool, StorageError> {
+    let delivery = unit
+        .entry(&p.delivery_id)?
+        .ok_or_else(|| invalid("embedding delivery absent"))?;
+    if delivery.operation_id.as_ref() != Some(&p.operation_id) {
+        return Err(invalid("embedding delivery operation mismatch"));
+    }
+    Ok(delivery.cancel_requested || delivery.state == QueueState::Cancelled)
 }
