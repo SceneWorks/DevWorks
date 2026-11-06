@@ -10,11 +10,13 @@ fn id(s: &str) -> Id {
 struct Material {
     blobs: BTreeMap<String, Vec<u8>>,
     schema: Value,
+    reads: std::cell::Cell<usize>,
 }
 impl Material {
     fn new() -> Self {
         Self {
             blobs: BTreeMap::new(),
+            reads: std::cell::Cell::new(0),
             schema: json!({"type":"object","properties":{"x":{"type":"string"}},"additionalProperties":false}),
         }
     }
@@ -43,6 +45,7 @@ impl Material {
 }
 impl Materials for Material {
     fn artifact(&self, r: &ArtifactRef, max: u64) -> Result<Vec<u8>, ProviderError> {
+        self.reads.set(self.reads.get() + 1);
         let b = self
             .blobs
             .get(r.sha256.as_str())
@@ -1168,4 +1171,148 @@ fn adaptive_and_unspecified_effort_keep_target_defaults_and_disabled_local_kwarg
     );
     let embedding = caps(binding(EndpointProfile::Embedding));
     assert!(effort::normalize_effort(&c.parameters, &r.options, &embedding).is_err());
+}
+
+#[test]
+fn repeated_image_references_stop_expanding_at_the_request_budget() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut materials = Material::new();
+        let image = materials.put(&vec![7; 16 * 1024], "image/png");
+        let mut context = context();
+        context.messages[0].content = (0..512)
+            .map(|_| ContentBlock::Image {
+                artifact: image.clone(),
+                detail: None,
+                cache: None,
+            })
+            .collect();
+        let request = request(&mut materials, &context);
+        let binding = binding(profile);
+        let limits = PreparationLimits {
+            request_bytes: 48 * 1024,
+            ..limits()
+        };
+        let result = prepare(
+            identity(binding.clone()),
+            &request,
+            &caps(binding),
+            &materials,
+            None,
+            &limits,
+        );
+        assert!(matches!(result, Err(ProviderError::TooLarge)));
+        assert!(
+            materials.reads.get() <= 4,
+            "expanded {} artifacts before rejecting a 48KiB request",
+            materials.reads.get()
+        );
+    }
+}
+
+#[test]
+fn repeated_native_and_tool_json_artifacts_share_the_request_expansion_budget() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for native in [false, true] {
+            let mut materials = Material::new();
+            let binding = binding(profile.clone());
+            let payload = if !native {
+                json!({"payload":"x".repeat(16*1024)})
+            } else {
+                match profile {
+                    EndpointProfile::AnthropicMessages
+                    | EndpointProfile::ClaudeSubscriptionMessages => {
+                        json!({"type":"thinking","thinking":"x".repeat(16*1024),"signature":"signed"})
+                    }
+                    EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat => {
+                        json!({"reasoning":"x".repeat(16*1024)})
+                    }
+                    _ => {
+                        json!({"type":"reasoning","id":"native-reasoning","encrypted_content":"x".repeat(16*1024)})
+                    }
+                }
+            };
+            let artifact =
+                materials.put(&serde_json::to_vec(&payload).unwrap(), "application/json");
+            let mut context = context();
+            context.messages = (0..512)
+                .map(|i| Message {
+                    role: MessageRole::Assistant,
+                    content: vec![if native {
+                        ContentBlock::Native {
+                            binding: binding.clone(),
+                            artifact: artifact.clone(),
+                        }
+                    } else {
+                        ContentBlock::ToolCall {
+                            call_id: format!("call-{i}"),
+                            wire_name: "lookup".into(),
+                            arguments: artifact.clone(),
+                        }
+                    }],
+                })
+                .collect();
+            let request = request(&mut materials, &context);
+            let result = prepare(
+                identity(binding.clone()),
+                &request,
+                &caps(binding),
+                &materials,
+                None,
+                &PreparationLimits {
+                    request_bytes: 48 * 1024,
+                    ..limits()
+                },
+            );
+            assert!(
+                matches!(result, Err(ProviderError::TooLarge)),
+                "{profile:?}/{native}: {result:?}"
+            );
+            assert!(
+                materials.reads.get() <= 5,
+                "{profile:?}/{native}: expanded {} artifacts",
+                materials.reads.get()
+            );
+        }
+    }
+}
+
+#[test]
+fn embedding_input_artifacts_also_share_the_request_expansion_budget() {
+    let mut materials = Material::new();
+    let text = materials.put(&vec![b'a'; 16 * 1024], "text/plain");
+    let mut request = request(&mut materials, &context());
+    request.purpose = InferencePurpose::Embedding;
+    request.input = InferenceInput::Embedding {
+        embedding_space_id: id("space"),
+        dimensions: 3,
+        inputs: vec![text; 64],
+    };
+    let binding = binding(EndpointProfile::Embedding);
+    let result = prepare(
+        identity(binding.clone()),
+        &request,
+        &caps(binding),
+        &materials,
+        None,
+        &PreparationLimits {
+            request_bytes: 48 * 1024,
+            ..limits()
+        },
+    );
+    assert!(matches!(result, Err(ProviderError::TooLarge)));
+    assert!(materials.reads.get() <= 4);
 }
