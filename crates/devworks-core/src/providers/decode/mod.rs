@@ -4,6 +4,7 @@ mod chat;
 mod embedding;
 mod messages;
 mod responses;
+mod think_tags;
 mod usage;
 
 use crate::protocol::provider::EndpointProfile;
@@ -161,6 +162,9 @@ pub struct Decoder {
     continuations: BTreeMap<(u64, String), Value>,
     stopped_blocks: std::collections::BTreeSet<u64>,
     embedding_dimensions: Option<usize>,
+    think_tags: think_tags::ThinkTagFilter,
+    tagged_reasoning: String,
+    explicit_reasoning: bool,
 }
 
 impl Decoder {
@@ -187,6 +191,9 @@ impl Decoder {
             continuations: BTreeMap::new(),
             stopped_blocks: Default::default(),
             embedding_dimensions: None,
+            think_tags: Default::default(),
+            tagged_reasoning: String::new(),
+            explicit_reasoning: false,
         }
     }
     /// Bind the requested embedding dimension before consuming any response bytes.
@@ -316,6 +323,27 @@ impl Decoder {
         }
         self.finished = true;
         let mut out = Vec::new();
+        if matches!(
+            self.profile,
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+        ) {
+            let (thinking, text) = self.think_tags.flush();
+            self.tagged_reasoning.push_str(&thinking);
+            if !text.is_empty() {
+                out.push(DecodedFrame::TextDelta {
+                    block_index: 0,
+                    text,
+                });
+            }
+            if !self.explicit_reasoning && !self.tagged_reasoning.is_empty() {
+                let field = if matches!(self.profile, EndpointProfile::OpenRouterChat) {
+                    "reasoning"
+                } else {
+                    "reasoning_content"
+                };
+                self.chat_reasoning[field] = Value::String(self.tagged_reasoning.clone());
+            }
+        }
         if self
             .chat_reasoning
             .as_object()
@@ -549,6 +577,8 @@ impl Decoder {
         let facts = format!("{} {}", code.as_deref().unwrap_or(""), message).to_ascii_lowercase();
         let kind = if facts.contains("authentication")
             || facts.contains("invalid_api_key")
+            || facts.contains("invalid_access_token")
+            || facts.contains("token_expired")
             || code.as_deref() == Some("401")
         {
             DecodeErrorKind::Authentication
@@ -556,17 +586,32 @@ impl Decoder {
             DecodeErrorKind::Permission
         } else if facts.contains("context_length")
             || facts.contains("context window")
+            || facts.contains("context_window")
+            || facts.contains("prompt is too long")
+            || facts.contains("maximum context")
             || facts.contains("too many tokens")
         {
             DecodeErrorKind::ContextLimit
-        } else if facts.contains("rate_limit") || code.as_deref() == Some("429") {
+        } else if facts.contains("rate_limit")
+            || facts.contains("rate limit")
+            || [
+                "usage_limit_reached",
+                "usage_not_included",
+                "insufficient_quota",
+            ]
+            .contains(&code.as_deref().unwrap_or(""))
+            || code.as_deref() == Some("429")
+        {
             DecodeErrorKind::Cooldown
         } else if facts.contains("overload")
             || code.as_deref() == Some("529")
             || code.as_deref() == Some("503")
         {
             DecodeErrorKind::Overloaded
-        } else if facts.contains("model_not_found") || facts.contains("invalid model") {
+        } else if facts.contains("model_not_found")
+            || facts.contains("model_not_available")
+            || facts.contains("invalid model")
+        {
             DecodeErrorKind::ModelUnavailable
         } else {
             DecodeErrorKind::Provider

@@ -354,6 +354,10 @@ fn errors_remain_typed_and_partial_native_facts_survive() {
         ("permission_error", DecodeErrorKind::Permission),
         ("context_length_exceeded", DecodeErrorKind::ContextLimit),
         ("rate_limit_error", DecodeErrorKind::Cooldown),
+        ("usage_limit_reached", DecodeErrorKind::Cooldown),
+        ("usage_not_included", DecodeErrorKind::Cooldown),
+        ("insufficient_quota", DecodeErrorKind::Cooldown),
+        ("context_window_exceeded", DecodeErrorKind::ContextLimit),
         ("overloaded_error", DecodeErrorKind::Overloaded),
         ("model_not_found", DecodeErrorKind::ModelUnavailable),
         ("other", DecodeErrorKind::Provider),
@@ -567,4 +571,163 @@ fn unknown_opaque_reasoning_and_unsigned_thinking_remain_evidence_not_replay() {
     let frames=Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(br#"{"choices":[{"index":0,"message":{"reasoning_details":[{"type":"reasoning.future","opaque":"exact"}]},"finish_reason":"stop"}]}"#);
     assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
     assert!(frames.iter().any(|f|matches!(f,DecodedFrame::Native{observation} if observation.replay==NativeReplay::Unsupported)));
+}
+
+fn text(frames: &[DecodedFrame]) -> String {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            DecodedFrame::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+fn continuation(frames: &[DecodedFrame]) -> Option<&Value> {
+    frames.iter().find_map(|f| match f {
+        DecodedFrame::Native { observation } => observation.continuation.as_ref(),
+        _ => None,
+    })
+}
+
+#[test]
+fn retained_leading_think_tags_split_at_every_boundary_into_native_reasoning_and_visible_text() {
+    let content = " \t\n<think>secret λ</think> \nAnswer <think>mention</think>";
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let field = if profile == EndpointProfile::CompatibleChat {
+            "reasoning_content"
+        } else {
+            "reasoning"
+        };
+        let aggregate=Decoder::new(profile.clone()).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":content},"finish_reason":"stop"}]})).unwrap());
+        assert_eq!(text(&aggregate), "Answer <think>mention</think>");
+        assert_eq!(continuation(&aggregate).unwrap()[field], "secret λ");
+        for split in content
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(content.len()))
+        {
+            let mut d = Decoder::new(profile.clone());
+            let mut frames = Vec::new();
+            for part in [&content[..split], &content[split..]] {
+                frames.extend(event(
+                    &mut d,
+                    json!({"choices":[{"index":0,"delta":{"content":part},"finish_reason":null}]}),
+                ));
+            }
+            frames.extend(event(
+                &mut d,
+                json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+            ));
+            frames.extend(d.consume_data_event(None, "[DONE]"));
+            frames.extend(d.finish());
+            assert_eq!(
+                text(&frames),
+                "Answer <think>mention</think>",
+                "split {split}"
+            );
+            assert_eq!(
+                continuation(&frames).unwrap()[field],
+                "secret λ",
+                "split {split}"
+            );
+            assert_eq!(outcome(&frames), &DecodedOutcome::Completed);
+        }
+        let mut d = Decoder::new(profile);
+        let mut frames = Vec::new();
+        for ch in content.chars() {
+            frames.extend(event(&mut d,json!({"choices":[{"index":0,"delta":{"content":ch.to_string()},"finish_reason":null}]})));
+        }
+        frames.extend(event(
+            &mut d,
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        ));
+        d.consume_data_event(None, "[DONE]");
+        frames.extend(d.finish());
+        assert_eq!(text(&frames), "Answer <think>mention</think>");
+        assert_eq!(continuation(&frames).unwrap()[field], "secret λ");
+    }
+}
+
+#[test]
+fn retained_think_tag_flush_preserves_nonleading_mentions_partial_tags_and_whitespace() {
+    for (content, visible, thinking) in [
+        (
+            "Text <think>mention</think>",
+            "Text <think>mention</think>",
+            None,
+        ),
+        ("  <thi", "  <thi", None),
+        (" \t\n", " \t\n", None),
+        ("<think>secret</thi", "", Some("secret</thi")),
+        ("<think>x</think> \n ", "", Some("x")),
+    ] {
+        let frames=Decoder::new(EndpointProfile::CompatibleChat).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":content},"finish_reason":"stop"}]})).unwrap());
+        assert_eq!(text(&frames), visible);
+        assert_eq!(
+            continuation(&frames)
+                .and_then(|v| v.get("reasoning_content"))
+                .and_then(Value::as_str),
+            thinking
+        );
+    }
+    // The retained source qualifies only the Chat families; other profiles preserve literal text.
+    let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(br#"{"content":[{"type":"text","text":"<think>literal</think>"}],"stop_reason":"end_turn"}"#);
+    assert_eq!(text(&frames), "<think>literal</think>");
+    assert!(continuation(&frames).is_none());
+}
+
+#[test]
+fn explicit_chat_reasoning_and_openrouter_details_suppress_duplicate_tagged_reasoning() {
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for field in ["reasoning_content", "reasoning"] {
+            let mut body = json!({"content":"<think>same</think> visible"});
+            body[field] = json!("same");
+            let frames = Decoder::new(profile.clone()).consume_aggregate(
+                &serde_json::to_vec(
+                    &json!({"choices":[{"index":0,"message":body,"finish_reason":"stop"}]}),
+                )
+                .unwrap(),
+            );
+            assert_eq!(text(&frames), "visible");
+            assert_eq!(continuation(&frames).unwrap(), &json!({field:"same"}));
+            for explicit_first in [true, false] {
+                let mut d = Decoder::new(profile.clone());
+                let mut frames = Vec::new();
+                let explicit = json!({field:"same"});
+                let tagged = json!({"content":"<think>same</think> visible"});
+                let deltas = if explicit_first {
+                    [explicit, tagged]
+                } else {
+                    [tagged, explicit]
+                };
+                for delta in deltas {
+                    frames.extend(event(
+                        &mut d,
+                        json!({"choices":[{"index":0,"delta":delta,"finish_reason":null}]}),
+                    ));
+                }
+                event(
+                    &mut d,
+                    json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+                );
+                d.consume_data_event(None, "[DONE]");
+                frames.extend(d.finish());
+                assert_eq!(text(&frames), "visible");
+                assert_eq!(continuation(&frames).unwrap(), &json!({field:"same"}));
+            }
+        }
+    }
+    let details = json!([{"type":"reasoning.encrypted","id":"native-r","data":"exact-encrypted"}]);
+    let frames=Decoder::new(EndpointProfile::OpenRouterChat).consume_aggregate(&serde_json::to_vec(&json!({"choices":[{"index":0,"message":{"content":"<think>duplicate</think> visible","reasoning_details":details},"finish_reason":"stop"}]})).unwrap());
+    assert_eq!(text(&frames), "visible");
+    assert_eq!(
+        continuation(&frames).unwrap(),
+        &json!({"reasoning_details":details})
+    );
 }

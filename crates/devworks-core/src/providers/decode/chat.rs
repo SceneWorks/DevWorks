@@ -39,21 +39,13 @@ impl Decoder {
                 self.chat_reasoning(body, aggregate, out);
                 if let Some(text) = body.get("content").filter(|v| !v.is_null()) {
                     if let Some(text) = text.as_str() {
-                        if !text.is_empty() {
-                            out.push(DecodedFrame::TextDelta {
-                                block_index: i,
-                                text: text.into(),
-                            });
-                        }
+                        self.chat_text(i, text, out);
                     } else if let Some(parts) = text.as_array() {
                         for part in parts {
                             if part.get("type").and_then(Value::as_str) == Some("text")
                                 && part.get("text").is_some_and(Value::is_string)
                             {
-                                out.push(DecodedFrame::TextDelta {
-                                    block_index: i,
-                                    text: part["text"].as_str().unwrap().into(),
-                                });
+                                self.chat_text(i, part["text"].as_str().unwrap(), out);
                             } else {
                                 self.native(Some(i), "chat_content", part, raw, false, out);
                             }
@@ -222,6 +214,7 @@ impl Decoder {
                     );
                     continue;
                 };
+                self.explicit_reasoning |= !part.is_empty();
                 if aggregate {
                     self.chat_reasoning[field] = Value::String(part.into());
                 } else {
@@ -245,6 +238,7 @@ impl Decoder {
             );
             return;
         };
+        self.explicit_reasoning |= !details.is_empty();
         if aggregate {
             self.chat_reasoning["reasoning_details"] = Value::Array(details.clone());
             return;
@@ -299,6 +293,16 @@ impl Decoder {
             } else {
                 collected.push(fragment.clone());
             }
+        }
+    }
+    fn chat_text(&mut self, index: u64, text: &str, out: &mut Vec<DecodedFrame>) {
+        let (thinking, text) = self.think_tags.feed(text);
+        self.tagged_reasoning.push_str(&thinking);
+        if !text.is_empty() {
+            out.push(DecodedFrame::TextDelta {
+                block_index: index,
+                text,
+            });
         }
     }
 }
