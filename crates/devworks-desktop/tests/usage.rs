@@ -573,7 +573,13 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
     press(&mut h, "Apply price catalog filters");
     assert_eq!(
         h.state().usage.prices.as_ref().unwrap().snapshots.0.len(),
-        2
+        2,
+        "history={} query={:?} loading={} refresh={:?} error={:?}",
+        h.state().usage.history,
+        h.state().usage.price_query,
+        h.state().usage.prices_loading,
+        h.state().usage.refresh,
+        h.state().usage.price_error
     );
     click(&mut h, Role::DisclosureTriangle, "Price source history");
     assert!(has_text(&h, "official-markdown-v1"));
@@ -1107,7 +1113,17 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
     let UsageQueryResult::Report { report } = h.state().usage.data.as_ref().unwrap() else {
         panic!("actualreport")
     };
-    assert!(report.items.0.len() > initial);
+    assert!(
+        report.items.0.len() > initial,
+        "initial={initial} rows={} loading={} generation={} error={:?} hasmore={} applied={:?} context={:?}",
+        report.items.0.len(),
+        h.state().usage.loading,
+        h.state().usage.generation,
+        h.state().usage.error,
+        report.has_more,
+        h.state().usage.applied,
+        report.context
+    );
     assert_eq!(serde_json::to_value(&report.context).unwrap(), context);
     assert!(report.context.applied_filters.user.is_none());
     assert_eq!(h.state().usage.draft.user, "unsubmitted-user");
@@ -1182,4 +1198,65 @@ fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
     assert_eq!(stored.name.0, "Retained unsaved name");
     assert_eq!(stored.local_free, Some(true));
     assert_eq!(stored.enabled, Some(false));
+}
+
+#[test]
+fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let root = Root::new("usage-settle-final-frame");
+    let engine = start(&root);
+    let prices = Gate::new("router.price_status").missing_hints();
+    let catalog = Gate::new("router.catalog").missing_hints();
+    let backend = prices.over(catalog.over(engine.backend()));
+    let armed = Arc::new(AtomicUsize::new(0));
+    let (frame, price_gate, catalog_gate) = (armed.clone(), prices.clone(), catalog.clone());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1800.0, 1800.0))
+        .with_max_steps(12)
+        .build_ui_state(
+            move |ui, shell: &mut devworks_desktop::shell::Shell| {
+                shell.ui(ui);
+                if frame.load(Ordering::SeqCst) > 0 {
+                    match frame.fetch_add(1, Ordering::SeqCst) {
+                        // settle's two preliminary frames are quiet. A real query is submitted
+                        // after rendering the final try_run frame, before its next worker wake.
+                        3 => shell.navigate(Route::Usage),
+                        4 => {
+                            price_gate.open();
+                            catalog_gate.open();
+                        }
+                        _ => {}
+                    }
+                }
+            },
+            shell_with(Ok(backend), &root, Script::default(), None),
+        );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    press(&mut h, "Prices");
+    while !h.state().client().unwrap().activities().is_empty() {
+        assert!(h.state().wait_idle());
+        h.step();
+    }
+    struct Release(Gate, Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+            self.1.open();
+        }
+    }
+    let _release = Release(prices.clone(), catalog.clone());
+    prices.close();
+    catalog.close();
+    armed.store(1, Ordering::SeqCst);
+    settle(&mut h);
+    assert!(
+        h.state().client().unwrap().activities().is_empty(),
+        "a successful repaint left a real backend reply pending"
+    );
+    assert!(!h.state().usage.prices_loading);
 }
