@@ -212,16 +212,35 @@ pub(super) fn query(
                 } else {
                     None
                 };
+                let metadata = super::analysis::repository_metadata(reader, &repository.id)?;
+                let foundational = metadata.as_ref().and_then(|properties| {
+                    properties
+                        .get("foundational")
+                        .or_else(|| properties.get("isFoundational"))
+                        .and_then(serde_json::Value::as_bool)
+                });
+                let description = metadata
+                    .as_ref()
+                    .and_then(|properties| properties.get("description"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|value| model::wire(json!(value)))
+                    .transpose()?;
+                let framework = metadata
+                    .as_ref()
+                    .and_then(|properties| properties.get("framework"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|value| model::wire(json!(value)))
+                    .transpose()?;
                 hits.push((
                     repository.name.clone(),
                     true,
                     Hit::Repository(CodeSearchRepository {
                         repository_id: repository.id,
                         name: model::wire(json!(repository.name))?,
-                        description: None,
+                        description,
                         language,
-                        framework: None,
-                        foundational: false,
+                        framework,
+                        foundational,
                     }),
                 ));
             }

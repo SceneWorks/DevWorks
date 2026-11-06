@@ -120,6 +120,11 @@ def append_graph_cases(case,sample,base):
  case('dw28-directory-opaque-trust','index-command-request.r3',opaque)
  mutated('reject-mixed-trust-content-witnesses','index-command-request.r3',opaque,lambda v:v['command'].update(expectedContentDigest='a'*64))
  mutated('reject-null-opaque-trust','index-command-request.r3',opaque,lambda v:v['command'].update(expectedContentIdentity=None))
+ # Unified repository hits preserve unknown foundation separately from recorded false.
+ unified=output('code.search');unified['value']['result']['value'].update(mode='Unified',items=[{'kind':'Repository','repository':{'repositoryId':repo,'name':'Captured registration'}}])
+ case('dw28-unified-foundation-unknown','operation-result.r3',unified)
+ mutated('unified-foundation-recorded-false','operation-result.r3',unified,lambda v:v['value']['result']['value']['items'][0]['repository'].update(foundational=False),True,True)
+ mutated('reject-null-unified-foundation','operation-result.r3',unified,lambda v:v['value']['result']['value']['items'][0]['repository'].update(foundational=None))
  # Required aggregate facts can exceed the returned row count without page-local totals.
  architecture=output('code.architecture');v=architecture['value']['result']['value'];v.update(nodeCounts=[{'name':'Function','count':'100'}],hotspots=[{'name':'Widget','qualifiedName':'module.Widget','fanIn':'20','reason':'High fan-in method'}],inbound=[{'sourceRepositoryId':'repo-b','targetRepositoryId':repo,'edgeKind':'REFERENCES_PACKAGE','count':'3','confidenceBand':'medium'}],packages=[{'name':'pkg','ecosystem':'cargo','version':'1.0','dependentCount':'2'}],packageCount='50',packageCountsByEcosystem=[{'name':'cargo','count':'50'}],supertypes=[{'name':'Base','qualifiedName':'module.Base','nodeKind':'Interface','subtypeCount':'5','external':True}]);architecture['value'].update(completion='ResultLimit',nextCursor='architecture-packages-1')
  case('dw28-full-architecture-aggregate','operation-result.r3',architecture)

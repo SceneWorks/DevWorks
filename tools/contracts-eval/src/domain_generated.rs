@@ -12780,7 +12780,13 @@ pub struct CodeSearchRepository {
     )]
     #[schemars(with = "Label", extend("x-since" = 3))]
     pub framework: Option<Label>,
-    pub foundational: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub foundational: Option<bool>,
 }
 impl Check for CodeSearchRepository {
     fn check(&self) -> Result<(), String> {
@@ -12808,6 +12814,9 @@ impl Revisioned for CodeSearchRepository {
         }
         if revision < 3 {
             self.framework = None;
+        }
+        if revision < 3 {
+            self.foundational = None;
         }
     }
 }
