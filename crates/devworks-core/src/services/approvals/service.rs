@@ -334,12 +334,9 @@ pub(crate) fn unsupported() -> Failure {
     .into()
 }
 pub(crate) fn conflict(id: &Id) -> Failure {
-    Refusal::new(
-        DomainErrorCode::RevisionConflict,
-        "approval",
-        Some(id.clone()),
-    )
-    .into()
+    Refusal::new(DomainErrorCode::SourceChanged, "approval", Some(id.clone()))
+        .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+        .into()
 }
 fn parse_position(s: &str) -> Result<ApprovalSourcePosition, StorageError> {
     let p: Vec<_> = s.split('|').collect();
@@ -421,7 +418,7 @@ impl CommandHandler for ApprovalService {
                     if c["kind"] != "SavedOperation" {
                         return None;
                     }
-                    let original = super::replay::restore_context(s, &p, None).ok()?;
+                    let original = super::replay::restore_context(&env.info(), s, &p, None).ok()?;
                     Some((
                         p.operation_kind.clone(),
                         c["schemaRevision"]

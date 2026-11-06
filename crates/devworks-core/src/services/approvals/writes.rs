@@ -126,7 +126,7 @@ impl ApprovalService {
                     ctx,
                     i,
                     scope,
-                    json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::replay::save_context(ctx)}),
+                    json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::save_context(ctx)}),
                 )?;
                 model::generic(&p, true, None)?
             }
@@ -341,8 +341,17 @@ fn check_review(
     v: &crate::protocol::records::ApprovalViewRecord,
     i: &ops::RecordHumanDecisionInput,
 ) -> Result<(), Failure> {
-    if v.revision != i.expected_revision
-        || v.content_digest != i.content_digest
+    if v.revision != i.expected_revision {
+        return Err(StorageError::conflict(
+            crate::protocol::RevisionDimension::Review,
+            "approval",
+            i.proposal_id.clone(),
+            i.expected_revision.clone(),
+            v.revision.clone(),
+        )
+        .into());
+    }
+    if v.content_digest != i.content_digest
         || !matches!(v.state, crate::protocol::records::ApprovalState::Pending)
     {
         return Err(conflict(&i.proposal_id));
@@ -381,7 +390,7 @@ pub fn stage_saved(
         ctx,
         &input,
         preview.scope.clone(),
-        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::replay::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
+        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
     )
 }
 fn stage_generic(
@@ -389,8 +398,9 @@ fn stage_generic(
     ctx: &InvocationContext,
     i: &ops::ProposeInput,
     scope: ConfigScope,
-    payload: Value,
+    mut payload: Value,
 ) -> Result<StoredApproval, Failure> {
+    payload["sourceContext"] = super::save_source_context(ctx);
     let p = StoredApproval {
         id: tx.new_id(IdKind::Event),
         scope,

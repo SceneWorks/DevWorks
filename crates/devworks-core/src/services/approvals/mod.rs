@@ -60,6 +60,7 @@ mod review_queue;
 mod service;
 mod writes;
 pub use replay::{ApprovedCommand, ResumePreparation};
+pub(crate) use replay::{restore_source_context, save_context, save_source_context};
 pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};
 
 pub(crate) use writes::authority_binding;
