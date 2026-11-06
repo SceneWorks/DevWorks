@@ -1108,9 +1108,10 @@ for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
  definition=OPS[name]
  for mode in ([definition['mode']]if definition['mode']!='Hybrid'else['Query','Command']):
-  if not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
+  # Keep the pre-Usage generic forms alongside newer budget-specific coverage.
+  if name in ['features.edit','features.create','features.edit_plan','tasks.sync_plan','projects.create'] or not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
    frame=request(name,mode);frame['schemaRevision']=3;case('dw13-r3-admission-'+name+'-'+mode,'domain-request.r3',frame)
- if not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
+ if name=='features.get' or not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
   output=result(name,definition['result'])
   if TYPES.get(definition['result'],{}).get('kind')=='versioned':
    output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
