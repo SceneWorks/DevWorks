@@ -265,7 +265,10 @@ impl EmbeddingRepository for Unit<'_> {
         evidence: &StoredEmbeddingEvidence,
     ) -> Result<StoredEmbeddingQualification, StorageError> {
         let mut q = checked_qualification(self.conn, id, expected)?;
-        if q.state != EmbeddingQualificationState::Qualifying {
+        if !matches!(
+            q.state,
+            EmbeddingQualificationState::Qualifying | EmbeddingQualificationState::Unknown
+        ) {
             return Err(invalid("embedding probe not qualifying"));
         }
         let p = q
@@ -282,16 +285,23 @@ impl EmbeddingRepository for Unit<'_> {
         let operation = self
             .operation(operation_id)?
             .ok_or_else(|| invalid("embedding operation absent"))?;
-        if operation.state != OperationState::Dispatching
-            || operation
-                .latest_attempt()
-                .map(AttemptRecord::fence)
-                .as_ref()
-                != Some(fence)
+        if !matches!(
+            operation.state,
+            OperationState::Dispatching
+                | OperationState::OutcomeUnknown
+                | OperationState::NeedsInput
+        ) || operation
+            .latest_attempt()
+            .map(AttemptRecord::fence)
+            .as_ref()
+            != Some(fence)
         {
-            return Err(StorageError::LeaseLost);
+            return Err(StorageError::LeaseLost {
+                kind: "embedding_probe",
+                id: id.as_str().into(),
+            });
         }
-        check_evidence(self, id, &p, evidence)?;
+        check_evidence(self, id, &p, evidence, true)?;
         if let Some(previous) = q.evidence.as_ref() {
             if encode(previous)? != encode(evidence)? {
                 return Err(invalid("embedding evidence immutable"));
@@ -338,7 +348,10 @@ impl EmbeddingRepository for Unit<'_> {
             .as_ref()
             != Some(fence)
         {
-            return Err(StorageError::LeaseLost);
+            return Err(StorageError::LeaseLost {
+                kind: "embedding_probe",
+                id: id.as_str().into(),
+            });
         }
         let valid_state = match state {
             EmbeddingQualificationState::Qualified => {
@@ -364,7 +377,7 @@ impl EmbeddingRepository for Unit<'_> {
                 .evidence
                 .as_ref()
                 .ok_or_else(|| invalid("embedding evidence absent"))?;
-            check_evidence(self, id, &p, e)?;
+            check_evidence(self, id, &p, e, true)?;
             let registered:Option<(String,i64,String,String)>=db(self.conn.query_row("SELECT model_digest,dimensions,metric,element_type FROM embedding_spaces WHERE id=?1",[c.space_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
             let identity = (
                 c.model_digest.clone(),
@@ -417,6 +430,15 @@ impl EmbeddingRepository for Unit<'_> {
             {
                 return Err(StorageError::ScopeDenied);
             }
+            check_evidence(
+                self,
+                id,
+                p,
+                q.evidence
+                    .as_ref()
+                    .ok_or_else(|| corrupt("qualified evidence absent"))?,
+                false,
+            )?;
             if self
                 .operation(&p.operation_id)?
                 .is_none_or(|o| o.state != OperationState::ObservedComplete)
@@ -456,11 +478,12 @@ fn check_evidence(
     id: &Id,
     p: &StoredEmbeddingProbe,
     e: &StoredEmbeddingEvidence,
+    exact_connection_revision: bool,
 ) -> Result<(), StorageError> {
     let c = candidate(unit.conn, id)?.ok_or_else(|| corrupt("embedding candidate absent"))?;
     let source = current_source(unit.conn, &c)?;
     if e.request_id != p.request_id
-        || e.connection_revision != source.revision
+        || (exact_connection_revision && e.connection_revision != source.revision)
         || !digest(&e.registration_digest)
     {
         return Err(invalid("embedding evidence source mismatch"));
@@ -477,17 +500,55 @@ fn check_evidence(
     {
         return Err(invalid("native embedding request binding mismatch"));
     }
+    let native = unit
+        .operation(&e.native_operation_id)?
+        .ok_or_else(|| invalid("native embedding operation absent"))?;
+    if native.state != OperationState::ObservedComplete
+        || native
+            .latest_attempt()
+            .is_none_or(|last| last.id.0 != e.attempt_id)
+    {
+        return Err(invalid(
+            "native embedding operation not completed by exact attempt",
+        ));
+    }
     let balance = unit
         .attempt_balance(&e.attempt_id)?
         .ok_or_else(|| invalid("native embedding balance absent"))?;
+    let source_scope_matches = match &p.scope {
+        devworks_core::protocol::data::DataScope::Workspace => attempt.project_id.is_none(),
+        devworks_core::protocol::data::DataScope::Project { project_id } => {
+            attempt.project_id.as_ref() == Some(project_id)
+        }
+    };
     if attempt.request_id != p.request_id
         || attempt.operation_id != e.native_operation_id
         || attempt.connection_id != c.connection_id
+        || attempt.actor_id != p.actor_id
+        || !source_scope_matches
+        || attempt.provider_model_id != e.reported_model
+        || attempt
+            .pricing_snapshot
+            .get("admission_key")
+            .and_then(serde_json::Value::as_str)
+            != Some(p.admission_key.as_str())
+        || attempt
+            .pricing_snapshot
+            .get("quote")
+            .and_then(|v| v.get("connection_revision"))
+            .and_then(serde_json::Value::as_i64)
+            != Some(e.connection_revision)
         || attempt.endpoint_profile != "Embedding"
         || attempt.purpose != "Embedding"
         || attempt.state != "Settled"
         || !balance.local_quiescent
         || balance.unknown_tail
+        || balance.incomplete
+        || balance
+            .summary
+            .get("outcome")
+            .and_then(serde_json::Value::as_str)
+            != Some("Completed")
     {
         return Err(invalid("native embedding attempt incomplete or mismatched"));
     }

@@ -133,7 +133,7 @@ pub trait EmbeddingRepository: EmbeddingRead {
         expected_revision: i64,
         probe: &StoredEmbeddingProbe,
     ) -> Result<StoredEmbeddingQualification, StorageError>;
-    /// Stores the host-verified native evidence while the real operation is Dispatching. The
+    /// Stores the host-verified native evidence while the real operation is Dispatching, or on exact same-attempt Unknown/NeedsInput recovery. The
     /// latest fence and native journal/artifact metadata are rechecked. Repeated identical
     /// staging is allowed only at the current revision; changed evidence is refused.
     fn stage_embedding_probe_evidence(

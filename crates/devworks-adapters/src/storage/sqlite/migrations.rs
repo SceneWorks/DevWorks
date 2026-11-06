@@ -404,6 +404,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0032_conventions.sql"),
         rebuilds_tables: false,
     },
+    // Embedding candidates and their host qualification are additive. Writers must preserve
+    // the new explicit selection and evidence fences; readers keep the existing floor.
+    Migration {
+        version: 33,
+        minimum_reader: 8,
+        minimum_writer: 33,
+        sql: include_str!("migrations/0033_embedding_spaces.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -741,3 +750,7 @@ pub const MIGRATION_0031_SHA256: &str =
 /// Recorded checksum of migration 32; updated only before its first publication.
 pub const MIGRATION_0032_SHA256: &str =
     "200216474dfef210009051fd13968fad1cac37e701d268bb56c028bd78b76cc8";
+
+/// Immutable shipped DW-119 migration prefix.
+pub const MIGRATION_0033_SHA256: &str =
+    "3d96f8bd4e816a2a382ad862e3b1dc6269f9140c71ec3e12b6dbea2924f1337a";
