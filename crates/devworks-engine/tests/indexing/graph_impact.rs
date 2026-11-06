@@ -9,10 +9,10 @@ fn graph_page(
     operation: &str,
     query: Value,
     views: Value,
-    max_results: u16,
-    max_visited: u32,
+    limits: (u16, u32),
     cursor: Option<&str>,
 ) -> GraphPage {
+    let (max_results, max_visited) = limits;
     let mut request = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"impact-native","scope":{"kind":"Workspace"},"view":views,"query":query,"limits":{"maxResults":max_results,"maxVisited":max_visited,"deadlineMs":300000}});
     if let Some(cursor) = cursor {
         request["cursor"] = json!(cursor);
@@ -108,8 +108,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         "code.impact",
         node_query(&repository, 3),
         views.clone(),
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     let full = impact(&all);
@@ -133,8 +132,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         "code.impact",
         node_query(&repository, 3),
         views.clone(),
-        1,
-        100000,
+        (1, 100000),
         None,
     );
     let mut seen = std::collections::BTreeSet::new();
@@ -154,8 +152,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
             "code.impact",
             node_query(&repository, 3),
             views.clone(),
-            1,
-            100000,
+            (1, 100000),
             Some(&cursor),
         );
     }
@@ -166,8 +163,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         "code.impact",
         node_query(&repository, 1),
         views.clone(),
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     assert_eq!(impact(&shallow).summary.total_affected.get(), 2);
@@ -179,8 +175,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
         views.clone(),
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     assert_eq!(
@@ -200,8 +195,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         "code.impact",
         node_query(&repository, 3),
         views,
-        500,
-        1,
+        (500, 1),
         None,
     );
     assert_eq!(
@@ -247,8 +241,7 @@ fn native_file_impact_distinguishes_unindexed_language_and_missing_indexed_file(
             "code.file_impact",
             file_query(&repository, path),
             views.clone(),
-            100,
-            100000,
+            (100, 100000),
             None,
         );
         let value = impact(&page);
@@ -322,8 +315,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
         all_views.clone(),
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     assert_eq!(
@@ -359,8 +351,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
         all_views,
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     let value = impact(&full);
@@ -385,8 +376,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
         json!({"kind":"Published","repositoryIds":[ids["core"]]}),
-        500,
-        100000,
+        (500, 100000),
         None,
     );
     assert_eq!(impact(&isolated).summary.cross_repository_count.get(), 0);
@@ -454,8 +444,7 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
         json!({"kind":"Exact","viewIds":[baseline.output_view_id.unwrap()]}),
-        100,
-        100000,
+        (100, 100000),
         None,
     );
     assert!(impact(&old).found);
@@ -466,8 +455,7 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
         json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]}),
-        100,
-        100000,
+        (100, 100000),
         None,
     );
     let value = impact(&deleted);

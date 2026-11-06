@@ -74,6 +74,9 @@ pub(super) fn node_impact(
             starts.retain(|n| n.node.payload["qualifiedName"].as_str() == Some(&name.0));
         } else {
             if repository_id.is_none() {
+                if starts.len() > 10 {
+                    reader.gaps.push("impact_target_search_limit");
+                }
                 starts.truncate(10);
             }
             if starts
@@ -564,10 +567,15 @@ fn crate_dependents(
                 ..Default::default()
             },
         )?;
-        let owner = rows.into_iter().find(|n| {
+        let mut definitions = rows.into_iter().filter(|n| {
             let v = &n.node.payload["properties"]["is_definition"];
             v == true || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("true"))
         });
+        let owner = definitions.next();
+        if definitions.next().is_some() {
+            reader.gaps.push("ambiguous_impact_package_owner");
+            return Ok(());
+        }
         if owner.is_some() || directory.is_empty() || reader.budget.exhausted.is_some() {
             break owner;
         }
