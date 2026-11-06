@@ -110,6 +110,7 @@ pub(super) fn imported_body(app: &HelpApp, rt: &tokio::runtime::Runtime) -> Id {
 }
 #[test]
 fn scheduled_current_conventions_index_uses_real_running_job_and_fresh_scope_capture() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -234,6 +235,7 @@ impl NativeJobDispatch for LostAcceptedAck {
 }
 #[test]
 fn lost_accepted_convention_job_ack_replays_one_exact_source_operation() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);

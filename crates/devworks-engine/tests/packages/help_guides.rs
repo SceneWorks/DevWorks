@@ -35,6 +35,7 @@ fn app() -> App {
     app
 }
 fn settled(app: &App) {
+    let _diagnostics = crate::common::help_startup_diagnostics(&*app.store, app.app().dispatcher());
     app.rt
         .block_on(common::within("real Help publication", async {
             loop {
@@ -147,6 +148,7 @@ fn install(app: &App, version: &str) -> PackageRecord {
 }
 #[test]
 fn installed_help_is_manifest_bound_and_missing_tampered_or_linked_bytes_never_gain_a_ref() {
+    let _native_case = crate::common::native_runtime_case();
     let _serial = serial();
     let app = app();
     let record = install(&app, "1.0.0");
@@ -242,6 +244,7 @@ fn installed_help_is_manifest_bound_and_missing_tampered_or_linked_bytes_never_g
 /// measurement. Every actual Help hash, index, publication, read and search is measured.
 #[test]
 fn near_limit_guide_is_bounded_full_tail_unicode_and_reused_across_registry_churn() {
+    let _native_case = crate::common::native_runtime_case();
     use devworks_core::ports::files::ArtifactFiles;
     use devworks_core::services::cursor::CursorBinding;
     use std::io::{Read, Seek, SeekFrom, Write};

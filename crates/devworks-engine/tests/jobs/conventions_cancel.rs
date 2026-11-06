@@ -234,6 +234,7 @@ impl ArtifactFiles for SourceVerificationGate {
 
 #[test]
 fn cancelling_an_accepted_convention_job_preserves_previous_head_and_cancels_its_source() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
