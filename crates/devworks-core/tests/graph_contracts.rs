@@ -341,3 +341,28 @@ fn overview_readme_keeps_only_actual_same_view_source_provenance() {
     value["value"]["result"]["value"]["repositories"][0]["readmeSource"] = Value::Null;
     assert!(result(value).is_err());
 }
+
+#[test]
+fn overview_unknown_foundation_is_distinct_from_recorded_false() {
+    let value = json!({"repositoryId":"repo-a","name":"Captured registration"});
+    let unknown: devworks_core::protocol::records::CodeOverviewRepository =
+        serde_json::from_value(value.clone()).unwrap();
+    assert!(unknown.foundational.is_none());
+    assert!(
+        serde_json::to_value(unknown)
+            .unwrap()
+            .get("foundational")
+            .is_none()
+    );
+    let mut known = value.clone();
+    known["foundational"] = json!(false);
+    let known: devworks_core::protocol::records::CodeOverviewRepository =
+        serde_json::from_value(known).unwrap();
+    assert_eq!(known.foundational, Some(false));
+    let mut null = value;
+    null["foundational"] = Value::Null;
+    assert!(
+        serde_json::from_value::<devworks_core::protocol::records::CodeOverviewRepository>(null)
+            .is_err()
+    );
+}
