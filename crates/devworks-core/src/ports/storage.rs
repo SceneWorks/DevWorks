@@ -510,6 +510,7 @@ pub trait WriteTransaction {
     fn router(&mut self) -> &mut dyn RouterRepository;
     fn projects(&mut self) -> &mut dyn ProjectRepository;
     fn indexing(&mut self) -> &mut dyn IndexRepository;
+    fn graph(&mut self) -> &mut dyn GraphRepository;
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
@@ -562,6 +563,7 @@ pub trait ReadSnapshot {
     fn router(&self) -> &dyn RouterRead;
     fn projects(&self) -> &dyn ProjectRead;
     fn indexing(&self) -> &dyn IndexRead;
+    fn graph(&self) -> &dyn GraphRead;
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;

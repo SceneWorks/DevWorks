@@ -389,6 +389,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0030_help.sql"),
         rebuilds_tables: false,
     },
+    Migration {
+        version: 31,
+        minimum_reader: 8,
+        minimum_writer: 31,
+        sql: include_str!("migrations/0031_graph.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -718,3 +725,7 @@ pub const MIGRATION_0029_SHA256: &str =
 /// Recorded checksum of migration 30.
 pub const MIGRATION_0030_SHA256: &str =
     "173fa5720b9913758994fc2c8c0526476f5468f7758659d9902e21762150cdec";
+
+/// Recorded checksum of migration 31.
+pub const MIGRATION_0031_SHA256: &str =
+    "252918e5139e809bb03463bd77d6deb10d78bffd54aeeb709e82d0cb7c48022f";

@@ -484,7 +484,7 @@ macro_rules! artifact_reads {
             fn live_references(&self, digest: &str) -> Result<i64, StorageError> {
                 count(
                     self.conn,
-                    "SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL",
+                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE blob_digest=?1)",
                     [digest],
                 )
             }

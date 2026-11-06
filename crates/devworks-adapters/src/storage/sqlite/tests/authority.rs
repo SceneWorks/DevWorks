@@ -2270,6 +2270,9 @@ impl WriteTransaction for Lying<'_> {
     fn indexing(&mut self) -> &mut dyn devworks_core::ports::storage::IndexRepository {
         self.inner.indexing()
     }
+    fn graph(&mut self) -> &mut dyn devworks_core::ports::storage::GraphRepository {
+        self.inner.graph()
+    }
     fn knowledge(&mut self) -> &mut dyn devworks_core::ports::storage::KnowledgeRepository {
         self.inner.knowledge()
     }
