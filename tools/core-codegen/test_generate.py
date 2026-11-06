@@ -128,6 +128,10 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(catalog['earlierName'], 'Page')
         self.assertNotIn('budget', generate.TYPES['TaskPatch']['fields'])
         self.assertNotIn('budget', generate.TYPES['IssuePatch']['fields'])
+        self.assertNotIn('budget', generate.TYPES['PlanDraft']['fields'])
+        self.assertEqual(generate.DOMAIN_OPS['features.edit_plan']['since']['budget'], 3)
+        self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['budget'], 3)
+        self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['plan_digest'], 3)
 
     def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
         operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')

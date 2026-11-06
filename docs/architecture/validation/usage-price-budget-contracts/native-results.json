@@ -45145,6 +45145,123 @@
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,
+      "id": "dw21-plan-editor-budget",
+      "normalized": {
+        "body": {
+          "budget": {
+            "kind": "Limit",
+            "microUsd": "1000000"
+          },
+          "expectedRevision": "1",
+          "featureId": "root-a",
+          "kind": "features.edit_plan",
+          "plan": {
+            "acceptance": [],
+            "acceptanceTests": [],
+            "content": {
+              "artifactId": "artifact-a",
+              "byteLength": "8",
+              "mediaType": "text/plain",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "versionId": "version-a"
+            },
+            "goals": [],
+            "repositoryIds": [],
+            "requirements": []
+          }
+        },
+        "mode": "Command",
+        "protocol": "1.0-draft.1",
+        "requestKey": "request-a",
+        "schemaRevision": 3
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "domain-request.r2",
+      "error": "a member introduced after schema revision 2 is present",
+      "expectedSchemaValid": false,
+      "id": "dw21-plan-editor-budget-before3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "dw21-reopen-pending-budget",
+      "normalized": {
+        "kind": "features.get",
+        "value": {
+          "acceptance": [],
+          "attemptCount": "0",
+          "attempts": [],
+          "commentCount": "0",
+          "comments": [],
+          "dependencyIds": [],
+          "dependentIds": [],
+          "description": "Fixture content",
+          "detailCoverage": {
+            "gaps": [],
+            "moreGaps": false,
+            "state": "Complete"
+          },
+          "goals": [],
+          "handoffCount": "0",
+          "handoffs": [],
+          "id": "id-a",
+          "inheritsRequirementIds": [],
+          "kind": "Feature",
+          "links": [],
+          "mergedAwaitingAcceptance": false,
+          "pendingPlan": {
+            "budget": {
+              "kind": "Off"
+            },
+            "draft": {
+              "acceptance": [],
+              "acceptanceTests": [],
+              "content": {
+                "artifactId": "artifact-a",
+                "byteLength": "8",
+                "mediaType": "text/plain",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "versionId": "version-a"
+              },
+              "goals": [],
+              "repositoryIds": [],
+              "requirements": []
+            },
+            "revision": "2"
+          },
+          "priority": 1,
+          "projectId": "project-a",
+          "repositoryIds": [],
+          "requirements": [],
+          "revision": "1",
+          "statusId": "id-a",
+          "title": "fixture",
+          "touches": []
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r2",
+      "error": "a member introduced after schema revision 2 is present",
+      "expectedSchemaValid": false,
+      "id": "dw21-pending-budget-before3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
+      "entry": "domain-request.r3",
+      "error": null,
+      "expectedSchemaValid": true,
       "id": "dw13-r3-admission-router.connections-Query",
       "normalized": {
         "body": {
@@ -45616,39 +45733,6 @@
           "title": "fixture",
           "touches": []
         }
-      },
-      "passed": true,
-      "typedValid": true
-    },
-    {
-      "entry": "domain-request.r3",
-      "error": null,
-      "expectedSchemaValid": true,
-      "id": "dw13-r3-admission-features.edit_plan-Command",
-      "normalized": {
-        "body": {
-          "expectedRevision": "1",
-          "featureId": "root-a",
-          "kind": "features.edit_plan",
-          "plan": {
-            "acceptance": [],
-            "acceptanceTests": [],
-            "content": {
-              "artifactId": "artifact-a",
-              "byteLength": "8",
-              "mediaType": "text/plain",
-              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "versionId": "version-a"
-            },
-            "goals": [],
-            "repositoryIds": [],
-            "requirements": []
-          }
-        },
-        "mode": "Command",
-        "protocol": "1.0-draft.1",
-        "requestKey": "request-a",
-        "schemaRevision": 3
       },
       "passed": true,
       "typedValid": true

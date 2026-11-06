@@ -1806,6 +1806,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "budget": {
+              "$ref": "#/$defs/FeatureBudgetInput",
+              "x-since": 3
+            },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
             },

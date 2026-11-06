@@ -38,9 +38,9 @@
   "operationModeBindings": 364,
   "operationModeRevisionBindings": 546,
   "legacySchemasByteIdentical": 56,
-  "schemaFixtures": 1902,
-  "domainFixtures": 1573,
-  "negativeDomainFixtures": 370,
+  "schemaFixtures": 1907,
+  "domainFixtures": 1578,
+  "negativeDomainFixtures": 373,
   "generatorTestsPassed": 11,
   "nativeProbeIntegrationTests": {
     "usage_projection": 4,
@@ -203,12 +203,35 @@
   },
   "sourceSha256": {
     "docs/architecture/implementation-slices.json": "5a7cfc073edc201069cc2f70db1742c7e6f4fe9c7c17ddf8e9231564002bfc3f",
-    "docs/architecture/implementation-plan.json": "252aa38ff6c60ca626003c0823003487b77356d8ced94ece41a4cddaef62d624",
+    "docs/architecture/implementation-plan.json": "fea5dbc0884d0d99dddc9793c715903386909f31a7992cfb3948d9a0e791d5d0",
     "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
-    "docs/architecture/contracts/family-coverage.json": "4a250ad7968cc97f4e447030a15c69f794d7d1410ee6dca3b5832cc0ecf9ef57"
+    "docs/architecture/contracts/family-coverage.json": "ae6f44b2bb791beefbd55076389579b17f17723274e4c290a212c9e3ecf520e7"
   },
   "initialQualificationFindings": [
     "Generic Page legacy alias needed referenced numbered-family resolution; fixed in native/probe normalizers without hardcoded family numbers",
     "Historical fixture sourceId corrected to existing opaque ASCII identifier grammar; no schema widened"
-  ]
+  ],
+  "planEditorDelta": {
+    "sourceCommits": [
+      "a6ac505",
+      "d400adf"
+    ],
+    "scope": "Optional proposed budget sibling on features.edit_plan; PendingFeaturePlan captured budget and authoritative stored digest; plain PlanDraft unchanged",
+    "targetedCases": 6,
+    "replacedAutomaticCases": 1,
+    "netAdditionalDomainCases": 5,
+    "result": "plan-editor-delta-results.json",
+    "allPassed": true,
+    "admissionBindingsUnchanged": 546,
+    "legacySchemasByteIdentical": 56,
+    "nativeOwnerSnapshotCheck": "awaiting committed owner constructor delta; prior20-test snapshot remains recorded independently"
+  },
+  "validationCoverage": {
+    "lastFullVerifierMessages": 1905,
+    "currentUniqueMessages": 1907,
+    "focusedPlanEditorCases": 6,
+    "priorCasesRechecked": 4,
+    "newDigestCases": 2,
+    "strategy": "Reuse passed full baseline; native/schema-check every changed plan budget/digest case, plus all56legacy hashes; no broader campaign repeated"
+  }
 }

@@ -16287,8 +16287,16 @@
             }
           ]
         },
+        "budget": {
+          "$ref": "#/$defs/FeatureBudgetInput",
+          "x-since": 3
+        },
         "draft": {
           "$ref": "#/$defs/PlanDraft"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 3
         },
         "revision": {
           "$ref": "#/$defs/Revision"

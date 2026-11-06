@@ -82,7 +82,7 @@
 </tr>
 <tr>
 <td><code>features.edit_plan</code></td>
-<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><strong>Command</strong><br><code>featureId</code>: <code>RootId</code><br><code>expectedRevision</code>: <code>Revision</code><br><code>plan</code>: <code>PlanDraft</code><br><code>budget</code>: <code>?FeatureBudgetInput</code><br><br><strong>Schema revisions</strong> 1, 2, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>WorkRecord</code></td>
 </tr>
 <tr>
@@ -8719,6 +8719,14 @@
 <tr>
 <td><code>approval</code></td>
 <td><code>?PlanApproval</code></td>
+</tr>
+<tr>
+<td><code>budget</code></td>
+<td><code>?FeatureBudgetInput</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>planDigest</code></td>
+<td><code>?Digest</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h3 id="githubissueintakestate">GithubIssueIntakeState</h3>

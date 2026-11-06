@@ -1062,6 +1062,16 @@ case('dw21-inspect-stored-local-policy','operation-result.r3',{'kind':'router.co
 case('dw21-local-metadata-before3','operation-result.r2',{'kind':'router.connections','value':{'items':[connection],'hasMore':False}},False,False)
 observed=copy.deepcopy(POS['dw21-cost-Free']);observed['value']['page']['items'][0]['connectionRevision']='7'
 case('dw21-admitted-local-policy-revision','operation-result.r3',observed)
+# Proposed plan-editor cap changes round-trip separately from effective feature configuration.
+edit_plan=request('features.edit_plan','Command');edit_plan['schemaRevision']=3;edit_plan['body']['budget']={'kind':'Limit','microUsd':'1000000'}
+case('dw21-plan-editor-budget','domain-request.r3',edit_plan)
+mutate('dw21-plan-editor-budget-before3','dw21-plan-editor-budget',['schemaRevision'],2,entry='domain-request.r2')
+pending=sample('WorkRecord');pending['kind']='Feature';pending['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'budget':{'kind':'Off'}}
+case('dw21-reopen-pending-budget','operation-result.r3',{'kind':'features.get','value':pending})
+case('dw21-pending-budget-before3','operation-result.r2',{'kind':'features.get','value':pending},False,False)
+digest_view=sample('WorkRecord');digest_view['kind']='Feature';digest_view['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'planDigest':'b'*64}
+case('dw21-pending-approval-digest','operation-result.r3',{'kind':'features.get','value':digest_view})
+case('dw21-pending-digest-before3','operation-result.r2',{'kind':'features.get','value':digest_view},False,False)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
