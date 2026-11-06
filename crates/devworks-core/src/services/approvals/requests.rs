@@ -33,17 +33,14 @@ pub fn decode(
     input: &Value,
     registered: bool,
 ) -> Result<DecodedRequest, RequestFailure> {
-    let descriptor = registry::find(operation).ok_or(RequestFailure::Unsupported)?;
-    if !registered || !candidate(operation) || descriptor.envelope != Envelope::Domain {
+    registry::find(operation).ok_or(RequestFailure::Unsupported)?;
+    if !registered || !candidate(operation) {
         return Err(RequestFailure::Unsupported);
     }
     if !input.is_object() || input.get("kind").is_some() {
         return Err(RequestFailure::Invalid);
     }
-    let mut body = input.clone();
-    body["kind"] = json!(operation);
-    let frame = json!({"mode":"Command", "protocol":"1.0-draft.1",
-        "requestKey":"approval-preview", "schemaRevision":schema_revision, "body":body});
+    let frame = frame(operation, schema_revision, input, "approval-preview")?;
     admission::decode(
         Selection {
             operation,
@@ -52,6 +49,44 @@ pub fn decode(
         frame.to_string().as_bytes(),
     )
     .map_err(|_| RequestFailure::Invalid)
+}
+
+/// Construct only the operation's registered envelope; actual admission remains authoritative.
+pub fn frame(
+    operation: &str,
+    schema_revision: u32,
+    input: &Value,
+    key: &str,
+) -> Result<Value, RequestFailure> {
+    let descriptor = registry::find(operation).ok_or(RequestFailure::Unsupported)?;
+    let mut frame = match descriptor.envelope {
+        Envelope::Domain => {
+            let mut body = input.clone();
+            body["kind"] = json!(operation);
+            json!({"mode":"Command","body":body})
+        }
+        Envelope::Specialized { .. } => input.clone(),
+    };
+    if !frame.is_object() {
+        return Err(RequestFailure::Invalid);
+    }
+    for field in [
+        "protocol",
+        "requestKey",
+        "schemaRevision",
+        "actor",
+        "principal",
+        "authoritySources",
+        "human",
+    ] {
+        if input.get(field).is_some() {
+            return Err(RequestFailure::Invalid);
+        }
+    }
+    frame["protocol"] = json!("1.0-draft.1");
+    frame["requestKey"] = json!(key);
+    frame["schemaRevision"] = json!(schema_revision);
+    Ok(frame)
 }
 
 #[cfg(test)]

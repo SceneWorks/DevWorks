@@ -1,6 +1,7 @@
 //! Exact human decisions over source-owned proposals and closed, currently qualified commands.
 //! Settings and feature plans retain their own business rules. Approval never clears pauses,
 //! closes readiness findings generically, or supplies authority for an unqualified capability.
+mod model;
 pub mod requests;
 
 use crate::admission::DecodedRequest;
@@ -41,3 +42,9 @@ pub trait SavedOperationOwners: Send + Sync {
         preview: &OwnerPreview,
     ) -> Result<(), Failure>;
 }
+mod replay;
+mod review_queue;
+mod service;
+mod writes;
+pub use replay::{ApprovedCommand, ResumePreparation};
+pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};

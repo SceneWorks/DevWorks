@@ -77,6 +77,13 @@ impl UseCases {
         self
     }
 
+    pub fn with_approvals(mut self, service: Arc<approvals::ApprovalService>) -> Self {
+        for op in approvals::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

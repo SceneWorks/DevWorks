@@ -237,6 +237,7 @@ impl Default for JobConfig {
 pub struct JobService {
     catalog: NativeCatalog,
     config: JobConfig,
+    approval_control: Option<std::sync::Arc<crate::services::runs::ControlService>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -287,6 +288,9 @@ fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> Failure
 /// Whether the invocation is a person, whose decision alone authorizes a schedule.
 pub fn authorizes(ctx: &InvocationContext) -> bool {
     ctx.principal_kind() == PrincipalKind::Human
+        || ctx
+            .reviewed_operation()
+            .is_some_and(|r| crate::services::approvals::requests::reviewed_job(r.operation()))
 }
 /// Whether a project is closed to work (anything but `Active`: archived or deleted). DW-11's
 /// `services::runs::closed_to_work` states the same rule; this keeps the jobs item independent
@@ -593,7 +597,18 @@ fn run_in_snapshot(
 
 impl JobService {
     pub fn new(catalog: NativeCatalog, config: JobConfig) -> Self {
-        Self { catalog, config }
+        Self {
+            catalog,
+            config,
+            approval_control: None,
+        }
+    }
+    pub fn with_approval_control(
+        mut self,
+        control: std::sync::Arc<crate::services::runs::ControlService>,
+    ) -> Self {
+        self.approval_control = Some(control);
+        self
     }
     pub fn catalog(&self) -> &NativeCatalog {
         &self.catalog
@@ -798,7 +813,7 @@ impl JobService {
             definition: canonical(&i.definition),
             enabled: i.enabled,
             authorized: human,
-            authorized_by: human.then(|| ctx.principal().clone()),
+            authorized_by: human.then(|| authorizer(ctx)),
             hold: None,
             activated_epoch: tx.store().restore_epoch,
             project_epoch: project_epoch(
@@ -892,7 +907,7 @@ impl JobService {
             after.project_epoch = project_epoch(tx, target.as_ref())?;
         }
         after.authorized = human;
-        after.authorized_by = human.then(|| ctx.principal().clone());
+        after.authorized_by = human.then(|| authorizer(ctx));
         after.anchor_at_ms = now;
         after.next_at_ms = if after.enabled && after.hold.is_none() {
             first
@@ -980,7 +995,7 @@ impl JobService {
         let mut after = before.clone();
         after.enabled = true;
         after.authorized = true;
-        after.authorized_by = Some(ctx.principal().clone());
+        after.authorized_by = Some(authorizer(ctx));
         after.hold = None;
         after.activated_epoch = epoch;
         after.project_epoch = project_epoch(tx, target.as_ref())?;
@@ -1402,6 +1417,11 @@ impl CommandHandler for JobService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
             );
         };
+        if ctx.reviewed_operation().is_some() {
+            if let Err(f) = self.validate_reviewed_consent(tx, ctx, command) {
+                return crate::services::sessions::decided(tx, Err(f));
+            }
+        }
         let outcome = match input {
             ops::Input::Create(i) => self.create(tx, ctx, i).map(|d| (d, None)),
             ops::Input::Edit(i) => self.edit(tx, ctx, i).map(|d| (d, None)),
@@ -1486,5 +1506,117 @@ mod tests {
         }
         assert_eq!(parse_list_position("no newline"), None);
         assert_eq!(parse_list_position("bad id\ntitle"), None);
+    }
+}
+
+fn authorizer(ctx: &InvocationContext) -> crate::protocol::ActorId {
+    ctx.reviewed_operation()
+        .map_or_else(|| ctx.principal().clone(), |r| r.approver().clone())
+}
+impl JobService {
+    fn validate_reviewed_consent(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        c: &AdmittedCommand,
+    ) -> Result<(), Failure> {
+        let r = ctx
+            .reviewed_operation()
+            .ok_or_else(|| invalid("reviewed_consent"))?;
+        if !crate::services::approvals::requests::reviewed_job(c.descriptor().name)
+            || r.operation() != c.descriptor().name
+            || r.request_digest() != c.fingerprint().as_str()
+            || r.schema_revision() != c.schema_revision().0
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "reviewed_consent",
+                None,
+            ));
+        }
+        let p = tx
+            .decisions()
+            .approval(r.approval_id())?
+            .ok_or_else(|| not_found("approval", r.approval_id()))?;
+        let a = tx
+            .decisions()
+            .human_decision(
+                crate::ports::storage::ApprovalSource::Generic,
+                r.approval_id(),
+            )?
+            .ok_or_else(|| not_found("human_decision", r.approval_id()))?;
+        let out = tx
+            .decisions()
+            .approval_resume(r.approval_id())?
+            .ok_or_else(|| not_found("approval_resume", r.approval_id()))?;
+        if p.state != "Approved"
+            || a.decision != "Approved"
+            || a.actor != *r.approver()
+            || p.author != *ctx.principal()
+            || p.author_kind != ctx.principal_kind()
+            || p.decided_by.as_ref() != Some(r.approver())
+            || p.content_digest != c.fingerprint().as_str()
+            || p.payload["binding"] != *r.owner_binding()
+            || out.request_digest != c.fingerprint().as_str()
+            || out.principal != *ctx.principal()
+            || out.principal_kind != ctx.principal_kind()
+            || tx.actors().actor_kind(r.approver())? != Some(PrincipalKind::Human)
+            || !out.grant_id.as_ref().is_some_and(|g| {
+                c.authorization()
+                    .authority_grants()
+                    .iter()
+                    .any(|a| &a.grant_id == g)
+            })
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "reviewed_consent",
+                None,
+            ));
+        }
+        if let Some(id) = ctx.root_id() {
+            let root = tx
+                .sessions()
+                .work_root(id)?
+                .ok_or_else(|| not_found("root", &id.0))?;
+            let target = ctx
+                .assignment_id()
+                .map_or(crate::services::runs::Target::Root, |a| {
+                    crate::services::runs::Target::Assignment(a.clone())
+                });
+            let control = self.approval_control.as_ref().ok_or_else(|| {
+                refuse(DomainErrorCode::PermissionDenied, "reviewed_control", None)
+            })?;
+            let eligibility = control.evaluate(
+                tx.runs(),
+                &root,
+                &target,
+                crate::ports::storage::ActivationPurpose::Implementation,
+            )?;
+            if !eligibility.eligible {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "independent_work_hold",
+                    None,
+                ));
+            }
+        }
+        let job = match c.input() {
+            OperationInput::Jobs(ops::Input::Edit(i)) => Some(i.job_id.clone()),
+            OperationInput::Jobs(ops::Input::Enable(i)) => Some(i.job_id.clone()),
+            OperationInput::Jobs(ops::Input::RunNow(i)) => Some(i.job_id.clone()),
+            _ => None,
+        };
+        if let Some(id) = job {
+            let job = tx.jobs().job(&id)?.ok_or_else(|| not_found(JOB, &id))?;
+            if job.hold.is_some() || runner::fence_of(tx, &job)?.is_some() {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "independent_job_hold",
+                    Some(&id),
+                ));
+            }
+        }
+        Ok(())
     }
 }

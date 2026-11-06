@@ -243,6 +243,23 @@ fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    if let Some(reviewed) = ctx.reviewed_operation() {
+        if reviewed.operation() != request.descriptor.name
+            || reviewed.request_digest() != request.fingerprint.as_str()
+            || reviewed.schema_revision() == 0
+        {
+            return Err(deny(DenialReason::ApprovalRequired));
+        }
+        if super::super::services::approvals::requests::reviewed_job(request.descriptor.name)
+            && matches!(verdict, Verdict::Allow)
+        {
+            verdict = Verdict::NeedsGrant {
+                kind: GrantKind::Operation,
+                exact: true,
+                reason: DenialReason::ApprovalRequired,
+            };
+        }
+    }
     let mut ownership = None;
     if matches!(
         verdict,

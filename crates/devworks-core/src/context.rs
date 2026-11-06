@@ -64,6 +64,37 @@ impl BoundWorktree {
     }
 }
 
+/// Read-only exact human-reviewed owner evidence. Only core restoration mints this value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewedOperation {
+    pub(crate) approval_id: Id,
+    pub(crate) approver: ActorId,
+    pub(crate) operation: String,
+    pub(crate) schema_revision: u32,
+    pub(crate) request_digest: String,
+    pub(crate) owner_binding: serde_json::Value,
+}
+impl ReviewedOperation {
+    pub fn approval_id(&self) -> &Id {
+        &self.approval_id
+    }
+    pub fn approver(&self) -> &ActorId {
+        &self.approver
+    }
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+    pub fn schema_revision(&self) -> u32 {
+        self.schema_revision
+    }
+    pub fn request_digest(&self) -> &str {
+        &self.request_digest
+    }
+    pub fn owner_binding(&self) -> &serde_json::Value {
+        &self.owner_binding
+    }
+}
+
 /// Host-bound invocation context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationContext {
@@ -83,6 +114,7 @@ pub struct InvocationContext {
     worktree: Option<BoundWorktree>,
     /// Bound only by the trusted host's dedicated human interaction path, never wire data.
     human_decision: Option<String>,
+    reviewed_operation: Option<ReviewedOperation>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
 /// [`InvocationContext`]. It is created from the store itself, so only code the composition
@@ -172,6 +204,7 @@ impl InvocationContext {
             authority_sources: Vec::new(),
             worktree: None,
             human_decision: None,
+            reviewed_operation: None,
         }
     }
 
@@ -186,6 +219,14 @@ impl InvocationContext {
             && self.human_decision == decision_digest(decision)
     }
 
+    pub fn reviewed_operation(&self) -> Option<&ReviewedOperation> {
+        self.reviewed_operation.as_ref()
+    }
+    pub(crate) fn with_reviewed_operation(mut self, reviewed: ReviewedOperation) -> Self {
+        self.reviewed_operation = Some(reviewed);
+        self
+    }
+
     pub fn with_session(mut self, session_id: Id) -> Self {
         self.session_id = Some(session_id);
         self
@@ -198,6 +239,7 @@ impl InvocationContext {
         assignment_id: Option<AssignmentId>,
     ) -> Self {
         self.worktree = None;
+        self.reviewed_operation = None;
         self.project_id = project_id;
         self.root_id = root_id;
         self.assignment_id = assignment_id;

@@ -1039,6 +1039,14 @@ impl WorkService {
             reviewed_snapshot: s.pending.clone(),
         };
         tx.work().put_proposal(&p, None)?;
+        crate::services::notifications::notify_approval(
+            tx,
+            crate::ports::storage::ApprovalSource::FeaturePlan,
+            &p.id,
+            Some(&f.project_id),
+            "Review feature plan",
+            &p.summary,
+        )?;
         let after = touch(tx, ctx, &f)?;
         event(
             tx,
