@@ -797,6 +797,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "Items<Label>", extend("x-since" = 3))]
     pub labels: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WorkInheritanceOrigin", extend("x-since" = 3))]
+    pub previous_inheritance: Option<WorkInheritanceOrigin>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -843,6 +850,7 @@ impl Check for WorkRecord {
         self.pending_readiness.check()?;
         self.task_type.check()?;
         self.labels.check()?;
+        self.previous_inheritance.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -873,6 +881,9 @@ impl Revisioned for WorkRecord {
         }
         if revision < 3 {
             self.labels = None;
+        }
+        if revision < 3 {
+            self.previous_inheritance = None;
         }
     }
 }
@@ -10454,6 +10465,24 @@ impl Check for AllocationActivity {
         self.payload_unavailable_reason.check()?;
         crate::protocol::rules::record(
             "AllocationActivity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkInheritanceOrigin {
+    pub feature_id: Id,
+    pub requirement_ids: Items<Id>,
+}
+impl Check for WorkInheritanceOrigin {
+    fn check(&self) -> Result<(), String> {
+        self.feature_id.check()?;
+        self.requirement_ids.check()?;
+        crate::protocol::rules::record(
+            "WorkInheritanceOrigin",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())

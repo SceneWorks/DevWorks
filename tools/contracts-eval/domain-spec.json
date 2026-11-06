@@ -473,7 +473,8 @@
         "acceptance_tests": "?Items<AcceptanceCriterion>",
         "pending_readiness": "?ReadinessAssessment",
         "task_type": "?WorkItemType",
-        "labels": "?Items<Label>"
+        "labels": "?Items<Label>",
+        "previous_inheritance": "?WorkInheritanceOrigin"
       },
       "since": {
         "readiness": 2,
@@ -482,7 +483,8 @@
         "acceptance_tests": 2,
         "pending_readiness": 2,
         "task_type": 3,
-        "labels": 3
+        "labels": 3,
+        "previous_inheritance": 3
       }
     },
     "PlanDraft": {
@@ -3966,6 +3968,13 @@
         "work_id": "Id",
         "payload": "?AllocationActivityPayload",
         "payload_unavailable_reason": "?Label"
+      }
+    },
+    "WorkInheritanceOrigin": {
+      "kind": "record",
+      "fields": {
+        "feature_id": "Id",
+        "requirement_ids": "Items<Id>"
       }
     }
   },
