@@ -35,7 +35,7 @@
         "name": "Label",
         "connection_id": "Id",
         "account_revision": "Revision",
-        "upstream_model_id": "Label",
+        "upstream_model_id": "Text",
         "dimensions": "PositiveCounter",
         "dimension_mode": "EmbeddingDimensionMode",
         "metric": "EmbeddingMetric",
@@ -48,7 +48,8 @@
         "qualification_attempt_id": "?Id",
         "result_artifact": "?ArtifactRef",
         "created_at_ms": "Counter",
-        "updated_at_ms": "Counter"
+        "updated_at_ms": "Counter",
+        "space_id": "Id"
       }
     },
     "EmbeddingSpacePage": {
@@ -58,7 +59,8 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "selection_revision": "Revision",
-        "selected_space_id": "?Id"
+        "selected_space_id": "?Id",
+        "selected_candidate_id": "?Id"
       }
     },
     "RouterConfigAction": {
@@ -67,19 +69,19 @@
           "name": "Label",
           "connection_id": "Id",
           "expected_connection_revision": "Revision",
-          "upstream_model_id": "Label",
+          "upstream_model_id": "Text",
           "dimensions": "PositiveCounter",
           "dimension_mode": "EmbeddingDimensionMode",
           "metric": "EmbeddingMetric"
         },
         "QualifyEmbeddingSpace": {
-          "space_id": "Id",
-          "expected_revision": "Revision"
+          "expected_revision": "Revision",
+          "candidate_id": "Id"
         },
         "SelectEmbeddingSpace": {
-          "space_id": "Id",
           "expected_revision": "Revision",
-          "expected_selection_revision": "Revision"
+          "expected_selection_revision": "Revision",
+          "candidate_id": "Id"
         },
         "ClearEmbeddingSpace": {
           "expected_selection_revision": "Revision"
