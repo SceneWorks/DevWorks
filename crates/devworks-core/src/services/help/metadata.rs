@@ -89,3 +89,27 @@ pub(super) fn render(metadata: &HelpCapabilityMetadata) -> String {
     body.push_str(&format!("\n### Exact input contract\n\n```json\n{}\n```\n\n### Exact result contract\n\n```json\n{}\n```\n{AUTO_END}",serde_json::to_string_pretty(&schema).expect("schema"),serde_json::to_string_pretty(&descriptor.result_schema(revision)).expect("schema")));
     body
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn auto_generation_preserves_exact_manual_material_and_prepends_when_markers_are_absent() {
+        let generated = format!("{AUTO_START}\ncurrent schema\n{AUTO_END}");
+        let old =
+            format!("Manual π prefix\n{AUTO_START}\nstale schema\n{AUTO_END}\nManual 尾 suffix");
+        assert_eq!(
+            replace_auto(&old, &generated),
+            format!("Manual π prefix\n{generated}\nManual 尾 suffix")
+        );
+        let manual = "Entirely manual π page\n";
+        assert_eq!(
+            replace_auto(manual, &generated),
+            format!("{generated}\n\n{manual}")
+        );
+        assert_eq!(
+            replace_auto(&replace_auto(manual, &generated), &generated),
+            format!("{generated}\n\n{manual}")
+        );
+    }
+}

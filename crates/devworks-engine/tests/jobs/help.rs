@@ -573,3 +573,6 @@ fn a_lost_committed_help_ack_replays_one_exact_generation_operation() {
 
 #[path = "help_cancel.rs"]
 mod cancellation;
+
+#[path = "help_service.rs"]
+mod service;
