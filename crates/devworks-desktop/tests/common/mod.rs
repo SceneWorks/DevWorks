@@ -143,7 +143,18 @@ pub fn settle(h: &mut Harness<'_, Shell>) {
             }
         }
         match h.try_run() {
-            Ok(_) => return,
+            Ok(_) => {
+                // A final frame may submit a query after its spinner/status bar rendered.
+                // Its worker has not necessarily sent the repaint wake yet: a quiet egui
+                // frame alone does not mean its backend replies were applied.
+                if h.state().client().is_none_or(|c| c.activities().is_empty()) {
+                    return;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "requests never settled within {SETTLE_BOUND:?}"
+                );
+            }
             Err(e) if std::time::Instant::now() < deadline => {
                 let _ = e;
             }
