@@ -1068,7 +1068,7 @@ impl ArtifactService {
     ) -> Result<StoredVersion, Failure> {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
         let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
-        require_explicit(&artifact)?;
+        require_explicit(&artifact, &tx.store().host_actor)?;
         if expected_revision.get() != artifact.revision {
             return Err(conflict(
                 RevisionDimension::Artifact,
@@ -1136,7 +1136,7 @@ impl ArtifactService {
     ) -> Result<MutationSummary, Failure> {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
         let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
-        require_explicit(&artifact)?;
+        require_explicit(&artifact, &tx.store().host_actor)?;
         if expected_scope_revision.get() != artifact.scope_revision {
             return Err(conflict(
                 RevisionDimension::Scope,

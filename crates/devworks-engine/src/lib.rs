@@ -205,6 +205,7 @@ pub mod diagnostics;
 pub mod dispatch;
 pub mod evals;
 pub mod git;
+pub mod help;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;

@@ -474,6 +474,7 @@ pub(crate) fn share_named_in(
     };
     if artifact.state != ArtifactState::Live
         || artifact.retention != ArtifactRetention::Explicit
+        || retained_help(&artifact, &tx.store().host_actor)
         || artifact.scope.project() == Some(project)
         || !visible_in(tx.artifacts(), &viewer, &artifact, None)?
         || !tx.artifacts().add_share(&artifact.id, project)?
@@ -552,7 +553,23 @@ fn visible_artifact(
 }
 
 /// A receipt's reply is never deleted, shared, moved or replaced through the artifact use cases.
-fn require_explicit(artifact: &StoredArtifact) -> Result<(), Refusal> {
+fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["producedBy"].as_str() == Some(host.0.as_str())
+        && artifact.provenance["derived"]["kind"] == "HelpTopic"
+}
+
+fn require_explicit(
+    artifact: &StoredArtifact,
+    host: &crate::protocol::ActorId,
+) -> Result<(), Refusal> {
+    if retained_help(artifact, host) {
+        return Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            "help_retained",
+            Some(artifact.id.clone()),
+        ));
+    }
     match artifact.retention {
         ArtifactRetention::Explicit => Ok(()),
         ArtifactRetention::Receipt => Err(Refusal::new(
@@ -1601,7 +1618,7 @@ impl ArtifactService {
     ) -> Result<DomainDecision, Failure> {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
         let mut artifact = visible_artifact(tx.artifacts(), &viewer, &input.artifact_id)?;
-        require_explicit(&artifact)?;
+        require_explicit(&artifact, &tx.store().host_actor)?;
         // Only the owner scope edits metadata; seeing an artifact through a share never does.
         let owns = match &artifact.scope {
             // A workspace artifact: a member of its audience (its owner, the user, the host, the
@@ -1688,7 +1705,7 @@ impl ArtifactService {
             } => {
                 let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
                 let version = live_version(tx.artifacts(), &artifact, version_id)?;
-                require_explicit(&artifact)?;
+                require_explicit(&artifact, &tx.store().host_actor)?;
                 self.check_revisions(&artifact, expected_revision, expected_reference_revision)?;
                 self.authorize_reference_set(tx, &artifact, &scope)?;
                 let now = tx.now_ms();
@@ -1733,7 +1750,7 @@ impl ArtifactService {
                 expected_versions_digest,
             } => {
                 let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
-                require_explicit(&artifact)?;
+                require_explicit(&artifact, &tx.store().host_actor)?;
                 self.check_revisions(&artifact, expected_revision, expected_reference_revision)?;
                 let versions = tx.artifacts().versions(artifact_id)?;
                 if versions_digest(&versions) != String::from(expected_versions_digest.clone()) {
@@ -1784,7 +1801,7 @@ impl ArtifactService {
                 expected_reference_revision,
             } => {
                 let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
-                require_explicit(&artifact)?;
+                require_explicit(&artifact, &tx.store().host_actor)?;
                 if expected_reference_revision.get() != artifact.reference_revision {
                     return Err(conflict(
                         RevisionDimension::Reference,

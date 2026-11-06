@@ -366,6 +366,7 @@ pub struct Runtime {
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
@@ -541,6 +542,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
+    // A deliberately supplied native-job fixture may own DOCS. Production composes the
+    // complete Help family and its consumer together; it never attaches to a foreign journal.
+    let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
+        Arc::new(devworks_core::services::help::HelpService::new(
+            store.clone(),
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+            packages.as_ref().map(|package| package.service.clone()),
+        ))
+    });
+    let use_cases = if let Some(service) = &help {
+        consumers.push(crate::help::consumer(service.clone()));
+        use_cases.with_help(service.clone())
+    } else {
+        use_cases
+    };
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -645,6 +663,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let use_cases = use_cases
         .with_approvals(approvals.clone())
         .with_notifications(Arc::new(NotificationService::new(ids.clone())));
+    if let Some(service) = &help {
+        service.set_composition(&use_cases);
+    }
     let providers = match config.providers.clone() {
         Some(provider) => {
             let connections = use_cases.connection_service().ok_or_else(|| {
@@ -875,6 +896,29 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
     });
+    if let Some(service) = &help {
+        let service = service.clone();
+        let command = admitter.clone();
+        tasks.push(tokio::spawn(async move {
+            while !service.is_stopped() {
+                let current = service.clone();
+                let target = command.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = current.cleanup();
+                    if let Ok(Some((context, frame))) = current.maintenance_request() {
+                        let _ = target.command_with(
+                            &context,
+                            "help.generate_capability_docs",
+                            &frame,
+                            WriteOptions::default(),
+                        );
+                    }
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     let mut scheduler = Scheduler::new(
         store.clone(),
         jobs.clone(),
@@ -933,6 +977,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         browser,
         git,
+        help,
         browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
@@ -1410,6 +1455,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(help) = &self.help {
+            help.stop();
+        }
         self.usage.stop();
         if let Some(worker) = &self.prices {
             worker.stop();

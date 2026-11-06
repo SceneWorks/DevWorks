@@ -163,6 +163,14 @@ impl UseCases {
         self
     }
 
+    /// The same offline Help owner serves every gateway entry path.
+    pub fn with_help(mut self, service: Arc<help::HelpService>) -> Self {
+        for operation in help::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the sessions family (`ConversationService`).
     pub fn with_sessions(mut self, service: Arc<sessions::SessionService>) -> Self {
         for op in sessions::OPERATIONS {

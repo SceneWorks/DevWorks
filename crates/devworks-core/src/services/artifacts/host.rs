@@ -229,3 +229,43 @@ impl ArtifactService {
         }
     }
 }
+
+impl ArtifactService {
+    /// Internal cleanup for a terminal, unpublished Help draft. Public mutations cannot mint
+    /// trusted host provenance, and a reused published reference has a different generation.
+    pub(crate) fn retire_help_draft(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        reference: &crate::protocol::provider::ArtifactRef,
+        generation: &crate::protocol::Id,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<(), StorageError> {
+        let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+            return Ok(());
+        };
+        if !super::retained_help(&artifact, &tx.store().host_actor)
+            || artifact.provenance["derived"]["generationId"] != serde_json::json!(generation)
+            || artifact.provenance["derived"]["operationId"] != serde_json::json!(operation)
+        {
+            return Ok(());
+        }
+        let record = tx
+            .operations()
+            .operation(operation)?
+            .ok_or_else(|| StorageError::InvalidRecord("Help cleanup operation missing".into()))?;
+        if !crate::ports::storage::is_terminal(record.state) {
+            return Err(StorageError::Busy);
+        }
+        let now = tx.now_ms();
+        for version in tx.artifacts().versions(&artifact.id)? {
+            if version.live() {
+                tx.artifacts().tombstone_version(&version.id, now)?;
+                super::release_blob(tx, &version.blob_digest)?;
+            }
+        }
+        self.retire(tx, &mut artifact)?;
+        artifact.revision += 1;
+        tx.artifacts().update_artifact(&artifact)?;
+        Ok(())
+    }
+}
