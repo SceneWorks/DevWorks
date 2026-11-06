@@ -1,14 +1,27 @@
 -- DW-119: immutable semantic identities, append-only host qualification, explicit selection.
 -- The original embedding_spaces table remains the vector FK owner. A candidate is not a
 -- registered vector space until its native qualification has completed successfully.
+-- Only an explicitly persisted candidate creates a price subject. The ID is the exact native
+-- discovered_model_id(Embedding, connection, upstream), not the candidate or vector-space ID.
+CREATE TABLE router_embedding_price_subjects (
+    model_id TEXT PRIMARY KEY CHECK(length(model_id) BETWEEN 1 AND 128 AND model_id NOT GLOB '*[^A-Za-z0-9_-]*'),
+    connection_id TEXT NOT NULL,
+    upstream_model_id TEXT NOT NULL CHECK(length(upstream_model_id) BETWEEN 1 AND 4096),
+    created_connection_revision INTEGER NOT NULL CHECK(created_connection_revision>0),
+    created_at INTEGER NOT NULL CHECK(created_at>=0)
+) STRICT;
 CREATE TABLE router_embedding_candidates (
     id TEXT PRIMARY KEY CHECK(length(id) BETWEEN 1 AND 128 AND id NOT GLOB '*[^A-Za-z0-9_-]*'),
     space_id TEXT NOT NULL CHECK(length(space_id) BETWEEN 1 AND 128 AND space_id NOT GLOB '*[^A-Za-z0-9_-]*'),
     configuration_digest TEXT NOT NULL CHECK(length(configuration_digest)=64),
+    pricing_model_id TEXT NOT NULL REFERENCES router_embedding_price_subjects(model_id),
     body_json TEXT NOT NULL CHECK(json_valid(body_json) AND json_type(body_json)='object'),
     created_at INTEGER NOT NULL CHECK(created_at>=0)
 ) STRICT;
 CREATE INDEX router_embedding_candidates_space ON router_embedding_candidates(space_id,id);
+CREATE INDEX router_embedding_candidates_price ON router_embedding_candidates(pricing_model_id,id);
+CREATE INDEX router_embedding_candidates_price_identity ON router_embedding_candidates(
+    pricing_model_id,json_extract(body_json,'$.accountRevision'),json_extract(body_json,'$.accountDigest'),json_extract(body_json,'$.endpoint'),id);
 CREATE TABLE router_embedding_qualifications (
     candidate_id TEXT NOT NULL REFERENCES router_embedding_candidates(id),
     revision INTEGER NOT NULL CHECK(revision>0),

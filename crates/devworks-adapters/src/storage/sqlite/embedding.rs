@@ -29,6 +29,94 @@ fn encode(value: &impl Serialize) -> Result<String, StorageError> {
 fn decode<T: DeserializeOwned>(value: String) -> Result<T, StorageError> {
     serde_json::from_str(&value).map_err(|_| corrupt("embedding metadata shape"))
 }
+const SUBJECT_COLUMNS: &str =
+    "s.model_id,s.connection_id,s.upstream_model_id,s.created_connection_revision,s.created_at";
+// This is current persisted identity, not eligibility: offline/disabled pricing authoring
+// remains possible. Transport/qualification and the invocation's authority are separate owners.
+const CANDIDATE_IDENTITY: &str = "json_extract(c.body_json,'$.accountRevision')=e.account_revision AND json_extract(c.body_json,'$.accountDigest') IS e.account_digest AND json_extract(c.body_json,'$.endpoint')=e.endpoint";
+const KNOWN_EMBEDDING: &str = "e.profile='Embedding' AND EXISTS(SELECT 1 FROM json_each(e.discovered_json) d WHERE json_extract(d.value,'$.id')=s.upstream_model_id)";
+fn subject_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, String, String, i64, i64, Option<String>)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+fn subject_of(
+    raw: (String, String, String, i64, i64, Option<String>),
+) -> Result<StoredEmbeddingPriceSubject, StorageError> {
+    let id = |v: String| Id::new(v).map_err(|_| corrupt("embedding price subject identity"));
+    Ok(StoredEmbeddingPriceSubject {
+        model_id: id(raw.0)?,
+        connection_id: id(raw.1)?,
+        upstream_model_id: raw.2,
+        created_connection_revision: raw.3,
+        created_at_ms: raw.4,
+        current_candidate_id: raw.5.map(id).transpose()?,
+    })
+}
+fn subject_selection() -> String {
+    format!(
+        "SELECT {SUBJECT_COLUMNS},CASE WHEN {KNOWN_EMBEDDING} THEN (SELECT c.id FROM router_embedding_candidates c WHERE c.pricing_model_id=s.model_id AND {CANDIDATE_IDENTITY} ORDER BY c.id LIMIT 1) END FROM router_embedding_price_subjects s LEFT JOIN router_connections e ON e.id=s.connection_id"
+    )
+}
+pub(super) fn price_subject(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+    db(conn
+        .query_row(
+            &(subject_selection() + " WHERE s.model_id=?1"),
+            [id.as_str()],
+            subject_row,
+        )
+        .optional())?
+    .map(subject_of)
+    .transpose()
+}
+pub(super) fn has_price_subject(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
+    db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM router_embedding_price_subjects WHERE model_id=?1)",
+        [id.as_str()],
+        |r| r.get(0),
+    ))
+}
+fn candidate_price_subject(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+    let sql = format!(
+        "SELECT {SUBJECT_COLUMNS},c.id FROM router_embedding_candidates c JOIN router_embedding_price_subjects s ON s.model_id=c.pricing_model_id JOIN router_connections e ON e.id=s.connection_id WHERE c.id=?1 AND {KNOWN_EMBEDDING} AND {CANDIDATE_IDENTITY}"
+    );
+    db(conn.query_row(&sql, [id.as_str()], subject_row).optional())?
+        .map(subject_of)
+        .transpose()
+}
+fn price_subjects(
+    conn: &Connection,
+    after: Option<&Id>,
+    limit: u16,
+) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError> {
+    if limit == 0 || limit > MAX_PAGE {
+        return Err(invalid(
+            "embedding price subject page limit must be 1..=MAX_PAGE",
+        ));
+    }
+    let mut stmt = db(conn.prepare_cached(
+        &(subject_selection() + " WHERE s.model_id>?1 ORDER BY s.model_id LIMIT ?2"),
+    ))?;
+    let rows = db(
+        db(stmt.query_map(params![after.map_or("", Id::as_str), limit], subject_row))?
+            .collect::<rusqlite::Result<Vec<_>>>(),
+    )?;
+    rows.into_iter().map(subject_of).collect()
+}
+
 fn candidate(conn: &Connection, id: &Id) -> Result<Option<StoredEmbeddingCandidate>, StorageError> {
     db(conn
         .query_row(
@@ -151,6 +239,9 @@ fn next(q: &mut StoredEmbeddingQualification, now: i64) -> Result<(), StorageErr
     Ok(())
 }
 macro_rules! reads { ($t:ty) => { impl EmbeddingRead for $t {
+    fn embedding_price_subject(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{price_subject(self.conn,id)}
+    fn embedding_price_subject_for_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{candidate_price_subject(self.conn,id)}
+    fn embedding_price_subjects(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingPriceSubject>,StorageError>{price_subjects(self.conn,after,limit)}
     fn embedding_inventory_revision(&self)->Result<i64,StorageError>{db(self.conn.query_row("SELECT revision FROM router_embedding_inventory WHERE singleton=1",[],|r|r.get(0)))}
     fn embedding_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingCandidate>,StorageError>{candidate(self.conn,id)}
     fn embedding_candidates(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingCandidate>,StorageError>{
@@ -205,20 +296,53 @@ impl EmbeddingRepository for Unit<'_> {
                 return Err(invalid("embedding space identity collision"));
             }
         }
-        db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,body_json,created_at) VALUES(?1,?2,?3,?4,?5)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,encode(c)?,c.created_at_ms]))?;
-        append(
-            self.conn,
-            &StoredEmbeddingQualification {
-                candidate_id: c.id.clone(),
-                revision: 1,
-                state: EmbeddingQualificationState::Unqualified,
-                reason: None,
-                probe: None,
-                evidence: None,
-                updated_at_ms: self.now,
-            },
-        )
+        let pricing_id = devworks_core::services::router::connections::discovered_model_id(
+            "Embedding",
+            &c.connection_id,
+            &c.upstream_model_id,
+        );
+        if self.route_model(&pricing_id)?.is_some() || self.decision_model(&pricing_id)?.is_some() {
+            return Err(invalid(
+                "embedding price identity already belongs to another model kind",
+            ));
+        }
+        if let Some(previous) = price_subject(self.conn, &pricing_id)?
+            && (previous.connection_id != c.connection_id
+                || previous.upstream_model_id != c.upstream_model_id)
+        {
+            return Err(invalid("embedding price subject identity collision"));
+        }
+        // A caller may catch a rejected candidate write and still commit its own unit. The
+        // private map and candidate/qualification therefore share this existing savepoint.
+        let savepoint = WriteTransaction::savepoint(self)?;
+        let outcome = (|| {
+            db(self.conn.execute("INSERT OR IGNORE INTO router_embedding_price_subjects(model_id,connection_id,upstream_model_id,created_connection_revision,created_at) VALUES(?1,?2,?3,?4,?5)",params![pricing_id.as_str(),c.connection_id.as_str(),c.upstream_model_id,source.revision,c.created_at_ms]))?;
+            db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,pricing_model_id,body_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,pricing_id.as_str(),encode(c)?,c.created_at_ms]))?;
+            append(
+                self.conn,
+                &StoredEmbeddingQualification {
+                    candidate_id: c.id.clone(),
+                    revision: 1,
+                    state: EmbeddingQualificationState::Unqualified,
+                    reason: None,
+                    probe: None,
+                    evidence: None,
+                    updated_at_ms: self.now,
+                },
+            )
+        })();
+        match outcome {
+            Ok(()) => {
+                WriteTransaction::release(self, savepoint)?;
+                Ok(())
+            }
+            Err(error) => {
+                WriteTransaction::rollback_to(self, savepoint)?;
+                Err(error)
+            }
+        }
     }
+
     fn start_embedding_qualification(
         &mut self,
         id: &Id,

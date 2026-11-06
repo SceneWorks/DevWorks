@@ -1712,6 +1712,25 @@ impl JobRepository for Unsupported {
     }
 }
 impl EmbeddingRead for Unsupported {
+    fn embedding_price_subject(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+        nope()
+    }
+    fn embedding_price_subject_for_candidate(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+        nope()
+    }
+    fn embedding_price_subjects(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError> {
+        nope()
+    }
     fn embedding_inventory_revision(&self) -> Result<i64, StorageError> {
         nope()
     }
