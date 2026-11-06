@@ -1,4 +1,5 @@
 //! Real SQLite allocation concurrency, source fences and workflow mutation transactions.
+mod handoff;
 use super::{Harness, T0, through};
 use crate::storage::sqlite::{MIGRATION_0026_SHA256, MIGRATIONS, SqliteStore};
 use devworks_core::ports::storage::contract::StoreHarness;
