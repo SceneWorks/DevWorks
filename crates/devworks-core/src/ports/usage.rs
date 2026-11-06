@@ -70,6 +70,11 @@ pub struct PriceQuote {
     pub classification: CostClassification,
     /// Current connection/billing policy observed by quotation; admission checks it again.
     pub connection_revision: Option<i64>,
+    /// The official source the host actually consulted. Some with no snapshot records its
+    /// absence; None means an override/local/custom path bypassed official publication.
+    /// Old immutable quotes omit this field and retain their original representation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_provider: Option<OfficialPriceProvider>,
     pub snapshot_id: Option<Id>,
     pub price_revision: Option<i64>,
     pub override_revision: Option<i64>,
@@ -139,4 +144,17 @@ pub trait PriceSource: Send + Sync {
         provider: OfficialPriceProvider,
         now_ms: i64,
     ) -> Result<FetchedPriceCatalog, PriceFetchError>;
+}
+
+#[cfg(test)]
+mod quote_compatibility {
+    use super::PriceQuote;
+    use serde_json::json;
+    #[test]
+    fn old_immutable_quote_json_does_not_gain_a_publication_witness() {
+        let old = json!({"classification":"Untracked","connection_revision":2,"snapshot_id":null,"price_revision":null,"override_revision":1,"currency":"USD","rates":null,"tariffs":[],"untracked_reason":"official_catalog_unavailable"});
+        let quote: PriceQuote = serde_json::from_value(old.clone()).unwrap();
+        assert!(quote.publication_provider.is_none());
+        assert_eq!(serde_json::to_value(quote).unwrap(), old);
+    }
 }

@@ -62,6 +62,7 @@ impl NativeFx {
             quote: PriceQuote {
                 classification: CostClassification::Untracked,
                 connection_revision: Some(2),
+                publication_provider: None,
                 snapshot_id: None,
                 price_revision: None,
                 override_revision: None,
@@ -1744,5 +1745,222 @@ fn actual_feature_reservation_uses_only_host_possible_cache_reads_and_keeps_miss
         assert_eq!(page.totals.tracked_micro_usd.get(), incurred);
         assert_eq!(page.items.0[0].cost.monetary_complete, complete);
         assert_eq!(page.items.0[0].cost.untracked_reason.is_some(), !complete);
+    }
+}
+
+fn official_quote_fixture() -> NativeFx {
+    use devworks_core::ports::usage::PriceResolver;
+    let mut f = NativeFx::new();
+    f.fx.write(|tx| {
+        let mut c = tx.router().connection(&id("api"))?.unwrap();
+        let rev = c.revision;
+        c.endpoint = "https://api.openai.com/v1".into();
+        tx.router().put_connection(&c, Some(rev))?;
+        Ok(())
+    });
+    f.request.quote = f.fx.read(|read| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(read, &f.request.query)
+    });
+    // This field belongs to the opaque producer. It is deliberately not a host publication
+    // revision and must remain usable unchanged when a real requote is obtained.
+    f.request.price_generation = 7_654_321;
+    assert_eq!(
+        f.request.quote.classification,
+        CostClassification::Untracked
+    );
+    assert!(f.request.quote.snapshot_id.is_none());
+    f
+}
+fn publish_first_official_price(f: &NativeFx) {
+    use devworks_core::ports::usage::PublishedTariff;
+    f.fx.write(|tx| {
+        let status = StoredPriceStatus {
+            provider: "openai".into(),
+            revision: 1,
+            current_snapshot_id: None,
+            last_attempt_ms: Some(T0),
+            last_success_ms: None,
+            refresh_pending: true,
+            last_error: None,
+            next_refresh_ms: Some(i64::MAX),
+            refresh_operation_id: None,
+        };
+        tx.usage().put_price_status(&status, None)?;
+        tx.usage().publish_price_snapshot(
+            &StoredPriceSnapshot {
+                id: id("first-official-publication"),
+                provider: "openai".into(),
+                revision: 1,
+                source_url: "https://developers.openai.com/api/docs/pricing".into(),
+                source_digest: "a".repeat(64),
+                parser_version: "recorded-official".into(),
+                fetched_at_ms: T0,
+                verified_at_ms: T0,
+                effective_date: None,
+                tariffs: [("Input", "1"), ("Output", "2")]
+                    .map(|(kind, amount)| PublishedTariff {
+                        upstream_model_id: "upstream/accounted".into(),
+                        service_tier: "Standard".into(),
+                        context_lower_exclusive: None,
+                        context_upper_inclusive: None,
+                        modality: "Text".into(),
+                        charge_kind: kind.into(),
+                        cache_ttl_seconds: None,
+                        unit: "Token".into(),
+                        units: 1_000_000,
+                        amount_usd: amount.into(),
+                        region: None,
+                        endpoint_profile: Some("OpenAiResponses".into()),
+                    })
+                    .to_vec(),
+            },
+            status.revision,
+        )?;
+        Ok(())
+    });
+}
+#[test]
+fn absent_official_quote_is_fenced_by_first_publication_and_real_requote_reserves() {
+    use devworks_core::ports::usage::PriceResolver;
+    let mut f = official_quote_fixture();
+    let before = f.request.quote.clone();
+    publish_first_official_price(&f);
+    assert!(
+        matches!(f.admit(),Admission::SourceChanged(reason) if reason.contains("publication")),
+        "an absent official source is an immutable quotation fact, not permission to bypass the first publication"
+    );
+    assert!(
+        f.fx.read(|r| r
+            .usage()
+            .inference_attempts(&UsageAttemptFilter::default(), None, 10))
+            .is_empty()
+    );
+    f.request.quote = f.fx.read(|read| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(read, &f.request.query)
+    });
+    assert_eq!(
+        f.request.quote.classification,
+        CostClassification::OfficialEstimate
+    );
+    assert_eq!(f.request.price_generation, 7_654_321);
+    let attempt = f.admitted();
+    let balance =
+        f.fx.read(|r| r.usage().attempt_balance(&attempt.attempt_id))
+            .unwrap();
+    assert_eq!(
+        balance.reserved_micro_usd,
+        Some(200),
+        "100 input at1USD/M plus50 output at2USD/M are reserved from the actual new quote"
+    );
+    assert!(before.snapshot_id.is_none());
+    assert_eq!(before.classification, CostClassification::Untracked);
+}
+#[test]
+fn a_legitimately_admitted_missing_source_quote_remains_immutable_after_publication() {
+    let f = official_quote_fixture();
+    let attempt = f.admitted();
+    let retained = accounting::snapshot(&attempt).unwrap().quote;
+    publish_first_official_price(&f);
+    assert!(matches!(
+        f.admit(),
+        Admission::Admitted { reused: true, .. }
+    ));
+    let (src, _) = source(
+        vec![
+            InferenceFrame::Usage(observation("actual-token-only", 1, Some(100), None)),
+            InferenceFrame::Terminal(AttemptEnd::Completed),
+        ],
+        false,
+    );
+    let DriveOutcome::Settled(balance) = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap()
+    else {
+        panic!("unsettled");
+    };
+    assert_eq!(balance.classification, "Untracked");
+    assert!(balance.priced_micro_usd.is_none());
+    assert_eq!(
+        accounting::snapshot(
+            &f.fx
+                .read(|r| r.usage().inference_attempt(&attempt.attempt_id))
+                .unwrap()
+        )
+        .unwrap()
+        .quote,
+        retained
+    );
+}
+
+#[test]
+fn non_official_quote_paths_ignore_unrelated_official_publications() {
+    use devworks_core::ports::usage::{PriceResolver, PublishedTariff};
+    for mode in ["Custom", "LocalFree", "Configured"] {
+        let mut f = NativeFx::new();
+        if mode == "LocalFree" {
+            f.fx.write(|tx| {
+                let mut c = tx.router().connection(&id("api"))?.unwrap();
+                let revision = c.revision;
+                c.local_free = true;
+                tx.router().put_connection(&c, Some(revision))?;
+                Ok(())
+            });
+        }
+        if mode == "Configured" {
+            f.fx.write(|tx| {
+                tx.usage().put_price_override(
+                    &StoredPriceOverride {
+                        model_id: id("accounted"),
+                        revision: 2,
+                        mode: "Set".into(),
+                        tariffs: [("Input", "1"), ("Output", "2")]
+                            .map(|(kind, amount)| PublishedTariff {
+                                upstream_model_id: "upstream/accounted".into(),
+                                service_tier: "Standard".into(),
+                                context_lower_exclusive: None,
+                                context_upper_inclusive: None,
+                                modality: "Text".into(),
+                                charge_kind: kind.into(),
+                                cache_ttl_seconds: None,
+                                unit: "Token".into(),
+                                units: 1_000_000,
+                                amount_usd: amount.into(),
+                                region: None,
+                                endpoint_profile: Some("OpenAiResponses".into()),
+                            })
+                            .to_vec(),
+                        updated_by: actor("user-a"),
+                        updated_at_ms: T0,
+                    },
+                    1,
+                )
+            });
+            f.request.override_revision = 2;
+        }
+        f.request.quote = f.fx.read(|read| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(read, &f.request.query)
+        });
+        assert!(
+            f.request.quote.publication_provider.is_none(),
+            "no official source was consulted for{mode}"
+        );
+        let classification = f.request.quote.classification;
+        publish_first_official_price(&f);
+        let attempt = f.admitted();
+        let retained = accounting::snapshot(&attempt).unwrap();
+        assert_eq!(retained.quote.classification, classification);
+        let reserved =
+            f.fx.read(|r| r.usage().attempt_balance(&attempt.attempt_id))
+                .unwrap()
+                .reserved_micro_usd;
+        assert_eq!(
+            reserved,
+            match mode {
+                "LocalFree" => Some(0),
+                "Configured" => Some(200),
+                _ => None,
+            }
+        );
     }
 }

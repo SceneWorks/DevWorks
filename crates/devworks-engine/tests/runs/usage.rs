@@ -425,6 +425,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     quote: PriceQuote {
                         classification: CostClassification::LocalFree,
                         connection_revision: Some(1),
+                        publication_provider: None,
                         snapshot_id: None,
                         price_revision: None,
                         override_revision: None,
@@ -853,6 +854,7 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
                 quote: PriceQuote {
                     classification: CostClassification::LocalFree,
                     connection_revision: Some(1),
+                    publication_provider: None,
                     snapshot_id: None,
                     price_revision: None,
                     override_revision: None,
@@ -1166,6 +1168,7 @@ fn settled_unknown_and_cancelled_producer_replay_never_reopens_the_same_admissio
                 quote: PriceQuote {
                     classification: CostClassification::LocalFree,
                     connection_revision: Some(1),
+                    publication_provider: None,
                     snapshot_id: None,
                     price_revision: None,
                     override_revision: None,
@@ -1342,6 +1345,7 @@ let f=Fx::new();let selected_router=router(&f);let info=f.store.info();let conte
                 quote: PriceQuote {
                     classification: CostClassification::LocalFree,
                     connection_revision: Some(1),
+                    publication_provider: None,
                     snapshot_id: None,
                     price_revision: None,
                     override_revision: None,

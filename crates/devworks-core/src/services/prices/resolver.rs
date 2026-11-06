@@ -51,6 +51,7 @@ impl PriceResolver for CatalogPriceResolver {
         let mut quote = PriceQuote {
             classification: CostClassification::Untracked,
             connection_revision: None,
+            publication_provider: None,
             snapshot_id: None,
             price_revision: None,
             override_revision: None,
@@ -112,6 +113,9 @@ impl PriceResolver for CatalogPriceResolver {
                 );
                 return Ok(quote);
             };
+            // Capture even a missing publication. A later first refresh must force a requote
+            // before admission rather than silently admitting this old Untracked quotation.
+            quote.publication_provider = Some(provider);
             let Some(snapshot) = read.usage().current_price_snapshot(provider.id())? else {
                 quote.untracked_reason = Some("official_catalog_unavailable".into());
                 return Ok(quote);
