@@ -273,6 +273,7 @@ pub(super) fn run_case(writer_race: bool) {
                 required_modalities: vec!["Text".into()],
             },
             quote: PriceQuote {
+                publication_provider: None,
                 classification: CostClassification::LocalFree,
                 connection_revision: Some(1),
                 snapshot_id: None,
