@@ -55,7 +55,7 @@ fn quoted(value: &str) -> String {
 impl GitService {
     pub(super) fn push_transport<'a>(
         &'a self,
-        git: &Git<'_>,
+        git: &Git<'a>,
         path: &Path,
         format: &ObjectFormat,
         repository: &Id,
@@ -132,8 +132,8 @@ impl GitService {
                 "[core]\n repositoryFormatVersion = 1\n[extensions]\n objectFormat = sha256\n",
             );
         }
-        let mut environment: Vec<_> = self
-            .helpers
+        let mut environment: Vec<_> = git
+            .runner
             .environment()
             .into_iter()
             .filter(|(key, _)| !key.to_ascii_uppercase().starts_with("GIT_"))
@@ -146,7 +146,7 @@ impl GitService {
         let context = files.create(config.as_bytes()).map_err(|_| refused())?;
         Ok(PushTransport {
             context,
-            runner: &*self.helpers,
+            runner: git.runner,
             objects: PathBuf::from(common).join("objects"),
             environment,
             digest,

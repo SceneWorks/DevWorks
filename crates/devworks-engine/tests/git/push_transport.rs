@@ -13,6 +13,7 @@ pub(super) struct State {
     armed: AtomicBool,
     injected: AtomicBool,
     sent: std::sync::atomic::AtomicUsize,
+    journaled_reads: std::sync::atomic::AtomicUsize,
     block_observation: AtomicBool,
     pub marker: PathBuf,
 }
@@ -52,6 +53,7 @@ impl State {
             armed: AtomicBool::new(false),
             injected: AtomicBool::new(false),
             sent: std::sync::atomic::AtomicUsize::new(0),
+            journaled_reads: std::sync::atomic::AtomicUsize::new(0),
             block_observation: AtomicBool::new(true),
             marker: root.join("unreviewed-transport-marker"),
         }
@@ -67,6 +69,22 @@ impl State {
         environment.push(("NO_PROXY".into(), "127.0.0.1,localhost".into()));
         for key in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME"] {
             environment.push((key.into(), self.home.to_string_lossy().into()));
+        }
+    }
+    pub fn assert_recorded(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+        recorded: bool,
+    ) {
+        if self.armed.load(Ordering::SeqCst)
+            && spec.args.first().is_some_and(|arg| arg == "ls-remote")
+            && !spec.args.iter().any(|arg| arg == "--get-url")
+        {
+            assert!(
+                recorded,
+                "network observations retain the originating operation owner"
+            );
+            self.journaled_reads.fetch_add(1, Ordering::SeqCst);
         }
     }
     pub fn refuse_postcondition(&self, spec: &devworks_core::ports::process::ProcessSpec) -> bool {
@@ -358,6 +376,7 @@ pub(super) fn exercise(f: Fixture<'_>) {
         ),
         "{recovered:?}"
     );
+    assert!(f.state.journaled_reads.load(Ordering::SeqCst) > 0);
     assert_eq!(
         f.state.sent.load(Ordering::SeqCst),
         1,

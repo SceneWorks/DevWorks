@@ -517,6 +517,7 @@ fn native_task_lifecycle_transport(
             fs: filesystem.clone(),
         },
         reviewed_case,
+        push_state.clone(),
     ));
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
@@ -1420,7 +1421,11 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
 
 /// Lose the successful commit reply before the Git owner can checkpoint it. All native
 /// processes still run through the real supervisor; recovery must observe, never replay.
-struct CommitReplyLost(SupervisedHelpers, Option<ReviewedCommitCase>);
+struct CommitReplyLost(
+    SupervisedHelpers,
+    Option<ReviewedCommitCase>,
+    Option<Arc<push_transport::State>>,
+);
 impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
     fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
         self.0.filesystem()
@@ -1435,6 +1440,9 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         limits: devworks_core::services::indexing::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, false);
+        }
         self.0.run(ctx, spec, limits, stop)
     }
     fn run_difference(
@@ -1466,6 +1474,9 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         operation: &devworks_core::protocol::OperationId,
         approved_hold: bool,
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, true);
+        }
         let commit = spec.args.first().is_some_and(|arg| arg == "commit");
         let directory = spec.cwd.clone();
         let reply = self
