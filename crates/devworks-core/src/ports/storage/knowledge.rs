@@ -419,7 +419,25 @@ pub struct KnowledgeCounts {
 /// Most rows one repository page returns.
 pub const KNOWLEDGE_PAGE_MAX: u16 = 500;
 
+/// Native-applicable informational review sources. Candidate bounds precede final queue rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnowledgeReviewKind {
+    Challenge,
+    ProposedRule,
+}
+
 pub trait KnowledgeRead {
+    fn knowledge_review_candidates(
+        &self,
+        scopes: &[String],
+        kind: KnowledgeReviewKind,
+        limit: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError>;
+    fn knowledge_review_contradictions(
+        &self,
+        scopes: &[String],
+        limit: u16,
+    ) -> Result<Vec<StoredRelation>, StorageError>;
     /// The scope's revision; 0 before its first write.
     fn knowledge_scope_revision(&self, scope: &KnowledgeScope) -> Result<i64, StorageError>;
     fn knowledge_entity(&self, id: &Id) -> Result<Option<StoredEntity>, StorageError>;
@@ -523,6 +541,12 @@ pub trait KnowledgeRead {
     fn knowledge_challenge(&self, id: &Id) -> Result<Option<StoredChallenge>, StorageError>;
     /// Open challenges of a claim (all of them, not a page).
     fn knowledge_open_challenges(&self, claim: &Id) -> Result<i64, StorageError>;
+    /// Oldest Open records only; resolved history cannot consume the requested result bound.
+    fn knowledge_open_challenge_records(
+        &self,
+        claim: &Id,
+        limit: u16,
+    ) -> Result<Vec<StoredChallenge>, StorageError>;
     fn knowledge_addresses(&self, claim: &Id) -> Result<Vec<StoredAddress>, StorageError>;
     fn knowledge_deliveries(&self, claim: &Id) -> Result<DeliverySummary, StorageError>;
     /// Whether a later revision of one of the claim's basis sources was observed.

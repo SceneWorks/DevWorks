@@ -880,6 +880,17 @@ const STALE_SQL: &str = "EXISTS(SELECT 1 FROM knowledge_claim_basis b JOIN knowl
 macro_rules! knowledge_reads {
     ($t:ty) => {
         impl KnowledgeRead for $t {
+            fn knowledge_review_candidates(&self,scopes:&[String],kind:KnowledgeReviewKind,limit:u16)->Result<Vec<StoredClaim>,StorageError>{
+                let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
+                let mut p=Vec::new();let scopes=placeholders(scopes.len(),&mut p,scopes.iter().cloned());
+                let condition=match kind{KnowledgeReviewKind::Challenge=>"EXISTS(SELECT 1 FROM knowledge_challenges h WHERE h.claim_id=c.id AND h.state='Open')",KnowledgeReviewKind::ProposedRule=>"c.kind='Lesson' AND c.rule_state='Proposed'"};
+                p.push(Sql::Integer(limit));let tail=format!("WHERE c.scope_key IN ({scopes}) AND c.lifecycle='Active' AND {condition} ORDER BY c.id LIMIT ?{}",p.len());claims_where(self.conn,&tail,p)
+            }
+            fn knowledge_review_contradictions(&self,scopes:&[String],limit:u16)->Result<Vec<StoredRelation>,StorageError>{
+                let limit=check_limit(limit)?;if scopes.is_empty(){return Ok(Vec::new());}for scope in scopes{KnowledgeScope::parse(scope)?;}
+                let mut p=Vec::new();let scopes=placeholders(scopes.len(),&mut p,scopes.iter().cloned());p.push(Sql::Integer(limit));
+                rows(self.conn,&format!("SELECT {RELATION_COLUMNS} FROM (SELECT r.*,ROW_NUMBER() OVER (PARTITION BY r.scope_key,min(r.subject_id,r.object_id),max(r.subject_id,r.object_id) ORDER BY r.created_at,r.id) AS pair_rank FROM knowledge_relations r JOIN knowledge_claims a ON a.id=r.subject_id JOIN knowledge_claims b ON b.id=r.object_id WHERE r.scope_key IN ({scopes}) AND r.predicate='contradicts' AND r.removed_at IS NULL AND r.subject_id<>r.object_id AND a.lifecycle='Active' AND b.lifecycle='Active' AND a.scope_key=b.scope_key AND r.scope_key=a.scope_key) WHERE pair_rank=1 ORDER BY created_at,id LIMIT ?{}",p.len()),p,relation_row)?.into_iter().map(relation_of).collect()
+            }
             fn knowledge_scope_revision(
                 &self,
                 scope: &KnowledgeScope,
@@ -1222,6 +1233,10 @@ macro_rules! knowledge_reads {
                 .into_iter()
                 .map(challenge_of)
                 .collect()
+            }
+            fn knowledge_open_challenge_records(&self,claim:&Id,limit:u16)->Result<Vec<StoredChallenge>,StorageError>{
+                let limit=check_limit(limit)?;
+                rows(self.conn,&format!("SELECT {CHALLENGE_COLUMNS} FROM knowledge_challenges WHERE claim_id=?1 AND state='Open' ORDER BY opened_at,id LIMIT ?2"),vec![Sql::Text(claim.as_str().into()),Sql::Integer(limit)],challenge_row)?.into_iter().map(challenge_of).collect()
             }
             fn knowledge_challenge(
                 &self,
