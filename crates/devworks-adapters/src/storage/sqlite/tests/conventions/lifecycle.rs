@@ -545,3 +545,119 @@ fn deletion_cascades_resource_association_history_in_same_revision_transaction()
         "cannot append to an already committed owner deletion revision"
     );
 }
+#[test]
+fn small_heading_caches_are_exact_source_segments_once_and_large_or_nul_segments_keep_spans() {
+    let h = Harness::new();
+    let store = h.store();
+    let (generation, source_bytes) = run_write(&store, WriteOptions::default(), |tx| {
+        let large = "λ".repeat(32769);
+        let source = format!(
+            "# λ hello\r\nalpha\n## β two\r\nbeta\n# nul\0title\r\ngamma\n# {large}\r\ndelta"
+        );
+        let owner = record(
+            "cache-owner",
+            KnowledgeScope::Workspace,
+            Some(artifact(
+                tx,
+                "cache-source",
+                &KnowledgeScope::Workspace,
+                &source,
+            )?),
+        );
+        tx.conventions().create_convention(&owner)?;
+        let g = index(tx, &owner, "cache-generation", None)?;
+        tx.conventions().stage_convention_index(&g)?;
+        let root = StoredConventionSection {
+            generation_id: g.generation_id.clone(),
+            id: id("cache-root"),
+            parent_id: None,
+            heading: Some(owner.title),
+            level: 0,
+            source_offset: None,
+            source_length: None,
+            token_count: 0,
+        };
+        tx.conventions().stage_convention_section(&root)?;
+        for (n, title) in ["λ hello", "β two", "nul\0title", large.as_str()]
+            .into_iter()
+            .enumerate()
+        {
+            let start = source.find(title).unwrap();
+            let end = start + title.len();
+            let segment = source.get(start..end).unwrap();
+            // This source-reader step is outside SQLite: use the exact original UTF-8 slice,
+            // never the chunker's decorated '# heading' embedding segment.
+            let cache = (segment.len() <= 64 * 1024
+                && serde_json::from_value::<devworks_core::protocol::support::Content>(json!(
+                    segment
+                ))
+                .is_ok())
+            .then(|| segment.to_owned());
+            let section = StoredConventionSection {
+                generation_id: g.generation_id.clone(),
+                id: id(&format!("cached-{n}")),
+                parent_id: Some(root.id.clone()),
+                heading: cache,
+                level: 1,
+                source_offset: Some(start as i64),
+                source_length: Some(title.len() as i64),
+                token_count: 0,
+            };
+            tx.conventions().stage_convention_section(&section)?;
+            tx.conventions().stage_convention_section(&section)?;
+            if n < 2 {
+                assert_eq!(
+                    tx.conventions()
+                        .convention_section(&g.generation_id, &section.id)?
+                        .unwrap()
+                        .heading
+                        .as_deref(),
+                    Some(segment)
+                );
+            } else {
+                assert!(section.heading.is_none());
+                let mut illegal = section.clone();
+                illegal.id = id(&format!("invalid-cache-{n}"));
+                illegal.heading = Some(segment.into());
+                assert!(tx.conventions().stage_convention_section(&illegal).is_err());
+            }
+        }
+        let original = tx
+            .conventions()
+            .convention_section(&g.generation_id, &id("cached-0"))?
+            .unwrap();
+        let mut duplicate = original.clone();
+        duplicate.id = id("duplicate-span");
+        assert!(
+            tx.conventions()
+                .stage_convention_section(&duplicate)
+                .is_err(),
+            "same source heading cannot amplify through fresh section IDs"
+        );
+        let mut overlap = original;
+        overlap.id = id("overlapping-span");
+        overlap.source_offset = overlap.source_offset.map(|o| o + 1);
+        overlap.source_length = overlap.source_length.map(|n| n - 1);
+        overlap.heading = None;
+        assert!(tx.conventions().stage_convention_section(&overlap).is_err());
+        Ok((g.generation_id, source.len()))
+    })
+    .unwrap();
+    let raw = h.raw();
+    let cached:i64=raw.query_row("SELECT coalesce(sum(length(cast(heading AS BLOB))),0) FROM convention_sections WHERE generation_id=?1 AND level>0",[generation.as_str()],|r|r.get(0)).unwrap();
+    assert_eq!(cached, "λ hello".len() as i64 + "β two".len() as i64);
+    assert!(cached as usize <= source_bytes);
+    drop(raw);
+    drop(store);
+    let store = h.store();
+    let sections = read(&store, |r| {
+        r.conventions().convention_sections(&generation, None, 500)
+    });
+    assert_eq!(sections.len(), 5);
+    assert!(
+        sections
+            .iter()
+            .filter(|s| s.level > 0)
+            .all(|s| s.source_offset.is_some() && s.source_length.is_some())
+    );
+}

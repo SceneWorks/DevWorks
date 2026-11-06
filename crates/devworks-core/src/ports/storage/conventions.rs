@@ -191,7 +191,9 @@ pub struct ConventionTerm {
     pub term: String,
     pub frequency: u32,
 }
-/// Root title is inline; H1-H3 headings are exact byte spans in the generation's source_ref.
+/// Root title is inline; H1-H3 headings always retain exact byte spans in source_ref.
+/// A child may cache its exact source segment once when Content-valid and at most 64KiB
+/// UTF-8; the publisher verifies that slice against the immutable source outside the writer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredConventionSection {
     pub generation_id: Id,

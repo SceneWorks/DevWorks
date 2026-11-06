@@ -538,7 +538,11 @@ impl ConventionIndexRepository for Unit<'_> {
             let reference: ArtifactRef = serde_json::from_value(index.source_ref)
                 .map_err(|_| invalid("source reference invalid"))?;
             if p.level >= s.level
-                || s.heading.is_some()
+                || s.heading.as_ref().is_some_and(|heading| {
+                    heading.len() > 64 * 1024
+                        || !text(heading, 0, 65536)
+                        || Some(heading.len() as i64) != s.source_length
+                })
                 || s.source_offset.is_none_or(|o| o < 0)
                 || s.source_length.is_none_or(|n| n < 0)
                 || s.source_offset
@@ -547,6 +551,14 @@ impl ConventionIndexRepository for Unit<'_> {
                     .is_none_or(|end| end > reference.byte_length.get())
             {
                 return Err(invalid("invalid section source span/ancestor"));
+            }
+        }
+        if let Some((offset, length)) = s.source_offset.zip(s.source_length) {
+            let overlap:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM convention_sections WHERE generation_id=?1 AND id!=?2 AND level>0 AND (source_offset=?3 OR (source_offset<?4 AND ?3<source_offset+source_length)))",params![s.generation_id.as_str(),s.id.as_str(),offset,offset+length],|r|r.get(0)))?;
+            if overlap {
+                return Err(invalid(
+                    "section source spans must be distinct and nonoverlapping",
+                ));
             }
         }
         if let Some(old) = section(self.conn, &s.generation_id, &s.id)? {

@@ -81,9 +81,15 @@ CREATE TABLE convention_sections (
  token_count INTEGER NOT NULL CHECK(token_count>=0),PRIMARY KEY(generation_id,id),
  FOREIGN KEY(generation_id,parent_id) REFERENCES convention_sections(generation_id,id),
  CHECK((level=0 AND parent_id IS NULL AND heading IS NOT NULL AND source_offset IS NULL AND source_length IS NULL)
- OR(level>0 AND parent_id IS NOT NULL AND heading IS NULL AND source_offset>=0 AND source_length>=0))
+ OR(level>0 AND parent_id IS NOT NULL AND source_offset>=0 AND source_length>=0
+ AND (heading IS NULL OR (length(cast(heading AS BLOB))<=65536 AND length(cast(heading AS BLOB))=source_length AND instr(heading,char(0))=0))))
 ) STRICT;
 CREATE UNIQUE INDEX convention_section_root ON convention_sections(generation_id) WHERE level=0;
+CREATE UNIQUE INDEX convention_section_source_offset ON convention_sections(generation_id,source_offset) WHERE level>0;
+CREATE TRIGGER convention_section_source_overlap BEFORE INSERT ON convention_sections
+ WHEN NEW.level>0 AND EXISTS(SELECT 1 FROM convention_sections s WHERE s.generation_id=NEW.generation_id AND s.level>0
+ AND s.source_offset<NEW.source_offset+NEW.source_length AND NEW.source_offset<s.source_offset+s.source_length)
+ BEGIN SELECT RAISE(ABORT,'overlapping convention source sections'); END;
 CREATE TABLE convention_chunks (
  generation_id TEXT NOT NULL REFERENCES convention_indexes,id TEXT NOT NULL,
  chunk_index INTEGER NOT NULL CHECK(chunk_index>=0),section_id TEXT NOT NULL,text TEXT NOT NULL,
