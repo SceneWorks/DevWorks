@@ -18,7 +18,6 @@ pub(super) struct Aggregate {
 impl Aggregate {
     pub fn scan(reader: &mut Reader<'_>) -> Result<Self, Failure> {
         let mut out = Self::default();
-        let mut unmapped = false;
         let scope = reader.scope().clone();
         scan::edges(
             reader.read,
@@ -27,7 +26,6 @@ impl Aggregate {
             &mut reader.budget,
             |edge, budget| {
                 let Ok(edge) = edge else {
-                    unmapped = true;
                     return Ok(true);
                 };
                 let kind = &edge.raw.edge.kind;
@@ -79,13 +77,13 @@ impl Aggregate {
                 Ok(true)
             },
         )?;
-        if unmapped && !reader.gaps.contains(&"unresolved_aggregate_endpoint") {
-            reader.gaps.push("unresolved_aggregate_endpoint");
-        }
-        out.complete = reader.budget.exhausted.is_none() && !unmapped;
+        out.complete = reader.budget.exhausted.is_none();
         Ok(out)
     }
     pub fn links(&self) -> Vec<Value> {
+        if !self.complete {
+            return Vec::new();
+        }
         self.links.iter().map(|((source,target,kind),(count,band))| {
             let mut value=json!({"sourceRepositoryId":source,"targetRepositoryId":target,"edgeKind":kind,"count":count.to_string()});
             if let Some(band)=band { value["confidenceBand"]=json!(["low","medium","high"][*band as usize]); }
@@ -106,6 +104,10 @@ impl Aggregate {
     }
     pub fn ranked(&mut self, reader: &mut Reader<'_>, repository: &Id) -> Result<Ranked, Failure> {
         let scope = reader.scoped_repository(repository)?;
+        // A stopped edge scan cannot establish an exact fan-in or package population.
+        if !self.complete {
+            return Ok((Vec::new(), Vec::new(), Vec::new(), None, Vec::new()));
+        }
         let mut hotspots = Vec::new();
         let mut supertypes = Vec::new();
         let mut packages = Vec::new();
@@ -305,7 +307,7 @@ pub(super) fn rust_semantic(reader: &mut Reader<'_>, scope: &GraphScope) -> Resu
         if group["outcome"] == "semantic" {
             continue;
         }
-        let mut row = json!({"index":group["index"].as_u64().unwrap_or(0).to_string(),"crates":group.get("crates").cloned().unwrap_or(json!([])),"outcome":group["outcome"]});
+        let mut row = json!({"index":group["index"].as_u64().ok_or_else(||crate::services::sessions::Refusal::new(crate::protocol::DomainErrorCode::ViewUnavailable,"recorded_semantic_index",None))?.to_string(),"crates":group.get("crates").cloned().unwrap_or(json!([])),"outcome":group["outcome"]});
         for name in ["failureCode", "detailCode"] {
             if let Some(value) = group.get(name).filter(|v| !v.is_null()) {
                 row[name] = value.clone();
