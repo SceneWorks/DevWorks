@@ -1210,6 +1210,9 @@ fn redirect_is_received_acknowledged_and_incorporated_and_fences_only_incompatib
         .is_ok()
     );
     // Incorporated: only the incompatible worker is superseded.
+    let w1_generation = read(&*fx.store, |s| s.runs().assignment(&w1.id))
+        .unwrap()
+        .generation;
     let (x, i, w) = (a.id.clone(), instruction.clone(), w1.id.clone());
     let done = fx
         .tx(move |svc, tx| {
@@ -1246,6 +1249,7 @@ fn redirect_is_received_acknowledged_and_incorporated_and_fences_only_incompatib
     // A late result of the superseded worker is retained, never current.
     let claim = ResultClaim {
         assignment: w1.id.clone(),
+        assignment_generation: w1_generation,
         execution_id: a.id.clone(),
         owner_epoch: a.owner_epoch,
         plan_revision: None,
@@ -1275,8 +1279,18 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
     let coord = fx.assign("root-f", "root-f", None, None);
     let w = fx.assign("root-f", "task-f1", Some(&coord.id), Some("x"));
     let old = fx.launch("supervisor-1");
-    let claim = |a: &StoredActivation, plan: Option<i64>| ResultClaim {
+    let old_generation = fx
+        .dispatch(
+            &old,
+            Target::Assignment(w.id.clone()),
+            ActivationPurpose::Planning,
+        )
+        .unwrap()
+        .assignment_generation
+        .unwrap();
+    let claim = |a: &StoredActivation, generation: i64, plan: Option<i64>| ResultClaim {
         assignment: w.id.clone(),
+        assignment_generation: generation,
         execution_id: a.id.clone(),
         owner_epoch: a.owner_epoch,
         plan_revision: plan,
@@ -1287,18 +1301,33 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
             svc.accept_result(tx, &host, &c)
         })
     };
-    assert_eq!(accept(claim(&old, Some(1))), ResultAcceptance::Current);
+    assert_eq!(
+        accept(claim(&old, old_generation, Some(1))),
+        ResultAcceptance::Current
+    );
     applied(&fx.pause(&fx.user, "root-f"));
     let (x, e) = (old.id.clone(), old.owner_epoch);
     fx.tx(move |svc, tx| svc.finish_activation(tx, &x, e, ActivationOutcome::Cancelled, None))
         .unwrap();
     applied(&fx.resume(&fx.user, "root-f"));
     let new = fx.launch("supervisor-1");
+    let new_generation = fx
+        .dispatch(
+            &new,
+            Target::Assignment(w.id.clone()),
+            ActivationPurpose::Planning,
+        )
+        .unwrap()
+        .assignment_generation
+        .unwrap();
     assert!(matches!(
-        accept(claim(&old, Some(1))),
+        accept(claim(&old, old_generation, Some(1))),
         ResultAcceptance::Stale(_)
     ));
-    assert_eq!(accept(claim(&new, Some(1))), ResultAcceptance::Current);
+    assert_eq!(
+        accept(claim(&new, new_generation, Some(1))),
+        ResultAcceptance::Current
+    );
     // A compatible replacement plan rebinds the work; a result under the older plan is stale.
     fx.scope.approve(&rid("root-f"), 2, &[("x", "dx")]);
     assert!(
@@ -1310,10 +1339,13 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
         .is_ok()
     );
     assert!(matches!(
-        accept(claim(&new, Some(1))),
+        accept(claim(&new, new_generation, Some(1))),
         ResultAcceptance::Stale(_)
     ));
-    assert_eq!(accept(claim(&new, Some(2))), ResultAcceptance::Current);
+    assert_eq!(
+        accept(claim(&new, new_generation, Some(2))),
+        ResultAcceptance::Current
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2912,8 +2944,18 @@ fn results_of_an_interrupted_or_expired_owner_are_not_current() {
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let coord = fx.assign("root-i", "root-i", None, None);
     let a = fx.launch("supervisor-1");
+    let generation = fx
+        .dispatch(
+            &a,
+            Target::Assignment(coord.id.clone()),
+            ActivationPurpose::Planning,
+        )
+        .unwrap()
+        .assignment_generation
+        .unwrap();
     let claim = ResultClaim {
         assignment: coord.id.clone(),
+        assignment_generation: generation,
         execution_id: a.id.clone(),
         owner_epoch: a.owner_epoch,
         plan_revision: None,
@@ -3350,9 +3392,34 @@ fn a_result_after_a_plan_change_is_checked_against_the_active_plan() {
     let wx = fx.assign("root-f", "task-f1", Some(&coord.id), Some("x"));
     let wy = fx.assign("root-f", "task-f2", Some(&coord.id), Some("y"));
     let a = fx.launch("supervisor-1");
+    let generations = [
+        (
+            wx.id.clone(),
+            fx.dispatch(
+                &a,
+                Target::Assignment(wx.id.clone()),
+                ActivationPurpose::Planning,
+            )
+            .unwrap()
+            .assignment_generation
+            .unwrap(),
+        ),
+        (
+            wy.id.clone(),
+            fx.dispatch(
+                &a,
+                Target::Assignment(wy.id.clone()),
+                ActivationPurpose::Planning,
+            )
+            .unwrap()
+            .assignment_generation
+            .unwrap(),
+        ),
+    ];
     let accept = |w: &AssignmentId, plan: i64| {
         let c = ResultClaim {
             assignment: w.clone(),
+            assignment_generation: generations.iter().find(|(id, _)| id == w).unwrap().1,
             execution_id: a.id.clone(),
             owner_epoch: a.owner_epoch,
             plan_revision: Some(plan),
