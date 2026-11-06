@@ -259,7 +259,7 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
             result.is_ok(),
             "Engine Drop must finish before external source release; {result:?}"
         );
-        let _ = job;
+        drop(job);
         retired.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(
             read_snapshot(store.as_ref(), &ReadOptions::default(), |s| Ok(s
