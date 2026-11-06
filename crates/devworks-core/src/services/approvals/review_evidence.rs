@@ -38,8 +38,10 @@ pub(crate) fn bytes(document: &Value) -> Vec<u8> {
         .into_bytes()
 }
 pub(crate) fn needed(preview: &OwnerPreview) -> bool {
-    serde_json::to_vec(&preview.reviewed).is_ok_and(|v| v.len() > 524_288)
+    serde_json::from_value::<crate::protocol::support::DynamicJson>(preview.reviewed.clone())
+        .is_err()
 }
+
 fn changed() -> Failure {
     Refusal::new(DomainErrorCode::SourceChanged, "review_evidence", None)
         .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
@@ -119,6 +121,23 @@ pub(crate) fn expand(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn evidence_is_needed_for_shape_limits_even_when_contents_are_small() {
+        let mut value = json!("leaf");
+        for _ in 0..64 {
+            value = json!([value]);
+        }
+        let preview = OwnerPreview {
+            scope: ConfigScope::Workspace,
+            target_id: Id::new("job").unwrap(),
+            target_revision: 1,
+            summary: "Review job".into(),
+            reviewed: json!({"arguments":value}),
+            binding: Value::Null,
+        };
+        assert!(serde_json::to_vec(&preview.reviewed).unwrap().len() < 512);
+        assert!(needed(&preview));
+    }
     #[test]
     fn full_review_document_keeps_large_historical_contents_and_exact_host_numbers() {
         let preview = OwnerPreview {
