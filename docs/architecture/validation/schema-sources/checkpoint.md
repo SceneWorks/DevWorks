@@ -38,3 +38,11 @@ fixtures; current stack integration; full native acceptance, review, CI and merg
 The SQL Server driver has compiled but has not run against an actual SQL Server.
 Plaintext loopback qualification does not establish TLS behavior. No project or item
 acceptance follows from this checkpoint, and no learned inference was executed.
+
+SQL Server functional checkpoint: actual SQL Server16.0.4305.5 under isolated
+x86 emulation passes the native TDS metadata case (1/1,0.91s), including structural
+objects/routines/FKs/stable IDs, no row sentinel, bounded partials, bad credentials
+and cancellation. The fixture login has VIEW DEFINITION and an explicit schema
+SELECT denial. This validates static query functionality under this fixture only;
+supported x86-host and TLS qualification remain pending. An initial command used
+a nonmatching test filter and ran zero cases; it is excluded from evidence.
