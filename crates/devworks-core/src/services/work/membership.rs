@@ -510,6 +510,28 @@ fn record(
     Ok(())
 }
 
+/// An empty source cannot reacquire the project slot while its only worker awaits routing.
+pub(crate) fn awaiting_outgoing_handoff(
+    tx: &mut dyn WriteTransaction,
+    root: &RootId,
+) -> Result<bool, StorageError> {
+    for assignment in root_assignments(tx.runs(), root, false)? {
+        if marker(&assignment)
+            && tx.work().work(&assignment.work_id.0)?.is_some_and(|work| {
+                work.parent_feature_id
+                    .as_ref()
+                    .is_some_and(|parent| parent != &root.0)
+            })
+            && active_blockers(tx.runs(), &BlockerFilter::RootLevel(assignment.work_id))?
+                .iter()
+                .any(|hold| hold.clearance.get(MARKER) == Some(&Value::Bool(true)))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// A destination coordinator must be activatable to accept an incoming worker. These
 /// temporary routing/capacity waits are not permission to resume a user/budget-paused task.
 pub(crate) fn needs_root_activation(

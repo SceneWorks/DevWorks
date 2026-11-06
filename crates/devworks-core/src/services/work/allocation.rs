@@ -400,6 +400,9 @@ fn eligible(
     }
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
+        if super::membership::awaiting_outgoing_handoff(tx, &r.id)? {
+            return Ok(false);
+        }
         if let PlanState::Approved { units, .. } = &plan
             && units
                 .values()
