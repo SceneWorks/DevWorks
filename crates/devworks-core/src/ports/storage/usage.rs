@@ -193,6 +193,12 @@ pub struct StoredPriceOverride {
     pub updated_at_ms: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PriceOverridePosition {
+    pub model_id: Id,
+    pub revision: i64,
+}
+
 pub trait UsageRead {
     fn inference_attempt(&self, id: &Id) -> Result<Option<StoredInferenceAttempt>, StorageError>;
     /// ID-ordered, exclusive cursor, limit 1..=MAX_PAGE. Time range is [start_ms,end_ms).
@@ -247,6 +253,13 @@ pub trait UsageRead {
         provider: &str,
     ) -> Result<Option<StoredPriceSnapshot>, StorageError>;
     fn price_status(&self, provider: &str) -> Result<Option<StoredPriceStatus>, StorageError>;
+    /// Retained Set/Clear revisions in exclusive (model_id,revision) order, limit1..=MAX_PAGE.
+    fn price_override_history(
+        &self,
+        model: Option<&Id>,
+        after: Option<&PriceOverridePosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredPriceOverride>, StorageError>;
     fn price_override(&self, model: &Id) -> Result<Option<StoredPriceOverride>, StorageError>;
     /// Registered models have implicit override revision1 before any Set/Clear record.
     fn price_override_revision(&self, model: &Id) -> Result<i64, StorageError>;

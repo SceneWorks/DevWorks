@@ -3005,6 +3005,14 @@ impl UsageRead for Unsupported {
     fn price_status(&self, _provider: &str) -> Result<Option<StoredPriceStatus>, StorageError> {
         nope()
     }
+    fn price_override_history(
+        &self,
+        _model: Option<&Id>,
+        _after: Option<&PriceOverridePosition>,
+        _limit: u16,
+    ) -> Result<Vec<StoredPriceOverride>, StorageError> {
+        nope()
+    }
     fn price_override(&self, _model: &Id) -> Result<Option<StoredPriceOverride>, StorageError> {
         nope()
     }

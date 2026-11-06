@@ -1372,3 +1372,103 @@ fn usage28_execution_owner_pair_is_validated_and_immutable() {
     .unwrap();
     assert!(h.raw().execute("UPDATE usage_attempts SET execution_id=NULL,execution_root_id=NULL WHERE attempt_id='owned'",[]).is_err());
 }
+#[test]
+fn usage28_override_history_retains_set_a_set_b_clear_and_pages_across_models_after_restart() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let actor = tx.store().host_actor.clone();
+        let mut a = StoredPriceOverride {
+            model_id: id("sol"),
+            revision: 2,
+            mode: "Set".into(),
+            tariffs: vec![tariff()],
+            updated_by: actor.clone(),
+            updated_at_ms: T0,
+        };
+        tx.usage().put_price_override(&a, 1)?;
+        a.revision = 3;
+        a.tariffs[0].amount_usd = "2.75".into();
+        tx.usage().put_price_override(&a, 2)?;
+        a.revision = 4;
+        a.mode = "Clear".into();
+        a.tariffs.clear();
+        tx.usage().put_price_override(&a, 3)?;
+        let other = StoredPriceOverride {
+            model_id: id("opus"),
+            revision: 2,
+            mode: "Set".into(),
+            tariffs: vec![tariff()],
+            updated_by: actor,
+            updated_at_ms: T0,
+        };
+        tx.usage().put_price_override(&other, 1)?;
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let rows = r
+            .usage()
+            .price_override_history(Some(&id("sol")), None, 500)?;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            (
+                rows[0].revision,
+                rows[0].mode.as_str(),
+                rows[0].tariffs[0].amount_usd.as_str()
+            ),
+            (2, "Set", "1.25")
+        );
+        assert_eq!(
+            (
+                rows[1].revision,
+                rows[1].mode.as_str(),
+                rows[1].tariffs[0].amount_usd.as_str()
+            ),
+            (3, "Set", "2.75")
+        );
+        assert_eq!((rows[2].revision, rows[2].mode.as_str()), (4, "Clear"));
+        assert!(rows[2].tariffs.is_empty());
+        assert_eq!(r.usage().price_override(&id("sol"))?.unwrap(), rows[2]);
+        let first = r.usage().price_override_history(None, None, 1)?;
+        assert_eq!(first[0].model_id, id("opus"));
+        let cursor = PriceOverridePosition {
+            model_id: first[0].model_id.clone(),
+            revision: first[0].revision,
+        };
+        let next = r.usage().price_override_history(None, Some(&cursor), 1)?;
+        assert_eq!((next[0].model_id.as_str(), next[0].revision), ("sol", 2));
+        let cursor = PriceOverridePosition {
+            model_id: id("sol"),
+            revision: 2,
+        };
+        let next = r
+            .usage()
+            .price_override_history(Some(&id("sol")), Some(&cursor), 1)?;
+        assert_eq!(next[0].revision, 3);
+        assert!(r.usage().price_override_history(None, None, 0).is_err());
+        assert!(r.usage().price_override_history(None, None, 501).is_err());
+        assert!(
+            r.usage()
+                .price_override_history(
+                    None,
+                    Some(&PriceOverridePosition {
+                        model_id: id("sol"),
+                        revision: 0
+                    }),
+                    1
+                )
+                .is_err()
+        );
+        assert!(
+            r.usage()
+                .price_override_history(Some(&id("missing")), None, 1)?
+                .is_empty()
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.integrity_check().unwrap().problems.is_empty());
+}

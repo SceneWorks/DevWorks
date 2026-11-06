@@ -603,6 +603,37 @@ fn status(c: &Connection, p: &str) -> Result<Option<StoredPriceStatus>, StorageE
 fn price_override(c: &Connection, id: &Id) -> Result<Option<StoredPriceOverride>, StorageError> {
     Ok(rows(c,&format!("SELECT {PRICE_OVERRIDE_COLS} FROM usage_price_overrides WHERE model_id=?1 ORDER BY revision DESC LIMIT 1"),[id.as_str()],decode_price_override)?.pop())
 }
+fn override_history(
+    c: &Connection,
+    model: Option<&Id>,
+    after: Option<&PriceOverridePosition>,
+    limit: u16,
+) -> Result<Vec<StoredPriceOverride>, StorageError> {
+    let limit = page(limit)?;
+    if let Some(position) = after {
+        positive(position.revision)?;
+    }
+    let (model_after, revision_after) =
+        after.map_or(("", 0), |p| (p.model_id.as_str(), p.revision));
+    match model {
+        Some(model) => rows(
+            c,
+            &format!(
+                "SELECT {PRICE_OVERRIDE_COLS} FROM usage_price_overrides WHERE model_id=?3 AND (model_id,revision)>(?1,?2) ORDER BY model_id,revision LIMIT ?4"
+            ),
+            params![model_after, revision_after, model.as_str(), limit],
+            decode_price_override,
+        ),
+        None => rows(
+            c,
+            &format!(
+                "SELECT {PRICE_OVERRIDE_COLS} FROM usage_price_overrides WHERE (model_id,revision)>(?1,?2) ORDER BY model_id,revision LIMIT ?3"
+            ),
+            params![model_after, revision_after, limit],
+            decode_price_override,
+        ),
+    }
+}
 fn price_revision(c: &Connection) -> Result<i64, StorageError> {
     db(c.query_row(
         "SELECT revision FROM usage_price_revision WHERE singleton=1",
@@ -698,6 +729,7 @@ macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
  fn price_snapshot(&self,id:&Id)->Result<Option<StoredPriceSnapshot>,StorageError>{snapshot(self.conn,id)}
  fn current_price_snapshot(&self,p:&str)->Result<Option<StoredPriceSnapshot>,StorageError>{status(self.conn,p)?.and_then(|s|s.current_snapshot_id).map(|id|snapshot(self.conn,&id)).transpose().map(Option::flatten)}
  fn price_status(&self,p:&str)->Result<Option<StoredPriceStatus>,StorageError>{status(self.conn,p)}
+ fn price_override_history(&self,model:Option<&Id>,after:Option<&PriceOverridePosition>,limit:u16)->Result<Vec<StoredPriceOverride>,StorageError>{override_history(self.conn,model,after,limit)}
  fn price_override(&self,id:&Id)->Result<Option<StoredPriceOverride>,StorageError>{price_override(self.conn,id)}
  fn price_override_revision(&self,id:&Id)->Result<i64,StorageError>{Ok(price_override(self.conn,id)?.map_or(1,|v|v.revision))}
 }};}
