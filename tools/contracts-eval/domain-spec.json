@@ -4764,12 +4764,13 @@
         "description": "?Content",
         "language": "?Label",
         "framework": "?Label",
-        "foundational": "bool"
+        "foundational": "?bool"
       },
       "since": {
         "description": 3,
         "language": 3,
-        "framework": 3
+        "framework": 3,
+        "foundational": 3
       }
     },
     "CodeSearchHit": {

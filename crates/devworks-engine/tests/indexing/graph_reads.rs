@@ -63,6 +63,34 @@ fn native_graph_reads_reuse_one_pin_and_stream_exact_source_after_checkout_remov
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }));
+    let unified = page(
+        &app,
+        &ctx,
+        "code.search",
+        json!({"kind":"Search","selection":{"mode":"Unified","text":"reads"}}),
+        None,
+        None,
+    );
+    let GraphResult::CodeSearch { value: unified } = unified.result else {
+        panic!("unified repository search")
+    };
+    let repository = unified
+        .items
+        .0
+        .iter()
+        .find_map(|hit| match hit {
+            devworks_core::protocol::records::CodeSearchHit::Repository { repository }
+                if repository.repository_id.as_str() == repositories[0].as_str() =>
+            {
+                Some(repository)
+            }
+            _ => None,
+        })
+        .expect("actual registered repository hit");
+    assert!(
+        repository.foundational.is_none(),
+        "unrecorded classification stays unknown"
+    );
     let found = page(
         &app,
         &ctx,
