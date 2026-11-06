@@ -524,3 +524,6 @@ fn case_aliases_cannot_pass_the_exact_lowercase_contribution_namespace() {
         Err(InspectError::Manifest(_))
     ));
 }
+
+#[path = "packages/streaming.rs"]
+mod streaming;

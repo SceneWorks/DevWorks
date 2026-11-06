@@ -567,6 +567,11 @@ impl NativePackageFiles {
         let resolved = crate::fs::NativeFilesystem::new()
             .resolve(location, None)
             .map_err(|_| PackageFileError::Missing("installed package directory".into()))?;
+        if resolved.entry_kind == EntryKind::Missing {
+            return Err(PackageFileError::Missing(
+                "installed package directory".into(),
+            ));
+        }
         if resolved.entry_kind != EntryKind::Directory
             || resolved
                 .linked_ancestors
@@ -596,8 +601,13 @@ impl NativePackageFiles {
                 max_bytes: file.byte_length,
                 allow_hard_links: false,
             })
-            .map_err(|_| {
-                PackageFileError::Mismatch(format!("{:?} is unavailable or changed", file.path))
+            .map_err(|error| match error {
+                devworks_core::authority::reads::ReadRefusal::NotFound => {
+                    PackageFileError::Missing(file.path.clone())
+                }
+                _ => {
+                    PackageFileError::Mismatch(format!("{:?} is unavailable or changed", file.path))
+                }
             })
     }
     fn hash(
@@ -649,8 +659,7 @@ impl NativePackageFiles {
             ));
         }
         let mut want = BTreeSet::new();
-        let mut directories = BTreeSet::new();
-        directories.insert(root.location.clone());
+        let mut entry_bound = 0usize;
         let mut total = 0u64;
         for file in expected {
             Self::stopped(stopped)?;
@@ -663,15 +672,7 @@ impl NativePackageFiles {
                     "invalid package file list".into(),
                 ));
             }
-            let mut parent = root.location.join(&file.path);
-            parent.pop();
-            while parent.starts_with(&root.location) {
-                directories.insert(parent.clone());
-                if parent == root.location {
-                    break;
-                }
-                parent.pop();
-            }
+            entry_bound += Path::new(&file.path).components().count();
             if already_hashed != Some(file.path.as_str()) {
                 let mut opened = Self::opened(root, file)?;
                 Self::hash(&mut opened.reader, file, stopped)?;
@@ -680,6 +681,7 @@ impl NativePackageFiles {
         // Extra entries and all links are refused. Only manifest-declared ancestor directories
         // are traversed, so added empty directory trees cannot turn verification unbounded.
         let mut stack = vec![root.location.clone()];
+        let mut entries = 0usize;
         while let Some(directory) = stack.pop() {
             Self::stopped(stopped)?;
             let now = self.read_root(&directory)?;
@@ -693,7 +695,18 @@ impl NativePackageFiles {
                 let entry = entry.map_err(Self::io)?;
                 let kind = entry.file_type().map_err(Self::io)?;
                 let path = entry.path();
-                if kind.is_dir() && directories.contains(&path) {
+                entries += 1;
+                if entries > entry_bound {
+                    return Err(PackageFileError::Mismatch(
+                        "package directory changed during verification".into(),
+                    ));
+                }
+                let declared_directory = kind.is_dir()
+                    && want
+                        .range(path.clone()..)
+                        .next()
+                        .is_some_and(|file| file.starts_with(&path) && file != &path);
+                if declared_directory {
                     stack.push(path);
                 } else if !kind.is_file() || !want.contains(&path) {
                     return Err(PackageFileError::Mismatch(format!(
