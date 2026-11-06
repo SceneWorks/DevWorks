@@ -167,15 +167,15 @@ pub struct UsageInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 3))]
-    pub start_ms: Option<Counter>,
+    #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+    pub start_ms: Option<SignedCounter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 3))]
-    pub end_ms: Option<Counter>,
+    #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+    pub end_ms: Option<SignedCounter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

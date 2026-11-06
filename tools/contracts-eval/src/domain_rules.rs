@@ -252,8 +252,8 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             require(v[key].as_str().is_none_or(|s| s.trim().chars().count() <= 65536), "usage filter exceeds its output bound")?;
         }
         if present(v, "startMs") && present(v, "endMs") {
-            let start = v["startMs"].as_str().and_then(|n| n.parse::<u128>().ok());
-            let end = v["endMs"].as_str().and_then(|n| n.parse::<u128>().ok());
+            let start = v["startMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+            let end = v["endMs"].as_str().and_then(|n| n.parse::<i128>().ok());
             require(matches!((start, end), (Some(a), Some(b)) if a < b), "usage start must precede exclusive end")?;
         }
     }

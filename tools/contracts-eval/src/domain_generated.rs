@@ -11443,7 +11443,7 @@ impl Check for UsageReportKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageReportRange {
     pub start_ms: SignedCounter,
-    pub end_ms: Counter,
+    pub end_ms: SignedCounter,
 }
 impl Check for UsageReportRange {
     fn check(&self) -> Result<(), String> {
@@ -12927,15 +12927,15 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Counter", extend("x-since" = 3))]
-        start_ms: Option<Counter>,
+        #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+        start_ms: Option<SignedCounter>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Counter", extend("x-since" = 3))]
-        end_ms: Option<Counter>,
+        #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+        end_ms: Option<SignedCounter>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",

@@ -11445,7 +11445,7 @@ impl Check for UsageReportKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageReportRange {
     pub start_ms: SignedCounter,
-    pub end_ms: Counter,
+    pub end_ms: SignedCounter,
 }
 impl Check for UsageReportRange {
     fn check(&self) -> Result<(), String> {

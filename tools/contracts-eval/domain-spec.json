@@ -4275,7 +4275,7 @@
       "kind": "record",
       "fields": {
         "start_ms": "SignedCounter",
-        "end_ms": "Counter"
+        "end_ms": "SignedCounter"
       }
     },
     "UsageAppliedFilters": {
@@ -7864,8 +7864,8 @@
         "report_kind": "?UsageReportKind",
         "scope": "?DataScope",
         "project_id": "?ProjectId",
-        "start_ms": "?Counter",
-        "end_ms": "?Counter",
+        "start_ms": "?SignedCounter",
+        "end_ms": "?SignedCounter",
         "interval": "?Content",
         "user": "?Content",
         "provider": "?Content",
