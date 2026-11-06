@@ -6,13 +6,13 @@ use super::{
     scan,
 };
 use crate::ports::storage::*;
+use crate::protocol::Id;
 use crate::protocol::data::GraphResult;
 use crate::protocol::records::{
     CodeAffectedNode, CodeImpact, CodeImpactSummary, CodeNodeSelection, CodeRepositoryLink,
     CodeRisk,
 };
-use crate::protocol::{DomainErrorCode, Id};
-use crate::services::sessions::{Failure, Refusal};
+use crate::services::sessions::Failure;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,7 +53,7 @@ struct Reached {
     factors: Vec<String>,
 }
 
-type Links = BTreeMap<(Id, Id), (String, u64)>;
+type Links = BTreeMap<(String, String), (String, u64)>;
 
 pub(super) fn node_impact(
     reader: &mut Reader<'_>,
@@ -115,7 +115,7 @@ pub(super) fn file_impact(
         depth.clamp(1, 5),
         Some((repository, path)),
         &CodeNodeSelection::Name {
-            name: crate::protocol::support::Content(path.into()),
+            name: model::wire(json!(path))?,
             repository_id: Some(repository.clone()),
         },
     )
@@ -226,7 +226,7 @@ fn kind(risk: usize) -> CodeRisk {
     }
 }
 
-fn add_link(links: &mut Links, source: Id, target: Id, edge: &str, count: u64) {
+fn add_link(links: &mut Links, source: String, target: String, edge: &str, count: u64) {
     let value = links
         .entry((source, target))
         .or_insert_with(|| (edge.into(), 0));
@@ -245,7 +245,10 @@ fn build(
         reader.gaps.push("unresolved_impact_edges");
     }
     let start_keys: BTreeSet<Key> = starts.iter().map(dataset::node_key).collect();
-    let start_repositories: BTreeSet<Id> = starts.iter().map(|n| n.repository_id.clone()).collect();
+    let start_repositories: BTreeSet<String> = starts
+        .iter()
+        .map(|n| n.repository_id.as_str().to_owned())
+        .collect();
     let mut reached = BTreeMap::<Key, Reached>::new();
     for raw in starts {
         reached.insert(
@@ -332,7 +335,7 @@ fn build(
         }
     }
     let mut links = Links::new();
-    let mut direct = BTreeSet::<Id>::new();
+    let mut direct = BTreeSet::<String>::new();
     for edge in &edges.linked {
         if !reader.budget.visit() {
             break;
@@ -346,11 +349,11 @@ fn build(
             (&edge.target, &edge.source)
         };
         if start_keys.contains(&dataset::key(dependency)) {
-            direct.insert(dependent.repository_id.clone());
+            direct.insert(dependent.repository_id.as_str().to_owned());
             add_link(
                 &mut links,
-                edge.source.repository_id.clone(),
-                edge.target.repository_id.clone(),
+                edge.source.repository_id.as_str().to_owned(),
+                edge.target.repository_id.as_str().to_owned(),
                 &edge.raw.edge.kind,
                 1,
             );
@@ -359,13 +362,13 @@ fn build(
     if let Some(start) = start_repositories.first() {
         for reached in reached.values().filter(|n| {
             n.depth > 0
-                && !start_repositories.contains(&n.raw.repository_id)
-                && !direct.contains(&n.raw.repository_id)
+                && !start_repositories.contains(n.raw.repository_id.as_str())
+                && !direct.contains(n.raw.repository_id.as_str())
         }) {
             add_link(
                 &mut links,
                 start.clone(),
-                reached.raw.repository_id.clone(),
+                reached.raw.repository_id.as_str().to_owned(),
                 "TRANSITIVE",
                 1,
             );
@@ -378,7 +381,7 @@ fn build(
     let mut low = 0;
     let mut repositories = BTreeSet::new();
     for node in reached.values() {
-        repositories.insert(node.raw.repository_id.clone());
+        repositories.insert(node.raw.repository_id.as_str().to_owned());
         if dataset::low_node(&node.raw) {
             low += 1;
         }
@@ -466,26 +469,7 @@ fn build(
             offset += 1;
         }
     }
-    let mut repository_page = Vec::new();
-    if reader.next.is_none() {
-        for repository in &repositories {
-            if offset < reader.position.offset {
-                offset += 1;
-                continue;
-            }
-            if emitted == reader.limit || !reader.retain_wire(repository)? {
-                reader.next = Some(Position {
-                    offset,
-                    ..Default::default()
-                });
-                break;
-            }
-            repository_page.push(repository.clone());
-            emitted += 1;
-            offset += 1;
-        }
-    }
-    if reader.position.offset > reached.len() + links.len() + repositories.len() {
+    if reader.position.offset > reached.len() + links.len() {
         return Err(StorageError::CursorExpired.into());
     }
     if reader.budget.exhausted.is_some()
@@ -525,7 +509,7 @@ fn build(
                 high_count: model::count(counts[1])?,
                 medium_count: model::count(counts[2])?,
                 low_count: model::count(counts[3])?,
-                affected_repository_ids: model::wire(json!(repository_page))?,
+                affected_repository_ids: model::wire(json!(repositories))?,
                 low_confidence_count: model::count(low)?,
             },
             unmapped_inbound_edges: reader
@@ -556,8 +540,7 @@ fn crate_dependents(
     };
     let scope = reader.scoped_repository(repository)?;
     let mut directory = path.rsplit_once('/').map_or("", |(p, _)| p);
-    let mut owner = None;
-    loop {
+    let owner = loop {
         let path = if directory.is_empty() {
             manifest.into()
         } else {
@@ -571,15 +554,15 @@ fn crate_dependents(
                 ..Default::default()
             },
         )?;
-        owner = rows.into_iter().find(|n| {
+        let owner = rows.into_iter().find(|n| {
             let v = &n.node.payload["properties"]["is_definition"];
             v == true || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("true"))
         });
         if owner.is_some() || directory.is_empty() || reader.budget.exhausted.is_some() {
-            break;
+            break owner;
         }
         directory = directory.rsplit_once('/').map_or("", |(p, _)| p);
-    }
+    };
     let Some(owner) = owner else { return Ok(()) };
     let mut visited = BTreeSet::from([dataset::node_key(&owner)]);
     let mut frontier = visited.clone();
@@ -615,13 +598,7 @@ fn crate_dependents(
     }
     let mut additional = Links::new();
     for (source, target) in dependents {
-        let source = Id::new(source.0).map_err(|_| {
-            Refusal::new(DomainErrorCode::ViewUnavailable, "impact_repository", None)
-        })?;
-        let target = Id::new(target.0).map_err(|_| {
-            Refusal::new(DomainErrorCode::ViewUnavailable, "impact_repository", None)
-        })?;
-        add_link(&mut additional, source, target, "REFERENCES_PACKAGE", 1);
+        add_link(&mut additional, source.0, target.0, "REFERENCES_PACKAGE", 1);
     }
     for ((source, target), value) in additional {
         if !links.contains_key(&(source.clone(), target.clone()))
