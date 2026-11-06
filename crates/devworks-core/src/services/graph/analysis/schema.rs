@@ -128,6 +128,12 @@ pub(super) fn query(
             &mut value,
             &["nodeKinds", "edgeKinds", "properties", "notes"],
         )?;
+    } else {
+        super::paging::metadata(
+            metadata,
+            &mut value,
+            &["nodeKinds", "edgeKinds", "properties", "notes"],
+        )?;
     }
     Ok(GraphResult::SchemaDetails {
         value: model::wire(value)?,

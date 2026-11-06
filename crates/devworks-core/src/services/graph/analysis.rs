@@ -3,6 +3,7 @@
 //! bounded scan and disclose its actual budget/coverage through the enclosing graph page.
 mod aggregate;
 mod module_analysis;
+mod paging;
 mod schema;
 
 use super::{
@@ -10,12 +11,8 @@ use super::{
     read::{Metadata, Reader},
 };
 use crate::ports::storage::*;
-use crate::protocol::DomainErrorCode;
-use crate::protocol::{
-    Id,
-    data::{DataScope, GraphResult},
-};
-use crate::services::sessions::{Failure, Refusal};
+use crate::protocol::{Id, data::GraphResult};
+use crate::services::sessions::Failure;
 use serde_json::{Value, json};
 
 pub(super) fn architecture(
@@ -86,50 +83,30 @@ pub(super) fn overview(
     repository: Option<&Id>,
 ) -> Result<GraphResult, Failure> {
     let mut repositories = Vec::new();
-    let mut after = None;
-    loop {
-        let page = metadata.read.projects().repositories(
-            &RepositoryFilter {
-                project: match metadata.scope {
-                    DataScope::Project { project_id } => Some(project_id.clone()),
-                    _ => None,
-                },
-                ..Default::default()
-            },
-            after.as_ref(),
-            32,
-        )?;
-        if page.is_empty() {
-            break;
+    metadata.repositories(|row| {
+        if repository.is_some_and(|id| id != &row.id) {
+            return Ok(true);
         }
-        for row in &page {
-            after = Some(row.id.clone());
-            if repository.is_some_and(|id| id != &row.id) {
-                continue;
-            }
-            // The same visibility seam is used even for metadata-only bootstrap responses.
-            super::scope::authorize(metadata.read, metadata.context, metadata.scope, &row.id)?;
-            if repositories.len() == 500 {
-                return Err(Refusal::new(
-                    DomainErrorCode::ViewUnavailable,
-                    "overview_metadata_page",
-                    None,
-                )
-                .into());
-            }
-            let mut value = json!({"repositoryId":row.id,"name":row.name,"foundational":false});
-            if row.languages.len() == 1 {
-                value["language"] = json!(row.languages[0]);
-            }
-            repositories.push(value);
+        let mut value = json!({"repositoryId":row.id,"name":row.name,"foundational":false});
+        if row.languages.len() == 1 {
+            value["language"] = json!(row.languages[0]);
         }
-        if page.len() < 32 {
-            break;
+        if !metadata.budget.borrow_mut().retain(value.to_string().len()) {
+            return Ok(false);
         }
-    }
+        repositories.push(value);
+        Ok(true)
+    })?;
     let mut value = json!({"repositories":repositories,"dependencies":[],"stamp":metadata.stamp,
-        "graphCoverage":{"state":"Unavailable"},"unavailableReason":"graph_not_indexed","internalModules":[]});
+        "graphCoverage":{"state":"Unavailable","gaps":[],"moreGaps":false},"unavailableReason":"graph_not_indexed","internalModules":[]});
     if let Some(reader) = reader.as_mut() {
+        {
+            let budget = metadata.budget.borrow();
+            reader.budget.visited = reader.budget.visited.saturating_add(budget.visited);
+            if reader.budget.exhausted.is_none() {
+                reader.budget.exhausted = budget.exhausted;
+            }
+        }
         let scope = match repository {
             Some(id) => reader.scoped_repository(id)?,
             None => reader.scope().clone(),
@@ -149,11 +126,18 @@ pub(super) fn overview(
         value["internalModules"] = json!(module_analysis::query(reader, &scope)?);
         value["graphTotals"] =
             json!({"nodeCount":counts.nodes.to_string(),"edgeCount":counts.edges.to_string()});
-        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() { "Partial" } else { "Complete" }});
+        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() { "Partial" } else { "Complete" },"gaps":[],"moreGaps":false});
         value
             .as_object_mut()
             .expect("object")
             .remove("unavailableReason");
+        page_sections(
+            reader,
+            &mut value,
+            &["repositories", "dependencies", "internalModules"],
+        )?;
+    } else {
+        paging::metadata(metadata, &mut value, &["repositories"])?;
     }
     Ok(GraphResult::RepositoryOverview {
         value: model::wire(value)?,
@@ -191,43 +175,10 @@ fn reference(node: &GraphNode) -> Value {
     json!({"repositoryId":node.repository_id,"viewId":node.view_id,"unitKey":node.node.unit_key,"nodeId":node.node.node_id})
 }
 
-/// One signed outer continuation addresses a deterministic sequence of report sections.
-/// Aggregate totals stay independent of the displayed section rows.
 fn page_sections(
     reader: &mut Reader<'_>,
     value: &mut Value,
     sections: &[&str],
 ) -> Result<(), Failure> {
-    let mut at = 0usize;
-    let mut emitted = 0usize;
-    let mut stopped = false;
-    for name in sections {
-        let rows = value
-            .pointer_mut(&format!("/{name}"))
-            .and_then(Value::as_array_mut)
-            .expect("report section");
-        let mut page = Vec::new();
-        for row in std::mem::take(rows) {
-            let index = at;
-            at += 1;
-            if index < reader.position.offset || stopped {
-                continue;
-            }
-            if emitted == reader.limit || !reader.retain_wire(&row)? {
-                reader.next = Some(super::read::Position {
-                    offset: index,
-                    ..Default::default()
-                });
-                stopped = true;
-                continue;
-            }
-            emitted += 1;
-            page.push(row);
-        }
-        *rows = page;
-    }
-    if reader.position.offset > at {
-        return Err(StorageError::CursorExpired.into());
-    }
-    Ok(())
+    paging::sections(reader, value, sections)
 }

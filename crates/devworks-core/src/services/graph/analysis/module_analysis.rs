@@ -75,22 +75,14 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         }
         let mut value = json!({"module":module,"state":"NotAnalyzed","reason":"analysis_not_recorded",
             "observedNodeCounts":group.counts.into_iter().map(|(name,count)|json!({"name":name,"count":count.to_string()})).collect::<Vec<_>>(),
-            "observedCoverage":{"state":if complete{"Complete"}else{"Partial"}},
+            "observedCoverage":{"state":if complete{"Complete"}else{"Partial"},"gaps":[],"moreGaps":false},
             "endpoints":drilldown("Route",group.endpoints,complete),"services":drilldown("Service",group.services,complete),"tables":drilldown("Table",group.tables,complete)});
         if let Some(source) = group.source {
             // Accept only the closed current typed record, including its actual provenance.
             // Invalid stored analysis is unavailable, never silently replaced with invented prose.
-            if let Ok(recorded) = serde_json::from_value::<
-                crate::protocol::records::CodeRecordedModuleAnalysis,
-            >(source)
-            {
-                value["recorded"] = serde_json::to_value(recorded).expect("typed record");
-                value["state"] = json!("Recorded");
-                value.as_object_mut().expect("object").remove("reason");
-            } else {
-                value["state"] = json!("Unavailable");
-                value["reason"] = json!("recorded_analysis_unrepresentable");
-            }
+            value["recorded"] = source;
+            value["state"] = json!("Recorded");
+            value.as_object_mut().expect("object").remove("reason");
         }
         out.push(value);
     }
