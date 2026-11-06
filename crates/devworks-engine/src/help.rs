@@ -54,6 +54,6 @@ pub fn consumer(service: Arc<HelpService>) -> Consumer {
             max_delay_ms: 30_000,
             max_attempts: 4,
         },
-        max_in_flight: None,
+        max_in_flight: Some(1),
     }
 }

@@ -111,7 +111,9 @@ impl HelpService {
             event_id: event,
             root_id: None,
             operation_id: Some(operation.clone()),
-            partition: Some("help-catalog".into()),
+            // The head CAS serializes generations. A failed old source must not become a
+            // poisoned partition head that strands a newly accepted current-source request.
+            partition: None,
             priority: 0,
             ready_at_ms,
             payload: json!({"kind":JOB_KIND}),

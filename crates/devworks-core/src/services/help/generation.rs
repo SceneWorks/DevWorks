@@ -570,18 +570,29 @@ impl HelpService {
     /// Recovery first consumes an exact durable publication observation. Otherwise the same
     /// immutable draft can be resumed, under fresh source/authority/cancellation checks.
     pub fn execute(&self, operation: &OperationRecord) -> GenerationOutcome {
-        let current = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            read.operations().operation(&operation.id)
-        });
-        if let Ok(Some(current)) = current
-            && let Some(result) = recorded_completion(&current)
-        {
-            return GenerationOutcome::Completed(result);
-        }
         let job = match self.job(operation) {
             Ok(job) => job,
             Err(_) => return GenerationOutcome::Failed("Invalid Help generation journal.".into()),
         };
+        let current = match read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.operations().operation(&operation.id)
+        }) {
+            Ok(Some(current)) => current,
+            Ok(None) => {
+                return GenerationOutcome::Unknown(
+                    "The original Help journal is unavailable; no new publication was attempted."
+                        .into(),
+                );
+            }
+            Err(_) => {
+                return GenerationOutcome::Unknown(
+                    "The Help journal could not be read; no new publication was attempted.".into(),
+                );
+            }
+        };
+        if let Some(result) = recorded_completion(&current) {
+            return GenerationOutcome::Completed(result);
+        }
         match self.build(operation,&job) {
             Ok(result)=>GenerationOutcome::Completed(result),
             Err(StorageError::Cancelled) if self.is_stopped()=>GenerationOutcome::Unknown("Help generation stopped before publication; its immutable draft is recoverable.".into()),
