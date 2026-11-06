@@ -48,6 +48,8 @@ struct Production {
     source: Box<dyn OwnedInferenceSource>,
     sink: Option<Box<dyn OwnedInferenceSink>>,
     preparation: Option<crate::providers::driver::NativePreparation>,
+    cancellation: Option<Cancellation>,
+    source_fences: Vec<devworks_core::ports::AuthorityFence>,
 }
 struct Recovery {
     after: Option<Id>,
@@ -208,6 +210,8 @@ impl UsageRuntime {
             source,
             sink,
             preparation: None,
+            cancellation: None,
+            source_fences: Vec::new(),
         })
         .await
     }
@@ -216,6 +220,7 @@ impl UsageRuntime {
         production: crate::providers::driver::NativeProduction,
     ) -> Result<DriveOutcome, StorageError> {
         let crate::providers::driver::NativeProduction {
+            source_fences,
             context,
             logical,
             category,
@@ -232,6 +237,8 @@ impl UsageRuntime {
             source,
             sink: Some(sink),
             preparation: Some(preparation),
+            cancellation,
+            source_fences,
         })
         .await
     }
@@ -240,6 +247,7 @@ impl UsageRuntime {
         production: Production,
     ) -> Result<DriveOutcome, StorageError> {
         let Production {
+            source_fences,
             context,
             logical,
             category,
@@ -289,8 +297,8 @@ impl UsageRuntime {
                     if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
                 }
             }
-            if runtime.stopping.load(Ordering::SeqCst) { return Err(StorageError::Cancelled); }
-            let admission = host.admit(context, logical, category, request)?;
+            if runtime.stopping.load(Ordering::SeqCst) || cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
+            let admission = host.admit_fenced(context, logical, category, request, source_fences)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
                     attempt, ..
