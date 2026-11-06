@@ -629,7 +629,7 @@ fn crate_dependents(
 
 /// Ordinary unresolved symbols are not evidence that a previously mapped endpoint was lost.
 /// A foreign caller may be in a baseline while its target is masked by a selected overlay.
-fn formerly_mapped(
+pub(super) fn formerly_mapped(
     edge: &GraphEdge,
     layers: &[crate::services::indexing::views::ViewLayers],
     source: &str,

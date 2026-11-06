@@ -116,6 +116,9 @@ pub(super) fn edges(
 ) -> Result<(), Failure> {
     let mut after = None;
     let mut packages = None;
+    let mut declared = std::collections::BTreeSet::new();
+    let mut pinned = Vec::new();
+    let mut derived_seen = std::collections::BTreeSet::new();
     let mut sessions =
         std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
     loop {
@@ -235,14 +238,68 @@ pub(super) fn edges(
             if !visit(linked, budget)? {
                 return Ok(());
             }
-            if let Some(derived) = derived
-                && !visit(Ok(derived), budget)?
-            {
-                return Ok(());
+            if let Some(derived) = derived {
+                let identity = (
+                    super::dataset::key(&derived.source),
+                    super::dataset::key(&derived.target),
+                );
+                if derived_seen.contains(&identity) {
+                    continue;
+                }
+                if !budget.retain(
+                    identity.0.0.len()
+                        + identity.0.1.len()
+                        + identity.0.2.len()
+                        + identity.1.0.len()
+                        + identity.1.1.len()
+                        + identity.1.2.len()
+                        + 128,
+                ) {
+                    return Ok(());
+                }
+                derived_seen.insert(identity);
+                let props = &derived.raw.edge.payload["properties"];
+                if props["ecosystem"].as_str() == Some("swiftpm") {
+                    let key = (
+                        derived.source.repository_id.as_str().to_owned(),
+                        super::dataset::key(&derived.target),
+                    );
+                    if props["dependency_kind"].as_str() == Some("pinned") {
+                        if !budget.retain(
+                            std::mem::size_of::<Edge>()
+                                + derived.raw.edge.payload.to_string().len()
+                                + derived.source.unit_key.len()
+                                + derived.target.unit_key.len()
+                                + derived.source.node_id.len()
+                                + derived.target.node_id.len(),
+                        ) {
+                            return Ok(());
+                        }
+                        pinned.push((key, derived));
+                        continue;
+                    }
+                    if !budget
+                        .retain(key.0.len() + key.1.0.len() + key.1.1.len() + key.1.2.len() + 64)
+                    {
+                        return Ok(());
+                    }
+                    declared.insert(key);
+                }
+                if !visit(Ok(derived), budget)? {
+                    return Ok(());
+                }
             }
         }
         if !more {
-            return Ok(());
+            break;
         }
     }
+    // A pin is a fallback logical dependency only when no selected declaration links it.
+    // A cut scan returns above, so unseen declarations can never be treated as absent.
+    for (key, edge) in pinned {
+        if !declared.contains(&key) && !visit(Ok(edge), budget)? {
+            break;
+        }
+    }
+    Ok(())
 }

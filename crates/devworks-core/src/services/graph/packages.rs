@@ -16,6 +16,13 @@ pub(super) struct Packages {
 fn field<'a>(node: &'a GraphNode, name: &str) -> Option<&'a str> {
     node.node.payload["properties"][name].as_str()
 }
+fn definition(node: &GraphNode) -> bool {
+    let value = &node.node.payload["properties"]["is_definition"];
+    value.as_bool() == Some(true)
+        || value
+            .as_str()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+}
 fn git_key(text: &str) -> String {
     let text = text
         .trim()
@@ -45,7 +52,7 @@ impl Packages {
             },
             budget,
             |node, budget| {
-                if node.node.payload["properties"]["is_definition"].as_bool() == Some(true) {
+                if definition(&node) {
                     if !budget.retain(
                         node.node.payload.to_string().len() + std::mem::size_of::<GraphNode>(),
                     ) {
@@ -74,9 +81,7 @@ impl Packages {
         let Some(dependency) = read.graph().graph_node(scope, &local.target)? else {
             return Ok(None);
         };
-        if dependency.node.kind != "Package"
-            || dependency.node.payload["properties"]["is_definition"].as_bool() == Some(true)
-        {
+        if dependency.node.kind != "Package" || definition(&dependency) {
             return Ok(None);
         }
         let ecosystem = field(&dependency, "ecosystem");
@@ -199,6 +204,11 @@ impl Packages {
         );
         if !payload.get("properties").is_some_and(Value::is_object) {
             payload.insert("properties".into(), json!({}));
+        }
+        for key in ["ecosystem", "dependency_kind"] {
+            if let Some(value) = dependency.node.payload["properties"].get(key) {
+                payload["properties"][key] = value.clone();
+            }
         }
         payload["properties"]["resolutionBasis"] = json!("selected-view-package-manifest");
         Ok(Some(Edge {

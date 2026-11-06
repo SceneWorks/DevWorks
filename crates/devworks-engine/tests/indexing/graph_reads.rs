@@ -276,7 +276,7 @@ fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member
     let executor = runtime();
     let store = h.open();
     let src = sources();
-    for name in ["indexed", "missing"] {
+    for name in ["indexed", "missing", "added"] {
         let repo = src.join(name);
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::write(repo.join("README"), format!("{name}\n")).unwrap();
@@ -306,7 +306,11 @@ fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }));
-    let members: Vec<_> = by_name.values().map(|s| id(s)).collect();
+    let members: Vec<_> = by_name
+        .iter()
+        .filter(|(name, _)| name.as_str() != "added")
+        .map(|(_, s)| id(s))
+        .collect();
     write(&*store, move |tx| {
         let now = tx.now_ms();
         let project = StoredProject {
@@ -347,6 +351,81 @@ fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member
     );
     assert_eq!(first["value"]["view"]["views"].as_array().unwrap().len(), 1);
     let pin = first["value"]["view"]["pinId"].clone();
+    // Broad authority may grow after selection; the retained selection itself must not.
+    let expanded: Vec<_> = by_name.values().map(|value| id(value)).collect();
+    write(&*store, move |tx| {
+        let key = devworks_core::protocol::ProjectId(id("graph-project"));
+        let mut project = tx.projects().project(&key)?.unwrap();
+        let expected = project.revision;
+        project.revision += 1;
+        project.scope_revision += 1;
+        tx.projects().update_project(&project, expected)?;
+        tx.projects().set_members(&key, &expanded)
+    })
+    .unwrap();
+    let mut overview = frame.clone();
+    overview.as_object_mut().unwrap().remove("current");
+    overview["view"] = json!({"kind":"Pinned","pinId":pin});
+    overview["query"] = json!({"kind":"Overview"});
+    let overview = app
+        .query(&ctx, "code.overview", overview.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result {
+        result: OperationResult::CodeOverview { value },
+        ..
+    } = overview
+    else {
+        panic!("{overview:?}")
+    };
+    let GraphResult::RepositoryOverview { value } = value.result else {
+        panic!("overview")
+    };
+    assert_eq!(
+        value.repositories.0.len(),
+        2,
+        "new project members cannot widen the retained selection"
+    );
+    let mut status = frame.clone();
+    status.as_object_mut().unwrap().remove("current");
+    status["view"] = json!({"kind":"Pinned","pinId":pin});
+    status["query"] = json!({"kind":"ScopeStatus"});
+    status["limits"]["maxResults"] = json!(1);
+    let mut status_ids = std::collections::BTreeSet::new();
+    let mut status_pages = 0;
+    loop {
+        let reply = app
+            .query(
+                &ctx,
+                "code.graph_scope_status",
+                status.to_string().as_bytes(),
+            )
+            .unwrap();
+        let DomainQueryReply::Result {
+            result: OperationResult::CodeGraphScopeStatus { value },
+            ..
+        } = reply
+        else {
+            panic!("{reply:?}")
+        };
+        let GraphResult::ScopeDetails { value: scope } = value.result else {
+            panic!("scope")
+        };
+        for row in scope.repositories.0 {
+            assert!(
+                status_ids.insert(row.repository_id.as_str().to_owned()),
+                "status page repeated"
+            );
+        }
+        status_pages += 1;
+        assert!(status_pages <= 2);
+        if let Some(cursor) = value.next_cursor {
+            status["cursor"] = json!(cursor);
+        } else {
+            break;
+        }
+    }
+    assert_eq!(status_ids.len(), 2);
+
     let run = index(&app, &user, &by_name["missing"], "pin-second");
     executor.block_on(within("second pin member publishes", async {
         loop {
@@ -542,6 +621,332 @@ fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_pois
         matches!(recovered, DomainQueryReply::Result { .. }),
         "{recovered:?}"
     );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn native_swift_dependency_pin_does_not_duplicate_its_declared_cross_repository_link() {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    for (name, manifest) in [
+        (
+            "swift-core",
+            "// swift-tools-version: 5.9\nimport PackageDescription\nlet package = Package(name: \"swift-core\")\n",
+        ),
+        (
+            "swift-consumer",
+            "// swift-tools-version: 5.9\nimport PackageDescription\nlet package = Package(name: \"swift-consumer\", dependencies: [.package(url: \"https://example.invalid/swift-core.git\", from: \"1.0.0\")])\n",
+        ),
+    ] {
+        let repo = src.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("Package.swift"), manifest).unwrap();
+        if name == "swift-consumer" {
+            std::fs::write(repo.join("Package.resolved"),json!({"version":2,"pins":[{"identity":"swift-core","kind":"remoteSourceControl","location":"https://example.invalid/swift-core.git","state":{"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"1.0.0"}}]}).to_string()).unwrap();
+        }
+        git(&repo, &["init", "-q"]);
+        if name == "swift-core" {
+            git(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://example.invalid/swift-core.git",
+                ],
+            );
+        }
+        git(&repo, &["add", "-A"]);
+        git(
+            &repo,
+            &["commit", "-q", "-m", "Swift captured dependencies"],
+        );
+    }
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repositories = discovered(&app, &ctx);
+    let mut consumer = None;
+    for repository in &repositories {
+        let record = read(&*store, |s| s.projects().repository(&id(repository))).unwrap();
+        if record.name == "swift-consumer" {
+            consumer = Some(repository.clone());
+        }
+        let run = index(&app, &ctx, repository, &format!("swift-index-{repository}"));
+        executor.block_on(within("Swift manifests publish", async {
+            loop {
+                let state = run_state(&store, &run);
+                if state.state == RUN_SUCCEEDED {
+                    break;
+                }
+                assert!(!run_terminal(&state.state), "{state:?}");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+    }
+    let answer = page(
+        &app,
+        &ctx,
+        "code.repository_dependencies",
+        json!({"kind":"RepositoryDependencies","repositoryId":consumer.unwrap()}),
+        Some(json!({"kind":"Published","repositoryIds":repositories})),
+        None,
+    );
+    let GraphResult::Dependencies { value } = answer.result else {
+        panic!("dependencies")
+    };
+    let count: u64 = value
+        .outbound
+        .0
+        .iter()
+        .filter(|link| link.edge_kind.0 == "REFERENCES_PACKAGE")
+        .map(|link| link.count.get() as u64)
+        .sum();
+    assert_eq!(
+        count, 1,
+        "a resolved pin repeats one declared logical dependency"
+    );
+    executor.block_on(app.shutdown());
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without_main_fallback() {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let main = src.join("main");
+    let owned = src.join("owned");
+    std::fs::create_dir_all(&main).unwrap();
+    std::fs::write(main.join("README"), "published main\n").unwrap();
+    git(&main, &["init", "-q"]);
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-q", "-m", "baseline"]);
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "owned",
+            owned.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(owned.join("README"), "owned dirty capture\n").unwrap();
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let user = principal(&*store, "user", PrincipalKind::Human);
+    let agent = principal(&*store, "agent", PrincipalKind::Agent);
+    base_directory(&store, &user, &src);
+    let repositories = discovered(&app, &user);
+    assert_eq!(repositories.len(), 1);
+    let repository = id(&repositories[0]);
+    let run = index(&app, &user, &repositories[0], "owned-baseline");
+    executor.block_on(within("owned baseline publishes", async {
+        loop {
+            let state = run_state(&store, &run);
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let tree = read(&*store, |snapshot| {
+        let rows = snapshot.indexing().worktrees(&repository)?;
+        Ok(rows.into_iter().find(|tree| !tree.main).unwrap())
+    });
+    assert_ne!(tree.worktree_id, id("git-owned-record"));
+    let actor = agent.principal().clone();
+    let path = tree.path.clone();
+    let head = tree.head_oid.clone().unwrap();
+    let repo_id = repository.clone();
+    write(&*store, move |tx| {
+        let now = tx.now_ms();
+        let project = StoredProject {
+            id: devworks_core::protocol::ProjectId(id("owned-project")),
+            name: "Owned".into(),
+            description: String::new(),
+            lifecycle: ACTIVE.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: now,
+            updated_at_ms: now,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 1,
+            archive_stop_pending: false,
+        };
+        tx.projects().insert_project(&project)?;
+        tx.projects()
+            .set_members(&project.id, std::slice::from_ref(&repo_id))?;
+        let work = StoredWork {
+            id: id("owned-work"),
+            project_id: project.id.clone(),
+            kind: TASK.into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Owned".into(),
+            priority: 0,
+            manual_order: 1,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: now,
+            updated_at_ms: now,
+            created_by: Some(actor.clone()),
+            updated_by: Some(actor.clone()),
+            search_key: "owned".into(),
+            caller_ref: None,
+            completion: None,
+            brief: devworks_core::services::work::model::WorkBrief::default().value(),
+        };
+        tx.work().insert_work(&work)?;
+        tx.work()
+            .set_work_repositories(&work.id, std::slice::from_ref(&repo_id))?;
+        tx.git().insert_git_worktree(&StoredGitWorktree {
+            id: id("git-owned-record"),
+            repository_id: repo_id,
+            work_id: work.id,
+            owner: actor,
+            ownership_revision: 1,
+            owner_root_id: Some(devworks_core::protocol::RootId(id("owned-work"))),
+            owner_assignment_id: None,
+            registered_root_id: id("fixture-native-root"),
+            path,
+            branch: "refs/heads/owned".into(),
+            head: serde_json::from_value(json!({"format":"Sha1","hex":head})).unwrap(),
+            revision: 1,
+            removed: false,
+            location: None,
+            pending_operation_id: None,
+            last_operation_id: None,
+            last_result: None,
+        })
+    })
+    .unwrap();
+    let context = devworks_core::services::git::context::bind_worktree(
+        &*store,
+        agent.with_lineage(
+            Some(devworks_core::protocol::ProjectId(id("owned-project"))),
+            Some(devworks_core::protocol::RootId(id("owned-work"))),
+            None,
+        ),
+        &id("git-owned-record"),
+    )
+    .unwrap();
+    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"owned-current","scope":{"kind":"Project","projectId":"owned-project"},"current":true,"query":{"kind":"Source","selection":{"kind":"File","repositoryId":repository,"path":"README","startLine":"0","endLine":"0"}},"limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}});
+    assert!(
+        matches!(app.query(&context,"code.source",frame.to_string().as_bytes()).unwrap(),DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::ViewUnavailable),
+        "an unprepared owned view must never fall back to main"
+    );
+    let mut status = frame.clone();
+    status["query"] = json!({"kind":"ScopeStatus"});
+    let unavailable = app
+        .query(
+            &context,
+            "code.graph_scope_status",
+            status.to_string().as_bytes(),
+        )
+        .unwrap();
+    let DomainQueryReply::Result {
+        result: OperationResult::CodeGraphScopeStatus { value },
+        ..
+    } = unavailable
+    else {
+        panic!("{unavailable:?}")
+    };
+    assert!(value.view.is_none());
+    let GraphResult::ScopeDetails { value } = value.result else {
+        panic!("owned status")
+    };
+    assert!(!value.current);
+    assert!(value.unavailable_reason.is_some());
+    let revision = read(&*store, |s| {
+        devworks_core::services::indexing::section_config(
+            s.indexing(),
+            &devworks_core::services::indexing::section_key(None),
+        )
+    })
+    .revision;
+    let refresh = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"owned-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"worktreeId":tree.worktree_id,"expectedSourceRevision":revision.to_string()}});
+    let reply = app
+        .command(
+            &user,
+            "indexing.refresh_overlay",
+            refresh.to_string().as_bytes(),
+        )
+        .unwrap();
+    let CommandReply::Recorded { receipt, .. } = reply else {
+        panic!("{reply:?}")
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::IndexingRefreshOverlay { value },
+    } = receipt.decision
+    else {
+        panic!("{:?}", receipt.decision)
+    };
+    executor.block_on(within("owned overlay publishes", async {
+        loop {
+            let state = run_state(&store, value.id.as_str());
+            if state.state == RUN_SUCCEEDED {
+                break;
+            }
+            assert!(!run_terminal(&state.state), "{state:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }));
+    let answer = app
+        .query(&context, "code.source", frame.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result {
+        result: OperationResult::CodeSource { value },
+        ..
+    } = answer
+    else {
+        panic!("{answer:?}")
+    };
+    let owned_pin=value.view.as_ref().unwrap().pin_id.clone();
+    assert_eq!(
+        value.view.unwrap().views[0].snapshot.worktree_id.as_ref(),
+        Some(&tree.worktree_id)
+    );
+    let GraphResult::SourceText { value } = value.result else {
+        panic!("owned source")
+    };
+    assert_eq!(value.text.0, "owned dirty capture\n");
+    write(&*store, |tx| {
+        let mut tree = tx.git().git_worktree(&id("git-owned-record"))?.unwrap();
+        let expected = tree.revision;
+        tree.revision += 1;
+        tree.ownership_revision += 1;
+        tree.owner=devworks_core::protocol::ActorId(id("user"));
+        tx.git().update_git_worktree(&tree, expected)
+    })
+    .unwrap();
+    let stale = app
+        .query(
+            &context,
+            "code.graph_scope_status",
+            status.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&stale,DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::PermissionDenied),
+        "{stale:?}"
+    );
+    let owner=context.principal().clone();
+    write(&*store,move|tx|{let mut tree=tx.git().git_worktree(&id("git-owned-record"))?.unwrap();let expected=tree.revision;tree.owner=owner;tree.revision+=1;tree.ownership_revision+=1;tx.git().update_git_worktree(&tree,expected)}).unwrap();
+    let rebound=devworks_core::services::git::context::bind_worktree(&*store,context.clone(),&id("git-owned-record")).unwrap();
+    let mut old_pin=frame.clone();old_pin.as_object_mut().unwrap().remove("current");old_pin["view"]=json!({"kind":"Pinned","pinId":owned_pin});
+    let denied=app.query(&rebound,"code.source",old_pin.to_string().as_bytes()).unwrap();assert!(matches!(&denied,DomainQueryReply::Rejected{fault,..}if fault.code==devworks_core::protocol::DomainErrorCode::ViewUnavailable),"an ABA owner cannot inherit an earlier custody pin: {denied:?}");
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }

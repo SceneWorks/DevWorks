@@ -173,7 +173,9 @@ pub(super) fn query(
     }
     let low = selected.iter().filter(|n| dataset::low_node(n)).count() as u64;
     if nodes_only {
-        let total = if reader.budget.exhausted.is_none() {
+        let total = if reader.budget.exhausted.is_none()
+            && (query.module.is_none() || !reader.gaps.contains(&"ambiguous_internal_module"))
+        {
             Some(model::count(selected.len() as u64)?)
         } else {
             None
@@ -234,7 +236,9 @@ pub(super) fn query(
     if reader.position.offset > hits.len() {
         return Err(StorageError::CursorExpired.into());
     }
-    let total = if reader.budget.exhausted.is_none() {
+    let total = if reader.budget.exhausted.is_none()
+        && (query.module.is_none() || !reader.gaps.contains(&"ambiguous_internal_module"))
+    {
         Some(model::count(hits.len() as u64)?)
     } else {
         None

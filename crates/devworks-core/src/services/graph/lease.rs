@@ -5,6 +5,7 @@ use crate::fingerprint::sha256_hex;
 use crate::gateway::AdmittedQuery;
 use crate::ports::storage::*;
 use crate::ports::{Clock, IdKind, IdSource};
+use crate::protocol::Id;
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::services::indexing::views::ViewLayers;
 use crate::services::sessions::Failure;
@@ -17,7 +18,8 @@ pub(super) struct Selected {
 }
 
 pub(super) fn owner(ctx: &InvocationContext) -> String {
-    sha256_hex(json!({"actor":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"project":ctx.project_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace()}).to_string().as_bytes())
+    let worktree=ctx.worktree().map(|tree|json!({"id":tree.id(),"workId":tree.work_id(),"repositoryId":tree.repository_id(),"ownershipRevision":tree.ownership_revision()}));
+    sha256_hex(json!({"actor":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"worktree":worktree}).to_string().as_bytes())
 }
 
 pub(super) fn scope_digest(scope: &DataScope) -> String {
@@ -57,6 +59,7 @@ pub(super) fn select(
     data_scope: &DataScope,
     requested: Option<&ViewSelection>,
     options: &ReadOptions,
+    current_worktree: Option<&Id>,
 ) -> Result<Selected, Failure> {
     let Host { store, clock, ids } = host;
     let now = clock.now_ms().get();
@@ -83,7 +86,7 @@ pub(super) fn select(
                     Err(e) => Err(e),
                 }
             }
-            _ => scope::resolve(read, ctx, data_scope, requested, now).and_then(|resolved| {
+            _ => scope::resolve(read, ctx, data_scope, requested, now, current_worktree).and_then(|resolved| {
                 let layers = resolved.layers;
                 let unavailable_repositories = resolved.unavailable.into_iter().map(|(repository_id,reason)|GraphUnavailableRepository { repository_id,reason:reason.to_owned() }).collect::<Vec<_>>();
                 let witnesses = layers.iter().map(|v| scope::witness(read, &v.view)).collect::<Result<Vec<_>, _>>()?;
