@@ -235,7 +235,7 @@ impl ApprovalService {
             .filter(|p| project_visible(ctx, p.scope.project_id()))
             .ok_or_else(|| not_found("approval", id))?;
         let mut view = model::generic(&p, full, s.decisions().approval_resume(id)?.as_ref())?;
-        if p.payload["content"]["kind"] == "FindingRisk" {
+        if p.state == "Pending" && p.payload["content"]["kind"] == "FindingRisk" {
             let feature: Id = serde_json::from_value(p.payload["content"]["featureId"].clone())
                 .map_err(|_| invalid("finding_risk"))?;
             view.stale =

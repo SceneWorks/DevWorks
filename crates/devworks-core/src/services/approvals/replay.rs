@@ -138,12 +138,16 @@ impl ApprovalService {
         let policy =
             crate::authority::policy::resolve_policy(tx.configuration(), original.project_id())?
                 .digest();
-        let kind =
-            if crate::authority::policy::NATIVE_EXECUTION.contains(&p.operation_kind.as_str()) {
-                GrantKind::NativeExecution
-            } else {
-                GrantKind::Operation
-            };
+        let actual = crate::ports::AuthorityRequest {
+            descriptor: request.descriptor,
+            binding: request.binding,
+            effect: request.effect,
+            action: request.action,
+            input: &request.input,
+            fingerprint: &request.fingerprint,
+        };
+        let kind = crate::authority::service::reviewed_grant_kind(tx, &original, &actual)
+            .map_err(|_| denied("reviewed_operation_current_authority"))?;
         let now = tx.now_ms();
         let g = crate::authority::service::mint_reviewed_grant(
             tx,
@@ -295,6 +299,22 @@ impl ApprovalService {
     ) -> Result<(), StorageError> {
         let id = request.approval_id.clone();
         let expected = request.resume_revision;
+        let original = request.context.clone();
+        let operation = request.operation.clone();
+        let decoded = crate::admission::decode(
+            crate::admission::Selection {
+                operation: &operation,
+                mode: crate::registry::Mode::Command,
+            },
+            &request.frame,
+        )
+        .map_err(|_| StorageError::InvalidRecord("resume settlement frame".into()))?;
+        let crate::admission::CallerKey::Command(request_key) = decoded.key else {
+            return Err(StorageError::InvalidRecord("resume settlement key".into()));
+        };
+        let fingerprint = decoded.fingerprint;
+        let schema_revision = decoded.revision;
+
         let value = outcome
             .as_ref()
             .ok()
@@ -330,6 +350,60 @@ impl ApprovalService {
             if r.revision != expected || !matches!(r.state.as_str(), "Pending" | "Unknown") {
                 return Ok(());
             }
+            if request_key.0 != r.request_key
+                || original.store_id() != &tx.store().store_id
+                || original.restore_epoch().get() != tx.store().restore_epoch
+            {
+                return Err(StorageError::InvalidRecord(
+                    "resume settlement identity".into(),
+                ));
+            }
+            if r.principal != *original.principal()
+                || r.principal_kind != original.principal_kind()
+                || r.invocation != save_context(&original)
+                || r.operation != operation
+                || r.request_digest != fingerprint.as_str()
+                || r.schema_revision != i64::from(schema_revision.0)
+            {
+                return Err(StorageError::InvalidRecord(
+                    "resume settlement binding".into(),
+                ));
+            }
+            let identity =
+                crate::context::ReceiptIdentity::bind(&original, RequestKey(r.request_key.clone()));
+            let durable = if state == "Refused" {
+                tx.receipts().lookup(&identity)?
+            } else {
+                None
+            };
+            let (state, value) = match durable {
+                Some(LedgerEntry::Current(stored))
+                    if stored.operation == operation
+                        && stored.contract == crate::protocol::CONTRACT
+                        && stored.schema_revision == schema_revision
+                        && stored.fingerprint == fingerprint =>
+                {
+                    let state = if matches!(stored.receipt.decision, DomainDecision::Refused { .. })
+                    {
+                        "Refused"
+                    } else {
+                        "Admitted"
+                    };
+                    (
+                        state.to_owned(),
+                        Some(
+                            serde_json::to_value(CommandReply::Recorded {
+                                protocol: crate::protocol::Protocol::Draft1,
+                                receipt: stored.receipt,
+                                replayed: true,
+                            })
+                            .expect("durable receipt"),
+                        ),
+                    )
+                }
+                _ if r.state == "Unknown" && state == "Refused" => ("Unknown".into(), value),
+                _ => (state, value),
+            };
             r.revision += 1;
             r.state = state;
             r.updated_at_ms = tx.now_ms();

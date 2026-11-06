@@ -400,9 +400,7 @@ fn stage_generic(
         target_id: i.target.id.clone(),
         target_revision: i.target.revision.get(),
         content_digest: i.content_digest.0.clone(),
-        scope_digest: model::hash(
-            &json!({"owner":payload["binding"],"authority":payload.get("authority")}),
-        ),
+        scope_digest: super::scope_digest(&payload["binding"], payload.get("authority")),
         summary: payload["reviewed"]
             .get("summary")
             .and_then(Value::as_str)

@@ -112,6 +112,50 @@ fn deny(reason: DenialReason) -> Denied {
     }
 }
 
+fn reviewed_verdict(verdict: Verdict, operation: &str) -> Verdict {
+    match verdict {
+        Verdict::Allow => Verdict::NeedsGrant {
+            kind: if policy::NATIVE_EXECUTION.contains(&operation) {
+                GrantKind::NativeExecution
+            } else {
+                GrantKind::Operation
+            },
+            exact: true,
+            reason: DenialReason::ApprovalRequired,
+        },
+        v => v,
+    }
+}
+/// The same current ownership refinement and exact reviewed requirement used by admission.
+pub(crate) fn reviewed_grant_kind(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &AuthorityRequest<'_>,
+) -> Result<GrantKind, AdminError> {
+    let binding = match ctx.principal_kind() {
+        PrincipalKind::Human | PrincipalKind::Host => None,
+        _ => tx.authority().principal(ctx.principal())?,
+    };
+    let policy = resolve_policy(tx.configuration(), ctx.project_id())?;
+    let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, &[]);
+    if matches!(
+        verdict,
+        Verdict::NeedsGrant {
+            reason: DenialReason::ApprovalRequired,
+            ..
+        }
+    ) && super::git::owned_force_in(tx, ctx, request.input)?.is_some()
+    {
+        verdict =
+            policy::evaluate_with_owned_task(ctx, binding.as_ref(), &policy, request, &[], true);
+    }
+    match reviewed_verdict(verdict, request.descriptor.name) {
+        Verdict::NeedsGrant { kind, .. } => Ok(kind),
+        Verdict::Deny(reason) => Err(AdminError::Denied(reason)),
+        Verdict::Allow => unreachable!("reviewed operation is exact"),
+    }
+}
+
 /// Effective permissions of one principal, as shown in Settings and with blocked requests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffectivePermissions {
@@ -245,24 +289,12 @@ fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
-    if let Some(reviewed) = ctx.reviewed_operation() {
-        if reviewed.operation() != request.descriptor.name
+    if let Some(reviewed) = ctx.reviewed_operation()
+        && (reviewed.operation() != request.descriptor.name
             || reviewed.request_digest() != request.fingerprint.as_str()
-            || reviewed.schema_revision() == 0
-        {
-            return Err(deny(DenialReason::ApprovalRequired));
-        }
-        if matches!(verdict, Verdict::Allow) {
-            verdict = Verdict::NeedsGrant {
-                kind: if policy::NATIVE_EXECUTION.contains(&request.descriptor.name) {
-                    GrantKind::NativeExecution
-                } else {
-                    GrantKind::Operation
-                },
-                exact: true,
-                reason: DenialReason::ApprovalRequired,
-            };
-        }
+            || reviewed.schema_revision() == 0)
+    {
+        return Err(deny(DenialReason::ApprovalRequired));
     }
     let mut ownership = None;
     if matches!(
@@ -283,6 +315,9 @@ fn decide_in(
                 true,
             );
         }
+    }
+    if ctx.reviewed_operation().is_some() {
+        verdict = reviewed_verdict(verdict, request.descriptor.name);
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
@@ -1038,6 +1073,47 @@ mod reviewed_scope_tests {
             Revision::new(1).unwrap(),
         )
         .with_lineage(project.map(|p| ProjectId(id(p))), None, None)
+    }
+    #[test]
+    fn reviewed_kind_preserves_current_operation_requirement_and_hard_denial() {
+        assert!(
+            matches!(
+                reviewed_verdict(Verdict::Allow, "git.push"),
+                Verdict::NeedsGrant {
+                    kind: GrantKind::NativeExecution,
+                    exact: true,
+                    ..
+                }
+            ),
+            "an ownership-refined Full force-push still spends its exact reviewed native grant"
+        );
+        for reason in [DenialReason::ApprovalRequired, DenialReason::GrantRequired] {
+            assert!(
+                matches!(
+                    reviewed_verdict(
+                        Verdict::NeedsGrant {
+                            kind: GrantKind::Operation,
+                            exact: true,
+                            reason
+                        },
+                        "git.push"
+                    ),
+                    Verdict::NeedsGrant {
+                        kind: GrantKind::Operation,
+                        ..
+                    }
+                ),
+                "an unowned force or Full package operation keeps its actual operation requirement"
+            );
+        }
+        assert!(matches!(
+            reviewed_verdict(Verdict::Deny(DenialReason::ProtectedBranch), "git.push"),
+            Verdict::Deny(DenialReason::ProtectedBranch)
+        ));
+        assert!(matches!(
+            reviewed_verdict(Verdict::Deny(DenialReason::ReadOnlyRole), "jobs.enable"),
+            Verdict::Deny(DenialReason::ReadOnlyRole)
+        ));
     }
     #[test]
     fn native_workspace_grants_are_exact_scope_policy_and_normalized_request_bindings() {

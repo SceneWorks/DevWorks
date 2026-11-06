@@ -185,6 +185,9 @@ fn settings_decision_requires_exact_host_human_witness_and_persists_reviewed_sna
         proposal(result).state,
         devworks_core::protocol::records::ApprovalState::Approved
     ));
+    let history = proposal(f.query("approvals.inspect", json!({"proposalId":p.id})));
+    assert_eq!(history.stale, Some(false));
+    assert_eq!(history.rationale.unwrap().0, "Reviewed the exact change");
     let audit = read_snapshot(&f.s, &ReadOptions::default(), |s| {
         s.decisions()
             .human_decision(ApprovalSource::Settings, &p.id)
@@ -496,4 +499,67 @@ fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_recei
         again,
         CommandReply::Recorded { replayed: true, .. }
     ));
+    let service = ApprovalService::new(
+        f.h.ids.clone(),
+        f.h.clock.clone(),
+        Arc::new(Roles),
+        Arc::new(ControlService::new(f.h.ids.clone())),
+    )
+    .with_catalog(devworks_core::services::approvals::ApprovalCatalog::qualified(&f.cases));
+    let devworks_core::services::approvals::ResumePreparation::Ready(request) =
+        service.prepare_resume(&f.s, &p.id).unwrap()
+    else {
+        panic!("pending resume")
+    };
+    let unknown = Ok(CommandReply::CommandStatusUnknown {
+        protocol: devworks_core::protocol::Protocol::Draft1,
+        request_key: devworks_core::protocol::RequestKey(r.request_key.clone()),
+        correlation_id: devworks_core::protocol::CorrelationId(id("lost-ack")),
+    });
+    service.settle_resume(&f.s, &request, &unknown).unwrap();
+    assert_eq!(
+        read_snapshot(&f.s, &ReadOptions::default(), |s| s
+            .decisions()
+            .approval_resume(&p.id))
+        .unwrap()
+        .unwrap()
+        .state,
+        "Unknown"
+    );
+    let human = f.ctx("user");
+    run_write(&f.s, WriteOptions::default(), move |tx| {
+        devworks_core::authority::service::revoke_principal(tx, &human, &actor("agent"), 1)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        Ok(())
+    })
+    .unwrap();
+    let devworks_core::services::approvals::ResumePreparation::Ready(request) =
+        service.prepare_resume(&f.s, &p.id).unwrap()
+    else {
+        panic!("exact receipt remains recoverable")
+    };
+    let refused = f.cases.command(
+        &gateway,
+        &request.context,
+        &request.operation,
+        &request.frame,
+    );
+    assert!(matches!(
+        refused,
+        Ok(CommandReply::Rejected {
+            code: devworks_core::protocol::Rejection::PermissionDenied,
+            ..
+        })
+    ));
+    service.settle_resume(&f.s, &request, &refused).unwrap();
+    assert_eq!(
+        read_snapshot(&f.s, &ReadOptions::default(), |s| s
+            .decisions()
+            .approval_resume(&p.id))
+        .unwrap()
+        .unwrap()
+        .state,
+        "Admitted",
+        "a new authority denial does not erase the prior durable exact applied receipt"
+    );
 }

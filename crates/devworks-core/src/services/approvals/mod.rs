@@ -2,6 +2,7 @@
 //! Settings and feature plans retain their own business rules. Approval never clears pauses,
 //! closes readiness findings generically, or supplies authority for an unqualified capability.
 mod model;
+pub(crate) use model::scope_digest;
 pub mod owner_preview;
 pub mod requests;
 
