@@ -202,6 +202,18 @@ impl AttemptHost {
                 }
             }
             let bound = accounting::snapshot(attempt)?;
+            if attempt.work_id.is_none()
+                && let Some(run_id) = &attempt.job_run_id
+                && !s.jobs().job_run(run_id)?.is_some_and(|run| {
+                    Some(run.revision) == bound.job_run_revision
+                        && run.boot_id.as_ref() == Some(&bound.admitted_boot_id)
+                        && run.status == "Running"
+                        && !run.cancel_requested
+                        && run.hold.is_none()
+                })
+            {
+                return Ok(true);
+            }
             if let Some(proof) = &bound.dispatch {
                 let owner = match &proof.assignment_id {
                     Some(id) => s.runs().assignment(id)?,

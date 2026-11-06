@@ -67,6 +67,9 @@ pub struct AdmittedSnapshot {
     pub policy_digest: Option<String>,
     pub authority_project_id: Option<crate::protocol::ProjectId>,
     pub context_epoch: Option<i64>,
+    /// Primary job orchestration custody; delegated managed work retains only provenance.
+    #[serde(default)]
+    pub job_run_revision: Option<i64>,
     pub dispatch: Option<DispatchIdentity>,
     pub cache_diagnostics: Vec<crate::protocol::records::UsageCacheDiagnostic>,
 }
@@ -318,11 +321,14 @@ pub(crate) fn admit_attempt(
         if session.closed() {
             return Err(StorageError::ScopeDenied);
         }
-        if request.dispatch.is_some()
-            && ctx.principal_kind() != crate::context::PrincipalKind::Host
-            && session.agent_id != *ctx.principal()
-        {
-            return Err(StorageError::ScopeDenied);
+        if ctx.principal_kind() != crate::context::PrincipalKind::Host {
+            let human = ctx.principal_kind() == crate::context::PrincipalKind::Human;
+            if (!human
+                && (ctx.session_id() != Some(session_id) || session.agent_id != *ctx.principal()))
+                || (human && ctx.session_id().is_some_and(|id| id != session_id))
+            {
+                return Err(StorageError::ScopeDenied);
+            }
         }
         if request.expected_context_epoch != Some(session.context_epoch) {
             return Ok(Admission::SourceChanged(
@@ -335,6 +341,14 @@ pub(crate) fn admit_attempt(
         if session.project_id != route.project_id {
             return Err(StorageError::ScopeDenied);
         }
+    }
+    // Manual Human chats have no managed activation. Every autonomous work-owned request
+    // must carry its real active turn, including coordinator requests without a worker ID.
+    if work_id.is_some()
+        && request.dispatch.is_none()
+        && ctx.principal_kind() != crate::context::PrincipalKind::Human
+    {
+        return Err(StorageError::ScopeDenied);
     }
     let work = work_id
         .as_ref()
@@ -369,6 +383,7 @@ pub(crate) fn admit_attempt(
             work.parent_feature_id.clone()
         }
     });
+    let mut job_run_revision = None;
     if let Some(run_id) = &request.job_run_id {
         let run = tx
             .jobs()
@@ -384,6 +399,7 @@ pub(crate) fn admit_attempt(
             if owned.cancel_requested || owned.hold.is_some() || owned.status != "Running" {
                 return Ok(Admission::Fenced(Fenced::StopRequested));
             }
+            job_run_revision = Some(owned.revision);
             if owned.agent_actor.as_ref() != Some(ctx.principal())
                 && ctx.principal_kind() != crate::context::PrincipalKind::Host
             {
@@ -454,6 +470,7 @@ pub(crate) fn admit_attempt(
         policy_digest,
         authority_project_id: ctx.project_id().cloned(),
         context_epoch: request.expected_context_epoch,
+        job_run_revision,
         dispatch: request.dispatch.clone(),
         cache_diagnostics: request.cache_diagnostics.clone(),
     };
@@ -668,6 +685,20 @@ pub(crate) fn mark_dispatched(
     }
     if tx.store().boot_id.as_ref() != Some(&bound.admitted_boot_id) {
         return Err(invalid("inference attempt belongs to an earlier host boot"));
+    }
+    if attempt.work_id.is_none()
+        && let Some(run_id) = &attempt.job_run_id
+    {
+        let current = tx.jobs().job_run(run_id)?;
+        if !current.is_some_and(|run| {
+            Some(run.revision) == bound.job_run_revision
+                && run.boot_id.as_ref() == Some(&bound.admitted_boot_id)
+                && run.status == "Running"
+                && !run.cancel_requested
+                && run.hold.is_none()
+        }) {
+            return Ok(Admission::Fenced(Fenced::StopRequested));
+        }
     }
     if let Some(work) = &attempt.work_id {
         let current = tx
