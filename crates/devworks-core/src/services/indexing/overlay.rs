@@ -686,6 +686,7 @@ fn end_overlay(
             .is_some_and(|p| &p.view_id == v);
         if !named && let Some(view) = tx.indexing().view(v)? {
             layers.extend(view_layers(&view));
+            tx.graph().invalidate_graph_pins_for_view(v)?;
             tx.indexing().remove_view(v)?;
         }
     }

@@ -10,7 +10,7 @@ const PAGE_BYTES: usize = 48 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct Position {
-    pub key: String,
+    pub index: usize,
     pub offset: usize,
 }
 
@@ -30,12 +30,12 @@ pub(super) fn page(value: &Value, after: Option<&Position>) -> Result<Properties
     keys.sort();
     let mut output = Vec::new();
     let mut used = 0;
-    for key in keys {
-        if after.is_some_and(|p| key < &p.key) {
+    for (index, key) in keys.into_iter().enumerate() {
+        if after.is_some_and(|p| index < p.index) {
             continue;
         }
         let json = serde_json::to_string(&object[key]).map_err(|e| e.to_string())?;
-        let mut offset = after.filter(|p| &p.key == key).map_or(0, |p| p.offset);
+        let mut offset = after.filter(|p| p.index == index).map_or(0, |p| p.offset);
         if offset > json.len() || !json.is_char_boundary(offset) {
             return Err("invalid property cursor".into());
         }
@@ -43,10 +43,7 @@ pub(super) fn page(value: &Value, after: Option<&Position>) -> Result<Properties
             if used >= PAGE_BYTES {
                 return Ok(Properties {
                     items: BoundedList(output),
-                    next: Some(Position {
-                        key: key.clone(),
-                        offset,
-                    }),
+                    next: Some(Position { index, offset }),
                 });
             }
             let mut end = json.len().min(offset + FRAGMENT_BYTES);

@@ -107,6 +107,8 @@ pub(super) fn edges(
     mut visit: impl FnMut(Result<Edge, GraphEdge>, &mut Budget) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {
     let mut after = None;
+    let mut sessions =
+        std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
     loop {
         let page = read.graph().graph_edges(
             scope,
@@ -132,8 +134,10 @@ pub(super) fn edges(
                 let unit_key = raw.edge.unit_key.clone();
                 let linked = super::linking::link(
                     read.indexing(),
-                    raw.repository_id.as_str(),
-                    &view.layers,
+                    view,
+                    sessions
+                        .entry(view.view.view_id.as_str().to_owned())
+                        .or_default(),
                     &unit_key,
                     vec![raw.edge],
                     budget,

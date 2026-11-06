@@ -1,7 +1,9 @@
 //! Truthful wire projections of captured graph facts; no current checkout or catalog lookups.
 use super::{properties, scan};
 use crate::ports::storage::*;
-use crate::protocol::data::{GitOid, ObjectFormat, RepositorySnapshot};
+use crate::protocol::data::{
+    Citation, CitationSource, GitOid, Locator, ObjectFormat, RepositorySnapshot,
+};
 use crate::protocol::records::{CodeEdge, CodeNode, CodeSourceLocation};
 use crate::protocol::support::{BoundedText, GraphUnitKey};
 use crate::protocol::{Counter, DomainErrorCode, Id};
@@ -124,10 +126,40 @@ pub(super) fn location(
         .as_u64()
         .unwrap_or(u64::from(lines > 0));
     let end = payload["span"]["endLine"].as_u64().unwrap_or(lines);
+    let captured_snapshot = snapshot(view)?;
+    let digest: crate::protocol::provider::Digest = wire(json!(capture.blob_digest))?;
+    // Legacy keys cannot express real paths containing '/' or '.'. Omit the old citation
+    // rather than transliterating an identity. This capture is the real immutable byte block.
+    let legacy_citation = match (
+        Id::new(unit.unit_key.clone()),
+        u32::try_from(start),
+        u32::try_from(end),
+    ) {
+        (Ok(unit_key), Ok(first_line), Ok(last_line))
+            if first_line > 0 && last_line >= first_line =>
+        {
+            Some(Citation {
+                source: CitationSource::Repository {
+                    snapshot: captured_snapshot.clone(),
+                    unit_key: unit_key.clone(),
+                    source_digest: digest.clone(),
+                },
+                block_id: capture.id.clone(),
+                content_digest: digest.clone(),
+                locator: Locator::Code {
+                    snapshot: captured_snapshot.clone(),
+                    unit_key,
+                    first_line,
+                    last_line,
+                },
+            })
+        }
+        _ => None,
+    };
     Ok(Some(CodeSourceLocation {
-        snapshot: snapshot(view)?,
+        snapshot: captured_snapshot,
         unit_key: wire(json!(unit.unit_key))?,
-        source_digest: wire(json!(capture.blob_digest))?,
+        source_digest: digest,
         path: BoundedText(unit.unit_key.clone()),
         start_line: count(start)?,
         end_line: count(end)?,
@@ -141,7 +173,7 @@ pub(super) fn location(
             .filter(|v| v.is_string())
             .map(|v| wire(v.clone()))
             .transpose()?,
-        legacy_citation: None,
+        legacy_citation,
     }))
 }
 
@@ -187,7 +219,7 @@ pub(super) fn node(
         unit_key: GraphUnitKey(raw.node.unit_key.clone()),
         node_kind: wire(json!(raw.node.kind))?,
         name: wire(json!(raw.node.name))?,
-        qualified_name: wire(optional("qualifiedName").unwrap_or_else(|| json!(raw.node.name)))?,
+        qualified_name: wire(optional("qualifiedName").unwrap_or_else(|| json!("")))?,
         internal_module: optional("internalModule")
             .or_else(|| internal_module.map(|m| json!(m)))
             .map(wire)

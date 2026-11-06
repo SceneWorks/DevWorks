@@ -761,7 +761,8 @@ pub(crate) fn retire_view(
     .into_iter()
     .flatten()
     {
-        let in_use = published.as_ref().is_some_and(|p| &p.baseline_id == g)
+        let in_use = tx.indexing().generation_in_view(g)?
+            || published.as_ref().is_some_and(|p| &p.baseline_id == g)
             || overlays.iter().any(|o| {
                 !matches!(o.state.as_str(), OVERLAY_EXPIRED | OVERLAY_UNAVAILABLE)
                     && o.view_id.as_ref() != Some(&v.view_id)
@@ -802,6 +803,10 @@ pub struct Housekeeping {
     pub reclaimed_rows: u64,
     pub stale_overlays: usize,
     pub refreshes_queued: usize,
+    /// Expired graph read lease headers and all their child pins removed this pass.
+    pub expired_read_pins: usize,
+    /// Superseded overlay views retired after their last browsing lease ended.
+    pub retired_read_views: usize,
 }
 
 pub struct IndexWorker {
@@ -1040,6 +1045,75 @@ impl IndexWorker {
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Housekeeping, StorageError> {
         let mut report = Housekeeping::default();
+        let expired = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+            s.graph().graph_expired_pins(self.env.now(), None, 64)
+        })?;
+        for pin in expired.items {
+            if stop() {
+                return Ok(report);
+            }
+            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+                let Some(current) = tx.graph().graph_pin(&pin.id)? else {
+                    return Ok(false);
+                };
+                if current.revision != pin.revision || current.expires_at_ms > tx.now_ms() {
+                    return Ok(false);
+                }
+                tx.graph().retire_graph_pin(
+                    &current.id,
+                    &current.owner_namespace,
+                    current.revision,
+                )?;
+                Ok(true)
+            })?;
+            report.expired_read_pins += usize::from(removed);
+        }
+        let detached = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
+            s.graph().graph_retirable_views(self.env.now(), None, 64)
+        })?;
+        for view in detached.items {
+            if stop() {
+                return Ok(report);
+            }
+            let removed = run_write(&*self.env.store, WriteOptions::default(), move |tx| {
+                let Some(current) = tx.indexing().view(&view.view_id)? else {
+                    return Ok(false);
+                };
+                let now = tx.now_ms();
+                if current != view
+                    || tx.indexing().live_pins(&view.view_id, now)? > 0
+                    || tx
+                        .indexing()
+                        .published(&view.repository_id)?
+                        .is_some_and(|p| p.view_id == view.view_id)
+                {
+                    return Ok(false);
+                }
+                let overlay = if let Some(id) = view
+                    .coverage
+                    .get("overlayId")
+                    .and_then(|v| serde_json::from_value::<Id>(v.clone()).ok())
+                {
+                    tx.indexing().overlay(&id)?
+                } else if let Some(id) = view
+                    .coverage
+                    .get("worktreeId")
+                    .and_then(|v| serde_json::from_value::<Id>(v.clone()).ok())
+                {
+                    tx.indexing().overlay_for(&view.repository_id, &id)?
+                } else if let Some(head) = view.coverage.get("head").and_then(Value::as_str) {
+                    tx.indexing().overlay_at(&view.repository_id, head)?
+                } else {
+                    return Ok(false);
+                };
+                if overlay.is_some_and(|o| o.view_id.as_ref() == Some(&view.view_id)) {
+                    return Ok(false);
+                }
+                retire_view(tx, &view)?;
+                Ok(true)
+            })?;
+            report.retired_read_views += usize::from(removed);
+        }
         let due = read_snapshot(&*self.env.store, &ReadOptions::default(), |s| {
             s.indexing().overlays_due(self.env.now(), 64)
         })?;
@@ -2461,35 +2535,53 @@ pub(crate) fn link_view_edges(
     repository: &str,
     layers: &[Id],
     unit: &str,
-    mut edges: Vec<StoredEdge>,
+    edges: Vec<StoredEdge>,
 ) -> Result<Vec<StoredEdge>, StorageError> {
-    let Some((top, lower)) = layers.split_first() else {
-        return Ok(edges);
-    };
-    let mut cache = NameCache::new();
-    let mut scopes = None;
-    for edge in &mut edges {
-        let mut payload = edge.payload.clone();
-        let source =
-            swift_extension_source(read, top, lower, repository, unit, edge, &mut payload)?;
-        let target = link_target(
-            read,
-            top,
-            lower,
-            repository,
-            unit,
-            edge,
-            &mut payload,
-            &mut cache,
-            &mut scopes,
-        )?;
-        edge.source_node_id = source;
-        if let Some(target) = target {
-            edge.target_node_id = target;
+    ViewLinker::default().link(read, repository, layers, unit, edges)
+}
+
+/// A reader's per-immutable-view cache. Reusing this across bounded pages avoids rescanning
+/// the complete Swift module/import composition for every inherited edge.
+#[derive(Default)]
+pub(crate) struct ViewLinker {
+    cache: NameCache,
+    scopes: Option<SwiftScopes>,
+}
+impl ViewLinker {
+    pub(crate) fn link(
+        &mut self,
+        read: &dyn IndexRead,
+        repository: &str,
+        layers: &[Id],
+        unit: &str,
+        mut edges: Vec<StoredEdge>,
+    ) -> Result<Vec<StoredEdge>, StorageError> {
+        let Some((top, lower)) = layers.split_first() else {
+            return Ok(edges);
+        };
+        for edge in &mut edges {
+            let mut payload = edge.payload.clone();
+            let source =
+                swift_extension_source(read, top, lower, repository, unit, edge, &mut payload)?;
+            let target = link_target(
+                read,
+                top,
+                lower,
+                repository,
+                unit,
+                edge,
+                &mut payload,
+                &mut self.cache,
+                &mut self.scopes,
+            )?;
+            edge.source_node_id = source;
+            if let Some(target) = target {
+                edge.target_node_id = target;
+            }
+            edge.payload = payload;
         }
-        edge.payload = payload;
+        Ok(edges)
     }
-    Ok(edges)
 }
 
 /// The retained `SwiftTypeReference` endpoint kinds (`IsSwiftTypeNode`).
