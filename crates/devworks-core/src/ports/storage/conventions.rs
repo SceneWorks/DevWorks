@@ -37,6 +37,8 @@ pub struct StoredConventionResource {
     pub author_id: ActorId,
     pub created_at_ms: i64,
     pub deleted_at_ms: Option<i64>,
+    /// Active, Retired or Deleted.
+    pub lifecycle: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -58,7 +60,8 @@ pub struct ConventionResourceQuery {
     pub convention_id: Option<Id>,
     /// Requires convention_id. None lists current resource associations.
     pub convention_revision: Option<i64>,
-    pub include_deleted: bool,
+    /// Empty matches all lifecycle states.
+    pub lifecycles: Vec<String>,
 }
 
 pub trait ConventionRead {
@@ -113,4 +116,168 @@ pub trait ConventionRepository: ConventionRead {
         expected_convention: i64,
     ) -> Result<(), StorageError>;
     fn bump_convention_scope(&mut self, scope: &KnowledgeScope) -> Result<i64, StorageError>;
+}
+
+/// Immutable embedding-space identity captured from the actual embedding route.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredConventionEmbeddingSpace {
+    pub id: String,
+    pub provider: String,
+    pub model: String,
+    pub configuration_digest: String,
+    pub dimensions: u32,
+    pub metric: String,
+    pub element_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredConventionIndex {
+    pub generation_id: Id,
+    pub convention_id: Id,
+    pub convention_revision: i64,
+    pub resource_id: Option<Id>,
+    pub resource_revision: Option<i64>,
+    pub operation_id: crate::protocol::OperationId,
+    /// Draft or Published. Source fields remain immutable in either state.
+    pub state: String,
+    /// Queued, Indexing, Ready, LexicalOnly, Stale, Failed or Cancelled.
+    pub status: String,
+    pub error: Option<String>,
+    pub embedding_space: Option<String>,
+    pub source_digest: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConventionTerm {
+    pub term: String,
+    pub frequency: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredConventionChunk {
+    pub generation_id: Id,
+    pub id: Id,
+    pub convention_id: Id,
+    pub convention_revision: i64,
+    pub resource_id: Option<Id>,
+    pub resource_revision: Option<i64>,
+    pub index: i64,
+    pub section_path: String,
+    pub text: String,
+    pub embedding_text: String,
+    /// Frozen ASCII token count of embedding_text, including its breadcrumb.
+    pub token_count: i64,
+    /// Sorted, unique ASCII term frequencies computed by the owning chunker.
+    pub terms: Vec<ConventionTerm>,
+    pub vector: Option<Vec<f32>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConventionLexicalStatistics {
+    pub documents: u64,
+    pub total_tokens: u64,
+    pub document_frequencies: Vec<ConventionTerm>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConventionWeightedTerm {
+    pub term: String,
+    pub idf: f64,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConventionRankedChunk {
+    pub chunk: StoredConventionChunk,
+    pub lexical_score: f64,
+    pub dense_score: f64,
+    pub score: f64,
+}
+
+pub trait ConventionIndexRead {
+    fn convention_embedding_space(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredConventionEmbeddingSpace>, StorageError>;
+    fn convention_index_head(
+        &self,
+        convention: &Id,
+        resource: Option<&Id>,
+    ) -> Result<Option<StoredConventionIndex>, StorageError>;
+    fn convention_index_generation(
+        &self,
+        generation: &Id,
+    ) -> Result<Option<StoredConventionIndex>, StorageError>;
+    fn convention_index_generations(
+        &self,
+        convention: Option<&Id>,
+        operation: Option<&crate::protocol::OperationId>,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredConventionIndex>, StorageError>;
+    /// Chunk index order, strictly after the cursor; trusted index worker/history reads.
+    fn convention_chunks(
+        &self,
+        generation: &Id,
+        after_index: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<StoredConventionChunk>, StorageError>;
+    /// Full scoped current-active corpus statistics, before any candidate truncation.
+    fn convention_lexical_statistics(
+        &self,
+        query: &ConventionQuery,
+        terms: &[String],
+    ) -> Result<ConventionLexicalStatistics, StorageError>;
+    /// Frozen BM25 (k1=1.2,b=.75); positive dense top 4*K; union with ALL lexical matches.
+    /// Final score=.35*lexical/full_corpus_max+.65*dense, including lexical-only fallback.
+    /// Scope/current-version filters precede statistics/ranking. Limit is 1..=50; ties use
+    /// current title (binary Unicode), then stable convention/resource/generation/chunk identity.
+    fn convention_ranked_chunks(
+        &self,
+        query: &ConventionQuery,
+        terms: &[ConventionWeightedTerm],
+        average_length: f64,
+        space: Option<&str>,
+        vector: Option<&[f32]>,
+        limit: u16,
+    ) -> Result<Vec<ConventionRankedChunk>, StorageError>;
+}
+
+pub trait ConventionIndexRepository: ConventionIndexRead {
+    fn put_convention_embedding_space(
+        &mut self,
+        space: &StoredConventionEmbeddingSpace,
+    ) -> Result<(), StorageError>;
+    /// Immutable source identity, exact real conventions.index operation, idempotent retry.
+    fn stage_convention_index(&mut self, index: &StoredConventionIndex)
+    -> Result<(), StorageError>;
+    fn stage_convention_chunks(
+        &mut self,
+        generation: &Id,
+        chunks: &[StoredConventionChunk],
+    ) -> Result<(), StorageError>;
+    fn set_convention_index_status(
+        &mut self,
+        generation: &Id,
+        operation: &crate::protocol::OperationId,
+        expected_status: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<(), StorageError>;
+    /// Rechecks actual current owner/resource/source/live artifact and real operation, then
+    /// flips one head atomically. Ready requires complete vectors; otherwise LexicalOnly.
+    fn publish_convention_index(
+        &mut self,
+        generation: &Id,
+        expected_owner_revision: i64,
+        expected_head: Option<&Id>,
+        expected_chunk_count: i64,
+    ) -> Result<(), StorageError>;
+    /// Explicit bounded cleanup; current heads are refused. Keeps the immutable source header
+    /// and authored artifact refs; no guessed retention or artifact deletion is performed here.
+    fn discard_convention_index_chunks(
+        &mut self,
+        generation: &Id,
+        operation: &crate::protocol::OperationId,
+        limit: u16,
+    ) -> Result<bool, StorageError>;
 }
