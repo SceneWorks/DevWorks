@@ -1353,3 +1353,41 @@ pub fn cancel_admitted(
     )?;
     Ok(balance)
 }
+
+/// Records the host's local cancellation request without asserting a provider outcome.
+pub(crate) fn note_cancellation_requested(
+    tx: &mut dyn WriteTransaction,
+    attempt: &StoredInferenceAttempt,
+) -> Result<(), StorageError> {
+    let current = tx
+        .usage()
+        .inference_attempt(&attempt.attempt_id)?
+        .ok_or_else(|| invalid("missing cancellation attempt"))?;
+    if current.pricing_snapshot != attempt.pricing_snapshot || current.state != "Dispatched" {
+        return Ok(());
+    }
+    let before = tx
+        .usage()
+        .attempt_balance(&attempt.attempt_id)?
+        .ok_or_else(|| invalid("missing cancellation balance"))?;
+    let mut state = summary(&before)?;
+    if state.cancellation_requested {
+        return Ok(());
+    }
+    state.cancellation_requested = true;
+    let balance = StoredAttemptBalance {
+        revision: before.revision + 1,
+        summary: encoded(&state)?,
+        ..before.clone()
+    };
+    tx.usage()
+        .put_attempt_balance(&balance, Some(before.revision))?;
+    log(
+        tx,
+        attempt,
+        "InferenceCancellationRequested",
+        None,
+        json!({"localCancellationRequested":true}),
+    )?;
+    Ok(())
+}

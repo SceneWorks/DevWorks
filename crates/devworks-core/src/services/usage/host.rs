@@ -246,6 +246,14 @@ impl AttemptHost {
                 }
             }
         }
+        if cancellation.is_cancelled() {
+            let current = attempt.clone();
+            if let Err(error) =
+                self.write(move |tx| accounting::note_cancellation_requested(tx, &current))
+            {
+                failure = Some(error);
+            }
+        }
         // A failed close leaves the reservation and inference quiescence guard in place.
         // A host restart can reconcile it once this process's exclusive data-root owner exits.
         if let Err(error) = source.close() {

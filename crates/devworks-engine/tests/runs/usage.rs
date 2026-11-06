@@ -757,6 +757,8 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     panic!("source did not settle")
                 };
                 assert!(balance.local_quiescent && balance.unknown_tail);
+            assert!(devworks_core::services::usage::accounting::summary(&balance).unwrap().cancellation_requested);
+
                 assert!(read(&*f.store, |s| s
                     .runs()
                     .inference_quiescent(&RootId(id(execution_root)))));
@@ -970,6 +972,19 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
             assert_eq!(attempt.job_run_id, Some(run_id));
             assert_eq!(attempt.feature_id, None);
             assert_eq!(attempt.execution_root_id, None);
+            let before_close = read(&*f.store, |s| {
+                s.usage().attempt_balance(&attempt.attempt_id)
+            })
+            .unwrap();
+            assert!(
+                devworks_core::services::usage::accounting::summary(&before_close)
+                    .unwrap()
+                    .cancellation_requested
+            );
+            assert!(
+                !before_close.local_quiescent,
+                "a cancellation request does not prove transport closure"
+            );
             assert!(
                 !read(&*f.store, |s| s
                     .usage()
@@ -986,6 +1001,12 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
                 panic!("job source not settled")
             };
             assert!(balance.local_quiescent && balance.unknown_tail);
+            assert!(
+                devworks_core::services::usage::accounting::summary(&balance)
+                    .unwrap()
+                    .cancellation_requested
+            );
+
             runtime.drain().await;
         }
     }));
