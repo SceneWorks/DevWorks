@@ -1010,3 +1010,6 @@ fn original_auxiliary_authority_is_fenced_at_admission_and_after_credential_wait
 
 #[path = "providers/embedding_qualification.rs"]
 mod embedding_qualification;
+
+#[path = "providers/convention_search.rs"]
+mod convention_search;

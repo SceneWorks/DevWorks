@@ -16,7 +16,7 @@ fn source_context(ctx: &InvocationContext) -> Value {
         "principal":ctx.principal(),"kind":format!("{:?}",ctx.principal_kind()),"invocation":ctx.invocation_id(),"namespace":ctx.ingress_namespace(),"session":ctx.session_id(),
         "project":ctx.project_id(),"root":ctx.root_id(),"assignment":ctx.assignment_id(),"jobRun":ctx.job_run_id(),"capability":ctx.capability_registration(),"policyRevision":ctx.policy_revision(),"worktree":null}})
 }
-fn probe(f: &Fx) -> (Arc<EmbeddingSpaceService>, OperationRecord) {
+pub(super) fn probe(f: &Fx) -> (Arc<EmbeddingSpaceService>, OperationRecord) {
     let human = principal(f.store.as_ref(), "probe-human", PrincipalKind::Human);
     let ctx = human.clone();
     let operation=write(f.store.as_ref(),move|tx|{

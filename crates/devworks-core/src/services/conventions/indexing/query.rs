@@ -227,7 +227,7 @@ impl IndexService {
                 fingerprint: snapshot.fingerprint,
                 scope_digest: snapshot.witness,
             };
-            let inputs = self.prepare_embedding_inputs(InputPreparation {
+            let preparation = InputPreparation {
                 context: ctx,
                 origin: &origin,
                 embedding_space: &space.id,
@@ -236,7 +236,12 @@ impl IndexService {
                 fences: query.authorization().fences(),
                 cancellation: &cancel,
                 deadline_ms: env.deadline_ms,
-            })?;
+            };
+            let inputs = if position.is_some() {
+                self.existing_embedding_inputs(preparation)
+            } else {
+                self.prepare_embedding_inputs(preparation)
+            }?;
             if position
                 .as_ref()
                 .is_some_and(|p| p.request_id.as_ref() != Some(&inputs.request_id))
@@ -307,7 +312,10 @@ impl IndexService {
             &snapshot.filter,
             &weighted,
             average,
-            prepared.configuration.space.as_ref().map(|s| s.id.as_str()),
+            prepared
+                .vector
+                .as_ref()
+                .and_then(|_| prepared.configuration.space.as_ref().map(|s| s.id.as_str())),
             prepared.vector.as_deref(),
             snapshot.top_k,
         )?;
@@ -369,11 +377,13 @@ impl IndexService {
                 } else {
                     ConventionRetrievalMode::Lexical
                 },
-                embedding_space: prepared
-                    .configuration
-                    .space
-                    .as_ref()
-                    .map(|s| BoundedText(s.id.clone())),
+                embedding_space: prepared.vector.as_ref().and_then(|_| {
+                    prepared
+                        .configuration
+                        .space
+                        .as_ref()
+                        .map(|s| BoundedText(s.id.clone()))
+                }),
                 reason: prepared.reason.clone().map(BoundedText),
                 gaps: BoundedList(gaps.into_iter().map(BoundedText).collect()),
                 more_gaps,
