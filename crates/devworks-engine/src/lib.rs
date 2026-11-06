@@ -208,6 +208,7 @@ pub mod git;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
+pub mod notifications;
 pub mod package;
 pub mod package_host;
 pub mod replies;

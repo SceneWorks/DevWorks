@@ -43,6 +43,7 @@ pub mod files;
 pub mod host;
 pub mod knowledge_screen;
 pub mod memory;
+pub mod native_notifications;
 pub mod notifications;
 pub mod ops;
 pub mod platform;
