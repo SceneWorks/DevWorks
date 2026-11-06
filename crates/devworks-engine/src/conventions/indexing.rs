@@ -6,9 +6,7 @@ use crate::dispatch::{
 use devworks_core::{
     ports::storage::*,
     services::conventions::indexing::{
-        IndexService,
-        commands::{EFFECT_CONSUMER, IndexJob},
-        publisher::IndexOutcome,
+        IndexService, commands::EFFECT_CONSUMER, publisher::IndexOutcome,
     },
 };
 use std::sync::Arc;
@@ -43,8 +41,9 @@ impl Effects {
         Box::pin(async move {
             let token = Cancellation::new();
             let worker_token = token.clone();
-            let delivery = serde_json::from_value::<IndexJob>(operation.payload.clone())
-                .map(|j| j.delivery_id);
+            let delivery = serde_json::from_value::<devworks_core::protocol::Id>(
+                operation.payload["deliveryId"].clone(),
+            );
             let worker = tokio::task::spawn_blocking(move || {
                 service.run_index(&operation, &worker_token, None)
             });
