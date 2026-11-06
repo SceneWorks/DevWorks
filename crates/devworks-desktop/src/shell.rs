@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+mod conventions;
 pub mod decisions;
 pub mod graph;
 pub mod help;
@@ -44,6 +45,9 @@ pub mod work;
 pub trait Dialogs {
     fn pick_files(&mut self) -> Vec<PathBuf>;
     fn pick_folder(&mut self, start: Option<&str>) -> Option<PathBuf>;
+    fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
+        None
+    }
     /// A package bundle to install (the first picked file by default).
     fn pick_package(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -53,6 +57,12 @@ pub trait Dialogs {
 /// The platform dialogs.
 pub struct NativeDialogs;
 impl Dialogs for NativeDialogs {
+    fn save_file(&mut self, name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Save convention source")
+            .set_file_name(name)
+            .save_file()
+    }
     fn pick_files(&mut self) -> Vec<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Attach images or files")
@@ -164,6 +174,7 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
+    pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
     /// Every listed browser session: the workspace's, then each listed project's.
@@ -318,6 +329,7 @@ impl Shell {
             settings,
             help: Default::default(),
             knowledge: KnowledgeScreen::new(),
+            conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: ListState::default(),
             resources: ListState::default(),
             browser: ListState::default(),
@@ -1718,6 +1730,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_graph(slot, reply) else {
             return;
         };
@@ -2032,7 +2047,8 @@ impl Shell {
                         | TaskOutput::Prepared { .. }
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
-                        | TaskOutput::TextPreview(_),
+                        | TaskOutput::TextPreview(_)
+                        | TaskOutput::Convention(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2094,7 +2110,8 @@ impl Shell {
                             | TaskOutput::Prepared { .. }
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
-                            | TaskOutput::TextPreview(_),
+                            | TaskOutput::TextPreview(_)
+                            | TaskOutput::Convention(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -3287,6 +3304,7 @@ impl Shell {
             _ => None,
         };
         PendingMemory {
+            conventions: self.conventions_pending_memory(),
             starting: self
                 .chat
                 .starting
@@ -3330,6 +3348,7 @@ impl Shell {
 
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
+        self.restore_conventions_pending(&pending.conventions);
         if let Some(i) = &pending.knowledge_import {
             self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
                 name: i.name.clone(),
@@ -3345,6 +3364,17 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::ConventionArtifact(key, _) | Slot::ConventionCommand(key, _) => {
+                    if let Some(scope) = self
+                        .conventions
+                        .states
+                        .keys()
+                        .find(|s| s.key() == *key)
+                        .cloned()
+                    {
+                        self.conventions.states.get_mut(&scope).expect("scope").busy = true;
+                    }
+                }
                 Slot::GraphTrust(_) => {
                     self.graph.trust_busy = true;
                     self.graph.trust_unknown = true;
@@ -4146,6 +4176,9 @@ impl Shell {
             }
             Route::Portfolio => self.portfolio_screen(ui),
             Route::Repositories => self.repositories_screen(ui),
+            Route::Knowledge if self.routes.entry(Route::Knowledge).or_default().tab == 2 => {
+                self.conventions_screen(ui)
+            }
             Route::Knowledge => {
                 let online = self.online();
                 let mut actions = Vec::new();

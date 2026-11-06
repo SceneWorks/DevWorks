@@ -112,6 +112,8 @@ pub struct RemovedMemory {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PendingMemory {
+    #[serde(default)]
+    pub conventions: Value,
     pub commands: Vec<PendingCommand>,
     /// Why the unconfirmed `sessions.start` was started.
     pub starting: Option<crate::chat::StartReason>,
@@ -130,6 +132,7 @@ pub struct PendingMemory {
 impl PendingMemory {
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+            && self.conventions.is_null()
             && self.removed.is_empty()
             && self.knowledge_import.is_none()
             && self.plans.is_empty()

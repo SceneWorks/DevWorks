@@ -1298,6 +1298,9 @@ impl KnowledgeScreen {
                         }
                     },
                     |ui, st, tab| {
+                        if tab == 2 {
+                            return;
+                        }
                         if tab == 1 {
                             widgets::state_block(
                                 ui,

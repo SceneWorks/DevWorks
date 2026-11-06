@@ -270,6 +270,17 @@ pub enum Slot {
     /// A discovery scan.
     IndexDiscover,
     /// A Knowledge listing page (its request generation).
+    ConventionsList(String, u64, bool, bool),
+    ConventionRead(String, u64),
+    ConventionEditor(String, String, u64),
+    ConventionVersions(String, u64, bool),
+    ConventionResources(String, u64, bool),
+    ConventionParents(String, String, u64, bool),
+    ConventionCommand(String, String),
+    ConventionOperation(String, String),
+    ConventionPrepare(String, String),
+    ConventionArtifact(String, String),
+    ConventionTransfer(String, String),
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),
@@ -380,6 +391,8 @@ pub enum TaskOutput {
     Preview { size: [usize; 2], rgba: Vec<u8> },
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
+    /// A bounded convention editor or transfer task.
+    Convention(crate::conventions_ops::TaskResult),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
 }

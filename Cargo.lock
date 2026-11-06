@@ -994,6 +994,7 @@ dependencies = [
 name = "devworks-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "block2 0.5.1",
  "devworks-adapters",
  "devworks-core",
