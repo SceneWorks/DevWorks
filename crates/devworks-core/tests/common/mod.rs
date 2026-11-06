@@ -402,6 +402,9 @@ impl ReadSnapshot for MemSnapshot {
     fn indexing(&self) -> &dyn IndexRead {
         &self.unsupported
     }
+    fn graph(&self) -> &dyn GraphRead {
+        &self.unsupported
+    }
     fn knowledge(&self) -> &dyn KnowledgeRead {
         &self.unsupported
     }
@@ -509,6 +512,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn indexing(&mut self) -> &mut dyn IndexRepository {
+        &mut self.unsupported
+    }
+    fn graph(&mut self) -> &mut dyn GraphRepository {
         &mut self.unsupported
     }
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
@@ -3201,6 +3207,105 @@ impl HelpRepository for Unsupported {
         _: &OperationId,
         _: u16,
     ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+
+impl GraphRead for Unsupported {
+    fn graph_units(
+        &self,
+        _: &GraphScope,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphUnit>, StorageError> {
+        nope()
+    }
+    fn graph_nodes(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphNode>, StorageError> {
+        nope()
+    }
+    fn graph_node(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeIdentity,
+    ) -> Result<Option<GraphNode>, StorageError> {
+        nope()
+    }
+    fn graph_edges(
+        &self,
+        _: &GraphScope,
+        _: &GraphEdgeFilter,
+        _: Option<&GraphPosition>,
+        _: u16,
+    ) -> Result<GraphPage<GraphEdge>, StorageError> {
+        nope()
+    }
+    fn graph_counts(&self, _: &GraphScope) -> Result<GraphCounts, StorageError> {
+        nope()
+    }
+    fn graph_kinds(
+        &self,
+        _: &GraphScope,
+        _: GraphElementKind,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<GraphPage<GraphKindCount>, StorageError> {
+        nope()
+    }
+    fn graph_trust(
+        &self,
+        _: &GraphScope,
+        _: &GraphNodeIdentity,
+        _: &str,
+    ) -> Result<Option<StoredGraphTrust>, StorageError> {
+        nope()
+    }
+    fn graph_trust_revision(&self, _: &GraphScope) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn graph_pin(&self, _: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
+        nope()
+    }
+    fn graph_source_capture(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
+        nope()
+    }
+}
+impl GraphRepository for Unsupported {
+    fn put_graph_trust(
+        &mut self,
+        _: &GraphScope,
+        _: &StoredGraphTrust,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn acquire_graph_pin(&mut self, _: &StoredGraphReadPin) -> Result<(), StorageError> {
+        nope()
+    }
+    fn renew_graph_pin(
+        &mut self,
+        _: &Id,
+        _: &str,
+        _: i64,
+        _: i64,
+    ) -> Result<StoredGraphReadPin, StorageError> {
+        nope()
+    }
+    fn retire_graph_pin(&mut self, _: &Id, _: &str, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_graph_source_capture(
+        &mut self,
+        _: &StoredGraphSourceCapture,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }

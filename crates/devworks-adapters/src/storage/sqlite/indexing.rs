@@ -1119,7 +1119,13 @@ impl IndexRepository for Unit<'_> {
                     && current.watermark == g.watermark
                     && current.manifest == g.manifest
             }
-            (GEN_SEALED, GEN_RETIRED) => true,
+            (GEN_SEALED, GEN_RETIRED) => {
+                let held: bool = db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM index_views v JOIN index_pins p ON p.view_id=v.id WHERE ?1 IN(v.baseline_id,v.branch_id,v.worktree_id) AND p.lease_until>?2)",params![g.id.as_str(),self.now],|r|r.get(0)))?;
+                if held {
+                    return Err(StorageError::Busy);
+                }
+                true
+            }
             (GEN_RETIRED, GEN_RETIRED) => true,
             _ => false,
         };
@@ -1432,6 +1438,10 @@ impl IndexRepository for Unit<'_> {
         if named {
             return Err(invalid("the published view is not removed"));
         }
+        super::graph::release_expired_pins_for_view(self.conn, view, self.now)?;
+        if self.live_pins(view, self.now)? > 0 {
+            return Err(StorageError::Busy);
+        }
         for sql in [
             "DELETE FROM repository_texts WHERE view_id=?1",
             "DELETE FROM repository_index_views WHERE view_id=?1",
@@ -1632,6 +1642,7 @@ pub(crate) fn remove_repository_index(
     repository: &Id,
 ) -> Result<(), StorageError> {
     let r = repository.as_str();
+    db(conn.execute("DELETE FROM graph_read_pins WHERE id IN(SELECT pin_id FROM graph_read_pin_views WHERE repository_id=?1)",[r]))?;
     for sql in [
         "DELETE FROM published_views WHERE source_key=?1",
         "DELETE FROM index_pins WHERE view_id IN (SELECT id FROM index_views WHERE source_key=?1)",

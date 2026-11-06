@@ -1077,6 +1077,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn indexing(&self) -> &dyn IndexRead {
         self
     }
+    fn graph(&self) -> &dyn GraphRead {
+        self
+    }
     fn knowledge(&self) -> &dyn KnowledgeRead {
         self
     }
@@ -1321,6 +1324,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn indexing(&mut self) -> &mut dyn IndexRepository {
+        self
+    }
+    fn graph(&mut self) -> &mut dyn GraphRepository {
         self
     }
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository {
