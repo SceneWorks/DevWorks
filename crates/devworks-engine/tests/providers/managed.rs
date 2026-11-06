@@ -110,6 +110,7 @@ let cases=f.use_cases.clone().with_router(selected_router).with_connections(conn
                     role: "Worker".into(),
                     query,
                     quote: PriceQuote {
+                        publication_provider: None,
                         classification: CostClassification::LocalFree,
                         connection_revision: Some(1),
                         snapshot_id: None,
