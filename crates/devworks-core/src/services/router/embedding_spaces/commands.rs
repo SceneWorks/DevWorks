@@ -138,7 +138,7 @@ impl EmbeddingSpaceService {
                         Some(connection_id.clone()),
                     ));
                 }
-                let dimensions = u32::try_from(dimensions.get())
+                let dimensions = dimensions.0.parse::<u32>()
                     .ok()
                     .filter(|d| (1..=65536).contains(d))
                     .ok_or_else(|| {
