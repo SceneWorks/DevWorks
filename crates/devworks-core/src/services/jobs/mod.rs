@@ -1592,6 +1592,32 @@ impl JobService {
                 return Err(StorageError::Busy.into());
             }
         }
+        if p.payload["authority"] != crate::services::approvals::authority_binding(tx, ctx)? {
+            return Err(Refusal::new(
+                DomainErrorCode::SourceChanged,
+                "reviewed_job_authority",
+                Some(p.id.clone()),
+            )
+            .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+            .into());
+        }
+        let request = crate::services::approvals::requests::decode(
+            c.descriptor().name,
+            c.schema_revision().0,
+            &out.input,
+            true,
+        )
+        .map_err(|_| invalid("reviewed_job_request"))?;
+        let saved = crate::services::approvals::OwnerPreview {
+            scope: p.scope.clone(),
+            target_id: p.target_id.clone(),
+            target_revision: p.target_revision,
+            summary: p.summary.clone(),
+            reviewed: p.payload["reviewed"].clone(),
+            binding: p.payload["binding"].clone(),
+        };
+        let raw = crate::services::approvals::review_evidence::expand(tx.artifacts(), &saved)?;
+        self.validate_approval_preview(tx, ctx, &request, &raw)?;
         Ok(())
     }
 }
@@ -1810,15 +1836,24 @@ fn job_approval_preview(
     route: Value,
 ) -> crate::services::approvals::OwnerPreview {
     let before = candidate.before.as_ref().map(job_approval_config);
-    crate::services::approvals::OwnerPreview {
+    let mut preview = crate::services::approvals::OwnerPreview {
         scope: candidate.scope,
         target_id: candidate.target,
         target_revision: candidate.revision,
         summary: format!("Review job {}", candidate.title),
-        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before}),
+        reviewed: json!({"title":candidate.title,"schedule":candidate.schedule,"definition":candidate.definition,"enabled":candidate.enabled,"prior":before,"artifact":match &candidate.definition {JobDefinition::Inference {prompt,..}=>Some(prompt),_=>None}}),
         binding: json!({"prior":before,"project":project,"prompt":prompt,"route":route}),
+    };
+    if preview.reviewed["artifact"].is_null() {
+        preview
+            .reviewed
+            .as_object_mut()
+            .expect("owner preview")
+            .remove("artifact");
     }
+    preview
 }
+
 impl JobService {
     pub(crate) fn approval_preview(
         &self,

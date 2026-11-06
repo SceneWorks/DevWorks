@@ -51,9 +51,9 @@
   },
   "sourceSha256": {
     "docs/architecture/implementation-slices.json": "64ef39f050faf5d4655cbb1646e7be5b1cc3b829eaa88e98ba7f287a057c1c71",
-    "docs/architecture/implementation-plan.json": "d9c498ceb4e273c5dbea1ebdc71f2a7db169afa8a9a00fd8e50e8f48031fb0da",
+    "docs/architecture/implementation-plan.json": "ccc3440bc9a7d16eb7e931e3cdccb062c21cd80ca0e8217a29d8108f38592e86",
     "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
-    "docs/architecture/contracts/family-coverage.json": "89f09a247afcf0cafd662be3b48b35361811a90dfa296a16c1e99b51283d6e55"
+    "docs/architecture/contracts/family-coverage.json": "68ed2312bb59bfc5b80ca9c82f66f4f598bad7462de7366e592b6720dc9a340a"
   },
   "planningReaders": {
     "date": "2026-11-05",
@@ -203,5 +203,34 @@
     "domainFixtures": 1512,
     "fixtureSha256": "e07f4d63e2602161730f53fecb9f375cb28b8bfbab47d979f29cdfa04828dde2",
     "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures"
+  },
+  "savedInputDelta": {
+    "sourceCommit": "4be0fb9",
+    "results": "saved-input-delta-results.json",
+    "nativeSchemaCasesPassed": 6,
+    "boundaryRegressionsPassed": 3,
+    "legacySchemasByteIdentical": 56,
+    "frameLimitBytes": 1048576,
+    "frameMaxContainerNesting": 100,
+    "innerDynamicJsonUnchanged": true,
+    "qualifiedOwnerBoundAudit": "No actual qualified near-1-MiB input wrapping counterexample found in current Git/package/job owners; no speculative source/frame expansion",
+    "nativePublicationChecks": {
+      "snapshot": "8e4065eff60412ef32802251da6b8d82e5775284",
+      "sourceBoundaryTests": {
+        "passed": 2,
+        "names": [
+          "services::approvals::requests::tests::saved_configure_keeps_existing_legal_near_limit_input",
+          "services::approvals::requests::tests::saved_configure_keeps_existing_inner_dynamic_shape_limits"
+        ]
+      },
+      "nativeContractTests": {
+        "recorded_fixtures": 7,
+        "registry": 5,
+        "schema_revisions": 8,
+        "passed": 20
+      },
+      "noEditsOrStubs": true,
+      "execution": "Detached exact assembled native source; isolated existing contract target; no inference"
+    }
   }
 }

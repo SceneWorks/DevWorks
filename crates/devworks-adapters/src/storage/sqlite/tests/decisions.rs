@@ -1033,3 +1033,69 @@ fn legal_unicode_notification_text_uses_the_protocol_character_bounds() {
     })
     .unwrap();
 }
+#[test]
+fn saved_command_outbox_retains_legal_wrapped_dynamic_input_and_refuses_over_one_mib() {
+    use devworks_core::operations::addons::ConfigureInput;
+    use devworks_core::protocol::support::Check;
+    let input = json!({"packageId":"addon-pkg","expectedRevision":"1","config":{"schema":{"schemaId":"addon/config","revision":"1","sha256":"a".repeat(64)},"value":"x".repeat(524_279)}});
+    assert_eq!(
+        serde_json::to_vec(&input["config"]["value"]).unwrap().len(),
+        524_281
+    );
+    let typed: ConfigureInput = serde_json::from_value(input.clone()).unwrap();
+    typed.check().unwrap();
+    let input = serde_json::to_value(typed).unwrap();
+    assert_eq!(serde_json::to_vec(&input).unwrap().len(), 524_477);
+    assert!(serde_json::to_vec(&input).unwrap().len() < devworks_core::framing::MAX_FRAME_BYTES);
+    let h = Harness::new();
+    let s = seed(&h);
+    let mut a = approval("saved");
+    a.payload = json!({"kind":"SavedOperation","operation":"addons.configure","input":input.clone(),"originalActor":"agent"});
+    put(&s, a.clone(), None).unwrap();
+    a.revision = 2;
+    a.state = "Approved".into();
+    a.decided_by = Some(actor("human-a"));
+    a.decided_at_ms = Some(T0);
+    put(&s, a, Some(1)).unwrap();
+    approve(&s, "oversize");
+    let expected = input.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.authority().issue_grant(NewAuthorityGrant {
+            id: id("internal-grant"),
+            actor: actor("agent"),
+            kind: GrantKind::Operation,
+            issued_by: actor("human-a"),
+            binding: json!({"operation":"addons.configure","requestDigest":"exact"}),
+            expires_at_ms: None,
+            uses: Some(1),
+        })?;
+        let mut row = resume();
+        row.operation = "addons.configure".into();
+        row.input = input;
+        tx.decisions().put_approval_resume(&row, None)?;
+        let mut oversized = row;
+        oversized.approval_id = id("oversize");
+        oversized.request_key = id("oversize-request");
+        oversized.input = json!({"content":"x".repeat(MAX_SAVED_OPERATION_BYTES)});
+        assert!(matches!(
+            tx.decisions().put_approval_resume(&oversized, None),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        assert!(tx.decisions().approval_resume(&id("oversize"))?.is_none());
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let saved = r.decisions().approval_resume(&id("saved"))?.unwrap();
+        assert_eq!(saved.input, expected);
+        assert_eq!(saved.principal, actor("agent"));
+        assert_eq!(saved.operation, "addons.configure");
+        assert_eq!(saved.request_key, id("deterministic-request"));
+        assert_eq!(saved.revision, 1);
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.integrity_check().unwrap().problems.is_empty());
+}

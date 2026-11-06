@@ -26,16 +26,51 @@ pub(crate) fn save_context(c: &InvocationContext) -> Value {
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, StorageError> {
     serde_json::from_value(v).map_err(|e| StorageError::InvalidRecord(e.to_string()))
 }
-fn base_context(
+/// Private source provenance, independent of an approval or any authorization token.
+/// A source without this versioned captured context is not automatically replayable.
+pub(crate) fn save_source_context(c: &InvocationContext) -> Value {
+    json!({"version":1,"storeId":c.store_id(),"restoreEpoch":c.restore_epoch(),"invocationContext":save_context(c)})
+}
+pub(crate) fn restore_source_context(
+    store: &StoreInfo,
+    principal: &crate::protocol::ActorId,
+    kind: PrincipalKind,
+    source: &Value,
+) -> Result<InvocationContext, StorageError> {
+    if source["version"].as_u64() != Some(1)
+        || source["storeId"] != json!(store.store_id)
+        || parse::<Counter>(source["restoreEpoch"].clone())?.get() != store.restore_epoch
+    {
+        return Err(StorageError::InvalidRecord(
+            "source context store/version/restore binding".into(),
+        ));
+    }
+    invocation_context(
+        &store.store_id,
+        store.restore_epoch,
+        principal,
+        kind,
+        &source["invocationContext"],
+    )
+}
+fn invocation_context(
     store_id: &StoreId,
     restore_epoch: i64,
-    p: &StoredApproval,
-    grant: Option<&Id>,
+    principal: &crate::protocol::ActorId,
+    kind: PrincipalKind,
+    v: &Value,
 ) -> Result<InvocationContext, StorageError> {
-    let v = &p.payload["invocation"];
+    if !v.is_object()
+        || v["principal"] != json!(principal)
+        || v["kind"] != json!(format!("{kind:?}"))
+    {
+        return Err(StorageError::InvalidRecord(
+            "source context principal binding".into(),
+        ));
+    }
     let mut c = InvocationContext::new(
-        p.author.clone(),
-        p.author_kind,
+        principal.clone(),
+        kind,
         parse(v["invocation"].clone())?,
         parse(v["namespace"].clone())?,
         store_id.clone(),
@@ -48,14 +83,13 @@ fn base_context(
         parse(v["root"].clone())?,
         parse(v["assignment"].clone())?,
     );
-    if let Some(s) = v["session"].as_str() {
-        c = c.with_session(Id::new(s).map_err(|_| StorageError::InvalidRecord("session".into()))?)
+    if let Some(session) = parse::<Option<Id>>(v["session"].clone())? {
+        c = c.with_session(session);
     }
-    if let Some(s) = v["capability"].as_str() {
-        c = c.with_capability_registration(
-            Id::new(s).map_err(|_| StorageError::InvalidRecord("capability".into()))?,
-        )
+    if let Some(capability) = parse::<Option<Id>>(v["capability"].clone())? {
+        c = c.with_capability_registration(capability);
     }
+
     if !v["worktree"].is_null() {
         let w = &v["worktree"];
         c = c.bind_worktree(crate::context::BoundWorktree::resolved(
@@ -64,9 +98,27 @@ fn base_context(
             parse(w["work"].clone())?,
             w["revision"]
                 .as_i64()
+                .filter(|n| *n > 0)
                 .ok_or_else(|| StorageError::InvalidRecord("ownership revision".into()))?,
         ));
     }
+    Ok(c)
+}
+fn base_context(
+    store: &StoreInfo,
+    p: &StoredApproval,
+    grant: Option<&Id>,
+) -> Result<InvocationContext, StorageError> {
+    // Older generic proposals already captured the exact invocation privately. Their source
+    // restore epoch and containing store supply the same envelope without inventing lineage.
+    let legacy;
+    let source = if let Some(source) = p.payload.get("sourceContext") {
+        source
+    } else {
+        legacy = json!({"version":1,"storeId":store.store_id,"restoreEpoch":p.restore_epoch.to_string(),"invocationContext":p.payload["invocation"]});
+        &legacy
+    };
+    let mut c = super::restore_source_context(store, &p.author, p.author_kind, source)?;
     if let Some(g) = grant {
         c = c.with_authority_source(g.clone());
         let content = &p.payload["content"];
@@ -90,6 +142,7 @@ fn base_context(
     Ok(c)
 }
 pub(crate) fn restore_context(
+    store: &StoreInfo,
     s: &dyn ReadSnapshot,
     p: &StoredApproval,
     grant: Option<&Id>,
@@ -101,7 +154,7 @@ pub(crate) fn restore_context(
             "approval principal changed".into(),
         ));
     }
-    base_context(&s.stamp().store_id, s.stamp().restore_epoch, p, grant)
+    base_context(store, p, grant)
 }
 pub(crate) fn restore_context_tx(
     tx: &mut dyn WriteTransaction,
@@ -113,12 +166,7 @@ pub(crate) fn restore_context_tx(
     {
         return Err(denied("approval_principal_changed"));
     }
-    Ok(base_context(
-        &tx.store().store_id,
-        tx.store().restore_epoch,
-        p,
-        grant,
-    )?)
+    Ok(base_context(tx.store(), p, grant)?)
 }
 impl ApprovalService {
     pub(crate) fn create_resume(
@@ -138,16 +186,21 @@ impl ApprovalService {
         let policy =
             crate::authority::policy::resolve_policy(tx.configuration(), original.project_id())?
                 .digest();
-        let kind =
-            if crate::authority::policy::NATIVE_EXECUTION.contains(&p.operation_kind.as_str()) {
-                GrantKind::NativeExecution
-            } else {
-                GrantKind::Operation
-            };
+        let actual = crate::ports::AuthorityRequest {
+            descriptor: request.descriptor,
+            binding: request.binding,
+            effect: request.effect,
+            action: request.action,
+            input: &request.input,
+            fingerprint: &request.fingerprint,
+        };
+        let kind = crate::authority::service::reviewed_grant_kind(tx, &original, &actual)
+            .map_err(|_| denied("reviewed_operation_current_authority"))?;
         let now = tx.now_ms();
-        let g = crate::authority::service::mint_grant(
+        let g = crate::authority::service::mint_reviewed_grant(
             tx,
             human,
+            &p.id,
             p.author.clone(),
             kind,
             crate::authority::service::GrantBinding {
@@ -224,12 +277,7 @@ impl ApprovalService {
             {
                 return Err(StorageError::InvalidRecord("human audit binding".into()));
             }
-            let ctx = base_context(
-                &store.info().store_id,
-                store.info().restore_epoch,
-                &p,
-                r.grant_id.as_ref(),
-            )?;
+            let ctx = base_context(&store.info(), &p, r.grant_id.as_ref())?;
             if s.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
                 || ctx.restore_epoch().get() != p.restore_epoch
             {
@@ -294,6 +342,22 @@ impl ApprovalService {
     ) -> Result<(), StorageError> {
         let id = request.approval_id.clone();
         let expected = request.resume_revision;
+        let original = request.context.clone();
+        let operation = request.operation.clone();
+        let decoded = crate::admission::decode(
+            crate::admission::Selection {
+                operation: &operation,
+                mode: crate::registry::Mode::Command,
+            },
+            &request.frame,
+        )
+        .map_err(|_| StorageError::InvalidRecord("resume settlement frame".into()))?;
+        let crate::admission::CallerKey::Command(request_key) = decoded.key else {
+            return Err(StorageError::InvalidRecord("resume settlement key".into()));
+        };
+        let fingerprint = decoded.fingerprint;
+        let schema_revision = decoded.revision;
+
         let value = outcome
             .as_ref()
             .ok()
@@ -329,11 +393,193 @@ impl ApprovalService {
             if r.revision != expected || !matches!(r.state.as_str(), "Pending" | "Unknown") {
                 return Ok(());
             }
+            if request_key.0 != r.request_key
+                || original.store_id() != &tx.store().store_id
+                || original.restore_epoch().get() != tx.store().restore_epoch
+            {
+                return Err(StorageError::InvalidRecord(
+                    "resume settlement identity".into(),
+                ));
+            }
+            if r.principal != *original.principal()
+                || r.principal_kind != original.principal_kind()
+                || r.invocation != save_context(&original)
+                || r.operation != operation
+                || r.request_digest != fingerprint.as_str()
+                || r.schema_revision != i64::from(schema_revision.0)
+            {
+                return Err(StorageError::InvalidRecord(
+                    "resume settlement binding".into(),
+                ));
+            }
+            let identity =
+                crate::context::ReceiptIdentity::bind(&original, RequestKey(r.request_key.clone()));
+            let durable = if state == "Refused" {
+                tx.receipts().lookup(&identity)?
+            } else {
+                None
+            };
+            let (state, value) = match durable {
+                Some(LedgerEntry::Current(stored))
+                    if stored.operation == operation
+                        && stored.contract == crate::protocol::CONTRACT
+                        && stored.schema_revision == schema_revision
+                        && stored.fingerprint == fingerprint =>
+                {
+                    let state = if matches!(stored.receipt.decision, DomainDecision::Refused { .. })
+                    {
+                        "Refused"
+                    } else {
+                        "Admitted"
+                    };
+                    (
+                        state.to_owned(),
+                        Some(
+                            serde_json::to_value(CommandReply::Recorded {
+                                protocol: crate::protocol::Protocol::Draft1,
+                                receipt: stored.receipt,
+                                replayed: true,
+                            })
+                            .expect("durable receipt"),
+                        ),
+                    )
+                }
+                _ if r.state == "Unknown" && state == "Refused" => ("Unknown".into(), value),
+                _ => (state, value),
+            };
             r.revision += 1;
             r.state = state;
             r.updated_at_ms = tx.now_ms();
             r.result = value;
             tx.decisions().put_approval_resume(&r, Some(expected))
         })
+    }
+}
+
+#[cfg(test)]
+mod source_context_tests {
+    use super::*;
+    use crate::protocol::{ActorId, AssignmentId, ProjectId, Revision, RootId};
+    fn id(s: &str) -> Id {
+        Id::new(s).unwrap()
+    }
+    fn store() -> StoreInfo {
+        StoreInfo {
+            store_id: StoreId(id("source-store")),
+            restore_epoch: 7,
+            boot_id: None,
+            host_actor: ActorId(id("host")),
+            access: AccessMode::ReadWrite,
+        }
+    }
+    fn original() -> InvocationContext {
+        InvocationContext::new(
+            ActorId(id("original-agent")),
+            PrincipalKind::Agent,
+            id("actual-invocation"),
+            id("actual-namespace"),
+            store().store_id,
+            Counter::new(7).unwrap(),
+            Revision::new(11).unwrap(),
+        )
+        .with_lineage(
+            Some(ProjectId(id("project"))),
+            Some(RootId(id("root"))),
+            Some(AssignmentId(id("assignment"))),
+        )
+        .with_session(id("actual-session"))
+        .with_capability_registration(id("actual-tool"))
+        .with_authority_source(id("old-grant"))
+        .bind_worktree(crate::context::BoundWorktree::resolved(
+            id("tree"),
+            id("repository"),
+            id("work"),
+            3,
+        ))
+    }
+    #[test]
+    fn captured_source_context_preserves_exact_provenance_without_minting_consent() {
+        let original = original();
+        let captured = save_source_context(&original);
+        let restored = restore_source_context(
+            &store(),
+            original.principal(),
+            PrincipalKind::Agent,
+            &captured,
+        )
+        .unwrap();
+        assert_eq!(save_context(&original), save_context(&restored));
+        assert_eq!(restored.principal_kind(), PrincipalKind::Agent);
+        assert!(restored.reviewed_operation().is_none());
+        assert!(restored.authority_sources().is_empty());
+        assert!(
+            restore_source_context(
+                &store(),
+                original.principal(),
+                PrincipalKind::Human,
+                &captured
+            )
+            .is_err()
+        );
+        assert!(
+            restore_source_context(
+                &store(),
+                &ActorId(id("other-agent")),
+                PrincipalKind::Agent,
+                &captured
+            )
+            .is_err()
+        );
+        for (field, value) in [
+            ("storeId", json!("other-store")),
+            ("restoreEpoch", json!("8")),
+            ("version", json!(2)),
+        ] {
+            let mut changed = captured.clone();
+            changed[field] = value;
+            assert!(
+                restore_source_context(
+                    &store(),
+                    original.principal(),
+                    PrincipalKind::Agent,
+                    &changed
+                )
+                .is_err()
+            );
+        }
+        for field in ["invocation", "namespace", "policyRevision"] {
+            let mut changed = captured.clone();
+            changed["invocationContext"][field] = Value::Null;
+            assert!(
+                restore_source_context(
+                    &store(),
+                    original.principal(),
+                    PrincipalKind::Agent,
+                    &changed
+                )
+                .is_err()
+            );
+        }
+        let mut changed = captured;
+        changed["invocationContext"]["session"] = json!(42);
+        assert!(
+            restore_source_context(
+                &store(),
+                original.principal(),
+                PrincipalKind::Agent,
+                &changed
+            )
+            .is_err()
+        );
+        assert!(
+            restore_source_context(
+                &store(),
+                original.principal(),
+                PrincipalKind::Agent,
+                &save_context(&original)
+            )
+            .is_err(),
+            "legacy unknown source context is not synthesized"
+        );
     }
 }

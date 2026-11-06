@@ -142,6 +142,7 @@ impl ApprovalService {
         request: &DecodedRequest,
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
+        check_authority(tx, ctx, request)?;
         if builtin(request.descriptor.name) {
             crate::services::projects::validate_approval_preview(tx, ctx, request, preview)
         } else {
@@ -213,7 +214,7 @@ impl ApprovalService {
             .filter(|p| project_visible(ctx, p.scope.project_id()))
             .ok_or_else(|| not_found("approval", id))?;
         let mut view = model::generic(&p, full, s.decisions().approval_resume(id)?.as_ref())?;
-        if p.payload["content"]["kind"] == "FindingRisk" {
+        if p.state == "Pending" && p.payload["content"]["kind"] == "FindingRisk" {
             let feature: Id = serde_json::from_value(p.payload["content"]["featureId"].clone())
                 .map_err(|_| invalid("finding_risk"))?;
             view.stale =
@@ -312,12 +313,9 @@ pub(crate) fn unsupported() -> Failure {
     .into()
 }
 pub(crate) fn conflict(id: &Id) -> Failure {
-    Refusal::new(
-        DomainErrorCode::RevisionConflict,
-        "approval",
-        Some(id.clone()),
-    )
-    .into()
+    Refusal::new(DomainErrorCode::SourceChanged, "approval", Some(id.clone()))
+        .retry(crate::protocol::RetryAdvice::RefreshAndNewRequest)
+        .into()
 }
 fn parse_position(s: &str) -> Result<ApprovalSourcePosition, StorageError> {
     let p: Vec<_> = s.split('|').collect();
@@ -376,6 +374,19 @@ impl CommandHandler for ApprovalService {
         if env.stopped(self.clock.now_ms().get()) {
             return Err(StorageError::Cancelled);
         }
+        if let OperationInput::Approvals(ops::Input::Propose(i)) = c.input()
+            && scope(ctx, &i.scope).is_err()
+        {
+            return Ok(None);
+        }
+        if let OperationInput::Approvals(ops::Input::RecordHumanDecision(i)) = c.input()
+            && matches!(
+                i.decision,
+                crate::protocol::records::ProposalDecision::Reject
+            )
+        {
+            return Ok(None);
+        }
         let candidate = match c.input() {
             OperationInput::Approvals(ops::Input::Propose(i)) => match &i.payload {
                 Some(ApprovalContent::SavedOperation {
@@ -399,7 +410,7 @@ impl CommandHandler for ApprovalService {
                     if c["kind"] != "SavedOperation" {
                         return None;
                     }
-                    let original = super::replay::restore_context(s, &p, None).ok()?;
+                    let original = super::replay::restore_context(&env.info(), s, &p, None).ok()?;
                     Some((
                         p.operation_kind.clone(),
                         c["schemaRevision"]
@@ -421,6 +432,9 @@ impl CommandHandler for ApprovalService {
             Ok(r) => r,
             Err(_) => return Ok(None),
         };
+        if !env.read(|s| super::prepare_authority(s, &original, &request))? {
+            return Ok(None);
+        }
         let prepared = if builtin(&op) {
             env.read(|s| {
                 Ok(crate::services::projects::approval_preview(
@@ -462,4 +476,74 @@ fn builtin(op: &str) -> bool {
         op,
         "projects.archive" | "projects.delete" | "repositories.remove_index"
     )
+}
+
+fn policy_permits(
+    ctx: &InvocationContext,
+    request: &DecodedRequest,
+    kind: Option<crate::context::PrincipalKind>,
+    principal: Option<&PrincipalBinding>,
+    policy: &crate::authority::policy::EffectivePolicy,
+) -> bool {
+    let actual = crate::ports::AuthorityRequest {
+        descriptor: request.descriptor,
+        binding: request.binding,
+        effect: request.effect,
+        action: request.action,
+        input: &request.input,
+        fingerprint: &request.fingerprint,
+    };
+    kind == Some(ctx.principal_kind())
+        && !matches!(
+            crate::authority::policy::evaluate(ctx, principal, policy, &actual, &[]),
+            crate::authority::policy::Verdict::Deny(_)
+        )
+}
+pub(crate) fn validate_authority(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &DecodedRequest,
+) -> Result<bool, StorageError> {
+    let kind = tx.actors().actor_kind(ctx.principal())?;
+    let principal = match ctx.principal_kind() {
+        crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host => None,
+        _ => tx.authority().principal(ctx.principal())?,
+    };
+    let policy = crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?;
+    Ok(policy_permits(
+        ctx,
+        request,
+        kind,
+        principal.as_ref(),
+        &policy,
+    ))
+}
+pub(crate) fn check_authority(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &DecodedRequest,
+) -> Result<(), Failure> {
+    if !super::validate_authority(tx, ctx, request)? {
+        return Err(denied("saved_operation_current_authority"));
+    }
+    Ok(())
+}
+pub(crate) fn prepare_authority(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    request: &DecodedRequest,
+) -> Result<bool, StorageError> {
+    let kind = read.actors().actor_kind(ctx.principal())?;
+    let principal = match ctx.principal_kind() {
+        crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host => None,
+        _ => read.authority().principal(ctx.principal())?,
+    };
+    let policy = crate::authority::policy::resolve_policy(read.configuration(), ctx.project_id())?;
+    Ok(policy_permits(
+        ctx,
+        request,
+        kind,
+        principal.as_ref(),
+        &policy,
+    ))
 }

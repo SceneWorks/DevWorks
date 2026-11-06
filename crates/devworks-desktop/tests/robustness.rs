@@ -1584,10 +1584,21 @@ fn every_route_keeps_its_essential_controls_on_the_minimum_window_at_the_largest
         .expand(0.5);
         for text in [
             "Update discovery, approval and installation",
-            "Notification history, read state and filters",
+            "Reading, acknowledging, and opening links never approve or resume work.",
+            "No notifications in this view.",
         ] {
             let r = h.get_by_label_contains(text).rect();
             assert!(window.contains_rect(r), "@{scale}: overlay text at {r:?}");
+        }
+        for (role, label) in [
+            (Role::ComboBox, "Notification project filter"),
+            (Role::Button, "Filter notifications"),
+        ] {
+            let rect = h.get_by_role_and_label(role, label).rect();
+            assert!(
+                window.contains_rect(rect),
+                "@{scale}: notification control {label} at {rect:?}"
+            );
         }
     }
 }

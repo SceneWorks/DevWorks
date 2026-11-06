@@ -4580,7 +4580,7 @@
         "distribution",
         "diagnostics"
       ],
-      "acceptance": "Generate deterministic corpus manifests and run W01\u2013W12 against production process trees on named hardware; record cold/warm/control data and calibrate provisional budgets. No inference compute in normal benchmarks/tests.",
+      "acceptance": "Generate deterministic corpus manifests and run W01–W12 against production process trees on named hardware; record cold/warm/control data and calibrate provisional budgets. No inference compute in normal benchmarks/tests.",
       "gates": [
         "G12"
       ],
@@ -5584,7 +5584,7 @@
     {
       "requirement": "ARCH-01",
       "requirementStatus": "Confirmed",
-      "statement": "The app must own the runtime for its selected capabilities. It must not require CodeGraph, dark-factory, simple-router, MariaDB, RabbitMQ, Docker, or a VM to be installed and administered as supporting servers. Optional container runtimes used by managed projects are separate from this core-app constraint under CONTAINER-01\u201303.",
+      "statement": "The app must own the runtime for its selected capabilities. It must not require CodeGraph, dark-factory, simple-router, MariaDB, RabbitMQ, Docker, or a VM to be installed and administered as supporting servers. Optional container runtimes used by managed projects are separate from this core-app constraint under CONTAINER-01–03.",
       "sourceSection": "4 Application architecture",
       "architectureSection": "component-and-dependency-structure",
       "owner": "Composition root and core boundaries",
@@ -5831,7 +5831,7 @@
     {
       "requirement": "STORE-08",
       "requirementStatus": "Confirmed",
-      "statement": "Use plain embedded SQLite with sqlite-vec for internal app storage. Persist graph nodes and edges in application-owned tables, with bounded graph traversal/analysis behind the storage contracts and SQLite FTS for lexical search. Do not depend on HelixDB, GraphQLite or a separate graph database for the app. External HelixDB schema reading is excluded under DB-06\u201307.",
+      "statement": "Use plain embedded SQLite with sqlite-vec for internal app storage. Persist graph nodes and edges in application-owned tables, with bounded graph traversal/analysis behind the storage contracts and SQLite FTS for lexical search. Do not depend on HelixDB, GraphQLite or a separate graph database for the app. External HelixDB schema reading is excluded under DB-06–07.",
       "sourceSection": "5 Storage scheduling and consistency",
       "architectureSection": "persistence-contracts-and-consistency-rules",
       "owner": "Core storage ports, application transactions and SQLite write owner",
@@ -6053,7 +6053,7 @@
     {
       "requirement": "CODE-07",
       "requirementStatus": "Proposed",
-      "statement": "The UI must expose repository index freshness, language coverage, semantic add-in state, source navigation, and the origin of relationships used in agent answers. Cross-repository relationships must preserve each repository\u2019s own revision identity.",
+      "statement": "The UI must expose repository index freshness, language coverage, semantic add-in state, source navigation, and the origin of relationships used in agent answers. Cross-repository relationships must preserve each repository’s own revision identity.",
       "sourceSection": "6 Code intelligence and language support",
       "architectureSection": "indexing-graphs-and-schemas",
       "owner": "IndexCoordinator and GraphView",
@@ -6089,7 +6089,7 @@
     {
       "requirement": "CODE-09",
       "requirementStatus": "Confirmed",
-      "statement": "Preserve CodeGraph branch-overlay functionality: query branch/commit changes over the repository baseline without modifying its default-branch index. Automatically include each agent\u2019s uncommitted worktree changes in its graph view, isolated from main and every other worktree. Apply the view consistently to graph search, symbol/source lookup, traversal, dependency/impact inspection and context retrieval. Represent additions, modifications, deletions and renames. Retain repository, branch/commit and worktree provenance, visible freshness and coverage, and inspectable overlay lifecycle and failures.",
+      "statement": "Preserve CodeGraph branch-overlay functionality: query branch/commit changes over the repository baseline without modifying its default-branch index. Automatically include each agent’s uncommitted worktree changes in its graph view, isolated from main and every other worktree. Apply the view consistently to graph search, symbol/source lookup, traversal, dependency/impact inspection and context retrieval. Represent additions, modifications, deletions and renames. Retain repository, branch/commit and worktree provenance, visible freshness and coverage, and inspectable overlay lifecycle and failures.",
       "sourceSection": "6 Code intelligence and language support",
       "architectureSection": "indexing-graphs-and-schemas",
       "owner": "IndexCoordinator and GraphView",
@@ -6107,7 +6107,7 @@
     {
       "requirement": "CODE-10",
       "requirementStatus": "Proposed",
-      "statement": "Identify overlay snapshots by repository, base/head revisions, worktree and local-content version; include staged, unstaged and indexable untracked changes. Select the agent\u2019s own view automatically, with explicit scope for inspecting other views. Incrementally compose changed nodes/edges over unchanged baseline data, hide deleted or renamed-away data, and preserve relation confidence and unresolved links. Publish consistent snapshots atomically; baseline movement or concurrent edits must trigger reconciliation and visible stale/indexing state. Never silently answer a scoped query from main or another worktree, or present baseline-only analysis or stale semantic data as current overlay results.",
+      "statement": "Identify overlay snapshots by repository, base/head revisions, worktree and local-content version; include staged, unstaged and indexable untracked changes. Select the agent’s own view automatically, with explicit scope for inspecting other views. Incrementally compose changed nodes/edges over unchanged baseline data, hide deleted or renamed-away data, and preserve relation confidence and unresolved links. Publish consistent snapshots atomically; baseline movement or concurrent edits must trigger reconciliation and visible stale/indexing state. Never silently answer a scoped query from main or another worktree, or present baseline-only analysis or stale semantic data as current overlay results.",
       "sourceSection": "6 Code intelligence and language support",
       "architectureSection": "indexing-graphs-and-schemas",
       "owner": "IndexCoordinator and GraphView",
@@ -6215,7 +6215,7 @@
     {
       "requirement": "COORD-01",
       "requirementStatus": "Confirmed",
-      "statement": "Opening the app must present a workspace coordinator conversation. The coordinator must be able to discover and inspect every project, feature, card, repository, active agent, relevant conversation, Git action, review, PR, and pending decision within the user\u2019s accessible workspace.",
+      "statement": "Opening the app must present a workspace coordinator conversation. The coordinator must be able to discover and inspect every project, feature, card, repository, active agent, relevant conversation, Git action, review, PR, and pending decision within the user’s accessible workspace.",
       "sourceSection": "7 Workspace coordinator behavior",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "Workspace coordinator and supervisor",
@@ -6329,7 +6329,7 @@
     {
       "requirement": "COORD-07",
       "requirementStatus": "Proposed",
-      "statement": "Ambiguous references must be resolved from context where reliable, with clarification only when materially different actions remain possible. Routine reversible work within the user\u2019s policy must not trigger repeated approval prompts.",
+      "statement": "Ambiguous references must be resolved from context where reliable, with clarification only when materially different actions remain possible. Routine reversible work within the user’s policy must not trigger repeated approval prompts.",
       "sourceSection": "7 Workspace coordinator behavior",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "Workspace coordinator and supervisor",
@@ -6403,7 +6403,7 @@
     {
       "requirement": "AGENT-03",
       "requirementStatus": "Confirmed",
-      "statement": "A feature coordinator must plan and manage cards, delegate scoped assignments, use code intelligence directly, coordinate repository changes, monitor workers, arrange verification and reviews, and keep the feature\u2019s status and history visible.",
+      "statement": "A feature coordinator must plan and manage cards, delegate scoped assignments, use code intelligence directly, coordinate repository changes, monitor workers, arrange verification and reviews, and keep the feature’s status and history visible.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -6565,7 +6565,7 @@
     {
       "requirement": "AGENT-12",
       "requirementStatus": "Confirmed",
-      "statement": "Before feature implementation starts, its coordinator must assess execution readiness even when the user has already approved the plan. Review the intended outcome and scope, observable acceptance, implementation coverage, dependencies, access and resources, verification and delivery path, and material uncertainties across the whole feature. Every implementation detail need not be settled, but each material uncertainty needs a credible resolution path. On Start, develop incomplete planning from available evidence and seek required plan approval before implementing unapproved scope. Apply AGENT-18\u201320 to resolve gaps, justify blockers and reuse current assessments. An approved, ready plan must proceed without redundant planning or repeated approval requests.",
+      "statement": "Before feature implementation starts, its coordinator must assess execution readiness even when the user has already approved the plan. Review the intended outcome and scope, observable acceptance, implementation coverage, dependencies, access and resources, verification and delivery path, and material uncertainties across the whole feature. Every implementation detail need not be settled, but each material uncertainty needs a credible resolution path. On Start, develop incomplete planning from available evidence and seek required plan approval before implementing unapproved scope. Apply AGENT-18–20 to resolve gaps, justify blockers and reuse current assessments. An approved, ready plan must proceed without redundant planning or repeated approval requests.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -6621,7 +6621,7 @@
     {
       "requirement": "AGENT-15",
       "requirementStatus": "Confirmed",
-      "statement": "A clear, actionable standalone issue may proceed immediately to implementation without separate plan approval. The agent may plan and delegate as needed within the issue\u2019s scope. Ask for input when requirements are unclear or an unresolved decision requires it. Existing tool permissions, user pauses, verification, review and Auto-Merge policies still apply; feature plan-approval requirements remain unchanged.",
+      "statement": "A clear, actionable standalone issue may proceed immediately to implementation without separate plan approval. The agent may plan and delegate as needed within the issue’s scope. Ask for input when requirements are unclear or an unresolved decision requires it. Existing tool permissions, user pauses, verification, review and Auto-Merge policies still apply; feature plan-approval requirements remain unchanged.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -6639,7 +6639,7 @@
     {
       "requirement": "AGENT-16",
       "requirementStatus": "Confirmed",
-      "statement": "Provide an optional per-project keep-working mode that automatically selects and starts the next highest-priority eligible feature or standalone issue through next_work(project). Make its configured state and activity visible and controllable in the project UI. Preserve plan readiness and approval, tool permissions, budgets, resource constraints and existing execution ownership. The mode must not resume explicitly paused work or bypass selective manual Continue after app closure. Run one feature or standalone issue at a time per project in this mode. Its subagents still use the independent per-item allowance under AGENT-10\u201311, and different projects may work concurrently. After reopening, keep-working requires manual restart. If no eligible work remains, stop until manually enabled again; later queue changes must not restart the mode automatically. Keep-working defaults to off for every new project; enabling it requires an explicit user action.",
+      "statement": "Provide an optional per-project keep-working mode that automatically selects and starts the next highest-priority eligible feature or standalone issue through next_work(project). Make its configured state and activity visible and controllable in the project UI. Preserve plan readiness and approval, tool permissions, budgets, resource constraints and existing execution ownership. The mode must not resume explicitly paused work or bypass selective manual Continue after app closure. Run one feature or standalone issue at a time per project in this mode. Its subagents still use the independent per-item allowance under AGENT-10–11, and different projects may work concurrently. After reopening, keep-working requires manual restart. If no eligible work remains, stop until manually enabled again; later queue changes must not restart the mode automatically. Keep-working defaults to off for every new project; enabling it requires an explicit user action.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -6657,7 +6657,7 @@
     {
       "requirement": "AGENT-17",
       "requirementStatus": "Confirmed",
-      "statement": "Every newly started feature, standalone issue or task assignment must begin in a new session with clear context for that work, including when launched by keep-working mode, a scheduled agent or a user action. Assemble the relevant brief, instructions, project knowledge and scoped evidence; do not carry over the prior work item\u2019s conversation as the new session\u2019s transcript. Retain links to the originating action and relevant history without conflating session identities. Continuing an existing item preserves its established history and continuity; it is not a new work item.",
+      "statement": "Every newly started feature, standalone issue or task assignment must begin in a new session with clear context for that work, including when launched by keep-working mode, a scheduled agent or a user action. Assemble the relevant brief, instructions, project knowledge and scoped evidence; do not carry over the prior work item’s conversation as the new session’s transcript. Retain links to the originating action and relevant history without conflating session identities. Continuing an existing item preserves its established history and continuity; it is not a new work item.",
       "sourceSection": "8 Feature coordinators and autonomous execution",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "AgentSupervisor and work activation",
@@ -7449,7 +7449,7 @@
     {
       "requirement": "ROUTE-19",
       "requirementStatus": "Confirmed",
-      "statement": "Every chat model selector offers DevWorks Auto under ROUTE-22\u201324, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14\u201315; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty.",
+      "statement": "Every chat model selector offers DevWorks Auto under ROUTE-22–24, followed by explicit Tier Max, Tier High, Tier Mid and Tier Low choices, then the named-model group. Allocate eligible configured members in round-robin order: initial Max membership is Fable and Astra; High is Opus and Sol; Mid is Sonnet and Terra; Low is Haiku and Luna. Include eligible custom models assigned to each tier. Membership is editable catalog configuration, not a permanent provider/model inventory. Select a tier directly without translating a named model to a tier. Preserve the resolved session pin across turns and restart under ROUTE-14–15; round robin applies when allocating or replacing a pin. Named-model selection requests that model directly. Offer Open Router Auto and Auto Beta as distinct explicit OpenRouter upstream routes, not synonyms for DevWorks Auto or tier selection; they bypass local tier classification. Context, capabilities, effort, enabled state, health and current policy still determine eligibility; do not silently cross to another tier or invent support when a pool is empty.",
       "sourceSection": "10 Routing providers usage and costs",
       "architectureSection": "inference-router-and-provider-contracts",
       "owner": "InferenceRouter and transport adapters",
@@ -7725,7 +7725,7 @@
     {
       "requirement": "WORK-06",
       "requirementStatus": "Proposed",
-      "statement": "Concurrent edits must use revision checks. A stale manual form or late agent update must be refused or explicitly reconciled while preserving the user\u2019s draft. Silent last-write-wins behavior is unacceptable for instructions, planning state, and conflict resolutions.",
+      "statement": "Concurrent edits must use revision checks. A stale manual form or late agent update must be refused or explicitly reconciled while preserving the user’s draft. Silent last-write-wins behavior is unacceptable for instructions, planning state, and conflict resolutions.",
       "sourceSection": "11 Project features and planning cards",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "WorkService and domain policies",
@@ -7841,7 +7841,7 @@
     {
       "requirement": "WORK-12",
       "requirementStatus": "Proposed",
-      "statement": "Provide project issue browsing/filtering, New issue with optional feature membership, and shared UI/chat/tool set/clear operations guarded by work revisions and project membership. Capture title, description/reproduction, expected/actual behavior where known, priority, status, acceptance criteria, repositories and source issue. Preserve one identity and its agent/session, transcript, Git/review, artifacts and history across association changes. Reconcile queues, supervisor responsibility, budget attribution and delivery routing without duplicate execution. Feature-linked work uses coordinator delivery; standalone work uses existing issue policies. Editable task details expose priority, blockers, Start/Pause/Continue, agents and history. Unlink uses a durable pause; relinking cannot clear it. Issue restart, concurrency and delegation retain CONTROL-10, AGENT-10\u201311 and AGENT-14.",
+      "statement": "Provide project issue browsing/filtering, New issue with optional feature membership, and shared UI/chat/tool set/clear operations guarded by work revisions and project membership. Capture title, description/reproduction, expected/actual behavior where known, priority, status, acceptance criteria, repositories and source issue. Preserve one identity and its agent/session, transcript, Git/review, artifacts and history across association changes. Reconcile queues, supervisor responsibility, budget attribution and delivery routing without duplicate execution. Feature-linked work uses coordinator delivery; standalone work uses existing issue policies. Editable task details expose priority, blockers, Start/Pause/Continue, agents and history. Unlink uses a durable pause; relinking cannot clear it. Issue restart, concurrency and delegation retain CONTROL-10, AGENT-10–11 and AGENT-14.",
       "sourceSection": "11 Project features and planning cards",
       "architectureSection": "coordinator-execution-and-concurrency",
       "owner": "WorkService and domain policies",
@@ -8026,7 +8026,7 @@
     {
       "requirement": "GIT-03",
       "requirementStatus": "Confirmed",
-      "statement": "Source-control views must support inspection of repository and branch state, changes/diffs, commits, worktrees, PRs, checks and review findings, with links to the producing agent session. Built-in manual staging, committing, branch management and merging are not required; the user uses an external Git client or GitHub for those operations. This does not remove the harness\u2019s configured autonomous Git and delivery capabilities.",
+      "statement": "Source-control views must support inspection of repository and branch state, changes/diffs, commits, worktrees, PRs, checks and review findings, with links to the producing agent session. Built-in manual staging, committing, branch management and merging are not required; the user uses an external Git client or GitHub for those operations. This does not remove the harness’s configured autonomous Git and delivery capabilities.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8044,7 +8044,7 @@
     {
       "requirement": "GIT-04",
       "requirementStatus": "Proposed",
-      "statement": "Automated commits, pushes, PR creation or updates, reviews, conflict resolution, and merges must follow configured authority and branch policies. A multi-repository feature must track its integration dependencies and each repository\u2019s result without claiming an atomic merge across repositories.",
+      "statement": "Automated commits, pushes, PR creation or updates, reviews, conflict resolution, and merges must follow configured authority and branch policies. A multi-repository feature must track its integration dependencies and each repository’s result without claiming an atomic merge across repositories.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8242,7 +8242,7 @@
     {
       "requirement": "GIT-15",
       "requirementStatus": "Confirmed",
-      "statement": "For a feature spanning multiple repositories, all final feature PRs must pass their required checks and reviews before any final PR is merged. Once every final PR is ready, merge them in dependency order. Apply each repository\u2019s effective Auto-Merge, review and approval policies; readiness does not grant authority to merge when that authority is disabled or awaiting approval. Track each repository\u2019s delivery result and the feature\u2019s overall delivery history.",
+      "statement": "For a feature spanning multiple repositories, all final feature PRs must pass their required checks and reviews before any final PR is merged. Once every final PR is ready, merge them in dependency order. Apply each repository’s effective Auto-Merge, review and approval policies; readiness does not grant authority to merge when that authority is disabled or awaiting approval. Track each repository’s delivery result and the feature’s overall delivery history.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8278,7 +8278,7 @@
     {
       "requirement": "GIT-17",
       "requirementStatus": "Confirmed",
-      "statement": "A feature is complete once all of its final feature PRs are verified as merged into main across the affected repositories. Track releases and deployments separately, retaining links to the feature, repositories, revisions and delivery history. A pending, approval-waiting or failed release or deployment must not keep the merged feature open. Release and deployment actions retain their separate configured authority under DELIVERY-09. Feature completion triggers the required cleanup of harness-owned worktrees and local branches under GIT-06\u201309; retain the feature\u2019s history and artifacts and expose cleanup outcomes separately.",
+      "statement": "A feature is complete once all of its final feature PRs are verified as merged into main across the affected repositories. Track releases and deployments separately, retaining links to the feature, repositories, revisions and delivery history. A pending, approval-waiting or failed release or deployment must not keep the merged feature open. Release and deployment actions retain their separate configured authority under DELIVERY-09. Feature completion triggers the required cleanup of harness-owned worktrees and local branches under GIT-06–09; retain the feature’s history and artifacts and expose cleanup outcomes separately.",
       "sourceSection": "12 Source control and complete work history",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "GitService and delivery coordinator",
@@ -8595,7 +8595,7 @@
     {
       "requirement": "UI-10",
       "requirementStatus": "Confirmed",
-      "statement": "Every chat input must include a selector populated with configured router tiers and available named models under ROUTE-19, plus a separate effort selector under ROUTE-20. Tier Max, High, Mid and Low precede the named model group; Open Router Auto selects the OpenRouter automatic route directly. Selection and effort persist for the chat and are shared between Home and its sidebar. Tier allocation pins its resolved model until changed or replaced by eligible failover under ROUTE-14\u201315. All requests still pass through the router and respect permissions and required capabilities.",
+      "statement": "Every chat input must include a selector populated with configured router tiers and available named models under ROUTE-19, plus a separate effort selector under ROUTE-20. Tier Max, High, Mid and Low precede the named model group; Open Router Auto selects the OpenRouter automatic route directly. Selection and effort persist for the chat and are shared between Home and its sidebar. Tier allocation pins its resolved model until changed or replaced by eligible failover under ROUTE-14–15. All requests still pass through the router and respect permissions and required capabilities.",
       "sourceSection": "14 Detailed UI workspaces",
       "architectureSection": "conversation-ui-and-screen-context",
       "owner": "Native UI and navigation registry",
@@ -8788,7 +8788,7 @@
     {
       "requirement": "KNOW-05",
       "requirementStatus": "Confirmed",
-      "statement": "The lesson lifecycle must distinguish candidate evidence, proposed rules, effective rules, and rejected proposals. Human instructions, review-derived lessons, and repeated corrections must retain their distinct provenance; recurrence alone must not be treated as proof of effectiveness. A rule\u2019s origin decides how it takes effect. A rule from the user\u2019s own instruction or review, given directly or relayed by an agent with the user\u2019s words attached, takes effect immediately without approval; it is the user\u2019s own edit under EVAL-05 and is monitored under EVAL-07. A lesson inferred by an agent, subagent or automated reviewer stays candidate evidence until it recurs across a configured number of distinct source events, then takes effect automatically without approval and is monitored under EVAL-07 like any other change that takes effect without approval under EVAL-05. No rule asks the user for approval; the user may promote a candidate early, or challenge or retire any rule, at any time. Taking effect is not proof that a rule works. Eval evidence under EVAL-08 may show whether a lesson rule is effective.",
+      "statement": "The lesson lifecycle must distinguish candidate evidence, proposed rules, effective rules, and rejected proposals. Human instructions, review-derived lessons, and repeated corrections must retain their distinct provenance; recurrence alone must not be treated as proof of effectiveness. A rule’s origin decides how it takes effect. A rule from the user’s own instruction or review, given directly or relayed by an agent with the user’s words attached, takes effect immediately without approval; it is the user’s own edit under EVAL-05 and is monitored under EVAL-07. A lesson inferred by an agent, subagent or automated reviewer stays candidate evidence until it recurs across a configured number of distinct source events, then takes effect automatically without approval and is monitored under EVAL-07 like any other change that takes effect without approval under EVAL-05. No rule asks the user for approval; the user may promote a candidate early, or challenge or retire any rule, at any time. Taking effect is not proof that a rule works. Eval evidence under EVAL-08 may show whether a lesson rule is effective.",
       "sourceSection": "15 Context memory knowledge lessons and rules",
       "architectureSection": "knowledge-documents-and-dreaming",
       "owner": "KnowledgeService",
@@ -8920,7 +8920,7 @@
     {
       "requirement": "CONTEXT-04",
       "requirementStatus": "Confirmed",
-      "statement": "When an agent reaches 80% of the active model\u2019s maximum context, the harness must automatically compact its working context and continue without user intervention. Preserve the complete original transcript and the same logical agent identity and work relationships. Compaction must not replace or truncate the stored transcript; record the compaction and resulting continuation in the agent\u2019s session history. Any compaction inference must use the router.",
+      "statement": "When an agent reaches 80% of the active model’s maximum context, the harness must automatically compact its working context and continue without user intervention. Preserve the complete original transcript and the same logical agent identity and work relationships. Compaction must not replace or truncate the stored transcript; record the compaction and resulting continuation in the agent’s session history. Any compaction inference must use the router.",
       "sourceSection": "15 Context memory knowledge lessons and rules",
       "architectureSection": "inference-router-and-provider-contracts",
       "owner": "ContextAssembler",
@@ -9370,7 +9370,7 @@
     {
       "requirement": "SEC-05",
       "requirementStatus": "Proposed",
-      "statement": "Centralize safety preflight for built-in and brokered shell/process, MCP and package tool calls. Resolve actual deletion targets, including path roots, parent traversal, wildcards and links/reparse points; protect filesystem/volume roots and registered repository roots. Avoid relying only on literal command-name or string matching. Distinguish bounded cleanup of owned task worktrees from deletion of a primary repository. Define enforcement for opaque tools and native executable add-ons honestly: harness policy checks alone do not provide OS confinement against arbitrary code running with the user\u2019s permissions. Validate any stronger claimed restriction at the process/OS boundary. Rule coverage, bypass resistance and platform-specific enforcement remain architecture validation work.",
+      "statement": "Centralize safety preflight for built-in and brokered shell/process, MCP and package tool calls. Resolve actual deletion targets, including path roots, parent traversal, wildcards and links/reparse points; protect filesystem/volume roots and registered repository roots. Avoid relying only on literal command-name or string matching. Distinguish bounded cleanup of owned task worktrees from deletion of a primary repository. Define enforcement for opaque tools and native executable add-ons honestly: harness policy checks alone do not provide OS confinement against arbitrary code running with the user’s permissions. Validate any stronger claimed restriction at the process/OS boundary. Rule coverage, bypass resistance and platform-specific enforcement remain architecture validation work.",
       "sourceSection": "17 Platform quality privacy and operations",
       "architectureSection": "tool-authority-and-trust-boundaries",
       "owner": "ToolBroker and restricted platform adapter",
@@ -9407,7 +9407,7 @@
     {
       "requirement": "OPS-02",
       "requirementStatus": "Proposed",
-      "statement": "The app must not require a central product account or remote control plane for normal operation. Repository hosting and provider integrations may use their own credentials. Provider connections follow ROUTE-09\u201310; Git-host authentication methods still need selection and documentation.",
+      "statement": "The app must not require a central product account or remote control plane for normal operation. Repository hosting and provider integrations may use their own credentials. Provider connections follow ROUTE-09–10; Git-host authentication methods still need selection and documentation.",
       "sourceSection": "17 Platform quality privacy and operations",
       "architectureSection": "offline-help-diagnostics-updates-and-migration",
       "owner": "Diagnostics and workspace lifecycle",
@@ -9479,7 +9479,7 @@
     {
       "requirement": "UIQA-04",
       "requirementStatus": "Proposed",
-      "statement": "Isolate concurrent browser sessions and test data. Coordinate access to shared desktop focus, mouse and keyboard through the resource reservation system under RES-01\u201303 so agents cannot interfere with each other. This resource constraint must not become a global subagent-count cap. If the user is active, desktop takeover requires OK or Wait under UIQA-05; idle detection and approval lifetime remain open. Mutating UI tests must run under an authorized testing/implementation role, preserving always-read-only reviewers.",
+      "statement": "Isolate concurrent browser sessions and test data. Coordinate access to shared desktop focus, mouse and keyboard through the resource reservation system under RES-01–03 so agents cannot interfere with each other. This resource constraint must not become a global subagent-count cap. If the user is active, desktop takeover requires OK or Wait under UIQA-05; idle detection and approval lifetime remain open. Mutating UI tests must run under an authorized testing/implementation role, preserving always-read-only reviewers.",
       "sourceSection": "17 Platform quality privacy and operations",
       "architectureSection": "integrations-automation-and-resource-ownership",
       "owner": "AutomationBackend and ResourceService",
@@ -9803,7 +9803,7 @@
     {
       "requirement": "CONTAINER-02",
       "requirementStatus": "Confirmed",
-      "statement": "Offer Apple\u2019s first-party container tooling as an additional backend on supported Macs where feasible. Detect supported OS/CPU and installed tooling and clearly show unavailable or unsupported states. Do not describe it as a universally preinstalled macOS capability. Rust host code may integrate with the optional external tool; no Swift development toolchain is required merely by choosing this backend. Validate the supported operation set before claiming parity with Docker or Podman.",
+      "statement": "Offer Apple’s first-party container tooling as an additional backend on supported Macs where feasible. Detect supported OS/CPU and installed tooling and clearly show unavailable or unsupported states. Do not describe it as a universally preinstalled macOS capability. Rust host code may integrate with the optional external tool; no Swift development toolchain is required merely by choosing this backend. Validate the supported operation set before claiming parity with Docker or Podman.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "integrations-automation-and-resource-ownership",
       "owner": "ContainerBackend and owned-resource ledger",
@@ -9961,7 +9961,7 @@
     {
       "requirement": "MCP-05",
       "requirementStatus": "Proposed",
-      "statement": "Tool discovery, server capability changes, resources and prompts where supported, and any server-initiated inference requests need an explicit compatibility and authority policy. Inference initiated through this integration must still follow the application router. This requirement governs outgoing client integration; incoming clients use the DevWorks server boundary under MCP-07\u201311.",
+      "statement": "Tool discovery, server capability changes, resources and prompts where supported, and any server-initiated inference requests need an explicit compatibility and authority policy. Inference initiated through this integration must still follow the application router. This requirement governs outgoing client integration; incoming clients use the DevWorks server boundary under MCP-07–11.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "integrations-automation-and-resource-ownership",
       "owner": "McpClient, McpServerAdapter and shared gateway",
@@ -10370,7 +10370,7 @@
     {
       "requirement": "DELIVERY-04",
       "requirementStatus": "Confirmed",
-      "statement": "Auto-Merge and mandatory-review policy must be configurable per repository with inherited defaults from project and workspace settings. Auto-Merge and mandatory independent review both default to on; project settings may override each inherited value, and repository settings may override each project value. The effective value and source of each value, including local overrides, must be visible. One repository\u2019s review setup must not be assumed to apply to every repository in its project.",
+      "statement": "Auto-Merge and mandatory-review policy must be configurable per repository with inherited defaults from project and workspace settings. Auto-Merge and mandatory independent review both default to on; project settings may override each inherited value, and repository settings may override each project value. The effective value and source of each value, including local overrides, must be visible. One repository’s review setup must not be assumed to apply to every repository in its project.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10406,7 +10406,7 @@
     {
       "requirement": "DELIVERY-06",
       "requirementStatus": "Proposed",
-      "statement": "Merge readiness must reconcile the current code revision, required checks, the review source selected under DELIVERY-02\u201303, all actionable findings, effective policy, and cross-repository dependencies. Apply the effective repository review and Auto-Merge policy to both task/group PRs into the feature branch and the final feature PR into main. Review findings, fixes, re-reviews, dismissals and reasons must remain linked to the feature, PR, revision, and participating agents.",
+      "statement": "Merge readiness must reconcile the current code revision, required checks, the review source selected under DELIVERY-02–03, all actionable findings, effective policy, and cross-repository dependencies. Apply the effective repository review and Auto-Merge policy to both task/group PRs into the feature branch and the final feature PR into main. Review findings, fixes, re-reviews, dismissals and reasons must remain linked to the feature, PR, revision, and participating agents.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "git-delivery-and-github-synchronization",
       "owner": "Delivery policies and review service",
@@ -10656,7 +10656,7 @@
     {
       "requirement": "EXT-02",
       "requirementStatus": "Confirmed",
-      "statement": "Agents must be able to create and test a package project, explain its capabilities and changes, and propose it for activation. Agent-authored new or changed executable packages require explicit user approval before activation, including updates to active packages. Bind approval to the reviewed package version and contents; record rationale, requested capabilities, dependencies, verification evidence and originating agent/work. Pending or rejected proposals leave the active version unchanged. Package development and tests use authorized worktrees and tool permissions; packaged skills and role-instruction changes retain SKILL-07\u201309 and SET-05\u201306 approval rules. Approval to activate a package does not grant approval for every action it later requests.",
+      "statement": "Agents must be able to create and test a package project, explain its capabilities and changes, and propose it for activation. Agent-authored new or changed executable packages require explicit user approval before activation, including updates to active packages. Bind approval to the reviewed package version and contents; record rationale, requested capabilities, dependencies, verification evidence and originating agent/work. Pending or rejected proposals leave the active version unchanged. Package development and tests use authorized worktrees and tool permissions; packaged skills and role-instruction changes retain SKILL-07–09 and SET-05–06 approval rules. Approval to activate a package does not grant approval for every action it later requests.",
       "sourceSection": "18 Settings integrations and tool access",
       "architectureSection": "managed-executable-packages",
       "owner": "PackageHost, protocol and SDK",
@@ -10890,7 +10890,7 @@
     {
       "requirement": "DB-03",
       "requirementStatus": "Proposed",
-      "statement": "Schema indexing must use read-only source access and extract supported tables, columns, types, keys, indexes, views, procedures and relationships. Report coverage per adapter. Indexing does not read row contents into a searchable data index. Agent queries and data mutations are separate operations under DB-04\u201305.",
+      "statement": "Schema indexing must use read-only source access and extract supported tables, columns, types, keys, indexes, views, procedures and relationships. Report coverage per adapter. Indexing does not read row contents into a searchable data index. Agent queries and data mutations are separate operations under DB-04–05.",
       "sourceSection": "19 Graph schema health and review workspaces",
       "architectureSection": "indexing-graphs-and-schemas",
       "owner": "SchemaAdapter and target data executor",
@@ -10958,7 +10958,7 @@
     {
       "requirement": "DB-07",
       "requirementStatus": "Confirmed",
-      "statement": "Do not implement a HelixDB schema reader or structural-inference adapter. The user removed this conditional capability on 2 November 2026. Retain historical storage evaluations only as evidence; they neither enable HelixDB connections nor add an internal storage dependency. Schema indexing for the selected relational targets remains metadata-only, with separately permissioned data tools governed by DB-04\u201306.",
+      "statement": "Do not implement a HelixDB schema reader or structural-inference adapter. The user removed this conditional capability on 2 November 2026. Retain historical storage evaluations only as evidence; they neither enable HelixDB connections nor add an internal storage dependency. Schema indexing for the selected relational targets remains metadata-only, with separately permissioned data tools governed by DB-04–06.",
       "sourceSection": "19 Graph schema health and review workspaces",
       "architectureSection": "indexing-graphs-and-schemas",
       "owner": "SchemaAdapter and target data executor",
@@ -11199,7 +11199,7 @@
     {
       "requirement": "SKILL-04",
       "requirementStatus": "Confirmed",
-      "statement": "Support using existing shared skill folders from ~/.agents/skills and a separate harness-specific skills directory. Users must be able to create harness-specific skills in that dedicated directory and manage skills from both locations in the app. Shared skills must be usable from their existing location rather than requiring an import copy. Show each skill\u2019s origin, filesystem location, and which version is active. Harness-specific skills take precedence over shared skills with the same name. The exact harness-specific directory path remains open.",
+      "statement": "Support using existing shared skill folders from ~/.agents/skills and a separate harness-specific skills directory. Users must be able to create harness-specific skills in that dedicated directory and manage skills from both locations in the app. Shared skills must be usable from their existing location rather than requiring an import copy. Show each skill’s origin, filesystem location, and which version is active. Harness-specific skills take precedence over shared skills with the same name. The exact harness-specific directory path remains open.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "knowledge-documents-and-dreaming",
       "owner": "SkillService and instruction resolver",
@@ -11271,7 +11271,7 @@
     {
       "requirement": "SKILL-08",
       "requirementStatus": "Proposed",
-      "statement": "Preserve prior skill versions and show changes, rationale and supporting evidence in the skill manager and linked work history. Provide revision-aware rollback without overwriting later edits silently. Record validation performed and its outcome; an agent\u2019s claim that a skill is improved must not be represented as demonstrated effectiveness. Validation follows EVAL-05 and post-adoption monitoring and rollback proposals follow EVAL-07, preserving the required user approval for agent-authored skill changes under SKILL-07.",
+      "statement": "Preserve prior skill versions and show changes, rationale and supporting evidence in the skill manager and linked work history. Provide revision-aware rollback without overwriting later edits silently. Record validation performed and its outcome; an agent’s claim that a skill is improved must not be represented as demonstrated effectiveness. Validation follows EVAL-05 and post-adoption monitoring and rollback proposals follow EVAL-07, preserving the required user approval for agent-authored skill changes under SKILL-07.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "knowledge-documents-and-dreaming",
       "owner": "SkillService and instruction resolver",
@@ -11401,7 +11401,7 @@
     {
       "requirement": "EVAL-02",
       "requirementStatus": "Proposed",
-      "statement": "Completed and stopped work must be graded automatically from durable history without re-running it: coordinator and worker transcripts and tool calls, Git, PR and review records, and the resulting work state. This covers DevWorks\u2019s own coordinator and worker sessions and the attributed command records of external harnesses connected as MCP clients under MCP-10; DevWorks holds no external harness transcripts and does not import them. Attribute graded behavior at the step level to the revisions in effect when it happened (skills, roles, overrides, conventions, rules, routing and running app version). A session can span several revisions under SKILL-05; a result that cannot be attributed to one revision belongs to an explicit mixed-revision group, never silently to one side. Grading reads only and never changes work, repositories, remotes or Knowledge.",
+      "statement": "Completed and stopped work must be graded automatically from durable history without re-running it: coordinator and worker transcripts and tool calls, Git, PR and review records, and the resulting work state. This covers DevWorks’s own coordinator and worker sessions and the attributed command records of external harnesses connected as MCP clients under MCP-10; DevWorks holds no external harness transcripts and does not import them. Attribute graded behavior at the step level to the revisions in effect when it happened (skills, roles, overrides, conventions, rules, routing and running app version). A session can span several revisions under SKILL-05; a result that cannot be attributed to one revision belongs to an explicit mixed-revision group, never silently to one side. Grading reads only and never changes work, repositories, remotes or Knowledge.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11436,7 +11436,7 @@
     {
       "requirement": "EVAL-04",
       "requirementStatus": "Proposed",
-      "statement": "Support repeatable trials that run agent work against frozen inputs, such as snapshots of work records and repository revisions, in an isolated workspace. Trials may write only to disposable copies: throwaway repositories and remotes and stateful substitutes for the tracker, GitHub and other external services, so claiming, implementation, review and delivery can be evaluated end to end. Production destinations, real accounts and real credentials are unreachable from a trial; a case may also refuse all writes. Substitute services expose the real services\u2019 tool schemas. Each case runs a configured number of times, and results report each run\u2019s score, the share of runs that passed and whether every run passed. Trials are live inference under TEST-03 and never run within unit or integration tests. Each snapshot records its source, time, content identity and expected answer.",
+      "statement": "Support repeatable trials that run agent work against frozen inputs, such as snapshots of work records and repository revisions, in an isolated workspace. Trials may write only to disposable copies: throwaway repositories and remotes and stateful substitutes for the tracker, GitHub and other external services, so claiming, implementation, review and delivery can be evaluated end to end. Production destinations, real accounts and real credentials are unreachable from a trial; a case may also refuse all writes. Substitute services expose the real services’ tool schemas. Each case runs a configured number of times, and results report each run’s score, the share of runs that passed and whether every run passed. Trials are live inference under TEST-03 and never run within unit or integration tests. Each snapshot records its source, time, content identity and expected answer.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11453,7 +11453,7 @@
     {
       "requirement": "EVAL-05",
       "requirementStatus": "Confirmed",
-      "statement": "Every change to an evaluable subject under EVAL-01 must carry eval evidence. For changes that need approval, run the applicable trials against the baseline and the candidate before the proposal is presented. For changes that take effect without approval, including user-saved edits, dreaming consolidations under DREAM-05 and user routing changes, record the comparison when it can run and always monitor after adoption under EVAL-07; evaluation adds no approval step where none exists. The comparison shows the target metric\u2019s change and every other metric\u2019s change with its method and uncertainty under EVAL-09, the run count and coverage under EVAL-14. Evidence is labeled improved, regressed, inconclusive or unvalidated. It is unvalidated when no applicable suite exists, the suite could not run or either arm falls below the suite\u2019s minimum sample or coverage; inconclusive is reserved for an adequately measured comparison without a meaningful difference. For an agent-authored change, regressed or unvalidated evidence blocks approval unless the user overrides it with a recorded reason; inconclusive evidence is shown without blocking. The user\u2019s own edits carry evidence without a gate. Eval evidence never replaces approval. Evidence is bound to immutable identities of the candidate and baseline, suite and case revisions, fixtures, grader and judge configurations, accepted exceptions and trial settings. Both arms use the same measurement revisions and settings except the declared subject under test; when that subject is a routing or model assignment, all other settings including the judge stay the same. Approval binds to the evaluated candidate; a later change to the candidate or to a measurement input it depends on returns the proposal to unvalidated until re-evaluated.",
+      "statement": "Every change to an evaluable subject under EVAL-01 must carry eval evidence. For changes that need approval, run the applicable trials against the baseline and the candidate before the proposal is presented. For changes that take effect without approval, including user-saved edits, dreaming consolidations under DREAM-05 and user routing changes, record the comparison when it can run and always monitor after adoption under EVAL-07; evaluation adds no approval step where none exists. The comparison shows the target metric’s change and every other metric’s change with its method and uncertainty under EVAL-09, the run count and coverage under EVAL-14. Evidence is labeled improved, regressed, inconclusive or unvalidated. It is unvalidated when no applicable suite exists, the suite could not run or either arm falls below the suite’s minimum sample or coverage; inconclusive is reserved for an adequately measured comparison without a meaningful difference. For an agent-authored change, regressed or unvalidated evidence blocks approval unless the user overrides it with a recorded reason; inconclusive evidence is shown without blocking. The user’s own edits carry evidence without a gate. Eval evidence never replaces approval. Evidence is bound to immutable identities of the candidate and baseline, suite and case revisions, fixtures, grader and judge configurations, accepted exceptions and trial settings. Both arms use the same measurement revisions and settings except the declared subject under test; when that subject is a routing or model assignment, all other settings including the judge stay the same. Approval binds to the evaluated candidate; a later change to the candidate or to a measurement input it depends on returns the proposal to unvalidated until re-evaluated.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11489,7 +11489,7 @@
     {
       "requirement": "EVAL-07",
       "requirementStatus": "Confirmed",
-      "statement": "After a change is adopted, production grading continues and compares the new revision with the previous one under EVAL-09. When a monitored metric regresses past its declared criterion, notify the user with the evidence and propose a rollback; a rollback never happens without user approval. Use the subject\u2019s own activation mechanism: SKILL-08 revision-aware rollback for skills, roles and overrides; the revision and lifecycle mechanisms of CONV-02, KNOW-03 and DREAM-04 for conventions and lesson rules; the settings revision for role routing; and reinstallation of a prior build for app builds, which also requires SELF-03 approval, a compatibility check of stored data and migrations made since that build, and the SELF-02 restart and rollback mechanics. A build whose data changes cannot be safely reversed is reported as not rollback-capable, with the reason. A rollback preserves later unrelated edits or reports the conflict without overwriting them, and is monitored like any other change.",
+      "statement": "After a change is adopted, production grading continues and compares the new revision with the previous one under EVAL-09. When a monitored metric regresses past its declared criterion, notify the user with the evidence and propose a rollback; a rollback never happens without user approval. Use the subject’s own activation mechanism: SKILL-08 revision-aware rollback for skills, roles and overrides; the revision and lifecycle mechanisms of CONV-02, KNOW-03 and DREAM-04 for conventions and lesson rules; the settings revision for role routing; and reinstallation of a prior build for app builds, which also requires SELF-03 approval, a compatibility check of stored data and migrations made since that build, and the SELF-02 restart and rollback mechanics. A build whose data changes cannot be safely reversed is reported as not rollback-capable, with the reason. A rollback preserves later unrelated edits or reports the conflict without overwriting them, and is monitored like any other change.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11557,7 +11557,7 @@
     {
       "requirement": "EVAL-11",
       "requirementStatus": "Confirmed",
-      "statement": "Provide a dedicated Evals area showing each suite\u2019s cases and graders, latest results by revision, trends across revisions, failing instances linked to their evidence and accepted exceptions. Each proposal in the approval queue under REVIEW-01 shows its eval comparison and evidence status.",
+      "statement": "Provide a dedicated Evals area showing each suite’s cases and graders, latest results by revision, trends across revisions, failing instances linked to their evidence and accepted exceptions. Each proposal in the approval queue under REVIEW-01 shows its eval comparison and evidence status.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11700,7 +11700,7 @@
     {
       "requirement": "JOB-05",
       "requirementStatus": "Confirmed",
-      "statement": "Support scheduled inference tasks at both project level and app level. Each task must be configurable to run instructions and perform automated actions through the harness\u2019s tools and router. A required use case is periodically checking a GitHub repository for newly reported issues and performing a configured automated action. Project tasks retain their project context; app-level tasks can cover configured work across projects. Scheduled actions remain subject to effective tool permissions and existing approval policies.",
+      "statement": "Support scheduled inference tasks at both project level and app level. Each task must be configurable to run instructions and perform automated actions through the harness’s tools and router. A required use case is periodically checking a GitHub repository for newly reported issues and performing a configured automated action. Project tasks retain their project context; app-level tasks can cover configured work across projects. Scheduled actions remain subject to effective tool permissions and existing approval policies.",
       "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
       "architectureSection": "scheduling-lifecycle-and-project-deletion",
       "owner": "Scheduler and AgentSupervisor",
@@ -11718,7 +11718,7 @@
     {
       "requirement": "JOB-06",
       "requirementStatus": "Proposed",
-      "statement": "Manage each inference schedule\u2019s name, scope/targets, saved prompt, schedule/timezone, enabled state, routing and usage reporting without job spending limits under JOB-09, with skipped inference overlap under JOB-08 and visible failure policy. Provide create/edit, enable/disable, Run now, inspect and cancel controls. Each run has a linked agent transcript, tool/action history, usage, outcome and created work/artifacts. Persist discovery checkpoints and action identities so repeated issue scans and retries do not duplicate actions. Unresolved actions enter the existing input queue with notifications. Apply no-server and pause/exit constraints, with automatic schedule/run resumption and no catch-up under JOB-03\u201304; reconcile external effects before retry.",
+      "statement": "Manage each inference schedule’s name, scope/targets, saved prompt, schedule/timezone, enabled state, routing and usage reporting without job spending limits under JOB-09, with skipped inference overlap under JOB-08 and visible failure policy. Provide create/edit, enable/disable, Run now, inspect and cancel controls. Each run has a linked agent transcript, tool/action history, usage, outcome and created work/artifacts. Persist discovery checkpoints and action identities so repeated issue scans and retries do not duplicate actions. Unresolved actions enter the existing input queue with notifications. Apply no-server and pause/exit constraints, with automatic schedule/run resumption and no catch-up under JOB-03–04; reconcile external effects before retry.",
       "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
       "architectureSection": "scheduling-lifecycle-and-project-deletion",
       "owner": "Scheduler and AgentSupervisor",
@@ -11772,7 +11772,7 @@
     {
       "requirement": "JOB-09",
       "requirementStatus": "Confirmed",
-      "statement": "Scheduled inference jobs report per-run usage and costs but have no job spending limits or monetary-limit holds. Apply ROUTE-17 reported/estimated/free/untracked classifications. Feature work started by a schedule remains subject to that feature\u2019s configured budget and normal approval, pause, eligibility and permission rules; invoking it through a job must not bypass those controls. Ordinary cancellation, deadlines and resource controls remain independent of monetary limits.",
+      "statement": "Scheduled inference jobs report per-run usage and costs but have no job spending limits or monetary-limit holds. Apply ROUTE-17 reported/estimated/free/untracked classifications. Feature work started by a schedule remains subject to that feature’s configured budget and normal approval, pause, eligibility and permission rules; invoking it through a job must not bypass those controls. Ordinary cancellation, deadlines and resource controls remain independent of monetary limits.",
       "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
       "architectureSection": "scheduling-lifecycle-and-project-deletion",
       "owner": "Scheduler and AgentSupervisor",
@@ -11843,7 +11843,7 @@
     {
       "requirement": "LOG-02",
       "requirementStatus": "Proposed",
-      "statement": "A run\u2019s diagnostics must correlate operation, target, stage, source revision, attempt, timestamps, progress, warnings/errors, helper output where relevant, and error classification. Provide filtering/search, live inspection, retained run history, copy/export, and links to safe recovery actions while redacting credentials and controlling large output.",
+      "statement": "A run’s diagnostics must correlate operation, target, stage, source revision, attempt, timestamps, progress, warnings/errors, helper output where relevant, and error classification. Provide filtering/search, live inspection, retained run history, copy/export, and links to safe recovery actions while redacting credentials and controlling large output.",
       "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
       "architectureSection": "offline-help-diagnostics-updates-and-migration",
       "owner": "Diagnostics and operation observers",
@@ -11911,7 +11911,7 @@
     {
       "requirement": "OP-03",
       "requirementStatus": "Confirmed",
-      "statement": "Do not port or bundle CodeGraph\u2019s legacy Shortcut or RabbitMQ integrations into DevWorks. Neither service may become a core application dependency. Preserve general outgoing MCP client support and the user-requested incoming DevWorks MCP server under MCP-01/07. Imported work/history may retain historical source references without requiring a live legacy connector. Internal asynchronous delivery uses the native application/runtime and durable persistence contracts rather than RabbitMQ.",
+      "statement": "Do not port or bundle CodeGraph’s legacy Shortcut or RabbitMQ integrations into DevWorks. Neither service may become a core application dependency. Preserve general outgoing MCP client support and the user-requested incoming DevWorks MCP server under MCP-01/07. Imported work/history may retain historical source references without requiring a live legacy connector. Internal asynchronous delivery uses the native application/runtime and durable persistence contracts rather than RabbitMQ.",
       "sourceSection": "21 Scheduled tasks operations and indexing diagnostics",
       "architectureSection": "capability-coverage-and-validation-workloads",
       "owner": "Capability inventory and integration scope",
@@ -30180,7 +30180,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "SearchGraph",
-      "description": "Description(\"Search for services, endpoints, models, events, or any code element by name pattern. Supports filtering by type and repository. Results are ranked by trust score \u2014 untrusted nodes are deprioritized but not hidden.\")",
+      "description": "Description(\"Search for services, endpoints, models, events, or any code element by name pattern. Supports filtering by type and repository. Results are ranked by trust score — untrusted nodes are deprioritized but not hidden.\")",
       "attribute": "McpServerTool(Name = \"search_graph\")",
       "operationDescriptions": [],
       "group": "GRAPH",
@@ -30436,7 +30436,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "GetFleetHealth",
-      "description": "Description(\"Get a health overview across all indexed repositories. Shows repos ranked by health score \u2014 useful for identifying which repos need the most attention. Optionally filter to only unhealthy repos.\")",
+      "description": "Description(\"Get a health overview across all indexed repositories. Shows repos ranked by health score — useful for identifying which repos need the most attention. Optionally filter to only unhealthy repos.\")",
       "attribute": "McpServerTool(Name = \"get_fleet_health\")",
       "operationDescriptions": [],
       "group": "ANALYSIS",
@@ -30468,7 +30468,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "FindArchivalCandidates",
-      "description": "Description(\"Find repositories with no inbound or outbound dependencies \u2014 candidates for archival.\")",
+      "description": "Description(\"Find repositories with no inbound or outbound dependencies — candidates for archival.\")",
       "attribute": "McpServerTool(Name = \"find_archival_candidates\")",
       "operationDescriptions": [],
       "group": "ANALYSIS",
@@ -30596,7 +30596,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "GetServiceClusters",
-      "description": "Description(\"List automatically detected service clusters \u2014 groups of repos that are tightly coupled and function as a single system. Shows cluster members, edge density, modularity score, and bridge repos. Uses Louvain community detection on the cross-repo dependency graph.\")",
+      "description": "Description(\"List automatically detected service clusters — groups of repos that are tightly coupled and function as a single system. Shows cluster members, edge density, modularity score, and bridge repos. Uses Louvain community detection on the cross-repo dependency graph.\")",
       "attribute": "McpServerTool(Name = \"get_service_clusters\")",
       "operationDescriptions": [],
       "group": "ANALYSIS",
@@ -30628,7 +30628,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "GetClusterDetail",
-      "description": "Description(\"Get detailed information about a specific service cluster \u2014 members with betweenness centrality, internal vs external edges, and connections to other clusters. Use get_service_clusters first to find cluster IDs.\")",
+      "description": "Description(\"Get detailed information about a specific service cluster — members with betweenness centrality, internal vs external edges, and connections to other clusters. Use get_service_clusters first to find cluster IDs.\")",
       "attribute": "McpServerTool(Name = \"get_cluster_detail\")",
       "operationDescriptions": [],
       "group": "ANALYSIS",
@@ -30724,7 +30724,7 @@
       },
       "owner": "CodeGraphMcpServer",
       "method": "GetRepoDependencies",
-      "description": "Description(\"Default-branch cross-repository dependencies of one repository, and how its Rust code was indexed. \" +\n                 \"Answers {repo, inbound, outbound, rustSemantic} plus commitSha. inbound lists the repositories that \" +\n                 \"depend on this one and outbound the repositories it depends on, each as {repo, edgeType, count, \" +\n                 \"confidenceBand} (count is the number of links of that edge type; confidenceBand is the weakest of \" +\n                 \"them, high|medium|low or null \u2014 a Cargo or Swift package path dependency matched by package name is medium; \" +\n                 \"Cargo and SwiftPM/Xcode package dependencies appear as REFERENCES_PACKAGE; a Swift package declared in \" +\n                 \"Package.swift and pinned in Package.resolved counts once, while a pin nothing declares (an Xcode project's \" +\n                 \"packages, or a transitive pin) is still a link, so a Swift REFERENCES_PACKAGE link may be indirect). rustSemantic is {status, manifest, groupCount, \" +\n                 \"semanticGroups, fallbackGroups, skippedGroups, treeSitterGroups}: status is semantic (every crate \" +\n                 \"group indexed by rust-analyzer), partial or fallback (some or all crate groups indexed by \" +\n                 \"tree-sitter instead), or not_analyzed (no Rust semantic pass was recorded for the repository). \" +\n                 \"treeSitterGroups lists each crate group that was not indexed semantically as {index, crates, outcome, \" +\n                 \"failureCode, detailCode}; those crates have no symbol-level cross-repository edges, so an absent \" +\n                 \"dependency on them is not evidence of independence. No model is called.\")",
+      "description": "Description(\"Default-branch cross-repository dependencies of one repository, and how its Rust code was indexed. \" +\n                 \"Answers {repo, inbound, outbound, rustSemantic} plus commitSha. inbound lists the repositories that \" +\n                 \"depend on this one and outbound the repositories it depends on, each as {repo, edgeType, count, \" +\n                 \"confidenceBand} (count is the number of links of that edge type; confidenceBand is the weakest of \" +\n                 \"them, high|medium|low or null — a Cargo or Swift package path dependency matched by package name is medium; \" +\n                 \"Cargo and SwiftPM/Xcode package dependencies appear as REFERENCES_PACKAGE; a Swift package declared in \" +\n                 \"Package.swift and pinned in Package.resolved counts once, while a pin nothing declares (an Xcode project's \" +\n                 \"packages, or a transitive pin) is still a link, so a Swift REFERENCES_PACKAGE link may be indirect). rustSemantic is {status, manifest, groupCount, \" +\n                 \"semanticGroups, fallbackGroups, skippedGroups, treeSitterGroups}: status is semantic (every crate \" +\n                 \"group indexed by rust-analyzer), partial or fallback (some or all crate groups indexed by \" +\n                 \"tree-sitter instead), or not_analyzed (no Rust semantic pass was recorded for the repository). \" +\n                 \"treeSitterGroups lists each crate group that was not indexed semantically as {index, crates, outcome, \" +\n                 \"failureCode, detailCode}; those crates have no symbol-level cross-repository edges, so an absent \" +\n                 \"dependency on them is not evidence of independence. No model is called.\")",
       "attribute": "McpServerTool(Name = RepoDependenciesTool, Title = \"Repository Dependencies\", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)",
       "operationDescriptions": [],
       "group": "GRAPH",
@@ -35520,7 +35520,7 @@
     {
       "id": "CAP-ROUTER",
       "title": "Native provider contracts",
-      "positiveAndScope": "Drive the router acceptance suite against actual codecs and controlled HTTP fixtures, including native tools, pins, caching, failover, usage and pricing. Include direct Max/High/Mid/Low editable pools and custom members, round-robin allocation with durable pins, independent requested/effective effort, direct named models and distinct Open Router Auto. Exercise native SystemOne model/capability discovery and structured choice/noul/score/box decisions with supported media, usage and host authority (ROUTE-18\u201320).",
+      "positiveAndScope": "Drive the router acceptance suite against actual codecs and controlled HTTP fixtures, including native tools, pins, caching, failover, usage and pricing. Include direct Max/High/Mid/Low editable pools and custom members, round-robin allocation with durable pins, independent requested/effective effort, direct named models and distinct Open Router Auto. Exercise native SystemOne model/capability discovery and structured choice/noul/score/box decisions with supported media, usage and host authority (ROUTE-18–20).",
       "failureAndRecovery": "Scripted text is not live endpoint/auth/cache qualification; no real inference in the normal suite. Reject unsupported decision/effort/media capabilities before send; keep decision models outside chat tiers; no silent empty-pool cross-tier fallback or dropped explicit effort.",
       "sourceEntries": 9,
       "fixtureStatus": "Specification only; actual native assertions not implemented/run",

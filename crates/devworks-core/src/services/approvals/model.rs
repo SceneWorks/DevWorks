@@ -9,9 +9,13 @@ use serde_json::{Value, json};
 pub(crate) fn hash(value: &Value) -> String {
     crate::fingerprint::sha256_hex(
         crate::jcs::canonicalize(value)
-            .expect("JSON canonicalization")
+            .unwrap_or_else(|_| value.to_string())
             .as_bytes(),
     )
+}
+/// The one binding shared by generic staging and the original owner's admission proof.
+pub(crate) fn scope_digest(owner: &Value, authority: Option<&Value>) -> String {
+    hash(&json!({"owner":owner,"authority":authority}))
 }
 pub(crate) fn wire(mut value: Value) -> Result<ApprovalViewRecord, StorageError> {
     if let Some(o) = value.as_object_mut() {
@@ -28,7 +32,7 @@ pub(crate) fn settings(
     let state = format!("{:?}", p.state);
     let scope = scope_wire(&p.scope);
     let binding = json!({"source":"Settings","scope":scope,"baseRevision":p.base_revision,"contentDigest":p.body["contentDigest"]});
-    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.body["contentDigest"],"state":state,"operationKind":"settings.configure","targetId":p.scope.target_id(),"targetRevision":rev(p.base_revision),"summary":"Review settings changes","scope":scope,"stale":current!=p.base_revision,"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":hash(&binding)});
+    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.body["contentDigest"],"state":state,"operationKind":"settings.configure","targetId":p.scope.target_id(),"targetRevision":rev(p.base_revision),"summary":"Review settings changes","scope":scope,"stale":matches!(p.state,crate::ports::storage::ProposalState::Pending)&&current!=p.base_revision,"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":hash(&binding)});
     if full {
         v["reviewedSource"] = json!({"kind":"Settings","entries":p.body["entries"]});
         v["reviewedContent"] = binding;
@@ -42,14 +46,15 @@ pub(crate) fn plan(
     full: bool,
 ) -> Result<ApprovalViewRecord, StorageError> {
     let binding = json!({"source":"FeaturePlan","featureId":p.feature_id,"planRevision":p.plan_revision,"contentDigest":p.plan_digest});
-    let stale = slot.is_none_or(|s| {
-        s.pending_revision != Some(p.plan_revision)
-            || s.pending
-                .as_ref()
-                .and_then(|p| p.get("digest"))
-                .and_then(Value::as_str)
-                != Some(p.plan_digest.as_str())
-    });
+    let stale = p.state == "Pending"
+        && slot.is_none_or(|s| {
+            s.pending_revision != Some(p.plan_revision)
+                || s.pending
+                    .as_ref()
+                    .and_then(|p| p.get("digest"))
+                    .and_then(Value::as_str)
+                    != Some(p.plan_digest.as_str())
+        });
     let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.plan_digest,"state":p.state,"operationKind":"features.plan_approval","targetId":p.feature_id,"targetRevision":rev(p.plan_revision),"summary":content(&p.summary),"scope":{"kind":"Project","projectId":project},"stale":stale,"requestedBy":p.requested_by,"createdAtMs":counter(p.requested_at_ms),"scopeDigest":hash(&binding)});
     if full {
         v["payload"] = json!({"kind":"FeaturePlan","proposalId":p.id});
@@ -101,5 +106,15 @@ pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     match scope {
         crate::ports::storage::ConfigScope::Workspace => json!({"kind":"Workspace"}),
         crate::ports::storage::ConfigScope::Project(p) => json!({"kind":"Project","projectId":p}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn private_owner_digest_preserves_large_host_identifiers_without_rounding() {
+        let a = super::hash(&serde_json::json!({"fileIdentity":u64::MAX}));
+        let b = super::hash(&serde_json::json!({"fileIdentity":u64::MAX-1}));
+        assert_ne!(a, b);
     }
 }

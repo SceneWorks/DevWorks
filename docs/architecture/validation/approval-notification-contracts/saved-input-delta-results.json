@@ -1,0 +1,194 @@
+{
+  "scope": "Dedicated saved-input native DTO/schema boundary delta; actual selected-operation eligibility/human review remains owningservice proof",
+  "sourceCommit": "4be0fb9",
+  "caseCount": 6,
+  "cases": [
+    {
+      "id": "dw14-propose-saved-operation",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true
+    },
+    {
+      "id": "dw14-payload-before3-saved-operation",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    },
+    {
+      "id": "dw14-saved-invalid-revision",
+      "typedValid": false,
+      "schemaValid": true,
+      "passed": true
+    },
+    {
+      "id": "dw14-saved-body-kind",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    },
+    {
+      "id": "dw14-saved-body-scalar",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    },
+    {
+      "id": "dw14-saved-zero-revision",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    }
+  ],
+  "native": {
+    "allPassed": true,
+    "cases": [
+      {
+        "entry": "domain-request.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw14-propose-saved-operation",
+        "normalized": {
+          "body": {
+            "contentDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "kind": "approvals.propose",
+            "operationKind": "fixture",
+            "payload": {
+              "input": {
+                "purpose": "Planning",
+                "rootId": "root-a"
+              },
+              "kind": "SavedOperation",
+              "schemaRevision": "3"
+            },
+            "scope": {
+              "kind": "Workspace"
+            },
+            "summary": "Fixture content",
+            "target": {
+              "id": "id-a",
+              "revision": "1"
+            }
+          },
+          "mode": "Command",
+          "protocol": "1.0-draft.1",
+          "requestKey": "request-a",
+          "schemaRevision": 3
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "domain-request",
+        "error": "a member introduced after schema revision 1 is present",
+        "expectedSchemaValid": false,
+        "id": "dw14-payload-before3-saved-operation",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "domain-request.r3",
+        "error": "saved operation schema revision exceeds supported range",
+        "expectedSchemaValid": true,
+        "id": "dw14-saved-invalid-revision",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "domain-request.r3",
+        "error": "saved command input is the closed argument object without operation kind",
+        "expectedSchemaValid": false,
+        "id": "dw14-saved-body-kind",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "domain-request.r3",
+        "error": "saved command input is the closed argument object without operation kind",
+        "expectedSchemaValid": false,
+        "id": "dw14-saved-body-scalar",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "domain-request.r3",
+        "error": "invalid PositiveCounter",
+        "expectedSchemaValid": false,
+        "id": "dw14-saved-zero-revision",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      }
+    ],
+    "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"
+  },
+  "fixtures": [
+    {
+      "id": "dw14-propose-saved-operation",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\"}}},\"schemaRevision\":3}",
+      "typedValid": true,
+      "schemaValid": true
+    },
+    {
+      "id": "dw14-payload-before3-saved-operation",
+      "entry": "domain-request",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\"}}},\"schemaRevision\":1}",
+      "typedValid": false,
+      "schemaValid": false
+    },
+    {
+      "id": "dw14-saved-invalid-revision",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"65536\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\"}}},\"schemaRevision\":3}",
+      "typedValid": false,
+      "schemaValid": true
+    },
+    {
+      "id": "dw14-saved-body-kind",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\",\"kind\":\"roots.start\"}}},\"schemaRevision\":3}",
+      "typedValid": false,
+      "schemaValid": false
+    },
+    {
+      "id": "dw14-saved-body-scalar",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":\"not a closed object\"}},\"schemaRevision\":3}",
+      "typedValid": false,
+      "schemaValid": false
+    },
+    {
+      "id": "dw14-saved-zero-revision",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"0\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\"}}},\"schemaRevision\":3}",
+      "typedValid": false,
+      "schemaValid": false
+    }
+  ],
+  "largeBoundaryTests": {
+    "passed": 3,
+    "source": "tools/contracts-eval/tests/saved_command_input.rs",
+    "bounds": [
+      "Legal innerJSON524281bytes wraps toclosedargs>512KiB without aggregateDynamicJsoncap",
+      "Inner64depth/10000nodes remainlegal insideaggregate; inner10001 stillrejected",
+      "Object-only/no-kind/1MiB andactualMAX_NESTING100 remainenforced"
+    ]
+  },
+  "legacySchemasByteIdentical": 56,
+  "allPassed": true,
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "7bf063b7b70b7e922327947c49be603134d1f6539353630feab5d913e3733073",
+    "tools/contracts-eval/src/domain_support.rs": "c4c8226672c897ae283c4a7a09bdc4df594031ca779ef9f6f58574fbdeba9f71",
+    "crates/devworks-core/src/protocol/support.rs": "6a786588a668498059e38140c58b920b87b815af9064f1520f01392a2d569f65",
+    "tools/contracts-eval/tests/saved_command_input.rs": "5481b2f1098ec0734ed38a03a2f90017bd2648cfa171b0539ecf4ca4c16deddf",
+    "docs/architecture/contracts/domain-fixtures.json": "bc225c5f0f988df6c21e91842fc5f60c7727a9a5d3d0c75db511033ed3d0664d"
+  },
+  "nativeSourceBoundarySnapshot": "8e4065eff60412ef32802251da6b8d82e5775284",
+  "nativeSourceBoundaryTestsPassed": 2,
+  "nativeContractTestsPassed": 20
+}

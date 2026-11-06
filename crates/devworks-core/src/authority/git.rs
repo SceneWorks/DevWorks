@@ -95,46 +95,83 @@ pub(super) fn witness_in(
         .contains(&work.project_id);
     digest(&tree, &work, &repo, &project, work_member, project_member)
 }
-pub(super) fn owned_force(
-    s: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    input: &OperationInput,
-) -> Result<Option<(Id, String)>, StorageError> {
-    if ctx.principal_kind() != PrincipalKind::Agent {
-        return Ok(None);
-    }
+fn force_target(input: &OperationInput) -> Option<&Id> {
     let OperationInput::Git(Input::Push(request)) = input else {
-        return Ok(None);
+        return None;
     };
     let GitCommand::Push {
         worktree_id,
-        target_ref,
         mode: PushMode::ForceWithLease,
         expected_remote: Some(_),
         ..
     } = &request.command
     else {
+        return None;
+    };
+    Some(worktree_id)
+}
+fn force_belongs(
+    ctx: &InvocationContext,
+    input: &OperationInput,
+    tree: &StoredGitWorktree,
+    work: &StoredWork,
+) -> Result<bool, StorageError> {
+    if ctx.principal_kind() != PrincipalKind::Agent {
+        return Ok(false);
+    }
+    let OperationInput::Git(Input::Push(request)) = input else {
+        return Ok(false);
+    };
+    let GitCommand::Push { target_ref, .. } = &request.command else {
+        return Ok(false);
+    };
+    let brief = crate::services::work::model::WorkBrief::of(work)?;
+    Ok(!brief
+        .assignment_id
+        .as_ref()
+        .is_some_and(|a| Some(a) != ctx.assignment_id())
+        && &tree.owner == ctx.principal()
+        && tree.branch == *target_ref
+        && ctx.project_id() == Some(&work.project_id)
+        && ctx
+            .root_id()
+            .is_some_and(|r| r.0 == work.id || work.parent_feature_id.as_ref() == Some(&r.0)))
+}
+pub(super) fn owned_force(
+    s: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &OperationInput,
+) -> Result<Option<(Id, String)>, StorageError> {
+    let Some(id) = force_target(input) else {
         return Ok(None);
     };
-    let Some(tree) = s.git().git_worktree(worktree_id)? else {
+    let Some(tree) = s.git().git_worktree(id)? else {
         return Ok(None);
     };
     let Some(work) = s.work().work(&tree.work_id)? else {
         return Ok(None);
     };
-    let brief = crate::services::work::model::WorkBrief::of(&work)?;
-    if brief
-        .assignment_id
-        .as_ref()
-        .is_some_and(|assignment| Some(assignment) != ctx.assignment_id())
-        || &tree.owner != ctx.principal()
-        || tree.branch != *target_ref
-        || ctx.project_id() != Some(&work.project_id)
-        || !ctx
-            .root_id()
-            .is_some_and(|r| r.0 == work.id || work.parent_feature_id.as_ref() == Some(&r.0))
-    {
+    if !force_belongs(ctx, input, &tree, &work)? {
         return Ok(None);
     }
-    Ok(witness(s, worktree_id)?.map(|d| (worktree_id.clone(), d)))
+    Ok(witness(s, id)?.map(|d| (id.clone(), d)))
+}
+pub(super) fn owned_force_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    input: &OperationInput,
+) -> Result<Option<(Id, String)>, StorageError> {
+    let Some(id) = force_target(input) else {
+        return Ok(None);
+    };
+    let Some(tree) = tx.git().git_worktree(id)? else {
+        return Ok(None);
+    };
+    let Some(work) = tx.work().work(&tree.work_id)? else {
+        return Ok(None);
+    };
+    if !force_belongs(ctx, input, &tree, &work)? {
+        return Ok(None);
+    }
+    Ok(witness_in(tx, id)?.map(|d| (id.clone(), d)))
 }

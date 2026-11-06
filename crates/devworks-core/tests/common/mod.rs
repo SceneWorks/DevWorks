@@ -2439,6 +2439,21 @@ impl RunRepository for Unsupported {
 }
 
 impl KnowledgeRead for Unsupported {
+    fn knowledge_review_candidates(
+        &self,
+        _: &[String],
+        _: KnowledgeReviewKind,
+        _: u16,
+    ) -> Result<Vec<StoredClaim>, StorageError> {
+        nope()
+    }
+    fn knowledge_review_contradictions(
+        &self,
+        _: &[String],
+        _: u16,
+    ) -> Result<Vec<StoredRelation>, StorageError> {
+        nope()
+    }
     fn knowledge_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
         nope()
     }
@@ -2526,6 +2541,13 @@ impl KnowledgeRead for Unsupported {
         nope()
     }
     fn knowledge_challenge(&self, _: &Id) -> Result<Option<StoredChallenge>, StorageError> {
+        nope()
+    }
+    fn knowledge_open_challenge_records(
+        &self,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredChallenge>, StorageError> {
         nope()
     }
     fn knowledge_open_challenges(&self, _: &Id) -> Result<i64, StorageError> {

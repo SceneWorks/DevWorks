@@ -101,7 +101,7 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
         json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Generic command cannot mint a Human witness"}),
     );
     assert!(ops::command_result(b.command("approvals.record_human_decision", &generic)).is_err());
-    assert!(get(&*b, &feature).approved_plan.is_none());
+    assert!(get(&*b, &feature).approval.is_none());
     let mut h = open(&engine, &root, &p);
     assert!(has_text(&h, "Exact proposed plan"));
     assert!(has_text(
@@ -112,7 +112,11 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
             p.target_revision.as_str()
         )
     ));
-    press(&mut h, "Exact proposal artifact text");
+    click(
+        &mut h,
+        Role::DisclosureTriangle,
+        "Exact proposal artifact text",
+    );
     assert!(has_text(&h, "Ship the inspected plan"));
     rationale(
         &mut h,
@@ -121,7 +125,7 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
     press(&mut h, "Approve exact proposal");
     let current = get(&*b, &feature);
     assert!(current.pending_plan.is_none());
-    assert!(current.approved_plan.is_some());
+    assert!(current.approval.is_some());
     assert!(has_text(&h, "Recorded rationale:"));
     assert!(
         current.attempts.0.is_empty(),
@@ -170,7 +174,7 @@ fn a_refreshed_inbox_keeps_the_inspected_draft_and_reports_target_staleness() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(get(&*b, &feature).approved_plan.is_none());
+    assert!(get(&*b, &feature).approval.is_none());
 }
 #[test]
 fn unknown_native_decisions_retain_the_exact_trusted_dispatch_across_restart() {
@@ -207,7 +211,7 @@ fn unknown_native_decisions_retain_the_exact_trusted_dispatch_across_restart() {
     settle(&mut h);
     assert!(h.state().client().unwrap().unresolved().is_empty());
     assert!(honest.frames.lock().unwrap().iter().all(|f| f == &frame));
-    assert!(get(&*real, &feature).approved_plan.is_some());
+    assert!(get(&*real, &feature).approval.is_some());
 }
 
 fn seed_notification(
@@ -283,7 +287,7 @@ fn durable_completion_cards_open_actual_work_and_separate_read_from_individual_a
             .collect::<Vec<_>>(),
         ["notice-b", "notice-a"]
     );
-    press(&mut h, "View completed work");
+    click(&mut h, Role::Link, "View completed work");
     assert_eq!(h.state().route(), Route::Features);
     assert_eq!(
         h.state().route_memory(Route::Features).selection.as_deref(),
@@ -386,7 +390,7 @@ fn rejected_native_plan_never_promotes_or_starts_work() {
         devworks_core::protocol::records::ApprovalState::Rejected
     ));
     let current = get(&*b, &feature);
-    assert!(current.approved_plan.is_none());
+    assert!(current.approval.is_none());
     assert!(current.attempts.0.is_empty());
 }
 #[test]
@@ -524,4 +528,248 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
         devworks_core::protocol::records::FindingState::Open
     ));
     assert!(current.attempts.0.is_empty());
+}
+
+#[test]
+fn native_notification_preferences_use_their_own_revision_and_keep_in_app_access() {
+    let root = Root::new("notification-native-settings");
+    let engine = start(&root);
+    let b = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1400.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Settings);
+    settle(&mut h);
+    press(&mut h, "Notification preferences");
+    click(&mut h, Role::DisclosureTriangle, "Notification preferences");
+    click(&mut h, Role::CheckBox, "Desktop notifications");
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .type_text("Completion, ");
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .type_text("Approval");
+    h.step();
+    h.step();
+    press(&mut h, "Save notification preferences");
+    match ops::query_result(b.query(
+        "notifications.settings",
+        &ops::query_frame(&*b, "notifications.settings", json!({})),
+    ))
+    .unwrap()
+    .0
+    {
+        devworks_core::protocol::results::OperationResult::NotificationsSettings { value } => {
+            assert_eq!(value.revision.as_str(), "2");
+            assert!(!value.config.desktop_enabled);
+            assert_eq!(
+                value
+                    .config
+                    .kinds
+                    .0
+                    .iter()
+                    .map(|k| k.0.as_str())
+                    .collect::<Vec<_>>(),
+                ["Completion", "Approval"]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(has_text(&h, "Preferences revision 2"));
+    assert!(has_text(&h, "In-app history remains available"));
+    assert!(has_text(&h, "No notifications in this view."));
+}
+
+struct ReviewQueries {
+    inner: std::sync::Arc<dyn Backend>,
+    frames: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+}
+impl Backend for ReviewQueries {
+    fn query(&self, op: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        if [
+            "approvals.review_queue",
+            "approvals.list",
+            "notifications.list",
+        ]
+        .contains(&op)
+        {
+            self.frames
+                .lock()
+                .unwrap()
+                .push((op.into(), serde_json::from_slice(frame).unwrap()));
+        }
+        self.inner.query(op, frame)
+    }
+    fn command(&self, op: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        self.inner.command(op, frame)
+    }
+    fn mint_workspace_upload(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_workspace_upload(path)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        path: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, path)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.inner.hints()
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> std::path::PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(&self, id: &devworks_core::protocol::Id, max: u64) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(id, max)
+    }
+}
+fn challenged_facts(
+    b: &dyn Backend,
+    scope: serde_json::Value,
+    count: usize,
+) -> std::collections::BTreeSet<String> {
+    use devworks_desktop::knowledge_screen as knowledge;
+    let claims=(0..count).map(|i|json!({"kind":"Fact","subjectId":"topic","predicate":format!("review-{i}"),"value":format!("A scoped fact requiring review {i}"),"confidence":0.8,"evidenceIds":[],"tags":[]})).collect::<Vec<_>>();
+    let ids=match ops::command_result(b.command("knowledge.record",&knowledge::command(b,"knowledge.record",json!({"scope":scope,"batch":{"entities":[{"clientId":"topic","label":"Scoped review fixture","entityType":"topic","aliases":[]}],"evidence":[],"claims":claims}})))).unwrap() {
+        devworks_core::protocol::results::OperationResult::KnowledgeRecord{value}=>value.claim_ids.0,
+        other=>panic!("{other:?}")
+    };
+    for id in &ids {
+        ops::command_result(b.command("knowledge.challenge",&knowledge::command(b,"knowledge.challenge",json!({"scope":scope,"claimId":id,"expectedRevision":"1","reason":"Review this project's current evidence","evidenceIds":[]})))).unwrap();
+    }
+    ids.into_iter().map(|id| id.as_str().to_owned()).collect()
+}
+fn choose_review_project(h: &mut Ui, name: &str) {
+    click(h, Role::ComboBox, "Approval project filter");
+    h.query_all_by_label(name)
+        .find(|n| {
+            matches!(
+                n.accesskit_node().role(),
+                Role::Button | Role::ListBoxOption
+            ) && n.rect().left() > devworks_desktop::theme::NAV
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "Project option {name}; matching roles: {:?}",
+                h.query_all_by_label(name)
+                    .map(|node| node.accesskit_node().role())
+                    .collect::<Vec<_>>()
+            )
+        })
+        .click();
+    settle(h);
+}
+#[test]
+fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
+    let root = Root::new("approval-native-project-review");
+    let engine = start(&root);
+    let b = engine.backend();
+    let project = |name: &str| {
+        ops::project_changed(b.command("projects.create", &ops::project_create(&*b, name, "", &[])))
+            .unwrap()
+    };
+    let alpha = project("Review alpha");
+    let beta = project("Review beta");
+    let workspace = challenged_facts(&*b, json!({"kind":"Workspace"}), 1);
+    let beta_ids = challenged_facts(&*b, json!({"kind":"Project","projectId":beta.id}), 4);
+    // More than one page of newer rows in another project must not crowd beta off its page.
+    let alpha_ids = challenged_facts(&*b, json!({"kind":"Project","projectId":alpha.id}), 51);
+    let traced = std::sync::Arc::new(ReviewQueries {
+        inner: b,
+        frames: Default::default(),
+    });
+    let mut h = harness(
+        shell_with(Ok(traced.clone()), &root, Script::default(), None),
+        1800.0,
+        1400.0,
+    );
+    settle(&mut h);
+    assert_eq!(h.state().route(), Route::Chat);
+    h.state_mut().navigate(Route::Approvals);
+    settle(&mut h);
+    press(&mut h, "Knowledge review");
+    assert!(has_text(&h, "Select a project to review Knowledge"));
+    assert!(h.state().decisions.reviews.is_empty());
+    assert!(!h.state().decisions.reviews_loaded);
+    {
+        let frames = traced.frames.lock().unwrap();
+        assert!(
+            !frames.iter().any(|(op, _)| op == "approvals.review_queue"),
+            "Home never asks for a Workspace review queue"
+        );
+        for op in ["approvals.list", "notifications.list"] {
+            assert!(
+                frames.iter().any(|(name, frame)| name == op
+                    && frame.pointer("/body/scope/kind") == Some(&json!("Workspace"))),
+                "{op} remains global"
+            );
+        }
+    }
+    choose_review_project(&mut h, "Review beta");
+    assert!(
+        h.state().decisions.error.is_none(),
+        "{:?}",
+        h.state().decisions.error
+    );
+    let shown = |h: &Ui| {
+        h.state()
+            .decisions
+            .reviews
+            .iter()
+            .map(|row| row.entry.id.as_str().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(shown(&h), beta_ids);
+    assert!(shown(&h).is_disjoint(&workspace));
+    choose_review_project(&mut h, "Review alpha");
+    assert_eq!(shown(&h), alpha_ids);
+    assert!(h.state().decisions.reviews_loaded);
+    {
+        let frames = traced.frames.lock().unwrap();
+        let review = frames
+            .iter()
+            .filter(|(op, _)| op == "approvals.review_queue")
+            .collect::<Vec<_>>();
+        assert!(
+            review
+                .iter()
+                .all(|(_, frame)| frame.pointer("/body/projectId").is_some()
+                    && frame.pointer("/body/page/limit") == Some(&json!(50)))
+        );
+        assert!(
+            review
+                .iter()
+                .any(
+                    |(_, frame)| frame.pointer("/body/projectId") == Some(&json!(alpha.id))
+                        && frame.pointer("/body/page/cursor").is_some()
+                ),
+            "the real project queue is read beyond its first page"
+        );
+    }
+    choose_review_project(&mut h, "All projects");
+    assert!(has_text(&h, "Select a project to review Knowledge"));
+    assert!(h.state().decisions.reviews.is_empty());
+    assert!(
+        traced
+            .frames
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(op, _)| op == "approvals.review_queue")
+            .all(|(_, frame)| frame.pointer("/body/projectId").is_some()),
+        "clearing the project never issues a global fallback"
+    );
 }

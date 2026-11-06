@@ -1052,6 +1052,7 @@ impl WorkService {
             && p.state == "Pending"
             && p.plan_revision == i.plan_revision.get()
             && p.plan_digest == digest
+            && p.reviewed_snapshot.is_some()
         {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesRequestPlanApproval {

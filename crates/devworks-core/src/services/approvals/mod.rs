@@ -2,8 +2,10 @@
 //! Settings and feature plans retain their own business rules. Approval never clears pauses,
 //! closes readiness findings generically, or supplies authority for an unqualified capability.
 mod model;
+pub(crate) use model::scope_digest;
 pub mod owner_preview;
 pub mod requests;
+pub(crate) mod review_evidence;
 
 use crate::admission::DecodedRequest;
 use crate::context::InvocationContext;
@@ -59,8 +61,11 @@ mod review_queue;
 mod service;
 mod writes;
 pub use replay::{ApprovedCommand, ResumePreparation};
+pub(crate) use replay::{restore_source_context, save_context, save_source_context};
 pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};
+pub(crate) use service::{prepare_authority, validate_authority};
 
+pub(crate) use writes::authority_binding;
 pub use writes::stage_saved;
 /// Canonical digest for a source-typed risk proposal; saved operations use requests::decode().fingerprint.
 pub fn content_digest(content: &crate::protocol::records::ApprovalContent) -> String {

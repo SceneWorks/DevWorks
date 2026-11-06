@@ -155,6 +155,7 @@ pub enum Slot {
     PriceOperation,
     ApprovalsList,
     ApprovalInspect(String),
+    ApprovalRefresh(String),
     ApprovalContent(String),
     ApprovalDecision(String),
     ReviewQueue,

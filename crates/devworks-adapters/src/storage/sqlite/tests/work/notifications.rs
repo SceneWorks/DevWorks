@@ -334,3 +334,43 @@ fn verified_feature_acceptance_produces_a_completion_card_from_the_shared_work_o
     assert_eq!(completions(&fx).len(), 1);
     assert_eq!(completions(&fx)[0].root_id, Some(RootId(verified.id)));
 }
+
+#[test]
+fn producer_preserves_legal_multibyte_character_bounds_through_the_shared_read_gateway() {
+    let fx = fixture();
+    let title = "界".repeat(256);
+    let body = "語".repeat(65_536);
+    let expected_title = title.clone();
+    let expected_body = body.clone();
+    fx.write(move |tx| {
+        notices::publish(
+            tx,
+            &notices::NotificationDraft {
+                source: "unicode-source".into(),
+                category: "Completion".into(),
+                decision_id: None,
+                project_id: None,
+                root_id: None,
+                title,
+                body,
+                links: vec![],
+                requires_input: false,
+                priority: 0,
+            },
+        )
+    });
+    let row = rows(&fx).pop().unwrap();
+    assert_eq!(row.title, expected_title);
+    assert_eq!(row.body, expected_body);
+    let result = query_value(
+        &fx,
+        &fx.user(),
+        "notifications.read",
+        json!({"notificationId":row.id}),
+        3,
+    );
+    assert_eq!(result["title"], expected_title);
+    assert_eq!(result["body"], expected_body);
+    assert!(!rows(&fx)[0].read);
+    assert!(!rows(&fx)[0].acknowledged);
+}

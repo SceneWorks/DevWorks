@@ -6,7 +6,8 @@ use crate::protocol::{ActorId, Id, ProjectId, RootId};
 use serde_json::Value;
 
 pub const MAX_DECISION_JSON_BYTES: usize = 1_048_576;
-pub const MAX_SAVED_OPERATION_BYTES: usize = 524_288;
+/// A complete normalized registered command, which may wrap a legal 512KiB dynamic value.
+pub const MAX_SAVED_OPERATION_BYTES: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ApprovalSource {

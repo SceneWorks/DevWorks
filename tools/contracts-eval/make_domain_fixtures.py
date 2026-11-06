@@ -935,8 +935,8 @@ for key in ['human','humanWitness','approvalToken','resumeGrant','originalActorI
  frame=request('approvals.record_human_decision','Command');frame['schemaRevision']=3;frame['body'][key]=True if key=='human' else 'forged'
  case('dw14-reject-authority-'+key,'domain-request.r3',frame,False,False)
 mutate('dw14-saved-invalid-revision','dw14-propose-saved-operation',['body','payload','schemaRevision'],'65536',False,True)
-mutate('dw14-saved-body-kind','dw14-propose-saved-operation',['body','payload','input','kind'],'roots.start',False,True)
-mutate('dw14-saved-body-scalar','dw14-propose-saved-operation',['body','payload','input'],'not a closed object',False,True)
+mutate('dw14-saved-body-kind','dw14-propose-saved-operation',['body','payload','input','kind'],'roots.start',False,False)
+mutate('dw14-saved-body-scalar','dw14-propose-saved-operation',['body','payload','input'],'not a closed object',False,False)
 mutate('dw14-saved-zero-revision','dw14-propose-saved-operation',['body','payload','schemaRevision'],'0')
 approval=sample('ApprovalViewRecord');approval.update(scope={'kind':'Project','projectId':'project-a'},payload={'kind':'FindingRisk','featureId':'feature-a','findingId':'finding-a','assessmentRevision':'7'},stale=False,requestedBy='actor-a',createdAtMs='100',scopeDigest='b'*64,reviewedContent={'findingId':'finding-a','assessmentRevision':'7'},rationale='Exact reviewed finding and scope',resumeStatus='NotApplicable',operationPreview={'effect':'Local','targetIds':['finding-a'],'projectIds':['project-a'],'requestDigest':'c'*64})
 case('dw14-approval-view','operation-result.r3',{'kind':'approvals.inspect','value':approval})

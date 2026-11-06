@@ -80,7 +80,7 @@ enum Action {
         force: bool,
     },
 }
-struct StagedMessage(Result<String, DomainErrorCode>);
+struct StagedMessage(Result<String, DomainErrorCode>, Option<Value>);
 
 impl Job {
     fn context(&self, service: &GitService, operation: &OperationId) -> InvocationContext {
@@ -268,6 +268,49 @@ impl GitService {
         Ok(())
     }
 
+    pub(super) fn validate_new_worktree(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        work: &StoredWork,
+        repository: &StoredRepository,
+        input: &ops::WorktreeInput,
+    ) -> Result<PathBuf, Failure> {
+        if input.worktree_id.is_some() {
+            return Err(refuse(
+                DomainErrorCode::InvalidArgument,
+                "new_worktree",
+                &work.id,
+            ));
+        }
+        let root = self.root_path(&input.registered_root_id)?;
+        if tx
+            .authority()
+            .registered_repositories()?
+            .iter()
+            .any(|r| root.starts_with(Path::new(&r.location)))
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "primary_checkout",
+                &repository.id,
+            ));
+        }
+        if let Some(feature) = &work.parent_feature_id
+            && !tx
+                .git()
+                .git_worktrees(feature, None, MAX_PAGE)?
+                .iter()
+                .any(|t| {
+                    t.repository_id == repository.id
+                        && !t.removed
+                        && t.pending_operation_id.is_none()
+                        && t.head == input.base
+                })
+        {
+            return Err(refuse(DomainErrorCode::Conflict, "feature_branch", feature));
+        }
+        Ok(root)
+    }
     fn decide_git(
         &self,
         ctx: &InvocationContext,
@@ -276,6 +319,19 @@ impl GitService {
     ) -> Result<Decided, Failure> {
         let reviewed_binding =
             crate::services::approvals::owner_preview::approved_binding(tx, ctx, command)?;
+        if let Some(binding) = &reviewed_binding {
+            let control = self
+                .approval_control
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            crate::services::approvals::owner_preview::recheck_control(
+                tx,
+                ctx,
+                control.as_deref(),
+            )?;
+            self.validate_reviewed_git_command(tx, ctx, command, binding)?;
+        }
         let op = OperationId(tx.new_id(IdKind::Operation));
         let (mut tree, repository, work, action) = match command.input() {
             OperationInput::Git(ops::Input::Worktree(input)) => {
@@ -299,41 +355,7 @@ impl GitService {
                 self.check_work(tx, ctx, &work, &repository)?;
                 match input.action {
                     GitActionKind::Create => {
-                        if input.worktree_id.is_some() {
-                            return Err(refuse(
-                                DomainErrorCode::InvalidArgument,
-                                "new_worktree",
-                                &work.id,
-                            ));
-                        }
-                        let root = self.root_path(&input.registered_root_id)?;
-                        if tx
-                            .authority()
-                            .registered_repositories()?
-                            .iter()
-                            .any(|r| root.starts_with(Path::new(&r.location)))
-                        {
-                            return Err(refuse(
-                                DomainErrorCode::PermissionDenied,
-                                "primary_checkout",
-                                &repository.id,
-                            ));
-                        }
-                        if let Some(feature) = &work.parent_feature_id {
-                            let features = tx.git().git_worktrees(feature, None, MAX_PAGE)?;
-                            if !features.iter().any(|t| {
-                                t.repository_id == repository.id
-                                    && !t.removed
-                                    && t.pending_operation_id.is_none()
-                                    && t.head == input.base
-                            }) {
-                                return Err(refuse(
-                                    DomainErrorCode::Conflict,
-                                    "feature_branch",
-                                    feature,
-                                ));
-                            }
-                        }
+                        let root = self.validate_new_worktree(tx, &work, &repository, input)?;
 
                         let id = tx.new_id(IdKind::Resource);
                         // IDs do not become path syntax. Hex encoding is reversible and collision free.
@@ -419,6 +441,15 @@ impl GitService {
                 let message = command.prepared::<StagedMessage>().ok_or_else(|| {
                     refuse(DomainErrorCode::InvalidArgument, "git_message", worktree_id)
                 })?;
+                if let Some(binding) = &reviewed_binding
+                    && message.1.as_ref() != Some(&binding["commitManifest"])
+                {
+                    return Err(refuse(
+                        DomainErrorCode::SourceChanged,
+                        "git_commit_contents",
+                        worktree_id,
+                    ));
+                }
                 let message = message
                     .0
                     .as_ref()
@@ -936,6 +967,12 @@ impl GitService {
         }
         let outcome = match &job.action {
             Action::Create => {
+                if let Some(binding) = &job.reviewed_binding {
+                    match self.approval_root_witness(&job.tree.registered_root_id) {
+                        Ok(current) if binding["native"]["rootWitness"] == current => {}
+                        _ => return changed("reviewed worktree root changed before creation"),
+                    }
+                }
                 if self.root_path(&job.tree.registered_root_id).is_err() {
                     return denied("registered root changed");
                 }
@@ -986,7 +1023,11 @@ impl GitService {
             Action::Commit { message, expected } => {
                 if let Some(binding) = &job.reviewed_binding {
                     match git.commit_manifest(path, &expected.hex) {
-                        Ok(manifest) if binding["commitManifest"] == manifest => {}
+                        Ok(manifest)
+                            if super::approval::compact_commit_manifest(&manifest)
+                                .ok()
+                                .as_ref()
+                                == Some(&binding["commitManifest"]) => {}
                         _ => return changed("reviewed commit contents changed before staging"),
                     }
                 }
@@ -1005,7 +1046,11 @@ impl GitService {
                     Ok(_) => {
                         if let Some(binding) = &job.reviewed_binding {
                             match git.staged_commit_manifest(path, &expected.hex) {
-                                Ok(manifest) if binding["commitManifest"] == manifest => {}
+                                Ok(manifest)
+                                    if super::approval::compact_commit_manifest(&manifest)
+                                        .ok()
+                                        .as_ref()
+                                        == Some(&binding["commitManifest"]) => {}
                                 _ => {
                                     return changed(
                                         "staged commit differs from the reviewed contents",
@@ -1192,7 +1237,24 @@ impl CommandHandler for GitService {
             Err(Failure::Refused(r)) => Err(r.code),
             Err(Failure::Storage(e)) => return Err(e),
         };
-        Ok(Some(Prepared::new(StagedMessage(text))))
+        let manifest = if ctx.reviewed_operation().is_some() {
+            match self.commit_source_manifest(ctx, &input.command, env) {
+                Ok(manifest) => Some(match super::approval::compact_commit_manifest(&manifest) {
+                    Ok(value) => value,
+                    Err(Failure::Refused(r)) => {
+                        return Ok(Some(Prepared::new(StagedMessage(Err(r.code), None))));
+                    }
+                    Err(Failure::Storage(e)) => return Err(e),
+                }),
+                Err(Failure::Refused(r)) => {
+                    return Ok(Some(Prepared::new(StagedMessage(Err(r.code), None))));
+                }
+                Err(Failure::Storage(e)) => return Err(e),
+            }
+        } else {
+            None
+        };
+        Ok(Some(Prepared::new(StagedMessage(text, manifest))))
     }
     fn decide(
         &self,

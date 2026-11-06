@@ -20,6 +20,7 @@ pub struct DecisionsUi {
     /// The inspected proposal is the exact displayed snapshot; a refresh never replaces a draft.
     pub selected: Option<ApprovalViewRecord>,
     inspecting: Option<String>,
+    current: Option<ApprovalStatus>,
     pub rationale: String,
     pub text: Option<ApprovalText>,
     pub decision_error: Option<String>,
@@ -44,6 +45,27 @@ pub struct DecisionsUi {
     pub config: Option<(NotificationConfig, String)>,
     pub config_draft: Option<NotificationConfig>,
     config_saving: Option<NotificationConfig>,
+    config_kinds: String,
+    config_kinds_saving: Option<String>,
+}
+
+struct ApprovalStatus {
+    revision: String,
+    state: ApprovalState,
+    stale: Option<bool>,
+    content_digest: String,
+    target_revision: String,
+}
+impl From<&ApprovalViewRecord> for ApprovalStatus {
+    fn from(p: &ApprovalViewRecord) -> Self {
+        Self {
+            revision: p.revision.as_str().into(),
+            state: p.state.clone(),
+            stale: p.stale,
+            content_digest: p.content_digest.as_str().into(),
+            target_revision: p.target_revision.as_str().into(),
+        }
+    }
 }
 
 pub struct ApprovalText {
@@ -101,10 +123,16 @@ impl Shell {
         );
     }
     fn review_page(&mut self, cursor: Option<String>) {
-        let mut body = json!({"page":dops::page(cursor.as_deref())});
-        if let Some(p) = &self.decisions.project {
-            body["projectId"] = json!(p);
-        }
+        let Some(project) = &self.decisions.project else {
+            self.decisions.reviews.clear();
+            self.decisions.review_gathering.clear();
+            self.decisions.reviews_loaded = false;
+            return;
+        };
+        // The retained informational queue requires a project and permits at most 50 per page.
+        let mut page = dops::page(cursor.as_deref());
+        page["limit"] = json!(50);
+        let body = json!({"projectId":project,"page":page});
         self.query(
             Slot::ReviewQueue,
             "Loading Knowledge review queue",
@@ -177,6 +205,27 @@ impl Shell {
             move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
         );
     }
+    fn refresh_selected_approval(&mut self) {
+        let Some(p) = &self.decisions.selected else {
+            return;
+        };
+        if let Some(row) = self
+            .decisions
+            .approvals
+            .iter()
+            .find(|row| row.id.as_str() == p.id.as_str())
+        {
+            self.decisions.current = Some(row.into());
+            return;
+        }
+        let id = p.id.as_str().to_owned();
+        self.query(
+            Slot::ApprovalRefresh(id.clone()),
+            "Checking inspected proposal status",
+            "approvals.inspect",
+            move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
+        );
+    }
     fn load_approval_text(&mut self) {
         let (Some(p), Some(text)) = (&self.decisions.selected, &self.decisions.text) else {
             return;
@@ -184,9 +233,6 @@ impl Shell {
         let id = p.id.as_str().to_owned();
         let artifact = text.artifact.clone();
         let cursor = text.next.clone();
-        if self.pending(&Slot::ApprovalContent(id.clone())) {
-            return;
-        }
         self.query(
             Slot::ApprovalContent(id),
             "Reading exact proposal artifact",
@@ -312,6 +358,7 @@ impl Shell {
                         self.decisions.approvals = std::mem::take(&mut self.decisions.gathering);
                         self.decisions.loaded = true;
                         self.decisions.error = None;
+                        self.refresh_selected_approval();
                     }
                 }
                 Err(e) => self.decisions.error = Some(e.describe()),
@@ -333,6 +380,7 @@ impl Shell {
                         next: None,
                         error: None,
                     });
+                    self.decisions.current = Some((&p).into());
                     self.decisions.selected = Some(p);
                     self.decisions.inspecting = None;
                     self.decisions.decision_error = None;
@@ -343,43 +391,55 @@ impl Shell {
                     self.decisions.decision_error = Some(e.describe());
                 }
             },
-            (Slot::ApprovalContent(id), Reply::Query(q)) => {
+            (Slot::ApprovalRefresh(id), Reply::Query(q)) => {
                 if self
                     .decisions
                     .selected
                     .as_ref()
                     .is_some_and(|p| p.id.as_str() == id)
                 {
-                    if let Some(text) = &mut self.decisions.text {
-                        match ops::read_content(q) {
-                            Ok(devworks_core::protocol::records::ArtifactReadContent::Text {
-                                artifact,
-                                content,
-                                next_byte,
-                                truncated,
-                                ..
-                            }) if artifact.version_id.as_str()
-                                == text.artifact.version_id.as_str()
-                                && artifact.sha256.as_str() == text.artifact.sha256.as_str() =>
-                            {
-                                text.pages.push(content.0);
-                                text.page = text.pages.len() - 1;
-                                text.next = truncated.then(|| next_byte.as_str().to_owned());
-                                text.error = None;
-                            }
-                            Ok(_) => {
-                                text.error = Some(
-                                    "The exact proposal artifact could not be displayed as text."
-                                        .into(),
-                                )
-                            }
-                            Err(e) => text.error = Some(e.describe()),
+                    match dops::approval(q) {
+                        Ok(p) => self.decisions.current = Some((&p).into()),
+                        Err(e) => self.decisions.decision_error = Some(e.describe()),
+                    }
+                }
+            }
+            (Slot::ApprovalContent(id), Reply::Query(q)) => {
+                if self
+                    .decisions
+                    .selected
+                    .as_ref()
+                    .is_some_and(|p| p.id.as_str() == id)
+                    && let Some(text) = &mut self.decisions.text
+                {
+                    match ops::read_content(q) {
+                        Ok(devworks_core::protocol::records::ArtifactReadContent::Text {
+                            artifact,
+                            content,
+                            next_byte,
+                            truncated,
+                            ..
+                        }) if artifact.version_id.as_str() == text.artifact.version_id.as_str()
+                            && artifact.sha256.as_str() == text.artifact.sha256.as_str() =>
+                        {
+                            text.pages.push(content.0);
+                            text.page = text.pages.len() - 1;
+                            text.next = truncated.then(|| next_byte.as_str().to_owned());
+                            text.error = None;
                         }
+                        Ok(_) => {
+                            text.error = Some(
+                                "The exact proposal artifact could not be displayed as text."
+                                    .into(),
+                            )
+                        }
+                        Err(e) => text.error = Some(e.describe()),
                     }
                 }
             }
             (Slot::ApprovalDecision(_), Reply::Command(q)) => match dops::decided(q) {
                 Ok(p) => {
+                    self.decisions.current = Some((&p).into());
                     self.decisions.selected = Some(p);
                     self.decisions.decision_error = None;
                     self.decisions.rationale.clear();
@@ -388,6 +448,9 @@ impl Shell {
                 }
                 Err(e) => self.decisions.decision_error = Some(e.describe()),
             },
+            // Clearing the project may leave an older project's reply in flight. It cannot
+            // restore hidden rows or continue paging without a selected project.
+            (Slot::ReviewQueue, Reply::Query(_)) if self.decisions.project.is_none() => {}
             (Slot::ReviewQueue, Reply::Query(q)) => match dops::reviews(q) {
                 Ok((rows, next)) => {
                     self.decisions.review_gathering.extend(rows);
@@ -461,6 +524,14 @@ impl Shell {
             (Slot::NotificationSettings, Reply::Query(q)) => match ops::query_result(q) {
                 Ok((OperationResult::NotificationsSettings { value }, _)) => {
                     if self.decisions.config_draft.is_none() {
+                        self.decisions.config_kinds = value
+                            .config
+                            .kinds
+                            .0
+                            .iter()
+                            .map(|k| k.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         self.decisions.config_draft = Some(value.config.clone());
                     }
                     self.decisions.config =
@@ -476,10 +547,21 @@ impl Shell {
                 Ok(OperationResult::NotificationsSettings { value }) => {
                     if serde_json::to_value(&self.decisions.config_draft).ok()
                         == serde_json::to_value(&self.decisions.config_saving).ok()
+                        && self.decisions.config_kinds_saving.as_deref()
+                            == Some(self.decisions.config_kinds.as_str())
                     {
+                        self.decisions.config_kinds = value
+                            .config
+                            .kinds
+                            .0
+                            .iter()
+                            .map(|k| k.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         self.decisions.config_draft = Some(value.config.clone());
                     }
                     self.decisions.config_saving = None;
+                    self.decisions.config_kinds_saving = None;
                     self.decisions.config =
                         Some((value.config, value.revision.as_str().to_owned()));
                 }
@@ -563,8 +645,20 @@ impl Shell {
                     if let (Some((_, revision)), Some(config)) =
                         (&self.decisions.config, &self.decisions.config_draft)
                     {
+                        let mut config = config.clone();
+                        config.kinds.0 = self
+                            .decisions
+                            .config_kinds
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|x| !x.is_empty())
+                            .map(|x| devworks_core::protocol::support::BoundedText(x.into()))
+                            .collect();
                         let body = json!({"expectedRevision":revision,"config":config});
                         self.decisions.config_saving = Some(config.clone());
+                        self.decisions.config_draft = Some(config);
+                        self.decisions.config_kinds_saving =
+                            Some(self.decisions.config_kinds.clone());
                         self.command(
                             Slot::NotificationSettingsSave,
                             "Saving notification settings",
@@ -651,7 +745,8 @@ impl Shell {
         }
     }
     pub(super) fn approvals_screen(&mut self, ui: &mut Ui) {
-        let online = self.online().is_ok();
+        let offline = self.online().err();
+        let online = offline.is_none();
         let mut actions = Vec::new();
         let projects: Vec<_> = self
             .projects
@@ -732,9 +827,12 @@ impl Shell {
                     },
                     |ui, state, tab| {
                         let (d, actions) = state;
-                        if !online {
-                            ui.label(
-                                "Application offline. Decisions require a connected native host.",
+                        if let Some(reason) = &offline {
+                            widgets::state_block(
+                                ui,
+                                &ViewState::Offline {
+                                    reason: reason.clone(),
+                                },
                             );
                         }
                         if let Some(e) = &d.error {
@@ -743,14 +841,17 @@ impl Shell {
                         egui::ScrollArea::vertical()
                             .id_salt("approval-inbox")
                             .show(ui, |ui| {
-                                if tab == 2 {
-                                    if !d.reviews_loaded {
+                                if tab == 2 && d.project.is_none() {
+                                    ui.label("Select a project to review Knowledge. This informational queue belongs to one project.");
+                                } else if tab == 2 {
+                                    if !d.reviews_loaded && online && d.error.is_none() {
                                         ui.label("Loading Knowledge review queue…");
                                     }
                                     if d.reviews_loaded && d.reviews.is_empty() {
                                         ui.label("No Knowledge entries need review.");
                                     }
                                     for r in &d.reviews {
+                                        ui.push_id((format!("{:?}",r.kind),r.entry.id.as_str(),r.other.as_ref().map(|row|row.id.as_str())),|ui| {
                                         ui.group(|ui| {
                                             ui.label(format!(
                                                 "{:?} · {} · {} occurrences",
@@ -771,9 +872,10 @@ impl Shell {
                                                 ));
                                             }
                                         });
+                                        });
                                     }
                                 } else {
-                                    if !d.loaded {
+                                    if !d.loaded && online && d.error.is_none() {
                                         ui.label("Loading approvals…");
                                     }
                                     if d.loaded && d.approvals.is_empty() {
@@ -891,8 +993,17 @@ impl Shell {
             });
             if let Some(n)=&d.notification {
                 ui.separator();ui.heading(&n.title.0);ui.label(&n.body.0);ui.label(format!("Notification {} @ {}",n.id.as_str(),n.revision.as_str()));
-                if let Some(id)=&n.decision_id {if ui.button("Open linked decision").clicked(){actions.push(Action::Approval(id.as_str().into()));}}
-                if let Some(links)=&n.links {for link in &links.0 {if let Some(url)=&link.url {ui.hyperlink_to(&link.kind.0,&url.0);}if link.target_id.is_some()||link.artifact.is_some(){if ui.button(format!("Open {}",link.kind.0)).clicked(){actions.push(Action::Link(link.clone()));}}}}
+                if let Some(id)=&n.decision_id && ui.button("Open linked decision").clicked() {
+                    actions.push(Action::Approval(id.as_str().into()));
+                }
+                if let Some(links)=&n.links {
+                    for link in &links.0 {
+                        if let Some(url)=&link.url {ui.hyperlink_to(&link.kind.0,&url.0);}
+                        if (link.target_id.is_some()||link.artifact.is_some()) && ui.button(format!("Open {}",link.kind.0)).clicked() {
+                            actions.push(Action::Link(link.clone()));
+                        }
+                    }
+                }
             }
             ui.collapsing("Notification preferences",|ui|{
                 if let Some(config)=&mut d.config_draft {
@@ -900,9 +1011,9 @@ impl Shell {
                     ui.label("Required-input desktop notifications are attempted only while the app is unfocused and permission allows them. In-app history remains available.");
                     if let Some(permission)=&d.permission { ui.label(permission_label(permission)); }
                     if ui.add_enabled(!requesting_permission,egui::Button::new("Request notification permission")).clicked() { actions.push(Action::RequestPermission); }
-                    let mut kinds=config.kinds.0.iter().map(|k|k.0.clone()).collect::<Vec<_>>().join(", ");
                     ui.label("Notification kinds (comma separated)");
-                    if ui.text_edit_singleline(&mut kinds).changed(){config.kinds.0=kinds.split(',').map(str::trim).filter(|x|!x.is_empty()).map(|x|devworks_core::protocol::support::BoundedText(x.into())).collect();}
+                    let input=ui.text_edit_singleline(&mut d.config_kinds);
+                    input.widget_info(||egui::WidgetInfo::labeled(egui::Role::TextInput,true,"Notification kinds"));
                     if ui.add_enabled(!preferences_busy,egui::Button::new("Save notification preferences")).clicked(){actions.push(Action::SaveConfig);}
                     if ui.button("Discard preference draft and reload").clicked(){actions.push(Action::ReloadConfig);}
                     if let Some((_,revision))=&d.config {ui.label(format!("Preferences revision {revision}"));}
@@ -976,22 +1087,32 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if let Some(scope) = &p.scope {
         json_view(ui, "Scope", scope);
     }
+    if let Some(artifact) = &p.artifact {
+        json_view(ui, "Reviewed artifact identity", artifact);
+    }
     if let Some(digest) = &p.scope_digest {
         ui.label(format!("Scope digest: {}", digest.as_str()));
     }
-    let changed = d
-        .approvals
-        .iter()
-        .find(|x| x.id.as_str() == p.id.as_str())
-        .is_some_and(|x| x.revision.as_str() != p.revision.as_str());
+    let changed = d.current.as_ref().is_some_and(|current| {
+        current.revision != p.revision.as_str()
+            || current.content_digest != p.content_digest.as_str()
+            || current.target_revision != p.target_revision.as_str()
+    });
     if changed {
         ui.colored_label(theme::AMBER,"A newer proposal revision is available. This draft remains bound to the inspected revision.");
     }
     let stale = p.stale == Some(true)
-        || d.approvals
-            .iter()
-            .find(|x| x.id.as_str() == p.id.as_str())
-            .is_some_and(|x| x.stale == Some(true));
+        || d.current
+            .as_ref()
+            .is_some_and(|current| current.stale == Some(true));
+    if let Some(current) = &d.current
+        && (changed || !matches!(current.state, ApprovalState::Pending))
+    {
+        ui.label(format!(
+            "Current proposal: {:?} @ {}",
+            current.state, current.revision
+        ));
+    }
     if stale {
         ui.colored_label(
             theme::AMBER,
@@ -1154,8 +1275,10 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     rationale_input.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Decision rationale")
     });
-    let can =
-        enabled && matches!(p.state, ApprovalState::Pending) && !d.rationale.trim().is_empty();
+    let can = enabled
+        && matches!(p.state, ApprovalState::Pending)
+        && !changed
+        && !d.rationale.trim().is_empty();
     let approve = can
         && !stale
         && !changed

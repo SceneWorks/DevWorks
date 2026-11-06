@@ -3719,7 +3719,7 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `Settings` | `entries`: `NonEmpty<SettingAssignment>` |
 | `FeaturePlan` | `proposalId`: `Id` |
 | `FindingRisk` | `featureId`: `Id`<br>`findingId`: `Id`<br>`assessmentRevision`: `Revision` |
-| `SavedOperation` | `schemaRevision`: `PositiveCounter`<br>`input`: `DynamicJson` |
+| `SavedOperation` | `schemaRevision`: `PositiveCounter`<br>`input`: `SavedCommandInput` |
 
 ### KnowledgeReviewKind
 

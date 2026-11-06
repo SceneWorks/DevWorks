@@ -72,6 +72,7 @@ impl ApprovalService {
                     schema_revision.0.parse().unwrap_or(0),
                     &input.0,
                 )?;
+                check_authority(tx, ctx, &request)?;
                 let prepared = c
                     .prepared::<PreparedOwner>()
                     .ok_or_else(|| invalid("owner_preview"))?;
@@ -121,12 +122,19 @@ impl ApprovalService {
                     return Err(invalid("content_digest"));
                 }
                 let binding = json!({"featureId":feature_id,"finding":finding,"assessmentRevision":r.revision,"assessmentDigest":model::hash(&r.body),"restoreEpoch":ctx.restore_epoch()});
+                let mut proposal = i.clone();
+                proposal.summary = crate::services::sessions::content(
+                    finding
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Review the exact finding risk"),
+                );
                 let p = stage_generic(
                     tx,
                     ctx,
-                    i,
+                    &proposal,
                     scope,
-                    json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::replay::save_context(ctx)}),
+                    json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::save_context(ctx)}),
                 )?;
                 model::generic(&p, true, None)?
             }
@@ -255,11 +263,15 @@ impl ApprovalService {
                         else {
                             unreachable!()
                         };
+                        if p.payload["authority"] != authority_binding(tx, &original)? {
+                            return Err(conflict(id));
+                        }
                         let request = self.decoded(
                             &p.operation_kind,
                             schema_revision.0.parse().unwrap_or(0),
                             &input.0,
                         )?;
+                        check_authority(tx, &original, &request)?;
                         let prepared = c
                             .prepared::<PreparedOwner>()
                             .ok_or_else(|| invalid("owner_preview"))?;
@@ -342,8 +354,17 @@ fn check_review(
     v: &crate::protocol::records::ApprovalViewRecord,
     i: &ops::RecordHumanDecisionInput,
 ) -> Result<(), Failure> {
-    if v.revision != i.expected_revision
-        || v.content_digest != i.content_digest
+    if v.revision != i.expected_revision {
+        return Err(StorageError::conflict(
+            crate::protocol::RevisionDimension::Review,
+            "approval",
+            i.proposal_id.clone(),
+            i.expected_revision.clone(),
+            v.revision.clone(),
+        )
+        .into());
+    }
+    if v.content_digest != i.content_digest
         || !matches!(v.state, crate::protocol::records::ApprovalState::Pending)
     {
         return Err(conflict(&i.proposal_id));
@@ -364,14 +385,26 @@ pub fn stage_saved(
     {
         return Err(invalid("reviewed_binding"));
     }
+    check_authority(tx, ctx, request)?;
+    let authority = super::authority_binding(tx, ctx)?;
     let mut input = i.clone();
     input.summary = crate::services::sessions::content(&preview.summary);
+    input.artifact = preview
+        .reviewed
+        .get("artifact")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()).map_err(|_| invalid("owner_artifact")))
+        .transpose()?;
+    if let Some(a) = &input.artifact {
+        a.validate().map_err(|_| invalid("owner_artifact"))?;
+    }
+
     stage_generic(
         tx,
         ctx,
         &input,
         preview.scope.clone(),
-        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"invocation":super::replay::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
+        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
     )
 }
 fn stage_generic(
@@ -379,8 +412,9 @@ fn stage_generic(
     ctx: &InvocationContext,
     i: &ops::ProposeInput,
     scope: ConfigScope,
-    payload: Value,
+    mut payload: Value,
 ) -> Result<StoredApproval, Failure> {
+    payload["sourceContext"] = super::save_source_context(ctx);
     let p = StoredApproval {
         id: tx.new_id(IdKind::Event),
         scope,
@@ -390,12 +424,8 @@ fn stage_generic(
         target_id: i.target.id.clone(),
         target_revision: i.target.revision.get(),
         content_digest: i.content_digest.0.clone(),
-        scope_digest: model::hash(&payload["binding"]),
-        summary: payload["reviewed"]
-            .get("summary")
-            .and_then(Value::as_str)
-            .unwrap_or(&i.summary.0)
-            .into(),
+        scope_digest: super::scope_digest(&payload["binding"], payload.get("authority")),
+        summary: i.summary.0.clone(),
         artifact: i
             .artifact
             .as_ref()
@@ -446,4 +476,16 @@ fn settings_failure(f: crate::settings::service::Failure) -> Failure {
             })
         }
     }
+}
+
+pub(crate) fn authority_binding(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+) -> Result<Value, StorageError> {
+    let policy =
+        crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?.digest();
+    let principal=tx.authority().principal(ctx.principal())?.map(|p|json!({"revision":p.revision,"active":p.active,"kind":format!("{:?}",p.kind),"role":p.role.map(|r|r.as_str()),"projectId":p.project_id,"tools":p.tool_families}));
+    Ok(
+        json!({"policyDigest":policy,"principal":principal,"projectId":ctx.project_id(),"rootId":ctx.root_id(),"assignmentId":ctx.assignment_id(),"restoreEpoch":ctx.restore_epoch()}),
+    )
 }
