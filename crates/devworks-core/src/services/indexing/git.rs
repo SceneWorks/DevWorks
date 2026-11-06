@@ -234,10 +234,8 @@ fn windows_reviewed_program(exec_path: &str) -> Option<String> {
         && path.as_bytes().get(2) == Some(&b'/')
     {
         &path[3..]
-    } else if let Some(rest) = path.strip_prefix("//") {
-        rest
     } else {
-        return None;
+        path.strip_prefix("//")?
     };
     if rest
         .split('/')
