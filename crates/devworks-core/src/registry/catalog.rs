@@ -20,7 +20,7 @@ use crate::protocol::support::*;
 use crate::registry::Mode;
 use serde_json::Value;
 
-pub(super) const FAMILIES: [&str; 48] = [
+pub(super) const FAMILIES: [&str; 49] = [
     "projects",
     "features",
     "issues",
@@ -69,9 +69,10 @@ pub(super) const FAMILIES: [&str; 48] = [
     "maintenance",
     "repository_docs",
     "mcp_server",
+    "evals",
 ];
 
-pub(super) static CATALOG: [OperationDescriptor; 354] = [
+pub(super) static CATALOG: [OperationDescriptor; 356] = [
     OperationDescriptor {
         name: "projects.list",
         family: "projects",
@@ -8024,6 +8025,50 @@ pub(super) static CATALOG: [OperationDescriptor; 354] = [
         completion: true,
         revisions: &[SchemaRevision(1)],
     },
+    OperationDescriptor {
+        name: "evals.grade",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.grade",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "evals::GradeInput",
+            decode: decode_evals_grade_command,
+            input_schema: schema_of::<ops::evals::GradeInput>,
+        }],
+        result_type: "EvalReport",
+        result_schema: schema_of::<EvalReport>,
+        completion: true,
+        revisions: &[SchemaRevision(1)],
+    },
+    OperationDescriptor {
+        name: "evals.results",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.results",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "evals::ResultsInput",
+            decode: decode_evals_results_query,
+            input_schema: schema_of::<ops::evals::ResultsInput>,
+        }],
+        result_type: "EvalReportPage",
+        result_schema: schema_of::<EvalReportPage>,
+        completion: false,
+        revisions: &[SchemaRevision(1)],
+    },
 ];
 
 pub(super) fn index_of(name: &str) -> Option<usize> {
@@ -8382,6 +8427,8 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "mcp_server.configure" => Some(351),
         "mcp_server.clients" => Some(352),
         "mcp_server.set_client_access" => Some(353),
+        "evals.grade" => Some(354),
+        "evals.results" => Some(355),
         _ => None,
     }
 }
@@ -12163,4 +12210,20 @@ fn decode_mcp_server_set_client_access_command(
         v,
         |i| OperationInput::McpServer(ops::mcp_server::Input::SetClientAccess(i)),
     )
+}
+fn decode_evals_grade_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::GradeInput>("evals.grade", Mode::Command, revision, v, |i| {
+        OperationInput::Evals(ops::evals::Input::Grade(i))
+    })
+}
+fn decode_evals_results_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::ResultsInput>("evals.results", Mode::Query, revision, v, |i| {
+        OperationInput::Evals(ops::evals::Input::Results(i))
+    })
 }

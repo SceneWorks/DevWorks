@@ -1366,7 +1366,10 @@
       "id": "DW-071",
       "type": "Feature",
       "title": "Grade recorded work end to end",
-      "operations": [],
+      "operations": [
+        "evals.grade",
+        "evals.results"
+      ],
       "dependsOnKeys": [],
       "acceptance": "Walking skeleton: add the evals architecture section, routing rule, evals.* operation contracts and implementation slices, and grade recorded DevWorks sessions with deterministic checks into persisted, revision-attributed results. Closes the traceability gap left when EVAL requirements were added. AC1: Running a suite with a deterministic check over recorded sessions persists results attributed to the revision in effect at each step, puts steps that cannot be attributed in an explicit mixed-revision group, and changes no work, repository or Knowledge record. AC2: Every instance, run and suite result has exactly one explicit outcome (passed, failed, unclear, not applicable, evidence unavailable, grader error, cancelled, budget exhausted) with eligible, graded and ungraded coverage counts; only passed and failed enter rates. AC3: The architecture reader, requirements traceability and implementation plan regenerate with every EVAL requirement and every evals.* operation owned, and no unowned requirement or operation.",
       "gates": [
@@ -1376,7 +1379,7 @@
       "codegraphItem": "DW-71",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "ready",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_suites",
@@ -1396,7 +1399,7 @@
       "codegraphItem": "DW-72",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_judges",
@@ -1417,7 +1420,7 @@
       "codegraphItem": "DW-73",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_trials",
@@ -1440,7 +1443,7 @@
       "codegraphItem": "DW-74",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_comparisons",
@@ -1460,7 +1463,7 @@
       "codegraphItem": "DW-75",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_gates",
@@ -1486,7 +1489,7 @@
       "codegraphItem": "DW-76",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_triggers",
@@ -1507,7 +1510,7 @@
       "codegraphItem": "DW-77",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_adoption",
@@ -1532,7 +1535,7 @@
       "codegraphItem": "DW-78",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_ui",
@@ -1555,7 +1558,7 @@
       "codegraphItem": "DW-79",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_package_suites",
@@ -1575,7 +1578,7 @@
       "codegraphItem": "DW-80",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_mcp_records",
@@ -1595,7 +1598,7 @@
       "codegraphItem": "DW-81",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "eval_acceptance",
@@ -1624,7 +1627,7 @@
       "codegraphItem": "DW-82",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71; EVAL operations are not added to the qualified catalog by this metadata synchronization"
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
     },
     {
       "key": "session_auto_routing",

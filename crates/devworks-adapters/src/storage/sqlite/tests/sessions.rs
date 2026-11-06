@@ -3733,3 +3733,6 @@ fn a_workspace_command_naming_a_project_belongs_to_that_projects_feed() {
     assert_eq!(feed.items.0.len(), 1);
     let _ = start;
 }
+
+#[path = "sessions/evals.rs"]
+mod evals;

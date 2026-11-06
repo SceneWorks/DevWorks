@@ -7,6 +7,7 @@
 use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
+use crate::evals::EvalSupervisor;
 use crate::indexing::{IndexSupervisor, IndexingConfig};
 use crate::jobs::Scheduler;
 use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
@@ -19,6 +20,7 @@ use devworks_core::ports::files::FileFault;
 use devworks_core::ports::process::{PowerPort, ProcessHost};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
 use devworks_core::ports::{AuthorityPort, Clock, IdSource};
+use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{CommandReply, Id};
 use devworks_core::services::UseCases;
@@ -29,6 +31,7 @@ use devworks_core::services::artifacts::lifecycle::{
 use devworks_core::services::artifacts::replies::ReceiptReplies;
 use devworks_core::services::browser::{BrowserRecovery, BrowserService};
 use devworks_core::services::diagnostics::{DiagnosticService, ExportFailure, LogQuery};
+use devworks_core::services::evals::EvalService;
 use devworks_core::services::jobs::runner::{
     InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
 };
@@ -209,6 +212,11 @@ pub struct RuntimeConfig {
     pub jobs: JobConfig,
     /// Time between scheduler ticks (commands that change jobs request one at once).
     pub scheduler_interval: Duration,
+    /// Already authorized immutable suites supplied by the host (DW-72 owns activation).
+    /// Empty by default: no automatic grading or transcript scans. Agents cannot activate suites.
+    pub automatic_eval_suites: Vec<EvalSuiteSnapshot>,
+    /// Maximum delay before a lost terminal-state wakeup is repaired by a durable sweep.
+    pub eval_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -224,6 +232,8 @@ impl RuntimeConfig {
             browser_interval: Duration::from_secs(1),
             jobs: JobConfig::default(),
             scheduler_interval: Duration::from_secs(5),
+            automatic_eval_suites: Vec::new(),
+            eval_interval: Duration::from_secs(30),
         }
     }
 }
@@ -318,6 +328,8 @@ pub struct Runtime {
     admitter: Arc<Admitter>,
     jobs: Arc<JobService>,
     scheduler: Arc<Scheduler>,
+    evals: Arc<EvalSupervisor>,
+    grading: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
@@ -387,6 +399,10 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
+    for suite in &config.automatic_eval_suites {
+        devworks_core::protocol::Check::check(suite)
+            .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))?;
+    }
     // The one process owner: every owned tree (browsers included) is launched through it. It is
     // built first so the browser service can be composed with it; its recovery still runs at
     // step 4.
@@ -459,7 +475,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let work = Arc::new(
         WorkService::new(ids.clone(), runs.service.clone()).with_staged_plans(artifacts.clone()),
     );
+    let eval_service = Arc::new(EvalService::new(ids.clone(), clock.clone()));
     let use_cases = use_cases
+        .with_evals(eval_service.clone())
         .with_artifacts(artifacts.clone())
         .with_resources(resources.clone())
         .with_runs(runs.service.clone())
@@ -712,6 +730,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let indexing_task = index_supervisor
         .clone()
         .map(|ix| tokio::spawn(async move { ix.run().await }));
+    // Recovery has settled prior-boot activations before the first evaluation sweep.
+    let evals = EvalSupervisor::new(store.clone(), eval_service, config.automatic_eval_suites);
+    let grading = tokio::spawn(evals.clone().run(config.eval_interval));
     let admission = Arc::new(std::sync::RwLock::new(false));
     let admitter = Arc::new(Admitter {
         store: store.clone(),
@@ -725,6 +746,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         diagnostics: diagnostics.clone(),
         keep_awake: keep_awake.clone(),
         scheduler: OnceLock::new(),
+        evals: evals.clone(),
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
     });
@@ -757,6 +779,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         admitter,
         jobs,
         scheduler,
+        evals,
+        grading: Mutex::new(Some(grading)),
         keep_awake,
         diagnostics,
         monitor,
@@ -876,6 +900,10 @@ impl Runtime {
     /// helper hosts).
     pub fn processes(&self) -> &Arc<ProcessSupervisor> {
         self.housekeeper.supervisor()
+    }
+    /// Host automatic grading supervisor (suite activation is supplied at composition).
+    pub fn evals(&self) -> &Arc<EvalSupervisor> {
+        &self.evals
     }
     /// How far shutdown has progressed (AD20: the progress surface stays responsive).
     pub fn shutdown_stage(&self) -> ShutdownStage {
@@ -1013,6 +1041,7 @@ impl Runtime {
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
+        self.evals.stop();
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
@@ -1031,6 +1060,8 @@ impl Runtime {
             *admission.write().unwrap_or_else(|p| p.into_inner()) = true;
         })
         .await;
+        // No blocking evaluator job may outlive the runtime: drain its local write fence.
+        self.evals.drain().await;
         self.enter(ShutdownStage::Quiescing);
         let _ = self.runs.quiesce(self.shutdown_grace.min(left())).await;
         self.enter(ShutdownStage::StoppingWork);
@@ -1044,7 +1075,12 @@ impl Runtime {
         // within its own bound, and the owned-tree stop below covers its trees.
         let mut joining: Vec<JoinHandle<()>> =
             std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|p| p.into_inner()));
-        for slot in [&self.monitoring, &self.supervision, &self.scheduling] {
+        for slot in [
+            &self.monitoring,
+            &self.supervision,
+            &self.scheduling,
+            &self.grading,
+        ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
         for mut task in joining {
@@ -1105,6 +1141,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.evals.stop();
         self.browser_supervision.stop();
         if let Some(ix) = &self.indexing {
             ix.worker().stop_all();
@@ -1204,6 +1241,7 @@ fn closing_reply(raw: &[u8], correlation: Id) -> CommandOutcome {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
+        self.evals.close();
         // Package helpers are killed at once (no grace): their host threads would otherwise
         // keep the process owner, and so the helper trees, alive.
         if let Some(h) = &self.packages {
@@ -1230,6 +1268,7 @@ struct Admitter {
     diagnostics: Arc<DiagnosticService>,
     keep_awake: Arc<KeepAwake>,
     scheduler: OnceLock<Weak<Scheduler>>,
+    evals: Arc<EvalSupervisor>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
@@ -1277,6 +1316,9 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            if operation == "sessions.end" || operation.starts_with("runs.") {
+                self.evals.notify();
+            }
             if operation.starts_with("runs.") {
                 // A stop to execute, a stop to signal or a new activation to claim.
                 self.runs.notify();

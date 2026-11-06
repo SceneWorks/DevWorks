@@ -459,18 +459,25 @@ fn a_missing_wakeup_is_repaired_by_the_bounded_sweep() {
     runtime().block_on(within(
         "a_missing_wakeup_is_repaired_by_the_bounded_sweep",
         async {
+            // Exercise a wake that wins before the first timer is polled, as a delivery's
+            // completion can. Both passes must report the wait they requested.
+            d.wakeup().wake();
             let (tick, d2) = (sweep.clone(), d.clone());
             let looping = tokio::spawn(async move {
                 d2.run_with_sweep(move |wait| {
-                    let (asked_tx, tick) = (asked_tx.clone(), tick.clone());
+                    // Record the requested wait when the timer is constructed. A pending
+                    // completion wakeup wins before the timer future is polled, so reporting
+                    // inside that future would lose this pass and strand the assertions below.
+                    let _ = asked_tx.send(wait);
+                    let tick = tick.clone();
                     async move {
-                        let _ = asked_tx.send(wait);
                         tick.notified().await;
                     }
                 })
                 .await
             });
             // First pass over an empty queue: the loop waits one full sweep interval.
+            assert_eq!(asked.recv().await, Some(interval));
             assert_eq!(asked.recv().await, Some(interval));
             // A delivery due later, committed without a wakeup: the loop stays parked until the
             // sweep; that pass sees nothing ready and shortens its next wait to the saved time.

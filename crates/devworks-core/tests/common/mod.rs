@@ -381,6 +381,9 @@ impl ReadSnapshot for MemSnapshot {
     fn browser(&self) -> &dyn BrowserRead {
         &self.unsupported
     }
+    fn evals(&self) -> &dyn EvalRead {
+        &self.unsupported
+    }
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
@@ -476,6 +479,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
+        &mut self.unsupported
+    }
+    fn evals(&mut self) -> &mut dyn EvalRepository {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
@@ -2683,5 +2689,24 @@ impl GitRepository for Unsupported {
         Err(StorageError::InvalidRecord(
             "Git test store not configured".into(),
         ))
+    }
+}
+
+impl EvalRead for Unsupported {
+    fn eval_run(&self, _: &Id) -> Result<Option<StoredEvalRun>, StorageError> {
+        nope()
+    }
+    fn eval_runs(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredEvalRun>, StorageError> {
+        nope()
+    }
+}
+impl EvalRepository for Unsupported {
+    fn insert_eval_run(&mut self, _: &StoredEvalRun) -> Result<(), StorageError> {
+        nope()
     }
 }

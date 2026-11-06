@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 354 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 356 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -695,6 +695,15 @@ All 354 qualified operations have typed input/result candidates. Existing input 
 | `mcp_server.configure` | **Command**<br>`expectedRevision`: `Revision`<br>`enabled`: `bool`<br>`bindings`: `Items<McpServerBinding>`<br>`httpPort`: `?Port` | `McpInboundStatus` |
 | `mcp_server.clients` | **Query**<br>`page`: `PageRequest` | `Page<McpClientAccess>` |
 | `mcp_server.set_client_access` | **Command**<br>`action`: `McpClientAccessAction` | `McpClientAccess` |
+
+### Evals
+
+**Owner:** EvaluationService. Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.
+
+| Operation | Mode and input fields | Typed result value |
+| --- | --- | --- |
+| `evals.grade` | **Command**<br>`sessionId`: `Id`<br>`suite`: `EvalSuiteSnapshot` | `EvalReport` |
+| `evals.results` | **Query**<br>`sessionId`: `Id`<br>`page`: `PageRequest` | `EvalReportPage` |
 
 ## Domain types
 
@@ -3397,6 +3406,141 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `ownershipRevision` | `Revision` |
 | `observedAtMs` | `Counter` |
 | `repositoryUrl` | `?Url` |
+
+### EvalOutcome
+
+`passed`, `failed`, `unclear`, `not_applicable`, `evidence_unavailable`, `grader_error`, `cancelled`, `budget_exhausted`.
+
+### EvalMeasurementKind
+
+`Proxy`, `EnforcedRule`.
+
+### EvalPredicate
+
+| Kind | Fields |
+| --- | --- |
+| `ToolSucceeded` | `operation`: `Label` |
+| `TranscriptContains` | `entryKind`: `Label`<br>`text`: `Text` |
+| `RecordFieldEquals` | `source`: `EvalRecordSource`<br>`pointer`: `Text`<br>`expected`: `DynamicJson` |
+
+### EvalDeterministicCheck
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `ruleRef` | `Text` |
+| `measurement` | `EvalMeasurementKind` |
+| `predicate` | `EvalPredicate` |
+
+### EvalSuiteSnapshot
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `name` | `Label` |
+| `checks` | `NonEmpty<EvalDeterministicCheck>` |
+
+### EvalOutcomeCount
+
+| Field | Type |
+| --- | --- |
+| `outcome` | `EvalOutcome` |
+| `count` | `Counter` |
+
+### EvalCoverage
+
+| Field | Type |
+| --- | --- |
+| `eligible` | `Counter` |
+| `graded` | `Counter` |
+| `ungraded` | `Counter` |
+| `passed` | `Counter` |
+| `failed` | `Counter` |
+| `ungradedReasons` | `Rows<EvalOutcomeCount>` |
+| `passRate` | `?Probability` |
+
+### EvalStepSource
+
+| Field | Type |
+| --- | --- |
+| `sessionId` | `Id` |
+| `sequence` | `Counter` |
+| `entryId` | `Id` |
+| `kind` | `Label` |
+
+### EvalRevisionContext
+
+| Kind | Fields |
+| --- | --- |
+| `Exact` | `contextEpoch`: `Counter`<br>`sources`: `NonEmpty<EvalRevisionSource>` |
+| `Mixed` | `contextEpoch`: `Counter`<br>`sources`: `Items<EvalRevisionSource>`<br>`reason`: `Text` |
+
+### EvalInstanceResult
+
+| Field | Type |
+| --- | --- |
+| `checkId` | `Id` |
+| `source` | `?EvalStepSource` |
+| `revision` | `EvalRevisionContext` |
+| `outcome` | `EvalOutcome` |
+| `coverage` | `EvalCoverage` |
+| `detail` | `Text` |
+| `observedValue` | `?EvalObservedValue` |
+
+### EvalRunResult
+
+| Field | Type |
+| --- | --- |
+| `sessionId` | `Id` |
+| `outcome` | `EvalOutcome` |
+| `coverage` | `EvalCoverage` |
+| `instances` | `Rows<EvalInstanceResult>` |
+
+### EvalReport
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `projectId` | `?ProjectId` |
+| `sessionId` | `Id` |
+| `suite` | `EvalSuiteSnapshot` |
+| `createdAtMs` | `Counter` |
+| `sourceWatermark` | `Counter` |
+| `sessionRevision` | `Revision` |
+| `measurementDigest` | `Digest` |
+| `outcome` | `EvalOutcome` |
+| `coverage` | `EvalCoverage` |
+| `runs` | `Rows<EvalRunResult>` |
+| `sessionSequence` | `Counter` |
+| `evidenceDigest` | `Digest` |
+
+### EvalRevisionSource
+
+| Field | Type |
+| --- | --- |
+| `sourceId` | `Id` |
+| `kind` | `Label` |
+| `revision` | `Revision` |
+| `disposition` | `Label` |
+
+### EvalReportPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<EvalReport>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### EvalRecordSource
+
+`Session`, `HistoryEvent`, `GitLink`, `PullRequestLink`, `ReviewLink`, `WorkState`.
+
+### EvalObservedValue
+
+| Field | Type |
+| --- | --- |
+| `value` | `DynamicJson` |
 
 ## Machine sources
 

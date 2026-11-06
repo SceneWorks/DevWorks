@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-05",
-  "catalogSha256": "20f700ac89496bfb3a88ac10ee5dcb6bfb7df5ea9cfa085fdc41906cad0d67bb",
-  "familyCount": 48,
-  "operationCount": 354,
-  "concreteInputCandidates": 354,
+  "catalogSha256": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+  "familyCount": 49,
+  "operationCount": 356,
+  "concreteInputCandidates": 356,
   "domainInputsPending": 0,
   "families": [
     {
@@ -17718,6 +17718,105 @@
           "effect": "Local",
           "semanticRules": "Authenticated native human only; register disabled with empty grants, scoped identities and native credential flow. Replace validates scope relationships and operation allowlists; expected revision, revocation/generation fencing, restore reauthorization. No remote MCP self-grant or human impersonation.",
           "familyRules": "Incoming MCP adapter uses shared application services. Internal human configuration only; not automatically MCP-exposed. stdio/loopback HTTP, current principal/grant, explicit scope, read-default policy, receipts and publication revocation apply. Protocol/session/client labels never mint authority.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        }
+      ]
+    },
+    {
+      "family": "evals",
+      "owner": "EvaluationService",
+      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation",
+      "operations": [
+        {
+          "operation": "evals.grade",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.grade",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.grade"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.grade"
+          },
+          "resultValueType": "EvalReport",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Grade one visible recorded session using an immutable supplied/draft suite snapshot; no suite activation, adoption authority or evidence-gate approval is conferred. Only evaluator report/receipt/history records may be written. Attribute each matching durable step to complete host-recorded effective revision sources, otherwise keep known sources in the explicit Mixed group. ToolSucceeded grades each matching call response; all built-in predicates require Proxy. RecordFieldEquals compares a bounded expected JSON value at an RFC 6901 pointer in the fixed Session, HistoryEvent, GitLink, PullRequestLink, ReviewLink or WorkState projection captured in the coherent session snapshot; no arbitrary storage or network reads. Invalid pointers produce grader_error, missing durable record/field evidence produces evidence_unavailable. No matching transcript/tool step is not_applicable; missing durable response or selected record/field evidence is evidence_unavailable. No inference.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "evals.results",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.results",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.results"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.results"
+          },
+          "resultValueType": "EvalReportPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
           "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",

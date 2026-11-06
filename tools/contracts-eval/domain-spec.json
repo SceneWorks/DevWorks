@@ -3606,6 +3606,176 @@
         "observed_at_ms": "Counter",
         "repository_url": "?Url"
       }
+    },
+    "EvalOutcome": {
+      "kind": "enum",
+      "values": [
+        "passed",
+        "failed",
+        "unclear",
+        "not_applicable",
+        "evidence_unavailable",
+        "grader_error",
+        "cancelled",
+        "budget_exhausted"
+      ]
+    },
+    "EvalMeasurementKind": {
+      "kind": "enum",
+      "values": [
+        "Proxy",
+        "EnforcedRule"
+      ]
+    },
+    "EvalPredicate": {
+      "kind": "union",
+      "variants": {
+        "ToolSucceeded": {
+          "operation": "Label"
+        },
+        "TranscriptContains": {
+          "entry_kind": "Label",
+          "text": "Text"
+        },
+        "RecordFieldEquals": {
+          "source": "EvalRecordSource",
+          "pointer": "Text",
+          "expected": "DynamicJson"
+        }
+      }
+    },
+    "EvalDeterministicCheck": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "rule_ref": "Text",
+        "measurement": "EvalMeasurementKind",
+        "predicate": "EvalPredicate"
+      }
+    },
+    "EvalSuiteSnapshot": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "name": "Label",
+        "checks": "NonEmpty<EvalDeterministicCheck>"
+      }
+    },
+    "EvalOutcomeCount": {
+      "kind": "record",
+      "fields": {
+        "outcome": "EvalOutcome",
+        "count": "Counter"
+      }
+    },
+    "EvalCoverage": {
+      "kind": "record",
+      "fields": {
+        "eligible": "Counter",
+        "graded": "Counter",
+        "ungraded": "Counter",
+        "passed": "Counter",
+        "failed": "Counter",
+        "ungraded_reasons": "Rows<EvalOutcomeCount>",
+        "pass_rate": "?Probability"
+      }
+    },
+    "EvalStepSource": {
+      "kind": "record",
+      "fields": {
+        "session_id": "Id",
+        "sequence": "Counter",
+        "entry_id": "Id",
+        "kind": "Label"
+      }
+    },
+    "EvalRevisionContext": {
+      "kind": "union",
+      "variants": {
+        "Exact": {
+          "context_epoch": "Counter",
+          "sources": "NonEmpty<EvalRevisionSource>"
+        },
+        "Mixed": {
+          "context_epoch": "Counter",
+          "sources": "Items<EvalRevisionSource>",
+          "reason": "Text"
+        }
+      }
+    },
+    "EvalInstanceResult": {
+      "kind": "record",
+      "fields": {
+        "check_id": "Id",
+        "source": "?EvalStepSource",
+        "revision": "EvalRevisionContext",
+        "outcome": "EvalOutcome",
+        "coverage": "EvalCoverage",
+        "detail": "Text",
+        "observed_value": "?EvalObservedValue"
+      }
+    },
+    "EvalRunResult": {
+      "kind": "record",
+      "fields": {
+        "session_id": "Id",
+        "outcome": "EvalOutcome",
+        "coverage": "EvalCoverage",
+        "instances": "Rows<EvalInstanceResult>"
+      }
+    },
+    "EvalReport": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "project_id": "?ProjectId",
+        "session_id": "Id",
+        "suite": "EvalSuiteSnapshot",
+        "created_at_ms": "Counter",
+        "source_watermark": "Counter",
+        "session_revision": "Revision",
+        "measurement_digest": "Digest",
+        "outcome": "EvalOutcome",
+        "coverage": "EvalCoverage",
+        "runs": "Rows<EvalRunResult>",
+        "session_sequence": "Counter",
+        "evidence_digest": "Digest"
+      }
+    },
+    "EvalRevisionSource": {
+      "kind": "record",
+      "fields": {
+        "source_id": "Id",
+        "kind": "Label",
+        "revision": "Revision",
+        "disposition": "Label"
+      }
+    },
+    "EvalReportPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<EvalReport>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "EvalRecordSource": {
+      "kind": "enum",
+      "values": [
+        "Session",
+        "HistoryEvent",
+        "GitLink",
+        "PullRequestLink",
+        "ReviewLink",
+        "WorkState"
+      ]
+    },
+    "EvalObservedValue": {
+      "kind": "record",
+      "fields": {
+        "value": "DynamicJson"
+      }
     }
   },
   "operations": {
@@ -7713,6 +7883,30 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Replaces the tag set (empty clears it) of a live, explicitly retained artifact the caller sees and whose owner scope its authorized scope covers, under the expected artifact revision; an equal set is NoChange. Receipt replies are never retagged."
+    },
+    "evals.grade": {
+      "operation": "evals.grade",
+      "mode": "Command",
+      "fields": {
+        "session_id": "Id",
+        "suite": "EvalSuiteSnapshot"
+      },
+      "result": "EvalReport",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Grade one visible recorded session using an immutable supplied/draft suite snapshot; no suite activation, adoption authority or evidence-gate approval is conferred. Only evaluator report/receipt/history records may be written. Attribute each matching durable step to complete host-recorded effective revision sources, otherwise keep known sources in the explicit Mixed group. ToolSucceeded grades each matching call response; all built-in predicates require Proxy. RecordFieldEquals compares a bounded expected JSON value at an RFC 6901 pointer in the fixed Session, HistoryEvent, GitLink, PullRequestLink, ReviewLink or WorkState projection captured in the coherent session snapshot; no arbitrary storage or network reads. Invalid pointers produce grader_error, missing durable record/field evidence produces evidence_unavailable. No matching transcript/tool step is not_applicable; missing durable response or selected record/field evidence is evidence_unavailable. No inference."
+    },
+    "evals.results": {
+      "operation": "evals.results",
+      "mode": "Query",
+      "fields": {
+        "session_id": "Id",
+        "page": "PageRequest"
+      },
+      "result": "EvalReportPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query."
     }
   },
   "earlierInputResults": {
@@ -8272,6 +8466,7 @@
     "repository_docs": "Source/version-bound generated repository docs with scoped writes and ordinary router/approval/completion rules.",
     "code": "Existing exact-view read DTOs and source result/citation contracts remain authoritative; visibility before traversal, no main/view fallback and no raw graph query escape.",
     "artifacts": "Existing immutable source/version/reference/deletion DTOs remain authoritative. Explicit deletion tombstones first, preserves surviving references, and never reactivates an old version.",
-    "mcp_server": "Incoming MCP adapter uses shared application services. Internal human configuration only; not automatically MCP-exposed. stdio/loopback HTTP, current principal/grant, explicit scope, read-default policy, receipts and publication revocation apply. Protocol/session/client labels never mint authority."
+    "mcp_server": "Incoming MCP adapter uses shared application services. Internal human configuration only; not automatically MCP-exposed. stdio/loopback HTTP, current principal/grant, explicit scope, read-default policy, receipts and publication revocation apply. Protocol/session/client labels never mint authority.",
+    "evals": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions."
   }
 }

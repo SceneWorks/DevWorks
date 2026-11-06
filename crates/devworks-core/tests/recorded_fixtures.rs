@@ -326,7 +326,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1313), 1313);
+    assert_eq!(run("domain-fixtures.json", 1349), 1349);
 }
 
 #[test]
@@ -404,8 +404,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Indexing status/runs/overlay and eight package operations also retain revision 2.
     // Those eight package operations expose saved project overrides at revision 3.
     // Git grouped coverage, retained Git links, browser provenance and artifact source reads
-    // add 23 operation/mode/revision admissions without changing the 359 revision-1 bindings.
-    assert_eq!(admitted.len(), 496);
+    // add 23 operation/mode/revision admissions. Two new eval operations bring the
+    // revision-1 bindings to 361 and the complete revision/mode coverage to 498.
+    assert_eq!(admitted.len(), 498);
 }
 
 #[test]

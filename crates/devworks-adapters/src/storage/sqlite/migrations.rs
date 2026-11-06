@@ -332,6 +332,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0023_browser_source.sql"),
         rebuilds_tables: false,
     },
+    // Additive immutable eval reports; previous readers and writers preserve these rows.
+    Migration {
+        version: 24,
+        minimum_reader: 8,
+        minimum_writer: 23,
+        sql: include_str!("migrations/0024_eval_runs.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -633,3 +641,7 @@ pub const MIGRATION_0022_SHA256: &str =
 /// Recorded checksum of migration 23.
 pub const MIGRATION_0023_SHA256: &str =
     "bd92e57bf3aa579397301ccbb06deb45570712db11fa2ff229045e0c92c59c93";
+
+/// Recorded checksum of migration 24.
+pub const MIGRATION_0024_SHA256: &str =
+    "7a648e33e052c1f0e8d2cd5d795f4a68a05f97a97399040b4be4631b7750f44b";

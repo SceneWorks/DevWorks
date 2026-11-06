@@ -59,6 +59,10 @@
 //!   immediate stop of an archived project, and the run-control steps of shutdown. Every
 //!   consumer's root-scoped deliveries pass the run-control gate ([`runs::RunGate`]), so queued
 //!   work of a paused, held or stopped root waits until the root is continued.
+//! * **Recorded evaluations.** [`evals::EvalSupervisor`] catches up terminal conversations and
+//!   stopped activation sessions after recovery, on terminal command hints and periodic keyset
+//!   sweeps. The host supplies authorized immutable suites; the default empty set performs no
+//!   scans. One cancellable local grader runs at a time, and shutdown drains its write fence.
 //! * **Owned browsers.** [`browser`] composes the one `BrowserService` (`browser.*`) over the
 //!   process owner: its `browser_effects` consumer executes journaled browser effects under the
 //!   operation journal, its supervision loop detects exits, crashes and popups, and shutdown
@@ -198,6 +202,7 @@
 pub mod browser;
 pub mod diagnostics;
 pub mod dispatch;
+pub mod evals;
 pub mod git;
 pub mod indexing;
 pub mod jobs;

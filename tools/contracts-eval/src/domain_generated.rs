@@ -9345,6 +9345,399 @@ impl Check for TestedRepositoryRevision {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalOutcome {
+    #[serde(rename = "passed")]
+    Passed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "unclear")]
+    Unclear,
+    #[serde(rename = "not_applicable")]
+    NotApplicable,
+    #[serde(rename = "evidence_unavailable")]
+    EvidenceUnavailable,
+    #[serde(rename = "grader_error")]
+    GraderError,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "budget_exhausted")]
+    BudgetExhausted,
+}
+impl Check for EvalOutcome {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalMeasurementKind {
+    Proxy,
+    EnforcedRule,
+}
+impl Check for EvalMeasurementKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum EvalPredicate {
+    ToolSucceeded {
+        operation: Label,
+    },
+    TranscriptContains {
+        entry_kind: Label,
+        text: Text,
+    },
+    RecordFieldEquals {
+        source: EvalRecordSource,
+        pointer: Text,
+        expected: DynamicJson,
+    },
+}
+impl Check for EvalPredicate {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::ToolSucceeded { operation } => {
+                operation.check()?;
+            }
+            Self::TranscriptContains { entry_kind, text } => {
+                entry_kind.check()?;
+                text.check()?;
+            }
+            Self::RecordFieldEquals {
+                source,
+                pointer,
+                expected,
+            } => {
+                source.check()?;
+                pointer.check()?;
+                expected.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalDeterministicCheck {
+    pub id: Id,
+    pub rule_ref: Text,
+    pub measurement: EvalMeasurementKind,
+    pub predicate: EvalPredicate,
+}
+impl Check for EvalDeterministicCheck {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.rule_ref.check()?;
+        self.measurement.check()?;
+        self.predicate.check()?;
+        super::domain_rules::record(
+            "EvalDeterministicCheck",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteSnapshot {
+    pub id: Id,
+    pub revision: Revision,
+    pub name: Label,
+    pub checks: NonEmpty<EvalDeterministicCheck>,
+}
+impl Check for EvalSuiteSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.name.check()?;
+        self.checks.check()?;
+        super::domain_rules::record(
+            "EvalSuiteSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalOutcomeCount {
+    pub outcome: EvalOutcome,
+    pub count: Counter,
+}
+impl Check for EvalOutcomeCount {
+    fn check(&self) -> Result<(), String> {
+        self.outcome.check()?;
+        self.count.check()?;
+        super::domain_rules::record(
+            "EvalOutcomeCount",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalCoverage {
+    pub eligible: Counter,
+    pub graded: Counter,
+    pub ungraded: Counter,
+    pub passed: Counter,
+    pub failed: Counter,
+    pub ungraded_reasons: Rows<EvalOutcomeCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_rate: Option<Probability>,
+}
+impl Check for EvalCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.eligible.check()?;
+        self.graded.check()?;
+        self.ungraded.check()?;
+        self.passed.check()?;
+        self.failed.check()?;
+        self.ungraded_reasons.check()?;
+        self.pass_rate.check()?;
+        super::domain_rules::record(
+            "EvalCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalStepSource {
+    pub session_id: Id,
+    pub sequence: Counter,
+    pub entry_id: Id,
+    pub kind: Label,
+}
+impl Check for EvalStepSource {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.sequence.check()?;
+        self.entry_id.check()?;
+        self.kind.check()?;
+        super::domain_rules::record(
+            "EvalStepSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum EvalRevisionContext {
+    Exact {
+        context_epoch: Counter,
+        sources: NonEmpty<EvalRevisionSource>,
+    },
+    Mixed {
+        context_epoch: Counter,
+        sources: Items<EvalRevisionSource>,
+        reason: Text,
+    },
+}
+impl Check for EvalRevisionContext {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Exact {
+                context_epoch,
+                sources,
+            } => {
+                context_epoch.check()?;
+                sources.check()?;
+            }
+            Self::Mixed {
+                context_epoch,
+                sources,
+                reason,
+            } => {
+                context_epoch.check()?;
+                sources.check()?;
+                reason.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalInstanceResult {
+    pub check_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<EvalStepSource>,
+    pub revision: EvalRevisionContext,
+    pub outcome: EvalOutcome,
+    pub coverage: EvalCoverage,
+    pub detail: Text,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_value: Option<EvalObservedValue>,
+}
+impl Check for EvalInstanceResult {
+    fn check(&self) -> Result<(), String> {
+        self.check_id.check()?;
+        self.source.check()?;
+        self.revision.check()?;
+        self.outcome.check()?;
+        self.coverage.check()?;
+        self.detail.check()?;
+        self.observed_value.check()?;
+        super::domain_rules::record(
+            "EvalInstanceResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalRunResult {
+    pub session_id: Id,
+    pub outcome: EvalOutcome,
+    pub coverage: EvalCoverage,
+    pub instances: Rows<EvalInstanceResult>,
+}
+impl Check for EvalRunResult {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.outcome.check()?;
+        self.coverage.check()?;
+        self.instances.check()?;
+        super::domain_rules::record(
+            "EvalRunResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalReport {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub session_id: Id,
+    pub suite: EvalSuiteSnapshot,
+    pub created_at_ms: Counter,
+    pub source_watermark: Counter,
+    pub session_revision: Revision,
+    pub measurement_digest: Digest,
+    pub outcome: EvalOutcome,
+    pub coverage: EvalCoverage,
+    pub runs: Rows<EvalRunResult>,
+    pub session_sequence: Counter,
+    pub evidence_digest: Digest,
+}
+impl Check for EvalReport {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.project_id.check()?;
+        self.session_id.check()?;
+        self.suite.check()?;
+        self.created_at_ms.check()?;
+        self.source_watermark.check()?;
+        self.session_revision.check()?;
+        self.measurement_digest.check()?;
+        self.outcome.check()?;
+        self.coverage.check()?;
+        self.runs.check()?;
+        self.session_sequence.check()?;
+        self.evidence_digest.check()?;
+        super::domain_rules::record(
+            "EvalReport",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalRevisionSource {
+    pub source_id: Id,
+    pub kind: Label,
+    pub revision: Revision,
+    pub disposition: Label,
+}
+impl Check for EvalRevisionSource {
+    fn check(&self) -> Result<(), String> {
+        self.source_id.check()?;
+        self.kind.check()?;
+        self.revision.check()?;
+        self.disposition.check()?;
+        super::domain_rules::record(
+            "EvalRevisionSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalReportPage {
+    pub items: Rows<EvalReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for EvalReportPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "EvalReportPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalRecordSource {
+    Session,
+    HistoryEvent,
+    GitLink,
+    PullRequestLink,
+    ReviewLink,
+    WorkState,
+}
+impl Check for EvalRecordSource {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalObservedValue {
+    pub value: DynamicJson,
+}
+impl Check for EvalObservedValue {
+    fn check(&self) -> Result<(), String> {
+        self.value.check()?;
+        super::domain_rules::record(
+            "EvalObservedValue",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -10309,6 +10702,8 @@ pub enum DomainQuery {
     McpServerStatus {},
     #[serde(rename = "mcp_server.clients")]
     McpServerClients { page: PageRequest },
+    #[serde(rename = "evals.results")]
+    EvalsResults { session_id: Id, page: PageRequest },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -10451,6 +10846,7 @@ impl DomainQuery {
             Self::ImportsInspect { .. } => "imports.inspect",
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerClients { .. } => "mcp_server.clients",
+            Self::EvalsResults { .. } => "evals.results",
         }
     }
 }
@@ -11485,6 +11881,10 @@ impl Check for DomainQuery {
             }
             Self::McpServerStatus {} => {}
             Self::McpServerClients { page } => {
+                page.check()?;
+            }
+            Self::EvalsResults { session_id, page } => {
+                session_id.check()?;
                 page.check()?;
             }
         }
@@ -13021,6 +13421,11 @@ pub enum DomainCommand {
         expected_revision: Revision,
         tags: ArtifactTags,
     },
+    #[serde(rename = "evals.grade")]
+    EvalsGrade {
+        session_id: Id,
+        suite: EvalSuiteSnapshot,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -13192,6 +13597,7 @@ impl DomainCommand {
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
             Self::ArtifactsTag { .. } => "artifacts.tag",
+            Self::EvalsGrade { .. } => "evals.grade",
         }
     }
 }
@@ -14917,6 +15323,10 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
                 tags.check()?;
             }
+            Self::EvalsGrade { session_id, suite } => {
+                session_id.check()?;
+                suite.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -15715,6 +16125,10 @@ pub enum OperationResult {
     TasksSetFeature { value: WorkRecord },
     #[serde(rename = "artifacts.tag")]
     ArtifactsTag { value: MutationSummary },
+    #[serde(rename = "evals.grade")]
+    EvalsGrade { value: EvalReport },
+    #[serde(rename = "evals.results")]
+    EvalsResults { value: EvalReportPage },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -16135,6 +16549,8 @@ impl OperationResult {
             Self::TasksPrioritize { .. } => "tasks.prioritize",
             Self::TasksSetFeature { .. } => "tasks.set_feature",
             Self::ArtifactsTag { .. } => "artifacts.tag",
+            Self::EvalsGrade { .. } => "evals.grade",
+            Self::EvalsResults { .. } => "evals.results",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -16495,6 +16911,8 @@ impl Check for OperationResult {
             Self::TasksPrioritize { value } => value.check()?,
             Self::TasksSetFeature { value } => value.check()?,
             Self::ArtifactsTag { value } => value.check()?,
+            Self::EvalsGrade { value } => value.check()?,
+            Self::EvalsResults { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
