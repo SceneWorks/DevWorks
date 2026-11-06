@@ -15,6 +15,53 @@ fn values(input: &str) -> Vec<&str> {
         .collect()
 }
 impl Shell {
+    pub(super) fn restore_price_command(&mut self, slot: &Slot, frame: &[u8]) {
+        self.usage.price_busy = true;
+        self.usage.message = Some(
+            "A submitted price change is awaiting confirmation. Its original request is retained."
+                .into(),
+        );
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(frame) else {
+            return;
+        };
+        let body = &v["body"];
+        match slot {
+            Slot::PriceOverride => {
+                let (Some(model), Some(revision)) =
+                    (body["modelId"].as_str(), body["expectedRevision"].as_str())
+                else {
+                    return;
+                };
+                let tariffs = if body["change"]["kind"] == "Set" {
+                    let Ok(rates) = serde_json::from_value::<Vec<PriceTariff>>(
+                        body["change"]["tariffs"].clone(),
+                    ) else {
+                        return;
+                    };
+                    rates.iter().map(TariffForm::from_tariff).collect()
+                } else {
+                    Vec::new()
+                };
+                let draft = PriceDraft {
+                    model: model.into(),
+                    revision: revision.into(),
+                    tariffs,
+                };
+                self.usage.price_saving = Some(draft.clone());
+                self.usage.price_draft = Some(draft);
+            }
+            Slot::PriceRefresh => {
+                if let Some(providers) = body["providerIds"].as_array() {
+                    self.usage.price_providers = providers
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                }
+            }
+            _ => {}
+        }
+    }
     pub(super) fn load_usage(&mut self) {
         if self.usage.tab == 2 {
             self.load_prices(false);
@@ -74,6 +121,42 @@ impl Shell {
             "Loading more usage rows",
             "router.usage",
             move |b| uops::query(b, "router.usage", body),
+        );
+    }
+    /// Keep a user's loaded page set intact when a background refresh publishes a new catalog.
+    /// A small revision probe offers an explicit reload instead of silently replacing those rows.
+    pub(super) fn refresh_visible_prices(&mut self) {
+        if self.usage.price_pages <= 1 {
+            self.reload_applied_prices();
+        } else if !self.pending(&Slot::PriceProbe(self.usage.price_generation)) {
+            let generation = self.usage.price_generation;
+            self.query(
+                Slot::PriceProbe(generation),
+                "Checking for updated price catalog",
+                "router.price_status",
+                move |b| {
+                    uops::query(
+                        b,
+                        "router.price_status",
+                        json!({"modelIds":[],"page":{"limit":1}}),
+                    )
+                },
+            );
+        }
+    }
+    fn reload_applied_prices(&mut self) {
+        let Some(body) = self.usage.price_query.clone() else {
+            self.load_prices(false);
+            return;
+        };
+        self.usage.price_generation += 1;
+        let generation = self.usage.price_generation;
+        self.usage.prices_loading = true;
+        self.query(
+            Slot::Prices(generation, false),
+            "Refreshing applied price catalog",
+            "router.price_status",
+            move |b| uops::query(b, "router.price_status", body),
         );
     }
     pub(super) fn load_prices(&mut self, append: bool) {
@@ -295,6 +378,16 @@ impl Shell {
                 Ok(_) => self.usage.error = Some("Unexpected usage filter response".into()),
                 Err(e) => self.usage.error = Some(e.describe()),
             },
+            (Slot::PriceProbe(generation), _) if generation != self.usage.price_generation => {}
+            (Slot::PriceProbe(_), Reply::Query(q)) => match uops::prices(q) {
+                Ok(current) => {
+                    self.usage.price_update_available =
+                        self.usage.prices.as_ref().is_some_and(|previous| {
+                            previous.catalog_revision.as_str() != current.catalog_revision.as_str()
+                        })
+                }
+                Err(e) => self.usage.price_error = Some(e.describe()),
+            },
             (Slot::Prices(generation, _), _) if generation != self.usage.price_generation => {}
             (Slot::Prices(_, append), Reply::Query(q)) => {
                 self.usage.prices_loading = false;
@@ -341,6 +434,12 @@ impl Shell {
                         } else {
                             self.usage.prices = Some(result);
                         }
+                        self.usage.price_pages = if append {
+                            self.usage.price_pages + 1
+                        } else {
+                            1
+                        };
+                        self.usage.price_update_available = false;
                         self.usage.price_error = None;
                     }
                     Err(e) => self.usage.price_error = Some(e.describe()),
@@ -355,7 +454,7 @@ impl Shell {
                         }
                         self.usage.price_saving = None;
                         self.usage.message=Some("Tariff override recorded. Earlier requests retain their captured price provenance.".into());
-                        self.load_prices(false);
+                        self.reload_applied_prices();
                     }
                     Err(e) => self.usage.price_error = Some(e.describe()),
                 }
@@ -387,7 +486,7 @@ impl Shell {
                     if terminal {
                         self.usage.refresh = None;
                         self.usage.message = Some(format!("Price refresh {:?}.", value.state));
-                        self.load_prices(false);
+                        self.reload_applied_prices();
                     } else {
                         self.usage.refresh = Some(value);
                     }

@@ -149,6 +149,7 @@ pub enum Slot {
     Usage(u64, bool),
     UsageOptions(u64),
     Prices(u64, bool),
+    PriceProbe(u64),
     PriceOverride,
     PriceRefresh,
     PriceOperation,

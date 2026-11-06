@@ -167,13 +167,14 @@ pub struct UsageScreen {
     pub prices: Option<PriceCatalogView>,
     pub prices_loading: bool,
     pub price_generation: u64,
+    pub price_pages: usize,
+    pub price_update_available: bool,
     pub price_error: Option<String>,
     pub history: bool,
     pub price_models: String,
     pub price_providers: String,
     pub price_snapshots: String,
     pub price_query: Option<Value>,
-    pub selected_model: String,
     pub price_draft: Option<PriceDraft>,
     pub price_saving: Option<PriceDraft>,
     pub price_busy: bool,
@@ -470,10 +471,13 @@ impl UsageScreen {
                             value,
                             ..
                         } => {
-                            series
-                                .entry(&label.0)
-                                .or_default()
-                                .push((bucket_start_ms.get(), value.as_str()));
+                            series.entry(&label.0).or_default().push((
+                                bucket_start_ms
+                                    .0
+                                    .parse::<i64>()
+                                    .expect("validated bucket timestamp"),
+                                value.as_str(),
+                            ));
                         }
                         UsageReportRow::Breakdown {
                             dimension,
@@ -588,6 +592,9 @@ impl UsageScreen {
             return;
         };
         coverage_ui(ui, &prices.coverage);
+        if self.price_update_available {
+            ui.colored_label(theme::AMBER, "The price catalog changed. Reload to inspect the current revision; loaded pages and your tariff draft are preserved until then.");
+        }
         ui.label(format!(
             "Price catalog revision {}",
             prices.catalog_revision.as_str()
@@ -626,13 +633,15 @@ impl UsageScreen {
                 !self.price_busy
                     && !self.prices_loading
                     && self.refresh.is_none()
-                    && !prices.providers.0.is_empty(),
+                    && !self.price_update_available
+                    && (!self.price_providers.trim().is_empty() || !prices.providers.0.is_empty()),
                 egui::Button::new("Refresh official price sources"),
             )
             .clicked()
         {
             actions.push(Action::RefreshPrices);
         }
+        ui.label("Official sources: openai, anthropic. Public price refresh does not enable a connection or require provider credentials.");
         if let Some(operation) = &self.refresh {
             ui.label(format!(
                 "Price refresh {:?} · {}",
@@ -729,10 +738,13 @@ impl UsageScreen {
                 .0
                 .iter()
                 .find(|m| m.model_id.as_str() == draft.model);
-            let stale = current.is_none_or(|model| model.revision.as_str() != draft.revision);
+            let stale = self.price_update_available
+                || current.is_none_or(|model| model.revision.as_str() != draft.revision);
             if stale {
                 ui.colored_label(theme::AMBER,if current.is_some(){"This model's price revision changed. Your tariff draft is preserved."}else{"The current model revision is not in these loaded rows. Load its catalog entry before submitting; your draft is preserved."});
-                if current.is_some() && ui.button("Review and use current price revision").clicked()
+                if current.is_some()
+                    && !self.price_update_available
+                    && ui.button("Review and use current price revision").clicked()
                 {
                     actions.push(Action::RebasePrice);
                 }
@@ -909,6 +921,15 @@ fn cost_label(cost: &UsageCostSnapshot) -> String {
 fn attempt_ui(ui: &mut Ui, r: &UsageAttemptRecord, actions: &mut Vec<Action>) {
     ui.label(cost_label(&r.cost));
     ui.label(format!(
+        "Request identity: {} · attempt identity: {}",
+        r.request_id
+            .as_ref()
+            .map_or("Not recorded", |id| id.as_str()),
+        r.attempt_id
+            .as_ref()
+            .map_or("Not recorded", |id| id.as_str())
+    ));
+    ui.label(format!(
         "Billing transport: {} · recorded actor: {}",
         r.provider_id
             .as_ref()
@@ -946,8 +967,8 @@ fn attempt_ui(ui: &mut Ui, r: &UsageAttemptRecord, actions: &mut Vec<Action>) {
         ui.label(format!("{label}: {}", observed(value)));
     }
     for (label, value) in [
-        ("Cache read cost", &r.cache_read_micro_usd),
-        ("Cache write cost", &r.cache_write_micro_usd),
+        ("Cache read cost estimate", &r.cache_read_micro_usd),
+        ("Cache write cost estimate", &r.cache_write_micro_usd),
     ] {
         ui.label(format!(
             "{label}: {}",

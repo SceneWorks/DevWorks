@@ -5,7 +5,11 @@ use crate::{
 };
 use devworks_core::{
     gateway::{CommandOutcome, QueryOutcome},
-    protocol::{records::*, results::OperationResult},
+    protocol::{
+        CommandReply, OperationState,
+        records::*,
+        results::{DomainDecision, OperationResult},
+    },
 };
 use serde_json::Value;
 pub fn query(b: &dyn Backend, op: &str, body: Value) -> Vec<u8> {
@@ -39,6 +43,14 @@ pub fn overridden(q: CommandOutcome) -> Result<PriceOverrideOutcome, Failure> {
     }
 }
 pub fn refreshed(q: CommandOutcome) -> Result<OperationRef, Failure> {
+    if let Ok(CommandReply::Recorded { receipt, .. }) = &q
+        && let DomainDecision::Accepted { operation_id } = &receipt.decision
+    {
+        return Ok(OperationRef {
+            operation_id: operation_id.clone(),
+            state: OperationState::IntentRecorded,
+        });
+    }
     match ops::command_result(q)? {
         OperationResult::RouterPriceRefresh { value } => Ok(value),
         other => Err(ops::unexpected("router.price_refresh", &other)),

@@ -2562,6 +2562,7 @@ impl Shell {
                 }
             }
             (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                self.settings.connections.prepared_edit(n, &frame);
                 let label = self
                     .settings
                     .connections
@@ -2577,6 +2578,8 @@ impl Shell {
                 }
             }
             (Slot::Configure(n), Reply::Command(outcome)) => {
+                let unknown = is_unknown(&outcome);
+                let result = ops::configured(outcome);
                 let p = &mut self.settings.connections;
                 let label = p
                     .busy
@@ -2584,10 +2587,11 @@ impl Shell {
                     .find(|(k, _)| *k == n)
                     .map(|(_, label)| label.clone())
                     .unwrap_or_default();
-                if !is_unknown(&outcome) {
+                if !unknown {
                     p.busy.retain(|(k, _)| *k != n);
                 }
-                p.message = Some(match ops::configured(outcome) {
+                p.edit_finished(n, result.is_ok(), unknown);
+                p.message = Some(match result {
                     Ok(true) => (Tone::Good, format!("{label}: done.")),
                     Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
                     Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
@@ -2597,6 +2601,7 @@ impl Shell {
             }
             (Slot::Configure(n), Reply::Task(t)) => {
                 let p = &mut self.settings.connections;
+                p.edit_finished(n, false, false);
                 let label = p
                     .busy
                     .iter()
@@ -2729,7 +2734,7 @@ impl Shell {
         }
         self.refresh_waiting_first_routes();
         if self.route == Route::Usage && self.usage.tab == 2 && !self.usage.prices_loading {
-            self.load_prices(false);
+            self.refresh_visible_prices();
         }
         self.load_completion_notifications();
         if self.route == Route::Approvals
@@ -3004,6 +3009,7 @@ impl Shell {
                 let p = &mut self.settings.connections;
                 p.sequence += 1;
                 let n = p.sequence;
+                p.preparing_edit(n, &action);
                 let submitted = self.client.as_mut().is_some_and(|c| {
                     c.task(Slot::Configure(n), &label, move |b| {
                         let mut action = action;
@@ -3026,6 +3032,7 @@ impl Shell {
                 if submitted {
                     self.settings.connections.busy.push((n, label));
                 } else {
+                    self.settings.connections.edit_finished(n, false, false);
                     self.settings.connections.message =
                         Some((Tone::Bad, "The change was not submitted.".into()));
                 }
@@ -3281,6 +3288,9 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::PriceOverride | Slot::PriceRefresh => {
+                    self.restore_price_command(&slot, u.frame())
+                }
                 Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
@@ -3318,6 +3328,7 @@ impl Shell {
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
                     p.sequence = p.sequence.max(*n);
+                    p.restore_edit(*n, u.frame());
                     p.busy.push((*n, u.label.clone()));
                 }
                 Slot::SettingsSave => {
