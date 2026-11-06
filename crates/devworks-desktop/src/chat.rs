@@ -755,7 +755,7 @@ fn transcript_state(
                 }
                 return;
             }
-            entry_block(ui, &entries[i]);
+            entry_block(ui, entries[i]);
         },
     );
 }
