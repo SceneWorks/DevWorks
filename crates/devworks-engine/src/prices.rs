@@ -98,19 +98,25 @@ impl PriceSupervisor {
         if self.stopping.load(Ordering::SeqCst) {
             return Ok(0);
         }
-        let (store, service, stopping, fence) = (
+        let (store, service, stopping, fence, source) = (
             self.store.clone(),
             self.service.clone(),
             self.stopping.clone(),
             self.fence.clone(),
+            self.source.clone(),
         );
         tokio::task::spawn_blocking(move || {
             let closed = fence.read().unwrap_or_else(|e| e.into_inner());
             if *closed || stopping.load(Ordering::SeqCst) {
                 return Ok(0);
             }
+            let recovered = service
+                .recover_refreshes(&*store, &*source, &|| stopping.load(Ordering::SeqCst))?;
+            if stopping.load(Ordering::SeqCst) {
+                return Ok(recovered);
+            }
             run_write(&*store, WriteOptions::default(), move |tx| {
-                service.schedule_due(tx)
+                service.schedule_due(tx).map(|n| n + recovered)
             })
         })
         .await

@@ -342,6 +342,7 @@ pub(crate) fn query(
     }
     let mut upstreams = BTreeSet::new();
     let mut legacy = 0usize;
+    let mut legacy_unsupported = false;
     refresh::models(s.router(), |m| {
         if !model_filter.is_empty() && !model_filter.contains(m.id.as_str()) {
             return Ok(true);
@@ -363,32 +364,31 @@ pub(crate) fn query(
             let price = if f.tariffs.is_empty() {
                 None
             } else {
-                Some(
-                    legacy_price(
-                        &m,
-                        &f.tariffs,
-                        f.override_.as_ref().map_or_else(
-                            || f.snapshot.as_ref().map_or(1, |v| v.revision),
-                            |v| v.revision,
-                        ),
-                        if f.override_.is_some() {
-                            "UserConfigured"
-                        } else {
-                            "OfficialSnapshot"
-                        },
-                        f.override_.as_ref().map_or_else(
-                            || f.snapshot.as_ref().map_or(0, |v| v.verified_at_ms),
-                            |v| v.updated_at_ms,
-                        ),
-                        f.snapshot.as_ref().map(|v| v.source_url.as_str()),
-                    )
-                    .map_err(|e| match e {
-                        Failure::Storage(e) => e,
-                        Failure::Refused(_) => StorageError::InvalidRecord(
-                            "legacy price view cannot represent exact tariff dimensions".into(),
-                        ),
-                    })?,
-                )
+                match legacy_price(
+                    &m,
+                    &f.tariffs,
+                    f.override_.as_ref().map_or_else(
+                        || f.snapshot.as_ref().map_or(1, |v| v.revision),
+                        |v| v.revision,
+                    ),
+                    if f.override_.is_some() {
+                        "UserConfigured"
+                    } else {
+                        "OfficialSnapshot"
+                    },
+                    f.override_.as_ref().map_or_else(
+                        || f.snapshot.as_ref().map_or(0, |v| v.verified_at_ms),
+                        |v| v.updated_at_ms,
+                    ),
+                    f.snapshot.as_ref().map(|v| v.source_url.as_str()),
+                ) {
+                    Ok(price) => Some(price),
+                    Err(Failure::Storage(error)) => return Err(error),
+                    Err(Failure::Refused(_)) => {
+                        legacy_unsupported = true;
+                        return Ok(false);
+                    }
+                }
             };
             let status = s.usage().price_status(&f.source)?;
             let row = wire::<ModelPriceStatus>(
@@ -416,6 +416,14 @@ pub(crate) fn query(
         }
         Ok(true)
     })?;
+    if legacy_unsupported {
+        return Err(Refusal::new(
+            DomainErrorCode::UnsupportedCapability,
+            "legacy_tariff_dimensions",
+            None,
+        )
+        .into());
+    }
     if schema < 3 {
         let more = page.models.len() > page.limit;
         page.models.truncate(page.limit);
@@ -445,7 +453,7 @@ pub(crate) fn query(
             }
             let status = s.usage().price_status(provider)?;
             let now = service.clock.now_ms().get();
-            let row = json!({"providerId":provider,"revision":status.as_ref().map_or(1,|v|v.revision).to_string(),"snapshotId":status.as_ref().and_then(|v|v.current_snapshot_id.clone()),"stale":refresh::official(provider).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=now)),"lastCheckedAtMs":status.as_ref().and_then(|v|v.last_attempt_ms).map(|v|v.to_string()),"nextCheckAtMs":status.as_ref().and_then(|v|v.next_refresh_ms).map(|v|v.to_string()),"refreshOperationId":status.as_ref().and_then(|v|v.refresh_operation_id.clone()),"error":status.as_ref().and_then(|v|v.last_error.clone())});
+            let row = json!({"providerId":provider,"revision":status.as_ref().map_or(1,|v|v.revision).to_string(),"snapshotId":status.as_ref().and_then(|v|v.current_snapshot_id.clone()),"stale":refresh::official(provider).is_some()&&status.as_ref().is_none_or(|v|v.last_success_ms.is_none_or(|at|at.saturating_add(refresh::WEEK_MS)<=now)),"lastCheckedAtMs":status.as_ref().and_then(|v|v.last_attempt_ms).map(|v|v.to_string()),"nextCheckAtMs":status.as_ref().and_then(|v|v.next_refresh_ms).map(|v|v.to_string()),"refreshOperationId":status.as_ref().and_then(|v|v.refresh_operation_id.clone()),"error":status.as_ref().and_then(|v|v.last_error.clone()).or_else(||(!service.source_available && refresh::official(provider).is_some()).then(||"official price source adapter unavailable".into()))});
             if !page.push(1, row) {
                 break;
             }

@@ -18,12 +18,14 @@ pub const CAPABILITY: &str = "router.price_refresh";
 pub const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const PAGE: u16 = 64;
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProviderRequest {
     provider: String,
     status_revision: i64,
     binding: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RefreshRequest {
     providers: Vec<ProviderRequest>,
 }
@@ -64,10 +66,16 @@ pub(crate) fn model(
     if let Some(m) = read.route_model(id)? {
         return Ok(Some(m));
     }
-    Ok(read.decision_model(id)?.map(|m| StoredRouteModel {
+    let Some(m) = read.decision_model(id)? else {
+        return Ok(None);
+    };
+    let profile = read
+        .connection(&m.connection_id)?
+        .map_or_else(|| "SystemOne".into(), |c| c.profile);
+    Ok(Some(StoredRouteModel {
         id: m.id,
         display_name: m.display_name,
-        endpoint_profile: "SystemOne".into(),
+        endpoint_profile: profile,
         upstream_model_id: m.upstream_model_id,
         enabled: m.enabled,
         efforts: vec![],
@@ -127,8 +135,8 @@ pub(crate) fn models(
     }
     Ok(())
 }
-/// Official publishers required by currently enabled, explicit connections. Connection and
-/// connection revisions enter the binding; no credential or private endpoint content is retained.
+/// Official publishers required by currently enabled, explicit connections. Connection
+/// revisions enter the binding; no credential or private endpoint content is retained.
 pub fn configured(read: &dyn RouterRead) -> Result<BTreeMap<String, String>, StorageError> {
     let mut hashes: BTreeMap<String, Sha256> = BTreeMap::new();
     let mut after = None;
@@ -366,10 +374,30 @@ impl PriceService {
         operation: &OperationRecord,
         stop: &dyn Fn() -> bool,
     ) -> RefreshOutcome {
+        if operation.capability != CAPABILITY
+            || operation.schema_version != 1
+            || sha256_hex(operation.payload.to_string().as_bytes()) != operation.args_digest
+        {
+            return RefreshOutcome::Failed("price refresh journal binding changed".into());
+        }
         let request: RefreshRequest = match serde_json::from_value(operation.payload.clone()) {
             Ok(v) => v,
             Err(_) => return RefreshOutcome::Failed("invalid saved price refresh".into()),
         };
+        let unique: BTreeSet<_> = request
+            .providers
+            .iter()
+            .map(|p| p.provider.as_str())
+            .collect();
+        if request.providers.is_empty()
+            || request.providers.len() > 2
+            || unique.len() != request.providers.len()
+            || request.providers.iter().any(|p| {
+                official(&p.provider).is_none() || p.status_revision < 1 || p.binding.len() != 64
+            })
+        {
+            return RefreshOutcome::Failed("invalid price provider refresh set".into());
+        }
         let mut failures = Vec::new();
         for p in request.providers {
             if stop() {
@@ -403,7 +431,12 @@ impl PriceService {
                     || r.source_url != provider.source_url()
                     || r.tariffs.is_empty()
                     || r.fetched_at_ms < 0
-                    || r.verified_at_ms < 0
+                    || r.verified_at_ms < r.fetched_at_ms
+                    || r.parser_version.is_empty()
+                    || r.parser_version.len() > 128
+                    || r.source_digest.len() != 64
+                    || !r.source_digest.bytes().all(|b| b.is_ascii_hexdigit())
+                    || r.effective_date.as_ref().is_some_and(|v| v.len() > 128)
                     || r.verified_at_ms > now
                 {
                     return Err(PriceFetchError::SourceChanged(
@@ -458,7 +491,16 @@ impl PriceService {
                             effective_date: fetched.effective_date,
                             tariffs: fetched.tariffs,
                         };
-                        tx.usage().publish_price_snapshot(&row, old.revision)?;
+                        let mut status = tx.usage().publish_price_snapshot(&row, old.revision)?;
+                        if status.last_attempt_ms != Some(now)
+                            || status.next_refresh_ms != Some(now.saturating_add(WEEK_MS))
+                        {
+                            let before = status.revision;
+                            status.revision += 1;
+                            status.last_attempt_ms = Some(now);
+                            status.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
+                            tx.usage().put_price_status(&status, Some(before))?;
+                        }
                         Ok(None)
                     }
                     Err(error) => {
@@ -468,6 +510,8 @@ impl PriceService {
                         row.revision += 1;
                         row.refresh_pending = false;
                         row.last_error = Some(reason.clone());
+                        row.last_attempt_ms = Some(now);
+                        row.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
                         tx.usage().put_price_status(&row, Some(old.revision))?;
                         Ok(Some(reason))
                     }
@@ -484,5 +528,121 @@ impl PriceService {
         } else {
             RefreshOutcome::Failed(failures.join("; "))
         }
+    }
+}
+
+impl PriceService {
+    /// Only this maintenance capability is safe to reconcile automatically: its external action
+    /// is a credential-free GET, and snapshot publication is fenced. Other effect consumers keep
+    /// their existing operator reconciliation rules.
+    pub fn recover_refreshes(
+        &self,
+        store: &dyn ApplicationStore,
+        source: &dyn PriceSource,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<usize, StorageError> {
+        let mut seen = BTreeSet::new();
+        let mut resolved = 0;
+        for provider in ["openai", "anthropic"] {
+            if stop() {
+                break;
+            }
+            let operation = read_snapshot(store, &ReadOptions::default(), |s| {
+                let Some(id) = s
+                    .usage()
+                    .price_status(provider)?
+                    .and_then(|v| v.refresh_operation_id)
+                else {
+                    return Ok(None);
+                };
+                s.operations().operation(&id)
+            })?;
+            let Some(operation) = operation else {
+                continue;
+            };
+            if operation.capability != CAPABILITY
+                || !seen.insert(operation.id.0.as_str().to_owned())
+            {
+                continue;
+            }
+            if is_terminal(operation.state) {
+                resolved += run_write(store, WriteOptions::default(), move |tx| {
+                    let mut changed = 0;
+                    for source in ["openai", "anthropic"] {
+                        if let Some(mut row) = tx.usage().price_status(source)?
+                            && row.refresh_pending
+                            && row.refresh_operation_id.as_ref() == Some(&operation.id)
+                        {
+                            let before = row.revision;
+                            row.revision += 1;
+                            row.refresh_pending = false;
+                            row.last_error = Some(format!(
+                                "refresh ended before publication: {:?}",
+                                operation.state
+                            ));
+                            tx.usage().put_price_status(&row, Some(before))?;
+                            changed += 1;
+                        }
+                    }
+                    Ok(changed)
+                })?;
+                continue;
+            }
+            if operation.state != crate::protocol::OperationState::OutcomeUnknown {
+                continue;
+            }
+            let outcome = self.execute_refresh(store, source, &operation, stop);
+            if stop() {
+                break;
+            }
+            let (state, note) = match outcome {
+                RefreshOutcome::Completed(value) => (
+                    crate::protocol::OperationState::ObservedComplete,
+                    json!({"outcome":"completed","evidence":value}),
+                ),
+                RefreshOutcome::Failed(reason) => (
+                    crate::protocol::OperationState::Failed,
+                    json!({"outcome":"failed","cause":reason}),
+                ),
+                RefreshOutcome::NotApplied(_) | RefreshOutcome::Unknown(_) => continue,
+            };
+            let changed = run_write(store, WriteOptions::default(), move |tx| {
+                let Some(current) = tx.operations().operation(&operation.id)? else {
+                    return Ok(false);
+                };
+                if current.revision != operation.revision
+                    || current.state != crate::protocol::OperationState::OutcomeUnknown
+                {
+                    return Ok(false);
+                }
+                tx.operations().transition(
+                    &current.id,
+                    current.revision,
+                    None,
+                    state,
+                    Some(json!({"reconciliation":note})),
+                )?;
+                let filter = DeliveryFilter {
+                    consumer: Some(CONSUMER.into()),
+                    operation_id: Some(current.id),
+                };
+                let mut after = None;
+                loop {
+                    let page = tx.queue().deliveries(&filter, after.as_ref(), PAGE)?;
+                    for entry in page.entries {
+                        if entry.state == QueueState::Reconciling {
+                            tx.queue().requeue(&entry.id, 0)?;
+                        }
+                    }
+                    match page.next {
+                        Some(next) => after = Some(next),
+                        None => break,
+                    }
+                }
+                Ok(true)
+            })?;
+            resolved += usize::from(changed);
+        }
+        Ok(resolved)
     }
 }

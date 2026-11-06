@@ -1,0 +1,870 @@
+//! Real gateway, SQLite, journal, durable delivery and host price maintenance. Scripted public
+//! sources exercise publication/failure/races without network or any inference execution.
+mod common;
+use common::*;
+use devworks_core::authority::HostAuthority;
+use devworks_core::context::{InvocationContext, PrincipalKind};
+use devworks_core::gateway::Gateway;
+use devworks_core::ports::storage::*;
+use devworks_core::ports::usage::*;
+use devworks_core::ports::{IdKind, IdSource};
+use devworks_core::protocol::OperationId;
+use devworks_core::protocol::results::{DomainCommandReply, DomainDecision};
+use devworks_core::services::{
+    UseCases,
+    prices::{PriceService, refresh},
+};
+use devworks_engine::prices::PriceSupervisor;
+use devworks_engine::{Dispatcher, DispatcherConfig};
+use serde_json::{Value, json};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+
+struct Fx {
+    h: Harness,
+    store: Arc<dyn ApplicationStore>,
+    service: Arc<PriceService>,
+    cases: UseCases,
+    user: InvocationContext,
+    agent: InvocationContext,
+}
+impl Fx {
+    fn new() -> Self {
+        let h = Harness::new();
+        let store = h.open();
+        let user = principal(&*store, "user", PrincipalKind::Human);
+        let agent = principal(&*store, "agent", PrincipalKind::Agent);
+        seed(&*store, &h);
+        let service = Arc::new(PriceService::new(h.ids.clone(), h.clock(), true));
+        let cases = UseCases::new().with_prices(service.clone());
+        Self {
+            h,
+            store,
+            service,
+            cases,
+            user,
+            agent,
+        }
+    }
+    fn frame(&self, op: &str, schema: u32, mode: &str, mut body: Value) -> Vec<u8> {
+        body["kind"] = json!(op);
+        serde_json::to_vec(&if mode=="Query"{json!({"protocol":"1.0-draft.1","mode":mode,"schemaRevision":schema,"queryId":self.h.ids.next_id(IdKind::Link),"body":body})}else{json!({"protocol":"1.0-draft.1","mode":mode,"schemaRevision":schema,"requestKey":self.h.ids.next_id(IdKind::Link),"body":body})}).unwrap()
+    }
+    fn command(
+        &self,
+        ctx: &InvocationContext,
+        op: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> DomainCommandReply {
+        let authority = HostAuthority {
+            store: &*self.store,
+            clock: &*self.h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        self.cases
+            .command_with(&gateway, ctx, op, raw, options)
+            .unwrap()
+    }
+    fn query(&self, body: Value) -> Value {
+        self.query_schema(body, 3)
+    }
+    fn query_schema(&self, body: Value, schema: u32) -> Value {
+        let raw = self.frame("router.price_status", schema, "Query", body);
+        let authority = HostAuthority {
+            store: &*self.store,
+            clock: &*self.h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            authority: &authority,
+            store: &*self.store,
+            ids: &*self.h.ids,
+        };
+        serde_json::to_value(
+            self.cases
+                .query(&gateway, &self.user, "router.price_status", &raw)
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    fn refresh(&self, providers: &[&str]) -> (Vec<u8>, OperationId) {
+        let revision = read(&*self.store, |s| s.usage().price_revision());
+        let raw = self.frame(
+            "router.price_refresh",
+            1,
+            "Command",
+            json!({"providerIds":providers,"expectedPriceRevision":revision.to_string()}),
+        );
+        let op = accepted(self.command(
+            &self.user,
+            "router.price_refresh",
+            &raw,
+            WriteOptions::default(),
+        ));
+        (raw, op)
+    }
+    fn dispatcher(&self, source: Arc<dyn PriceSource>) -> (Arc<PriceSupervisor>, Dispatcher) {
+        let worker = PriceSupervisor::new(self.store.clone(), self.service.clone(), source);
+        let dispatcher = Dispatcher::new(
+            self.store.clone(),
+            self.h.clock(),
+            vec![worker.consumer()],
+            DispatcherConfig::new(id("price-test")),
+        )
+        .unwrap();
+        (worker, dispatcher)
+    }
+}
+fn seed(store: &dyn ApplicationStore, h: &Harness) {
+    let now = h.now();
+    write(store, move |tx| {
+        for (name, profile) in [
+            ("openai-connection", "OpenAiResponses"),
+            ("anthropic-connection", "AnthropicMessages"),
+        ] {
+            tx.router().put_connection(
+                &StoredConnection {
+                    id: id(name),
+                    name: name.into(),
+                    profile: profile.into(),
+                    endpoint: "https://api.example.test".into(),
+                    enabled: true,
+                    local_free: false,
+                    open_router: None,
+                    credential_ref: None,
+                    credential_revision: 0,
+                    credential_epoch: None,
+                    lifecycle: "Disconnected".into(),
+                    state_reason: None,
+                    account_digest: None,
+                    access_expires_at_ms: None,
+                    risk: None,
+                    discovered: None,
+                    discovered_at_ms: None,
+                    healthy: None,
+                    checked_at_ms: None,
+                    revision: 1,
+                    created_at_ms: now,
+                    updated_at_ms: now,
+                },
+                None,
+            )?;
+        }
+        for (model, profile, connection) in [
+            ("priced-model", "OpenAiResponses", "openai-connection"),
+            (
+                "unpriced-model",
+                "AnthropicMessages",
+                "anthropic-connection",
+            ),
+        ] {
+            tx.router().put_route_model(
+                &StoredRouteModel {
+                    id: id(model),
+                    display_name: model.into(),
+                    endpoint_profile: profile.into(),
+                    upstream_model_id: model.into(),
+                    enabled: true,
+                    efforts: vec![],
+                    image_input: false,
+                    tools: false,
+                    context_tokens: Some(100_000),
+                    connection_id: Some(id(connection)),
+                    position: 1000,
+                    revision: 1,
+                    updated_at_ms: now,
+                },
+                None,
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+fn accepted(reply: DomainCommandReply) -> OperationId {
+    match reply {
+        devworks_core::protocol::CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Accepted { operation_id } => operation_id,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+fn applied(reply: DomainCommandReply) -> Value {
+    match reply {
+        devworks_core::protocol::CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied { result } | DomainDecision::NoChange { result } => {
+                serde_json::to_value(result).unwrap()["value"].clone()
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+fn rate(amount: &str) -> PublishedTariff {
+    PublishedTariff {
+        upstream_model_id: "priced-model".into(),
+        service_tier: "Standard".into(),
+        context_lower_exclusive: None,
+        context_upper_inclusive: None,
+        modality: "Text".into(),
+        charge_kind: "Input".into(),
+        cache_ttl_seconds: None,
+        unit: "Token".into(),
+        units: 1_000_000,
+        amount_usd: amount.into(),
+        region: None,
+        endpoint_profile: None,
+    }
+}
+fn catalog(provider: OfficialPriceProvider, now: i64, amount: &str) -> FetchedPriceCatalog {
+    let input = rate(amount);
+    let mut output = input.clone();
+    output.charge_kind = "Output".into();
+    FetchedPriceCatalog {
+        provider,
+        source_url: provider.source_url().into(),
+        source_digest: "a".repeat(64),
+        parser_version: "native-test-v1".into(),
+        fetched_at_ms: now,
+        verified_at_ms: now,
+        effective_date: None,
+        tariffs: vec![input, output],
+    }
+}
+struct Source {
+    outcomes: Mutex<VecDeque<Result<String, PriceFetchError>>>,
+    calls: AtomicUsize,
+    gate: Option<Arc<Gate>>,
+}
+impl Source {
+    fn new(outcomes: Vec<Result<&str, PriceFetchError>>) -> Arc<Self> {
+        Arc::new(Self {
+            outcomes: Mutex::new(outcomes.into_iter().map(|v| v.map(str::to_owned)).collect()),
+            calls: AtomicUsize::new(0),
+            gate: None,
+        })
+    }
+}
+impl PriceSource for Source {
+    fn fetch(
+        &self,
+        p: OfficialPriceProvider,
+        now: i64,
+    ) -> Result<FetchedPriceCatalog, PriceFetchError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(g) = &self.gate {
+            g.started.notify_one();
+            let mut open = g.open.lock().unwrap();
+            while !*open {
+                open = g.release.wait(open).unwrap();
+            }
+        }
+        let amount = self
+            .outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Ok("1.25".into()))?;
+        Ok(catalog(p, now, &amount))
+    }
+}
+struct Gate {
+    started: tokio::sync::Notify,
+    open: Mutex<bool>,
+    release: Condvar,
+}
+impl Gate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            started: tokio::sync::Notify::new(),
+            open: Mutex::new(false),
+            release: Condvar::new(),
+        })
+    }
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.release.notify_all();
+    }
+}
+async fn deliver(dispatcher: &Dispatcher) {
+    dispatcher.recover().await.unwrap();
+    dispatcher.tick().await.unwrap();
+    within("price delivery", dispatcher.idle()).await;
+}
+
+#[test]
+fn manual_refresh_is_accepted_persisted_and_replayed_while_complete_snapshots_keep_last_good_on_failure()
+ {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let source = Source::new(vec![
+            Ok("1.25"),
+            Err(PriceFetchError::SourceChanged(
+                "changed official markup".into(),
+            )),
+        ]);
+        let (worker, dispatcher) = fx.dispatcher(source.clone());
+        let (raw, op) = fx.refresh(&["openai"]);
+        assert_eq!(source.calls.load(Ordering::SeqCst), 0, "no I/O in writer");
+        let status = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+        assert!(status.refresh_pending);
+        assert_eq!(status.refresh_operation_id, Some(op.clone()));
+        assert_eq!(
+            accepted(fx.command(
+                &fx.user,
+                "router.price_refresh",
+                &raw,
+                WriteOptions::default()
+            )),
+            op
+        );
+        deliver(&dispatcher).await;
+        let first = read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+        assert_eq!(first.tariffs.len(), 2);
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&op))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::ObservedComplete
+        );
+        let (_, failed) = fx.refresh(&["openai"]);
+        deliver(&dispatcher).await;
+        assert_eq!(
+            read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap(),
+            first
+        );
+        let status = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+        assert!(
+            status
+                .last_error
+                .unwrap()
+                .contains("changed official markup")
+        );
+        assert_eq!(status.refresh_operation_id, Some(failed.clone()));
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&failed))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::Failed
+        );
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+
+#[test]
+fn global_refresh_cas_is_atomic_and_cancellation_never_records_intent() {
+    let fx = Fx::new();
+    let raw = fx.frame(
+        "router.price_refresh",
+        1,
+        "Command",
+        json!({"providerIds":["openai","missing-provider"],"expectedPriceRevision":"1"}),
+    );
+    let rejected = fx.command(
+        &fx.user,
+        "router.price_refresh",
+        &raw,
+        WriteOptions::default(),
+    );
+    assert!(
+        !matches!(rejected,devworks_core::protocol::CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Accepted{..}))
+    );
+    assert!(read(&*fx.store, |s| s.usage().price_status("openai")).is_none());
+    let raw = fx.frame(
+        "router.price_refresh",
+        1,
+        "Command",
+        json!({"providerIds":["openai"],"expectedPriceRevision":"1"}),
+    );
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    fx.command(
+        &fx.user,
+        "router.price_refresh",
+        &raw,
+        WriteOptions {
+            cancellation: Some(cancellation),
+            ..WriteOptions::default()
+        },
+    );
+    assert!(read(&*fx.store, |s| s.usage().price_status("openai")).is_none());
+    let (_, _) = fx.refresh(&["openai"]);
+    let stale = fx.frame(
+        "router.price_refresh",
+        1,
+        "Command",
+        json!({"providerIds":["anthropic"],"expectedPriceRevision":"1"}),
+    );
+    fx.command(
+        &fx.user,
+        "router.price_refresh",
+        &stale,
+        WriteOptions::default(),
+    );
+    assert!(read(&*fx.store, |s| s.usage().price_status("anthropic")).is_none());
+}
+
+#[test]
+fn positive_baseline_override_requires_actual_human_preserves_dimensions_and_survives_refresh_until_clear()
+ {
+    runtime().block_on(async{let fx=Fx::new();let change=json!({"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","contextLowerExclusive":"1000","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.025","region":"us","endpointProfile":"OpenAiResponses"}]});let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":change}));let denied=fx.command(&fx.agent,"router.price_override",&raw,WriteOptions::default());assert!(!matches!(denied,devworks_core::protocol::CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Applied{..})));assert_eq!(read(&*fx.store,|s|s.usage().price_override_revision(&id("priced-model"))),1);let result=applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::default()));assert_eq!(result["revision"],"2");let saved=read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap();assert_eq!(saved.tariffs[0].modality,"Audio");let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap(),saved);let clear=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"2","change":{"kind":"Clear"}}));assert_eq!(applied(fx.command(&fx.user,"router.price_override",&clear,WriteOptions::default()))["revision"],"3");assert_eq!(read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap().mode,"Clear");worker.drain().await;dispatcher.stop();});
+}
+
+#[test]
+fn price_catalog_pages_unpriced_models_dimensions_and_history_with_exact_query_bound_cursors() {
+    runtime().block_on(async{
+    let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![Ok("1.25"),Ok("2.50")]));fx.refresh(&["openai"]);deliver(&dispatcher).await;let first=read(&*fx.store,|s|s.usage().current_price_snapshot("openai")).unwrap();fx.refresh(&["openai"]);deliver(&dispatcher).await;
+    let mut cursor:Option<Value>=None;let mut models=Vec::new();let mut snapshots=Vec::new();let mut rates=Vec::new();let mut first_cursor=None;
+    for _ in 0..20{let mut body=json!({"modelIds":["priced-model","unpriced-model"],"includeHistory":true,"page":{"limit":2}});if let Some(cursor)=cursor.take(){body["page"]["cursor"]=cursor;}let reply=fx.query(body);assert_eq!(reply["kind"],"Result","{reply}");let view=&reply["result"]["value"];assert!(view["models"].as_array().unwrap().len()+view["items"].as_array().unwrap().len()+view["snapshots"].as_array().unwrap().len()+view["providers"].as_array().unwrap().len()<=2);models.extend(view["models"].as_array().unwrap().iter().cloned());snapshots.extend(view["snapshots"].as_array().unwrap().iter().cloned());rates.extend(view["items"].as_array().unwrap().iter().cloned());if !view["hasMore"].as_bool().unwrap(){break;}cursor=Some(view["nextCursor"].clone());if first_cursor.is_none(){first_cursor=cursor.clone();}}
+    assert_eq!(models.len(),2);assert!(models.iter().any(|v|v["modelId"]=="unpriced-model"&&v["priceKind"]=="Untracked"));assert_eq!(snapshots.len(),2);assert_eq!(rates.len(),4);assert!(rates.iter().any(|v|v["tariff"]["amountUsd"]=="1.25"));assert!(rates.iter().any(|v|v["tariff"]["amountUsd"]=="2.50"));
+    let wrong=fx.query(json!({"modelIds":["priced-model"],"includeHistory":true,"page":{"limit":2,"cursor":first_cursor.clone().unwrap()}}));assert_ne!(wrong["kind"],"Result","changed filter must not reuse cursor");
+    let selected=fx.query(json!({"modelIds":["priced-model"],"snapshotIds":[first.id],"includeHistory":false,"page":{"limit":50}}));let selected=&selected["result"]["value"];assert_eq!(selected["snapshots"].as_array().unwrap().len(),1);assert!(selected["items"].as_array().unwrap().iter().all(|v|v["snapshotId"]==first.id.as_str()));
+    let change=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","price":{"inputUsdPerMillion":"5","outputUsdPerMillion":"10"}}));applied(fx.command(&fx.user,"router.price_override",&change,WriteOptions::default()));let stale=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"includeHistory":true,"page":{"limit":2,"cursor":first_cursor.unwrap()}}));assert_ne!(stale["kind"],"Result","price mutation expires earlier view");worker.drain().await;dispatcher.stop();
+});
+}
+
+#[test]
+fn changed_connection_binding_refuses_stale_publication_without_overwriting_last_good() {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let (worker, dispatcher) = fx.dispatcher(Source::new(vec![]));
+        fx.refresh(&["openai"]);
+        deliver(&dispatcher).await;
+        let first = read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+        worker.drain().await;
+        dispatcher.stop();
+        drop(dispatcher);
+        drop(worker);
+        let gate = Gate::new();
+        let source = Arc::new(Source {
+            outcomes: Mutex::new(VecDeque::new()),
+            calls: AtomicUsize::new(0),
+            gate: Some(gate.clone()),
+        });
+        let (worker, dispatcher) = fx.dispatcher(source);
+        let (_, op) = fx.refresh(&["openai"]);
+        dispatcher.recover().await.unwrap();
+        dispatcher.tick().await.unwrap();
+        within("price source GET admitted", gate.started.notified()).await;
+        write(&*fx.store, |tx| {
+            let mut connection = tx.router().connection(&id("openai-connection"))?.unwrap();
+            let before = connection.revision;
+            connection.revision += 1;
+            connection.enabled = false;
+            tx.router().put_connection(&connection, Some(before))
+        })
+        .unwrap();
+        gate.release();
+        within("stale publication settles", dispatcher.idle()).await;
+        assert_eq!(
+            read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap(),
+            first
+        );
+        let status = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+        assert!(!status.refresh_pending);
+        assert!(status.last_error.unwrap().contains("binding changed"));
+        assert_eq!(status.refresh_operation_id, Some(op));
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+
+#[test]
+fn shutdown_drains_inflight_get_without_publication_then_restart_reconciles_the_same_operation() {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let gate = Gate::new();
+        let source = Arc::new(Source {
+            outcomes: Mutex::new(VecDeque::new()),
+            calls: AtomicUsize::new(0),
+            gate: Some(gate.clone()),
+        });
+        let (worker, dispatcher) = fx.dispatcher(source);
+        let (_, op) = fx.refresh(&["openai"]);
+        dispatcher.recover().await.unwrap();
+        dispatcher.tick().await.unwrap();
+        within("price fetch in flight", gate.started.notified()).await;
+        worker.stop();
+        let draining = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.drain().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!draining.is_finished());
+        gate.release();
+        draining.await.unwrap();
+        within("price unknown settles", dispatcher.idle()).await;
+        assert!(read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).is_none());
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&op))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::OutcomeUnknown
+        );
+        assert_eq!(worker.tick().await.unwrap(), 0);
+        dispatcher.stop();
+        drop(dispatcher);
+        drop(worker);
+        let Fx {
+            h,
+            store,
+            service,
+            cases,
+            user: _,
+            agent: _,
+        } = fx;
+        drop(service);
+        drop(cases);
+        drop(store);
+        let store = h.open();
+        let service = Arc::new(PriceService::new(h.ids.clone(), h.clock(), true));
+        let source = Source::new(vec![]);
+        let worker = PriceSupervisor::new(store.clone(), service, source.clone());
+        let dispatcher = Dispatcher::new(
+            store.clone(),
+            h.clock(),
+            vec![worker.consumer()],
+            DispatcherConfig::new(id("price-restart")),
+        )
+        .unwrap();
+        dispatcher.recover().await.unwrap();
+        worker.tick().await.unwrap();
+        deliver(&dispatcher).await;
+        assert_eq!(
+            read(&*store, |s| s.operations().operation(&op))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::ObservedComplete
+        );
+        assert_eq!(
+            read(&*store, |s| s.usage().price_status("openai"))
+                .unwrap()
+                .refresh_operation_id,
+            Some(op)
+        );
+        assert_eq!(
+            source.calls.load(Ordering::SeqCst),
+            2,
+            "one recovered OpenAI GET plus the configured Anthropic catch-up"
+        );
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+
+#[test]
+fn weekly_cadence_schedules_one_overdue_operation_and_keeps_overrides_and_history_immutable() {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let source = Source::new(vec![]);
+        let (worker, dispatcher) = fx.dispatcher(source.clone());
+        assert_eq!(worker.tick().await.unwrap(), 2);
+        let first = read(&*fx.store, |s| s.usage().price_status("openai"))
+            .unwrap()
+            .refresh_operation_id
+            .unwrap();
+        assert_eq!(worker.tick().await.unwrap(), 0);
+        deliver(&dispatcher).await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        let snapshot = read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+        assert_eq!(worker.tick().await.unwrap(), 0);
+        fx.h.advance(refresh::WEEK_MS * 5);
+        assert_eq!(worker.tick().await.unwrap(), 2);
+        let next = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+        assert_ne!(next.refresh_operation_id, Some(first));
+        assert_eq!(worker.tick().await.unwrap(), 0, "missed weeks never replay");
+        deliver(&dispatcher).await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            read(&*fx.store, |s| s.usage().price_snapshot(&snapshot.id)).unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            read(&*fx.store, |s| s.usage().current_price_snapshot("openai"))
+                .unwrap()
+                .revision,
+            2
+        );
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+
+#[test]
+fn source_filters_and_legacy_results_are_exact_or_truthfully_unrepresentable() {
+    runtime().block_on(async{
+    let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;
+    let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_eq!(legacy["kind"],"Result","{legacy}");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["inputUsdPerMillion"],"1.25");
+    let filtered=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"providerIds":["anthropic"],"includeHistory":true,"page":{"limit":50}}));let view=&filtered["result"]["value"];assert_eq!(view["models"].as_array().unwrap().len(),1);assert_eq!(view["models"][0]["modelId"],"unpriced-model");assert!(view["items"].as_array().unwrap().is_empty());assert!(view["providers"].as_array().unwrap().iter().all(|p|p["providerId"]=="anthropic"));
+    let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":{"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.0125"}]}}));applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::default()));let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_ne!(legacy["kind"],"Result","exact dimensions cannot become legacy zero shadows: {legacy}");assert!(legacy.to_string().contains("UnsupportedCapability"),"{legacy}");worker.drain().await;dispatcher.stop();
+});
+}
+
+#[test]
+fn accepted_refresh_cancelled_before_dispatch_does_not_leave_a_permanent_pending_provider() {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let (_, op) = fx.refresh(&["openai"]);
+        let cancelled_op = op.clone();
+        write(&*fx.store, move |tx| {
+            let page = tx.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: Some(refresh::CONSUMER.into()),
+                    operation_id: Some(cancelled_op.clone()),
+                },
+                None,
+                50,
+            )?;
+            assert_eq!(page.entries.len(), 1);
+            tx.queue().cancel(&page.entries[0].id)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&op))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::CancelledBeforeDispatch
+        );
+        let source = Source::new(vec![]);
+        let (worker, dispatcher) = fx.dispatcher(source.clone());
+        worker.tick().await.unwrap();
+        let status = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+        assert!(!status.refresh_pending);
+        assert!(
+            status
+                .last_error
+                .unwrap()
+                .contains("CancelledBeforeDispatch")
+        );
+        assert_eq!(source.calls.load(Ordering::SeqCst), 0);
+        assert!(read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).is_none());
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+struct MalformedSource(usize);
+impl PriceSource for MalformedSource {
+    fn fetch(
+        &self,
+        p: OfficialPriceProvider,
+        now: i64,
+    ) -> Result<FetchedPriceCatalog, PriceFetchError> {
+        let mut c = catalog(p, now, "1.25");
+        match self.0 {
+            0 => c.source_url = "https://untrusted.example/prices".into(),
+            1 => c.source_digest = "invalid".into(),
+            2 => c.tariffs.push(c.tariffs[0].clone()),
+            3 => c.verified_at_ms = now + 1,
+            4 => c.tariffs.clear(),
+            _ => c.tariffs[0].amount_usd = "NaN".into(),
+        }
+        Ok(c)
+    }
+}
+#[test]
+fn invalid_or_ambiguous_public_sources_are_visible_failures_and_never_partial_snapshots() {
+    runtime().block_on(async {
+        for case in 0..6 {
+            let fx = Fx::new();
+            let (worker, dispatcher) = fx.dispatcher(Arc::new(MalformedSource(case)));
+            let (_, op) = fx.refresh(&["openai"]);
+            deliver(&dispatcher).await;
+            let status = read(&*fx.store, |s| s.usage().price_status("openai")).unwrap();
+            assert!(!status.refresh_pending, "case{case}");
+            assert!(status.last_error.is_some(), "case{case}");
+            assert!(read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).is_none());
+            assert_eq!(
+                read(&*fx.store, |s| s.operations().operation(&op))
+                    .unwrap()
+                    .state,
+                devworks_core::protocol::OperationState::Failed
+            );
+            worker.drain().await;
+            dispatcher.stop();
+        }
+    });
+}
+
+struct NativeAuthority {
+    store: Arc<dyn ApplicationStore>,
+    clock: Arc<dyn devworks_core::ports::Clock>,
+}
+impl devworks_core::ports::AuthorityPort for NativeAuthority {
+    fn authorize(
+        &self,
+        ctx: &InvocationContext,
+        request: &devworks_core::ports::AuthorityRequest<'_>,
+    ) -> Result<devworks_core::ports::Authorization, devworks_core::ports::AuthorityDenial> {
+        HostAuthority {
+            store: &*self.store,
+            clock: &*self.clock,
+            protected_branches: &[],
+        }
+        .authorize(ctx, request)
+    }
+}
+fn composition(
+    h: &Harness,
+    store: Arc<dyn ApplicationStore>,
+    source: Arc<dyn PriceSource>,
+) -> devworks_engine::Composition {
+    use devworks_adapters::{
+        fs::{NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources},
+        power::NativePower,
+        process::NativeProcessHost,
+    };
+    use devworks_core::services::{
+        artifacts::ArtifactService, diagnostics::DiagnosticService, resources::ResourceService,
+        runs::ControlService,
+    };
+    let mut config = devworks_engine::RuntimeConfig::new(id("native-price-runtime"));
+    let mut prices = devworks_engine::prices::PriceComposition::new(source);
+    prices.interval = std::time::Duration::from_secs(3600);
+    config.price_refresh = Some(prices);
+    devworks_engine::Composition {
+        store: store.clone(),
+        clock: h.clock(),
+        ids: h.ids.clone(),
+        authority: Arc::new(NativeAuthority {
+            store: store.clone(),
+            clock: h.clock(),
+        }),
+        artifacts: Arc::new(ArtifactService::new(
+            Arc::new(NativeArtifactFiles::new(
+                h.root.clone(),
+                h.root.with_extension("cache"),
+            )),
+            Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
+            Arc::new(NativeFilesystem::new()),
+            h.clock(),
+            h.ids.clone(),
+        )),
+        resources: Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        process_host: Arc::new(NativeProcessHost),
+        runs: devworks_engine::RunComposition::new(Arc::new(ControlService::new(h.ids.clone()))),
+        power: Arc::new(NativePower),
+        diagnostics: Arc::new(DiagnosticService::new(
+            store,
+            h.ids.clone(),
+            h.clock(),
+            None,
+        )),
+        browser: None,
+        git: None,
+        packages: None,
+        use_cases: UseCases::new(),
+        consumers: vec![],
+        indexing: None,
+        config,
+    }
+}
+#[test]
+fn runtime_boot_and_lost_wake_catch_up_once_then_shutdown_fences_further_maintenance() {
+    runtime().block_on(async {
+        let h = Harness::new();
+        let store = h.open();
+        principal(&*store, "user", PrincipalKind::Human);
+        seed(&*store, &h);
+        let source = Source::new(vec![]);
+        let app = devworks_engine::boot(composition(&h, store.clone(), source.clone()))
+            .await
+            .unwrap();
+        let mut changes = app.dispatcher().subscribe();
+        within("runtime official price catchup", async {
+            while read(&*store, |s| s.usage().current_price_snapshot("openai")).is_none()
+                || read(&*store, |s| s.usage().current_price_snapshot("anthropic")).is_none()
+            {
+                changes.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        let old = read(&*store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+        app.shutdown().await;
+        assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
+        drop(app);
+        drop(store);
+        h.advance(refresh::WEEK_MS * 5);
+        let store = h.open();
+        let app = devworks_engine::boot(composition(&h, store.clone(), source.clone()))
+            .await
+            .unwrap();
+        let mut changes = app.dispatcher().subscribe();
+        within("reopen repairs overdue refresh once", async {
+            while read(&*store, |s| s.usage().current_price_snapshot("openai"))
+                .unwrap()
+                .revision
+                < 2
+                || read(&*store, |s| s.usage().current_price_snapshot("anthropic"))
+                    .unwrap()
+                    .revision
+                    < 2
+            {
+                changes.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            read(&*store, |s| s.usage().price_snapshot(&old.id)).unwrap(),
+            old
+        );
+        app.price_refreshes().unwrap().notify();
+        app.price_refreshes().unwrap().tick().await.unwrap();
+        assert_eq!(source.calls.load(Ordering::SeqCst), 4);
+        app.shutdown().await;
+        assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
+    });
+}
+
+#[test]
+fn periodic_runtime_pass_repairs_a_lost_wakeup_without_replaying_missed_weeks() {
+    runtime().block_on(async {
+        let h = Harness::new();
+        let store = h.open();
+        principal(&*store, "user", PrincipalKind::Human);
+        seed(&*store, &h);
+        let source = Source::new(vec![]);
+        let mut config = composition(&h, store.clone(), source.clone());
+        config.config.price_refresh.as_mut().unwrap().interval =
+            std::time::Duration::from_millis(5);
+        let app = devworks_engine::boot(config).await.unwrap();
+        let mut changed = app.dispatcher().subscribe();
+        within("initial price snapshots", async {
+            while read(&*store, |s| s.usage().current_price_snapshot("openai")).is_none()
+                || read(&*store, |s| s.usage().current_price_snapshot("anthropic")).is_none()
+            {
+                changed.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 2);
+        h.advance(refresh::WEEK_MS * 3);
+        within("timer repairs missing maintenance hint", async {
+            while read(&*store, |s| s.usage().current_price_snapshot("openai"))
+                .unwrap()
+                .revision
+                < 2
+                || read(&*store, |s| s.usage().current_price_snapshot("anthropic"))
+                    .unwrap()
+                    .revision
+                    < 2
+            {
+                changed.changed().await.unwrap();
+            }
+        })
+        .await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 4);
+        app.shutdown().await;
+    });
+}
