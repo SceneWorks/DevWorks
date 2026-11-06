@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_partial_page() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-price-more-hint");
     let engine = start(&root);
     startup::settled(&engine);

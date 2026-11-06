@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn native_refresh_gesture_survives_same_frame_catalog_revalidation_hint() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-refresh-hint-gesture");
     let http = std::sync::Arc::new(PublicPriceHttp::default());
     let mut c = config(&root.0);

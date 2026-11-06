@@ -77,6 +77,7 @@ fn open_features(engine: &devworks_desktop::host::Engine, root: &Root, p: &str) 
 
 #[test]
 fn native_feature_zero_limit_latches_and_turning_it_off_does_not_continue_work() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-feature-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -125,6 +126,7 @@ fn native_feature_zero_limit_latches_and_turning_it_off_does_not_continue_work()
 }
 #[test]
 fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-pending-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -196,6 +198,7 @@ fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
 }
 #[test]
 fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_explicit() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-withdraw-cap");
     let engine = start(&root);
     let b = engine.backend();
@@ -321,6 +324,7 @@ fn approve_pending_cap(h: &mut Ui, b: &dyn Backend, id: &str) {
 }
 #[test]
 fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-local-policy");
     let mut config = config(&root.0);
     config.connection_tick = None;
@@ -386,6 +390,7 @@ fn price_catalog(b: &dyn Backend, model: &str) -> PriceCatalogView {
 }
 #[test]
 fn native_tariff_editor_preserves_all_dimensions_and_recovers_from_authoritative_cas_conflict() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-tariff-cas");
     let engine = start(&root);
     let b = engine.backend();
@@ -624,6 +629,7 @@ fn wait_for_price_publication(b: &dyn Backend, snapshots: usize) -> PriceCatalog
 }
 #[test]
 fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_without_credentials() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-official-refresh");
     let http = std::sync::Arc::new(PublicPriceHttp::default());
     let mut c = config(&root.0);
@@ -806,6 +812,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
 
 #[test]
 fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-native-price-paging");
     let engine = start(&root);
     startup::settled(&engine);
@@ -866,6 +873,7 @@ fn configured_connection(b: &dyn Backend) -> ConnectionRecord {
 }
 #[test]
 fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explicit_review() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-stale");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -941,6 +949,7 @@ fn native_connection_billing_edit_preserves_refused_and_stale_draft_until_explic
 }
 #[test]
 fn native_unknown_connection_billing_edit_survives_restart_with_exact_frame_and_command_identity() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-unknown");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -1041,6 +1050,7 @@ fn report_total(h: &Ui, key: &str) -> Option<String> {
 }
 #[test]
 fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_legacy_truth() {
+    let _case = native_runtime_case();
     let root = Root::new("usage-six-native-reports");
     let engine = start(&root);
     let b = engine.backend();
@@ -1166,6 +1176,7 @@ fn native_usage_six_reports_share_authoritative_filters_utc_buckets_and_partial_
 
 #[test]
 fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_original_change() {
+    let _case = native_runtime_case();
     let root = Root::new("price-native-unknown-restart");
     let engine = start(&root);
     let real = engine.backend();
@@ -1236,6 +1247,7 @@ fn native_unknown_tariff_override_restores_exact_typed_draft_and_replays_one_ori
 
 #[test]
 fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_draft() {
+    let _case = native_runtime_case();
     use devworks_core::ports::storage::{StoredUsageOrigin, WriteOptions, run_write};
     use devworks_core::protocol::{Id, ProjectId};
     let root = Root::new("usage-native-paging");
@@ -1338,6 +1350,7 @@ fn native_usage_paging_keeps_applied_filters_and_preserves_unsubmitted_filter_dr
 
 #[test]
 fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
+    let _case = native_runtime_case();
     let root = Root::new("connection-billing-independent-state");
     let mut c = config(&root.0);
     c.connection_tick = None;
@@ -1392,6 +1405,7 @@ fn native_connection_state_change_preserves_an_unsaved_billing_editor() {
 
 #[test]
 fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
+    let _case = native_runtime_case();
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1453,6 +1467,7 @@ fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
 
 #[test]
 fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom_tiers() {
+    let _case = native_runtime_case();
     use devworks_core::ports::{
         storage::{ReadOptions, read_snapshot},
         usage::{CostClassification, PriceQuery, PriceResolver},
