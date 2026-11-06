@@ -155,6 +155,9 @@ fn fault(error: Failure) -> DomainFault {
         Failure::Storage(StorageError::CursorExpired) => {
             Refusal::new(DomainErrorCode::CursorExpired, "search", None)
         }
+        Failure::Storage(StorageError::Cancelled) => {
+            Refusal::new(DomainErrorCode::Cancelled, "search", None)
+        }
         Failure::Storage(error) => panic!("unexpected native search failure {error:?}"),
     }
     .fault(CorrelationId(id("search-fault")))
@@ -434,4 +437,142 @@ fn query_registers_actual_new_selected_space_over_existing_lexical_index() {
             .any(|g| g.as_str().unwrap().contains("MissingCompatibleVectors"))
     );
     assert!(f.transcript().is_empty());
+}
+#[test]
+fn actual_unknown_query_keeps_original_financial_custody_after_index_witness_changes() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (ctx, native, index) = qualify(&f);
+    let (_, op) = source(&f, index.clone(), &ctx, "source");
+    push(&f);
+    index.run_index(&op, &Cancellation::new(), None).unwrap();
+    let waiting = {
+        let mut script = f.http.lock().unwrap();
+        script.wait_for_cancel = true;
+        script.waiting.clone()
+    };
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            search(
+                &f,
+                index.clone(),
+                &ctx,
+                "same-financial-query",
+                "alpha",
+                None,
+            )
+        });
+        runtime().block_on(common::within(
+            "actual query transport starts",
+            waiting.notified(),
+        ));
+        index.stop();
+        let cancelled = worker.join().unwrap();
+        assert_eq!(cancelled["fault"]["code"], "Cancelled");
+    });
+    f.http.lock().unwrap().wait_for_cancel = false;
+    let query = read(&*f.store, |r| {
+        r.operations().operations_for_capability(
+            "conventions.embedding_prepare",
+            &[
+                OperationState::Dispatching,
+                OperationState::OutcomeUnknown,
+                OperationState::Failed,
+            ],
+            None,
+            500,
+        )
+    })
+    .into_iter()
+    .find(|op| op.payload["origin"]["kind"] == "Query")
+    .unwrap();
+    let request: Id = serde_json::from_value(query.payload["requestId"].clone()).unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let ready = read(&*f.store, |r| {
+            let rows = r
+                .usage()
+                .inference_attempts(&UsageAttemptFilter::default(), None, 500)?;
+            let attempt = rows.iter().find(|a| a.request_id == request);
+            attempt
+                .map(|a| r.usage().attempt_balance(&a.attempt_id))
+                .transpose()
+                .map(|v| {
+                    v.flatten()
+                        .is_some_and(|b| b.local_quiescent && b.unknown_tail)
+                })
+        });
+        if ready {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "actual interrupted native attempt must settle its unknown tail"
+        );
+        std::thread::yield_now();
+    }
+    let index = Arc::new(IndexService::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.h.ids.clone(),
+        f.h.clock(),
+    ));
+    index.set_embeddings(Some(native));
+    let first = search(
+        &f,
+        index.clone(),
+        &ctx,
+        "same-financial-query",
+        "alpha",
+        None,
+    );
+    let page = &first["result"]["value"];
+    assert_eq!(page["retrieval"]["mode"], "Lexical", "{first}");
+    let request: Id =
+        serde_json::from_value(page["retrieval"]["embeddingRequestId"].clone()).unwrap();
+    let operation: devworks_core::protocol::OperationId =
+        serde_json::from_value(page["retrieval"]["embeddingOperation"]["operationId"].clone())
+            .unwrap();
+    let original = read(&*f.store, |r| r.operations().operation(&operation)).unwrap();
+    assert_eq!(original.payload["requestId"], json!(request));
+    assert!(matches!(
+        original.state,
+        OperationState::OutcomeUnknown | OperationState::Dispatching
+    ));
+    assert_eq!(sent(&f), 3);
+    let (service, caller) = (index.clone(), ctx.clone());
+    write(&*f.store, move |tx| {
+        let owner = tx
+            .conventions()
+            .convention(&id("source"), None, &[KnowledgeScope::Workspace])?
+            .unwrap();
+        service.record_changed(tx, &caller, &owner).map(|_| ())
+    })
+    .unwrap();
+    let repeated = search(&f, index, &ctx, "same-financial-query", "alpha", None);
+    assert_eq!(repeated["fault"]["code"], "CursorExpired", "{repeated}");
+    assert_eq!(
+        sent(&f),
+        3,
+        "a changed corpus witness must not mint new query custody or send a second request"
+    );
+    let after = read(&*f.store, |r| {
+        r.operations().operations_for_capability(
+            "conventions.embedding_prepare",
+            &[
+                OperationState::Dispatching,
+                OperationState::OutcomeUnknown,
+                OperationState::ObservedComplete,
+                OperationState::Failed,
+            ],
+            None,
+            500,
+        )
+    });
+    let queries = after
+        .iter()
+        .filter(|op| op.payload["origin"]["kind"] == "Query")
+        .collect::<Vec<_>>();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].id, operation);
+    assert_eq!(queries[0].args_digest, original.args_digest);
 }
