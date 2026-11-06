@@ -2026,6 +2026,7 @@ impl ConnectionService {
                 profile: p.name.to_owned(),
                 endpoint: e.endpoint.to_owned(),
                 enabled: true,
+                local_free: false,
                 open_router: None,
                 credential_ref: None,
                 credential_revision: self.first_credential_revision(&id),

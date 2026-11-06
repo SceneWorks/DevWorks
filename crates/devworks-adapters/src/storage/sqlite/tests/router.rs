@@ -435,6 +435,7 @@ impl Fx {
                         profile: m.endpoint_profile.clone(),
                         endpoint: "https://example.test".into(),
                         enabled: true,
+                        local_free: false,
                         open_router: None,
                         credential_ref: None,
                         credential_revision: 0,

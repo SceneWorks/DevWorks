@@ -167,6 +167,8 @@ pub struct StoredConnection {
     pub endpoint: String,
     /// Turned on by the user; a disabled connection keeps its credential and is never routed.
     pub enabled: bool,
+    /// Explicit human-authored billing policy; never inferred from endpoint hostname.
+    pub local_free: bool,
     /// Canonical JSON of the wire `OpenRouterConstraints` (`OpenRouterChat` connections only).
     pub open_router: Option<String>,
     pub credential_ref: Option<Id>,
