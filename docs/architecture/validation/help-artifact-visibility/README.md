@@ -1,0 +1,9 @@
+# Help artifact visibility regression
+
+Help publishes real artifact-backed bodies so legacy topic references stay truthful. They are system-managed documentation, rather than user/work outputs. The existing mutation guard already identifies retained Help bodies by trusted Host provenance and the actual store host identity. The regression was that public artifact discovery still returned those bodies, polluting the workspace list during boot.
+
+SQLite project/workspace discovery now applies that same classification before its cursor and row limit. A private snapshot field carries the actual store host identity; no caller field, public DTO, retention enum or migration was added. Exact references, authorized point reads, Help-only inline retrieval and existing mutation protection remain intact. A user file named or tagged HelpTopic, or containing marker-looking JSON, remains an ordinary artifact. Other host-produced work outputs also remain visible, including those without a derived.kind field.
+
+The unchanged history/attachments test was reproduced RED and the entire five-case target now passes. A strengthened real Help/SQLite/runtime case verifies one-row paging, tags, caller-provenance rejection, lookalike uploads, unrelated host outputs, mutation denial and an old readable Help reference. Separate legacy/Help-only access and existing workspace/project audience cases pass. Four-crate all-target strict lint passes. All 67 schema artifacts, 56 legacy schemas and 30 migration files remain byte-identical to 91a07a34. Exact commands, logs and source hashes are in results.json.
+
+These native checks use temporary roots, explicit SessionSecrets/NoNetwork desktop configuration and no external inference or authentication. The original test expectations were not weakened. This is a focused Darwin regression proof; integrated CI still owns platform confirmation.
