@@ -446,9 +446,11 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
     let src = sources();
     let repo = src.join("large-calls");
     std::fs::create_dir_all(repo.join("src")).unwrap();
-    for unit in 0..210 {
+    // Preserve 21,000 real CALLS edges while keeping each native Git/parser unit below
+    // its file/node caps and avoiding 210 Windows Git subprocess round trips.
+    for unit in 0..7 {
         let mut source = format!("pub fn leaf_{unit:03}() {{}}\n");
-        for item in 0..100 {
+        for item in 0..3000 {
             source.push_str(&format!(
                 "pub fn caller_{unit:03}_{item:03}() {{ leaf_{unit:03}(); }}\n"
             ));
