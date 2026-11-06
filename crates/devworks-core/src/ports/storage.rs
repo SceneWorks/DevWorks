@@ -508,6 +508,7 @@ pub trait WriteTransaction {
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
+    fn usage(&mut self) -> &mut dyn UsageRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -558,6 +559,7 @@ pub trait ReadSnapshot {
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
+    fn usage(&self) -> &dyn UsageRead;
 }
 
 // ---------------------------------------------------------------------------------------------
