@@ -23,9 +23,7 @@
 //! assessment leaves out are kept. A blocking finding closes with a closure note and, for anyone
 //! but the user, evidence; a human may accept a finding's identified risk through the approvals
 //! item's decision seam ([`accept_finding_risk`]), which never waives a missing prerequisite.
-use super::model::{
-    FEATURE_UNIT, active_of, dropped, pending_of, plan_digest as digest_of_draft, plan_units,
-};
+use super::model::{FEATURE_UNIT, active_of, dropped, pending_of, plan_units};
 use super::{R, check_artifact, conflict, invalid, not_found, refuse, stale, visible_feature};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::IdKind;
@@ -585,7 +583,9 @@ pub(crate) fn apply_change(
                 }
                 _ => return Err(conflict("plan_changed", &feature.id)),
             };
-            debug_assert_eq!(digest_of_draft(&draft), digest);
+            // The stored review token may bind a proposed budget as well as the draft.
+            // Its exact slot/revision match above remains authoritative after adoption,
+            // even when the feature's current cap later changes.
             // Each generation has its own assessment. A pending draft's first one starts from
             // the active plan's: an open finding stays open in the replacement until it closes
             // (one the active plan's assessment opens later is carried into it then).

@@ -1,0 +1,71 @@
+{
+  "base": "7ad0532982db466b208e10ae30a50aaa579a9081",
+  "pr38Findings": [
+    4490316270,
+    4490316284
+  ],
+  "sourceCommits": [
+    "523b945c",
+    "1c109d44",
+    "999ec7b0"
+  ],
+  "peerCreateCommit": "188d48dc",
+  "host": {
+    "os": "Darwin27.0.0",
+    "architecture": "arm64",
+    "uid": 501,
+    "git": "2.54.0 (Apple Git-157)"
+  },
+  "sourceSha256": {
+    "crates/devworks-core/src/services/indexing/git.rs": "e2153ae60b96a53910a73fa38b30bb33fdc56ecc47bc2aef6c86d6fb0bc93971",
+    "crates/devworks-core/src/services/git/approval.rs": "5942e09b384524152566d96f365727ca8771f055ca9df7a49f645a50312000d6",
+    "crates/devworks-core/src/services/git/commands.rs": "f9ba536487d9b927ae78cdb86de97830dc0e7542f62891d09cd3f416260dc8d6",
+    "crates/devworks-engine/tests/git.rs": "17b0c433b2c430d13a8e33dc24bb8174fe606f728d9ed85936a9711dc7418a85",
+    "crates/devworks-engine/tests/git/approvals.rs": "19482b7f67a365e711f4923e05dc6d2ea2a8717de1fc96b75211017116ab4101",
+    "crates/devworks-engine/tests/git/worktree_hooks.rs": "9d0ccec3b8327641d19055887c4903f6056cb6e1f7f317fa5377b76b5f3dc039"
+  },
+  "checks": [
+    {
+      "command": "cargo test --locked -p devworks-engine --test git",
+      "passed": 22,
+      "failed": 0,
+      "note": "Full composed production-source pass before test-only bool-to-enum cleanup."
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test git reviewed_manifest_ -- --nocapture",
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test git reviewed_preparation_blocks_new_filter_at_status_spawn -- --nocapture",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p devworks-core --lib services::indexing::git",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "command": "cargo clippy --locked -p devworks-core -p devworks-engine --all-targets -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "counterexamples": {
+    "trackedPatchMarker": "RED before fix; GREEN with native child ban and unconfined control",
+    "untrackedPatchMarker": "RED before fix; GREEN with native child ban and unconfined control",
+    "newFilterAtStatus": "RED on same-size tracked edit; GREEN with native child ban and unconfined control",
+    "unreviewedGitlink": "RED completed actual original Human approval to Agent commit with omitted gitlink; GREEN includes reviewed gitlink and excludes inner dirty contents"
+  },
+  "inferenceExecuted": false,
+  "externalNetworkUsed": false,
+  "crossPlatformRuntimeClaim": false
+}
