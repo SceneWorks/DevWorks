@@ -1240,7 +1240,7 @@ fn bound_cursors(
         read.stamp().committed_sequence.max(1)
     };
     let mut canonical =
-        json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
+        json!({"scope":request.scope,"query":request.query,"limits":request.limits});
     if let Some(selected) = selected {
         canonical["selection"] = json!(selected.pin.intent_digest);
         let mut registrations = Vec::new();

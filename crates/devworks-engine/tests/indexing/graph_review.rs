@@ -179,6 +179,19 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
             // budget-exhausted continuation is exercised through the caller-bounded API.
             continue;
         }
+        // Budget-dependent candidate prefixes cannot share an offset cursor after a work
+        // limit changes. Keep page size and exact published scope unchanged in both refusals.
+        for (field, value) in [("maxVisited", 20001), ("deadlineMs", 30001)] {
+            let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"review-limits","scope":{"kind":"Workspace"},"query":query,"current":true,"cursor":cursor,"limits":{"maxResults":100,"maxVisited":20000,"deadlineMs":30000}});
+            frame["limits"][field] = json!(value);
+            let refused = app
+                .query(&ctx, operation, frame.to_string().as_bytes())
+                .unwrap();
+            assert!(
+                matches!(refused,DomainQueryReply::Rejected{ref fault,..} if fault.code==devworks_core::protocol::DomainErrorCode::CursorExpired),
+                "changed {field}: {refused:?}"
+            );
+        }
         let second = graph(&app, &ctx, operation, query, Some(cursor), None);
         assert_eq!(
             first.view.as_ref().unwrap().pin_id,
