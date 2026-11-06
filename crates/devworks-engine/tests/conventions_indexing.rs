@@ -75,6 +75,39 @@ fn exact_input_publication_keeps_original_actor_and_dispatching_owner_across_reo
             })
             .unwrap()
     };
+    assert!(matches!(
+        index.existing_embedding_inputs(InputPreparation {
+            context: &ctx,
+            origin: &origin,
+            embedding_space: "actual-space",
+            configuration_source_digest: &"d".repeat(64),
+            texts: &["exact first\ninput", "second\0input"],
+            fences: &[],
+            cancellation: &cancellation,
+            deadline_ms: None,
+        }),
+        Err(StorageError::CursorExpired)
+    ));
+    assert!(
+        read(store.as_ref(), |s| s.artifacts().list_workspace(
+            Some(ctx.principal()),
+            &[],
+            None,
+            20
+        ))
+        .is_empty()
+    );
+    assert!(
+        read(store.as_ref(), |s| s
+            .operations()
+            .operations_for_capability(
+                "conventions.embedding_prepare",
+                &[devworks_core::protocol::OperationState::Dispatching],
+                None,
+                20
+            ))
+        .is_empty()
+    );
     let first = prepare();
     let replay = prepare();
     assert_eq!(first.request_id, replay.request_id);
@@ -131,23 +164,30 @@ fn exact_input_publication_keeps_original_actor_and_dispatching_owner_across_reo
         serde_json::json!(second.input_refs),
         serde_json::json!(first.input_refs)
     );
-    let changed = index
-        .prepare_embedding_inputs(InputPreparation {
-            context: &ctx,
-            origin: &origin,
-            embedding_space: "actual-space",
-            configuration_source_digest: &"e".repeat(64),
-            texts: &["exact first\ninput", "second\0input"],
-            fences: &[],
-            cancellation: &cancellation,
-            deadline_ms: None,
-        })
-        .unwrap();
-    assert_ne!(
-        changed.request_id, first.request_id,
-        "selection ABA revision cannot reuse an old preparation identity"
+    let changed = index.prepare_embedding_inputs(InputPreparation {
+        context: &ctx,
+        origin: &origin,
+        embedding_space: "actual-space",
+        configuration_source_digest: &"e".repeat(64),
+        texts: &["exact first\ninput", "second\0input"],
+        fences: &[],
+        cancellation: &cancellation,
+        deadline_ms: None,
+    });
+    assert!(
+        matches!(changed, Err(StorageError::CursorExpired)),
+        "same query cannot mint a new paid identity when its witness changes"
     );
-    assert_ne!(changed.operation_id, first.operation_id);
+    let rows = read(store.as_ref(), |s| {
+        s.operations().operations_for_capability(
+            "conventions.embedding_prepare",
+            &[devworks_core::protocol::OperationState::Dispatching],
+            None,
+            20,
+        )
+    });
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, first.operation_id);
 }
 #[test]
 fn cancelled_or_stopped_preparation_never_creates_an_input_fact() {

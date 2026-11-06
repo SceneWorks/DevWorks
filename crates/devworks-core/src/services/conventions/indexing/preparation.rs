@@ -160,6 +160,17 @@ impl IndexService {
                 .map(|t| json!({"sha256":sha256_hex(t.as_bytes()),"byteCount":t.len()}))
                 .collect::<Vec<_>>()
         ))?;
+        let query_identity = match origin {
+            EmbeddingOrigin::Query {
+                query_id,
+                fingerprint,
+                ..
+            } => Some(digest(&json!({
+                "storeId":context.store_id(), "restoreEpoch":context.restore_epoch(), "actor":context.principal(),
+                "queryId":query_id, "fingerprint":fingerprint,
+            }))?),
+            EmbeddingOrigin::Index { .. } => None,
+        };
         let origin = match origin {
             EmbeddingOrigin::Query {
                 query_id,
@@ -180,8 +191,12 @@ impl IndexService {
         let args_digest = digest(
             &json!({"origin":origin,"context":context_digest,"space":embedding_space,"inputs":input_digest}),
         )?;
-        let request_id = identity("cemb_", &args_digest);
-        let operation_id = OperationId(identity("cprep_", &args_digest));
+        // A repeated query frame cannot escape an admitted/unknown request by observing a
+        // new index/configuration witness. Its immutable args below still bind those facts.
+        let stable_identity = query_identity.as_deref().unwrap_or(&args_digest);
+        let request_id = identity("cemb_", stable_identity);
+        let operation_id = OperationId(identity("cprep_", stable_identity));
+        let is_query = query_identity.is_some();
         let (
             ctx,
             fs,
@@ -210,6 +225,11 @@ impl IndexService {
                 return Err(StorageError::Cancelled);
             }
             check(tx,&ctx,&fs)?;
+            if let Some(prior) = tx.operations().operation(&op_id)?
+                && (prior.capability != CAPABILITY || prior.args_digest != args)
+            {
+                return Err(if is_query { StorageError::CursorExpired } else { StorageError::ScopeDenied });
+            }
             if let Some(row)=tx.conventions().convention_embedding_inputs(&request)? {
                 return captured(tx,&ctx,&row,&op_id,&args).map(Some);
             }
