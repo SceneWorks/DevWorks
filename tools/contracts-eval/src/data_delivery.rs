@@ -742,7 +742,7 @@ pub enum IndexCommand {
     Cancel {
         operation_id: OperationId,
     },
-#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest"], "not": {"required": ["expectedContentIdentity"]}, "x-since": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "trusted", "unitKey", "expectedViewDigest", "expectedContentIdentity"], "not": {"required": ["expectedContentDigest"]}, "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest", "scope"], "not": {"required": ["expectedContentIdentity"]}, "x-since": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "trusted", "unitKey", "expectedViewDigest", "expectedContentIdentity", "scope"], "not": {"required": ["expectedContentDigest"]}, "x-since": 3}]))]
     SetTrust {
         repository_id: Id,
         node_id: Id,
@@ -761,6 +761,12 @@ expected_content_digest: Option<Digest>,
 #[serde(default, skip_serializing_if="Option::is_none", deserialize_with="crate::domain_support::gated_member")]
 #[schemars(with="crate::domain_support::Content",extend("x-since"=3))]
 expected_content_identity:Option<crate::domain_support::Content>,
+        #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="crate::domain_support::gated_member")]
+        #[schemars(with="DataScope",extend("x-since"=3))]
+        scope:Option<DataScope>,
+        #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="crate::domain_support::gated_member")]
+        #[schemars(with="Id",extend("x-since"=3))]
+        pin_id:Option<Id>,
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -790,8 +796,8 @@ pub fn overlay_ref_ok(s: &str) -> bool {
 }
 impl IndexCommandRequest {
     pub fn validate_revision(&self,revision:u32)->Result<(), &'static str>{
-        if let IndexCommand::SetTrust{unit_key,expected_view_digest,expected_content_digest,expected_content_identity,..}=&self.command{
-            if revision>=3 {if unit_key.is_none()||expected_view_digest.is_none()||expected_content_digest.is_some()==expected_content_identity.is_some(){return Err("current trust change requires full view/unit identity and exactly one content witness");}}
+        if let IndexCommand::SetTrust{scope,unit_key,expected_view_digest,expected_content_digest,expected_content_identity,..}=&self.command{
+            if revision>=3 {if scope.is_none() || unit_key.is_none()||expected_view_digest.is_none()||expected_content_digest.is_some()==expected_content_identity.is_some(){return Err("current trust change requires full view/unit identity and exactly one content witness");}}
             else if expected_content_digest.is_none(){return Err("legacy trust change requires its recorded content digest");}
             if expected_content_identity.as_ref().is_some_and(|s|s.0.is_empty()){return Err("empty unit content identity");}
             if let Some(unit)=unit_key{unit.check().map_err(|_|"invalid trust unit identity")?;}
@@ -816,6 +822,8 @@ impl IndexCommandRequest {
 }
 impl crate::domain_support::Revisioned for IndexCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
+if revision<3 && let IndexCommand::SetTrust{scope,pin_id,..}=&mut self.command{*scope=None;*pin_id=None;}
+
 if revision<3 && let IndexCommand::SetTrust{expected_content_identity,..}=&mut self.command{*expected_content_identity=None;}
 
         if revision<3 && let IndexCommand::SetTrust{unit_key,expected_view_digest,..}=&mut self.command{*unit_key=None;*expected_view_digest=None;}

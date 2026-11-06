@@ -328,6 +328,11 @@ def operations():
                     fail('domain envelope selector must be /body/kind for ' + n)
                 every = {**d.get('fields', {}), **d.get('queryFields', {}), **d.get('commandFields', {})}
                 check_since(n, every, d.get('since', {}))
+                required = d.get('requiredSince', {})
+                if required:
+                    check_since(n, every, required)
+                    if not d.get('exactlyOne') or len(set(required.values())) != 1 or any(d.get('since', {}).get(member) != revision for member, revision in required.items()):
+                        fail(n + ': requiredSince must use its declared introduction revision in one choice boundary')
             else:
                 if o['inputSchema'] not in SPECIALIZED:
                     fail('unknown specialized envelope ' + o['inputSchema'])

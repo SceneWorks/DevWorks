@@ -971,7 +971,7 @@ pub enum IndexCommand {
     Cancel {
         operation_id: OperationId,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest"], "not": {"required": ["expectedContentIdentity"]}, "x-since": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "trusted", "unitKey", "expectedViewDigest", "expectedContentIdentity"], "not": {"required": ["expectedContentDigest"]}, "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest", "scope"], "not": {"required": ["expectedContentIdentity"]}, "x-since": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "trusted", "unitKey", "expectedViewDigest", "expectedContentIdentity", "scope"], "not": {"required": ["expectedContentDigest"]}, "x-since": 3}]))]
     SetTrust {
         repository_id: Id,
         node_id: Id,
@@ -1006,6 +1006,20 @@ pub enum IndexCommand {
         )]
         #[schemars(with="super::support::Content",extend("x-since"=3))]
         expected_content_identity: Option<super::support::Content>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with="DataScope",extend("x-since"=3))]
+        scope: Option<DataScope>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with="Id",extend("x-since"=3))]
+        pin_id: Option<Id>,
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -1036,6 +1050,7 @@ pub fn overlay_ref_ok(s: &str) -> bool {
 impl IndexCommandRequest {
     pub fn validate_revision(&self, revision: u32) -> Result<(), &'static str> {
         if let IndexCommand::SetTrust {
+            scope,
             unit_key,
             expected_view_digest,
             expected_content_digest,
@@ -1044,7 +1059,8 @@ impl IndexCommandRequest {
         } = &self.command
         {
             if revision >= 3 {
-                if unit_key.is_none()
+                if scope.is_none()
+                    || unit_key.is_none()
                     || expected_view_digest.is_none()
                     || expected_content_digest.is_some() == expected_content_identity.is_some()
                 {
@@ -1086,6 +1102,13 @@ impl IndexCommandRequest {
 }
 impl super::support::Revisioned for IndexCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 3
+            && let IndexCommand::SetTrust { scope, pin_id, .. } = &mut self.command
+        {
+            *scope = None;
+            *pin_id = None;
+        }
+
         if revision < 3
             && let IndexCommand::SetTrust {
                 expected_content_identity,
