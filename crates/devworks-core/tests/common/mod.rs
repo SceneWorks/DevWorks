@@ -3134,6 +3134,9 @@ impl UsageRepository for Unsupported {
 }
 
 impl HelpRead for Unsupported {
+    fn help_generation_operation(&self, _: &Id) -> Result<Option<OperationId>, StorageError> {
+        nope()
+    }
     fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
         nope()
     }

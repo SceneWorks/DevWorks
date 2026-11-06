@@ -106,9 +106,9 @@ fn operation(conn: &Connection, operation: &OperationId) -> Result<String, Stora
         )
         .optional())?;
     match value {
-        Some((cap, state)) if cap == "help.generate" => Ok(state),
+        Some((cap, state)) if cap == "help.generate_capability_docs" => Ok(state),
         Some(_) => Err(invalid(
-            "Help generation requires a real help.generate operation",
+            "Help generation requires a real help.generate_capability_docs operation",
         )),
         None => Err(StorageError::NotFound {
             kind: "operation",
@@ -209,6 +209,13 @@ macro_rules! help_reads {
         impl HelpRead for $ty {
             fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
                 head(self.conn)
+            }
+            fn help_generation_operation(&self, generation: &Id) -> Result<Option<OperationId>, StorageError> {
+                let operation: Option<String> = db(self.conn.query_row(
+                    "SELECT operation_id FROM help_generations WHERE id=?1 AND state='Published'",
+                    [generation.as_str()], |r| r.get(0)
+                ).optional())?;
+                operation.map(id).transpose().map(|value| value.map(OperationId))
             }
             fn help_drafts(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
                 page(limit)?;
