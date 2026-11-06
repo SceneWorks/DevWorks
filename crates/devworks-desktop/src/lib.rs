@@ -42,6 +42,7 @@ pub mod conventions_ops;
 pub mod conventions_screen;
 pub mod conventions_transfer;
 pub mod decision_ops;
+pub mod embedding_spaces_screen;
 pub mod files;
 pub mod graph_ops;
 pub mod graph_screen;

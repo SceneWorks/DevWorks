@@ -99,7 +99,39 @@ pub struct StoredEmbeddingSelection {
     pub space_id: Option<Id>,
 }
 
+/// Immutable price-only identity for the native connection-scoped discovered model. This is
+/// not a conversational catalog row, selection, transport permission or qualification proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredEmbeddingPriceSubject {
+    pub model_id: Id,
+    pub connection_id: Id,
+    pub upstream_model_id: String,
+    pub created_connection_revision: i64,
+    pub created_at_ms: i64,
+    /// Derived current identity match; does not require enabled/Connected and never authorizes
+    /// inference. None retains the historical subject while refusing stale-source edits.
+    pub current_candidate_id: Option<Id>,
+}
+
 pub trait EmbeddingRead {
+    /// Bounded durable change fence for inventory cursors, including status dependencies that
+    /// can change without a history append. Independent of the selection/candidate revisions.
+    fn embedding_inventory_revision(&self) -> Result<i64, StorageError>;
+    fn embedding_price_subject(
+        &self,
+        model_id: &Id,
+    ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError>;
+    /// Returns a subject only when this exact candidate still matches the current source identity.
+    fn embedding_price_subject_for_candidate(
+        &self,
+        candidate_id: &Id,
+    ) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError>;
+    /// Exclusive actual billing-model-ID order; limit 1..=MAX_PAGE. Historical subjects remain.
+    fn embedding_price_subjects(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError>;
     fn embedding_candidate(
         &self,
         id: &Id,
@@ -133,7 +165,7 @@ pub trait EmbeddingRepository: EmbeddingRead {
         expected_revision: i64,
         probe: &StoredEmbeddingProbe,
     ) -> Result<StoredEmbeddingQualification, StorageError>;
-    /// Stores the host-verified native evidence while the real operation is Dispatching. The
+    /// Stores the host-verified native evidence while the real operation is Dispatching, or on exact same-attempt Unknown/NeedsInput recovery. The
     /// latest fence and native journal/artifact metadata are rechecked. Repeated identical
     /// staging is allowed only at the current revision; changed evidence is refused.
     fn stage_embedding_probe_evidence(
@@ -147,13 +179,15 @@ pub trait EmbeddingRepository: EmbeddingRead {
     /// The host verifies raw manifest/vector content before calling this method. The writer
     /// rechecks the exact journal fence, original store/authority, current candidate source,
     /// usage attempt, quiescent balance and artifact metadata. Qualified requires real terminal
-    /// ObservedComplete; failed/unknown/cancelled work never creates a vector space.
+    /// ObservedComplete; failed/unknown/cancelled work never creates a vector space. A missing
+    /// fence is accepted only for actual unattempted CancelledBeforeDispatch plus its exact
+    /// cancelled delivery; no synthetic attempt zero is minted.
     fn finish_embedding_qualification(
         &mut self,
         candidate_id: &Id,
         expected_revision: i64,
         operation_id: &OperationId,
-        fence: &AttemptFence,
+        fence: Option<&AttemptFence>,
         state: EmbeddingQualificationState,
         reason: Option<&str>,
     ) -> Result<StoredEmbeddingQualification, StorageError>;

@@ -338,6 +338,7 @@ pub struct Runtime {
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
+    embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -559,6 +560,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     } else {
         use_cases
     };
+    // Install metadata and the durable consumer together. Transport is installed later, after
+    // the complete capability/schema registry exists, and before delivery can start.
+    let embedding_spaces = use_cases.connection_service().map(|_| {
+        Arc::new(
+            devworks_core::services::router::embedding_spaces::EmbeddingSpaceService::new(
+                store.clone(),
+            ),
+        )
+    });
+    let embedding_probes = embedding_spaces.as_ref().map(|service| {
+        let worker = crate::conventions::probes::ProbeRuntime::new(service.clone());
+        consumers.push(worker.consumer());
+        worker
+    });
+    let use_cases = if let Some(service) = &embedding_spaces {
+        use_cases.with_embedding_spaces(service.clone())
+    } else {
+        use_cases
+    };
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -700,6 +720,21 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
+    if let (Some(provider), Some(service), Some(worker)) =
+        (&providers, &embedding_spaces, &embedding_probes)
+    {
+        let executor = crate::conventions::embedding::NativeEmbeddings::new(
+            store.clone(),
+            artifacts.clone(),
+            provider.clone(),
+            service.clone(),
+            clock.clone(),
+        );
+        if !worker.install(executor) {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        service.enable_native_qualification();
+    }
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -928,6 +963,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(worker) = &embedding_probes {
+        let worker = worker.clone();
+        tasks.push(tokio::spawn(async move {
+            while !worker.is_stopped() {
+                let current = worker.clone();
+                let _ = tokio::task::spawn_blocking(move || current.reconcile()).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     let mut scheduler = Scheduler::new(
         store.clone(),
         jobs.clone(),
@@ -965,6 +1010,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs: run_supervisor,
         usage,
         providers,
+        embedding_probes,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -1485,6 +1531,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(probes) = &self.embedding_probes {
+            probes.stop();
+        }
         if let Some(help) = &self.help {
             help.stop();
         }

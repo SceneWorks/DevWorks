@@ -29,6 +29,94 @@ fn encode(value: &impl Serialize) -> Result<String, StorageError> {
 fn decode<T: DeserializeOwned>(value: String) -> Result<T, StorageError> {
     serde_json::from_str(&value).map_err(|_| corrupt("embedding metadata shape"))
 }
+const SUBJECT_COLUMNS: &str =
+    "s.model_id,s.connection_id,s.upstream_model_id,s.created_connection_revision,s.created_at";
+// This is current persisted identity, not eligibility: offline/disabled pricing authoring
+// remains possible. Transport/qualification and the invocation's authority are separate owners.
+const CANDIDATE_IDENTITY: &str = "json_extract(c.body_json,'$.accountRevision')=e.account_revision AND json_extract(c.body_json,'$.accountDigest') IS e.account_digest AND json_extract(c.body_json,'$.endpoint')=e.endpoint";
+const KNOWN_EMBEDDING: &str = "e.profile='Embedding' AND EXISTS(SELECT 1 FROM json_each(e.discovered_json) d WHERE json_extract(d.value,'$.id')=s.upstream_model_id)";
+fn subject_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, String, String, i64, i64, Option<String>)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+fn subject_of(
+    raw: (String, String, String, i64, i64, Option<String>),
+) -> Result<StoredEmbeddingPriceSubject, StorageError> {
+    let id = |v: String| Id::new(v).map_err(|_| corrupt("embedding price subject identity"));
+    Ok(StoredEmbeddingPriceSubject {
+        model_id: id(raw.0)?,
+        connection_id: id(raw.1)?,
+        upstream_model_id: raw.2,
+        created_connection_revision: raw.3,
+        created_at_ms: raw.4,
+        current_candidate_id: raw.5.map(id).transpose()?,
+    })
+}
+fn subject_selection() -> String {
+    format!(
+        "SELECT {SUBJECT_COLUMNS},CASE WHEN {KNOWN_EMBEDDING} THEN (SELECT c.id FROM router_embedding_candidates c WHERE c.pricing_model_id=s.model_id AND {CANDIDATE_IDENTITY} ORDER BY c.id LIMIT 1) END FROM router_embedding_price_subjects s LEFT JOIN router_connections e ON e.id=s.connection_id"
+    )
+}
+pub(super) fn price_subject(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+    db(conn
+        .query_row(
+            &(subject_selection() + " WHERE s.model_id=?1"),
+            [id.as_str()],
+            subject_row,
+        )
+        .optional())?
+    .map(subject_of)
+    .transpose()
+}
+pub(super) fn has_price_subject(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
+    db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM router_embedding_price_subjects WHERE model_id=?1)",
+        [id.as_str()],
+        |r| r.get(0),
+    ))
+}
+fn candidate_price_subject(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<StoredEmbeddingPriceSubject>, StorageError> {
+    let sql = format!(
+        "SELECT {SUBJECT_COLUMNS},c.id FROM router_embedding_candidates c JOIN router_embedding_price_subjects s ON s.model_id=c.pricing_model_id JOIN router_connections e ON e.id=s.connection_id WHERE c.id=?1 AND {KNOWN_EMBEDDING} AND {CANDIDATE_IDENTITY}"
+    );
+    db(conn.query_row(&sql, [id.as_str()], subject_row).optional())?
+        .map(subject_of)
+        .transpose()
+}
+fn price_subjects(
+    conn: &Connection,
+    after: Option<&Id>,
+    limit: u16,
+) -> Result<Vec<StoredEmbeddingPriceSubject>, StorageError> {
+    if limit == 0 || limit > MAX_PAGE {
+        return Err(invalid(
+            "embedding price subject page limit must be 1..=MAX_PAGE",
+        ));
+    }
+    let mut stmt = db(conn.prepare_cached(
+        &(subject_selection() + " WHERE s.model_id>?1 ORDER BY s.model_id LIMIT ?2"),
+    ))?;
+    let rows = db(
+        db(stmt.query_map(params![after.map_or("", Id::as_str), limit], subject_row))?
+            .collect::<rusqlite::Result<Vec<_>>>(),
+    )?;
+    rows.into_iter().map(subject_of).collect()
+}
+
 fn candidate(conn: &Connection, id: &Id) -> Result<Option<StoredEmbeddingCandidate>, StorageError> {
     db(conn
         .query_row(
@@ -80,6 +168,16 @@ fn validate(c: &StoredEmbeddingCandidate) -> Result<(), StorageError> {
         || !c.encoder_config.is_object()
     {
         return Err(invalid("invalid embedding candidate identity"));
+    }
+    let model_identity = serde_json::json!({"version":1,"connectionId":c.connection_id,"endpointProfile":"Embedding","endpoint":c.endpoint,"accountRevision":c.account_revision.to_string(),"accountDigest":c.account_digest,"upstreamModelId":c.upstream_model_id});
+    let model = devworks_core::jcs::canonicalize(&model_identity)
+        .map_err(|_| invalid("embedding model identity"))?;
+    let expected_encoder = serde_json::json!({"version":1,"modelDigest":c.model_digest,"dimensions":c.dimensions,"dimensionMode":c.dimension_mode,"metric":c.metric,"elementType":c.element_type,"encodingFormat":"float"});
+    if devworks_core::fingerprint::sha256_hex(model.as_bytes()) != c.model_digest
+        || c.encoder_config != expected_encoder
+        || c.space_id.as_str() != format!("embspace-{}", c.configuration_digest)
+    {
+        return Err(invalid("embedding semantic identity mismatch"));
     }
     let canonical = devworks_core::jcs::canonicalize(&c.encoder_config)
         .map_err(|_| invalid("embedding encoder configuration"))?;
@@ -141,6 +239,10 @@ fn next(q: &mut StoredEmbeddingQualification, now: i64) -> Result<(), StorageErr
     Ok(())
 }
 macro_rules! reads { ($t:ty) => { impl EmbeddingRead for $t {
+    fn embedding_price_subject(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{price_subject(self.conn,id)}
+    fn embedding_price_subject_for_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingPriceSubject>,StorageError>{candidate_price_subject(self.conn,id)}
+    fn embedding_price_subjects(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingPriceSubject>,StorageError>{price_subjects(self.conn,after,limit)}
+    fn embedding_inventory_revision(&self)->Result<i64,StorageError>{db(self.conn.query_row("SELECT revision FROM router_embedding_inventory WHERE singleton=1",[],|r|r.get(0)))}
     fn embedding_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingCandidate>,StorageError>{candidate(self.conn,id)}
     fn embedding_candidates(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingCandidate>,StorageError>{
         if limit==0 || limit>MAX_PAGE{return Err(invalid("embedding page limit must be 1..=MAX_PAGE"));}
@@ -194,20 +296,53 @@ impl EmbeddingRepository for Unit<'_> {
                 return Err(invalid("embedding space identity collision"));
             }
         }
-        db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,body_json,created_at) VALUES(?1,?2,?3,?4,?5)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,encode(c)?,c.created_at_ms]))?;
-        append(
-            self.conn,
-            &StoredEmbeddingQualification {
-                candidate_id: c.id.clone(),
-                revision: 1,
-                state: EmbeddingQualificationState::Unqualified,
-                reason: None,
-                probe: None,
-                evidence: None,
-                updated_at_ms: self.now,
-            },
-        )
+        let pricing_id = devworks_core::services::router::connections::discovered_model_id(
+            "Embedding",
+            &c.connection_id,
+            &c.upstream_model_id,
+        );
+        if self.route_model(&pricing_id)?.is_some() || self.decision_model(&pricing_id)?.is_some() {
+            return Err(invalid(
+                "embedding price identity already belongs to another model kind",
+            ));
+        }
+        if let Some(previous) = price_subject(self.conn, &pricing_id)?
+            && (previous.connection_id != c.connection_id
+                || previous.upstream_model_id != c.upstream_model_id)
+        {
+            return Err(invalid("embedding price subject identity collision"));
+        }
+        // A caller may catch a rejected candidate write and still commit its own unit. The
+        // private map and candidate/qualification therefore share this existing savepoint.
+        let savepoint = WriteTransaction::savepoint(self)?;
+        let outcome = (|| {
+            db(self.conn.execute("INSERT OR IGNORE INTO router_embedding_price_subjects(model_id,connection_id,upstream_model_id,created_connection_revision,created_at) VALUES(?1,?2,?3,?4,?5)",params![pricing_id.as_str(),c.connection_id.as_str(),c.upstream_model_id,source.revision,c.created_at_ms]))?;
+            db(self.conn.execute("INSERT INTO router_embedding_candidates(id,space_id,configuration_digest,pricing_model_id,body_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![c.id.as_str(),c.space_id.as_str(),c.configuration_digest,pricing_id.as_str(),encode(c)?,c.created_at_ms]))?;
+            append(
+                self.conn,
+                &StoredEmbeddingQualification {
+                    candidate_id: c.id.clone(),
+                    revision: 1,
+                    state: EmbeddingQualificationState::Unqualified,
+                    reason: None,
+                    probe: None,
+                    evidence: None,
+                    updated_at_ms: self.now,
+                },
+            )
+        })();
+        match outcome {
+            Ok(()) => {
+                WriteTransaction::release(self, savepoint)?;
+                Ok(())
+            }
+            Err(error) => {
+                WriteTransaction::rollback_to(self, savepoint)?;
+                Err(error)
+            }
+        }
     }
+
     fn start_embedding_qualification(
         &mut self,
         id: &Id,
@@ -225,6 +360,14 @@ impl EmbeddingRepository for Unit<'_> {
             || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
+        }
+        let reused:bool=db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id=?1 AND candidate_id<>?2) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.requestId')=?3 AND operation_id<>?1) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.admissionKey')=?4 AND operation_id<>?1)",
+            params![p.operation_id.0.as_str(),id.as_str(),p.request_id.as_str(),p.admission_key.as_str()],|r|r.get(0)))?;
+        if reused {
+            return Err(invalid(
+                "embedding probe identity already belongs to another intent",
+            ));
         }
         if let Some(previous) = &q.probe {
             let previous = self
@@ -265,7 +408,10 @@ impl EmbeddingRepository for Unit<'_> {
         evidence: &StoredEmbeddingEvidence,
     ) -> Result<StoredEmbeddingQualification, StorageError> {
         let mut q = checked_qualification(self.conn, id, expected)?;
-        if q.state != EmbeddingQualificationState::Qualifying {
+        if !matches!(
+            q.state,
+            EmbeddingQualificationState::Qualifying | EmbeddingQualificationState::Unknown
+        ) {
             return Err(invalid("embedding probe not qualifying"));
         }
         let p = q
@@ -282,19 +428,26 @@ impl EmbeddingRepository for Unit<'_> {
         let operation = self
             .operation(operation_id)?
             .ok_or_else(|| invalid("embedding operation absent"))?;
-        if operation.state != OperationState::Dispatching
-            || operation
-                .latest_attempt()
-                .map(AttemptRecord::fence)
-                .as_ref()
-                != Some(fence)
+        if !matches!(
+            operation.state,
+            OperationState::Dispatching
+                | OperationState::OutcomeUnknown
+                | OperationState::NeedsInput
+        ) || operation
+            .latest_attempt()
+            .map(AttemptRecord::fence)
+            .as_ref()
+            != Some(fence)
         {
             return Err(StorageError::LeaseLost {
                 kind: "embedding_probe",
                 id: id.as_str().into(),
             });
         }
-        check_evidence(self, id, &p, evidence)?;
+        if probe_cancelled(self, &p)? {
+            return Err(StorageError::Cancelled);
+        }
+        check_evidence(self, id, &p, evidence, true)?;
         if let Some(previous) = q.evidence.as_ref() {
             if encode(previous)? != encode(evidence)? {
                 return Err(invalid("embedding evidence immutable"));
@@ -311,7 +464,7 @@ impl EmbeddingRepository for Unit<'_> {
         id: &Id,
         expected: i64,
         operation_id: &OperationId,
-        fence: &AttemptFence,
+        fence: Option<&AttemptFence>,
         state: EmbeddingQualificationState,
         reason: Option<&str>,
     ) -> Result<StoredEmbeddingQualification, StorageError> {
@@ -328,23 +481,37 @@ impl EmbeddingRepository for Unit<'_> {
         if &p.operation_id != operation_id
             || p.store_id != self.info.store_id
             || p.restore_epoch != self.info.restore_epoch
-            || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        // Recording an exact negative journal fact cannot activate a space or change proof.
+        // Revoking the original proposer must prevent publication, not erase failure history.
+        if state == EmbeddingQualificationState::Qualified
+            && !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }
         let operation = self
             .operation(operation_id)?
             .ok_or_else(|| invalid("embedding operation absent"))?;
+        let cancelled = probe_cancelled(self, &p)?;
+        let no_attempt_cancel = state == EmbeddingQualificationState::Cancelled
+            && operation.state == OperationState::CancelledBeforeDispatch
+            && cancelled;
         if operation
             .latest_attempt()
             .map(AttemptRecord::fence)
             .as_ref()
-            != Some(fence)
+            != fence
+            || (fence.is_none() && !no_attempt_cancel)
         {
             return Err(StorageError::LeaseLost {
                 kind: "embedding_probe",
                 id: id.as_str().into(),
             });
+        }
+        if state == EmbeddingQualificationState::Qualified && cancelled {
+            return Err(StorageError::Cancelled);
         }
         let valid_state = match state {
             EmbeddingQualificationState::Qualified => {
@@ -357,6 +524,10 @@ impl EmbeddingRepository for Unit<'_> {
             ),
             EmbeddingQualificationState::Cancelled => {
                 operation.state == OperationState::CancelledBeforeDispatch
+                    || (matches!(
+                        operation.state,
+                        OperationState::ObservedComplete | OperationState::Failed
+                    ) && cancelled)
             }
             _ => false,
         };
@@ -370,7 +541,7 @@ impl EmbeddingRepository for Unit<'_> {
                 .evidence
                 .as_ref()
                 .ok_or_else(|| invalid("embedding evidence absent"))?;
-            check_evidence(self, id, &p, e)?;
+            check_evidence(self, id, &p, e, true)?;
             let registered:Option<(String,i64,String,String)>=db(self.conn.query_row("SELECT model_digest,dimensions,metric,element_type FROM embedding_spaces WHERE id=?1",[c.space_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
             let identity = (
                 c.model_digest.clone(),
@@ -423,6 +594,15 @@ impl EmbeddingRepository for Unit<'_> {
             {
                 return Err(StorageError::ScopeDenied);
             }
+            check_evidence(
+                self,
+                id,
+                p,
+                q.evidence
+                    .as_ref()
+                    .ok_or_else(|| corrupt("qualified evidence absent"))?,
+                false,
+            )?;
             if self
                 .operation(&p.operation_id)?
                 .is_none_or(|o| o.state != OperationState::ObservedComplete)
@@ -462,11 +642,12 @@ fn check_evidence(
     id: &Id,
     p: &StoredEmbeddingProbe,
     e: &StoredEmbeddingEvidence,
+    exact_connection_revision: bool,
 ) -> Result<(), StorageError> {
     let c = candidate(unit.conn, id)?.ok_or_else(|| corrupt("embedding candidate absent"))?;
     let source = current_source(unit.conn, &c)?;
     if e.request_id != p.request_id
-        || e.connection_revision != source.revision
+        || (exact_connection_revision && e.connection_revision != source.revision)
         || !digest(&e.registration_digest)
     {
         return Err(invalid("embedding evidence source mismatch"));
@@ -483,17 +664,55 @@ fn check_evidence(
     {
         return Err(invalid("native embedding request binding mismatch"));
     }
+    let native = unit
+        .operation(&e.native_operation_id)?
+        .ok_or_else(|| invalid("native embedding operation absent"))?;
+    if native.state != OperationState::ObservedComplete
+        || native
+            .latest_attempt()
+            .is_none_or(|last| last.id.0 != e.attempt_id)
+    {
+        return Err(invalid(
+            "native embedding operation not completed by exact attempt",
+        ));
+    }
     let balance = unit
         .attempt_balance(&e.attempt_id)?
         .ok_or_else(|| invalid("native embedding balance absent"))?;
+    let source_scope_matches = match &p.scope {
+        devworks_core::protocol::data::DataScope::Workspace => attempt.project_id.is_none(),
+        devworks_core::protocol::data::DataScope::Project { project_id } => {
+            attempt.project_id.as_ref() == Some(project_id)
+        }
+    };
     if attempt.request_id != p.request_id
         || attempt.operation_id != e.native_operation_id
         || attempt.connection_id != c.connection_id
+        || attempt.actor_id != p.actor_id
+        || !source_scope_matches
+        || attempt.provider_model_id != e.reported_model
+        || attempt
+            .pricing_snapshot
+            .get("admission_key")
+            .and_then(serde_json::Value::as_str)
+            != Some(p.admission_key.as_str())
+        || attempt
+            .pricing_snapshot
+            .get("quote")
+            .and_then(|v| v.get("connection_revision"))
+            .and_then(serde_json::Value::as_i64)
+            != Some(e.connection_revision)
         || attempt.endpoint_profile != "Embedding"
         || attempt.purpose != "Embedding"
         || attempt.state != "Settled"
         || !balance.local_quiescent
         || balance.unknown_tail
+        || balance.incomplete
+        || balance
+            .summary
+            .get("outcome")
+            .and_then(serde_json::Value::as_str)
+            != Some("Completed")
     {
         return Err(invalid("native embedding attempt incomplete or mismatched"));
     }
@@ -504,4 +723,14 @@ fn check_evidence(
         return Err(invalid("embedding vector byte length mismatch"));
     }
     Ok(())
+}
+
+fn probe_cancelled(unit: &Unit<'_>, p: &StoredEmbeddingProbe) -> Result<bool, StorageError> {
+    let delivery = unit
+        .entry(&p.delivery_id)?
+        .ok_or_else(|| invalid("embedding delivery absent"))?;
+    if delivery.operation_id.as_ref() != Some(&p.operation_id) {
+        return Err(invalid("embedding delivery operation mismatch"));
+    }
+    Ok(delivery.cancel_requested || delivery.state == QueueState::Cancelled)
 }

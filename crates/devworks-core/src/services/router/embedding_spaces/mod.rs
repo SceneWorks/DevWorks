@@ -16,3 +16,7 @@ pub use evidence::{NativeProbeResult, VerifiedProbeEvidence};
 mod inputs;
 
 mod commands;
+
+mod outcomes;
+mod query;
+pub use outcomes::ProbeOutcomePage;

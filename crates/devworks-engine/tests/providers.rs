@@ -216,6 +216,7 @@ struct Fx {
     http: Arc<ScriptHttp>,
     profile: String,
     model: Id,
+    source_fences:Mutex<Vec<devworks_core::ports::AuthorityFence>>,
 }
 impl Fx {
     fn new(profile: &str, script: Script, embedding: bool) -> Self {
@@ -432,6 +433,7 @@ impl Fx {
             http,
             profile: profile.into(),
             model,
+            source_fences:Mutex::new(Vec::new()),
         }
     }
     fn bytes(&self, bytes: &[u8]) -> ArtifactRef {
@@ -560,6 +562,26 @@ impl Fx {
         processing_region: Option<String>,
         embedding_session: bool,
     ) -> Result<devworks_engine::providers::driver::ProviderInvocation, StorageError> {
+        self.produce_dimensions_cancellable(
+            request,
+            pricing,
+            modalities,
+            service_tier,
+            processing_region,
+            (embedding_session, None),
+        )
+        .await
+    }
+    async fn produce_dimensions_cancellable(
+        &self,
+        request: InferenceRequest,
+        pricing: PricingContext,
+        modalities: Vec<String>,
+        service_tier: Option<String>,
+        processing_region: Option<String>,
+        auxiliary: (bool, Option<Cancellation>),
+    ) -> Result<devworks_engine::providers::driver::ProviderInvocation, StorageError> {
+        let (embedding_session, cancellation) = auxiliary;
         let embedding = matches!(request.input, InferenceInput::Embedding { .. });
         let (selection, query) = if embedding {
             self.driver.embedding_selection(&id("space")).unwrap()
@@ -644,13 +666,18 @@ impl Fx {
             pin_id: None,
             args_digest: "a".repeat(64),
         };
+        let source_fences=self.source_fences.lock().unwrap().clone();
         self.driver
-            .produce(
-                self.context.clone(),
-                logical,
-                ReportCategory::Assistant,
-                attempt,
-                request,
+            .produce_cancellable(
+                devworks_engine::providers::driver::NativeInvocation {
+                    source_fences,
+                    context: self.context.clone(),
+                    logical,
+                    category: ReportCategory::Assistant,
+                    attempt,
+                    request,
+                },
+                cancellation,
             )
             .await
     }
@@ -886,3 +913,100 @@ mod auto_routes;
 mod content_order;
 #[path = "providers/subscription_limits.rs"]
 mod subscription_limits;
+
+#[test]
+fn external_auxiliary_cancel_reaches_the_actual_producer_without_stopping_other_sources() {
+    runtime().block_on(async {
+        let mut script = Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"prefix\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":1}}\n\n");
+        script.wait_for_cancel = true;
+        let waiting = script.waiting.clone();
+        let f = Arc::new(Fx::new("CompatibleChat", script, false));
+        let request = f.generation(vec![]);
+        let cancellation = Cancellation::new();
+        let worker = f.clone();
+        let token = cancellation.clone();
+        let producing = tokio::spawn(async move {
+            worker.produce_dimensions_cancellable(request,
+                PricingContext { input_semantics: InputSemantics::Unknown,
+                    cache_read_possible: false, cache_write_possible: false,
+                    cache_write_ttl_ms: None }, vec!["Text".into()], None, None, (false, Some(token))).await
+        });
+        waiting.notified().await;
+        cancellation.cancel();
+        let outcome = producing.await.unwrap().unwrap();
+        let DriveOutcome::Settled(balance) = outcome.accounting else { panic!("not settled") };
+        assert!(balance.local_quiescent && balance.unknown_tail);
+        assert!(devworks_core::services::usage::accounting::summary(&balance).unwrap().cancellation_requested);
+        assert!(outcome.result.vector_artifacts.is_empty());
+        assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+        assert!(!read(f.store.as_ref(), |s| s.usage().usage_observations(&balance.attempt_id,None,64)).is_empty());
+        {
+            let mut script = f.http.lock().unwrap();
+            script.wait_for_cancel = false;
+            script.body = VecDeque::from([b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"other source\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()]);
+        }
+        let mut second = f.generation(vec![]); second.request_id = id("independent-request");
+        let second = f.produce(second).await.unwrap();
+        assert_eq!(second.result.outcome,Some(AttemptEnd::Completed));
+        let before = Cancellation::new(); before.cancel();
+        let f = Fx::new("Embedding", Script::aggregate("{}"), true);
+        let request = f.request(InferenceInput::Embedding {
+            embedding_space_id:id("space"), dimensions:2, inputs:vec![f.bytes(b"never sent")],
+        });
+        let result = f.produce_dimensions_cancellable(request,
+            PricingContext{input_semantics:InputSemantics::Unknown,cache_read_possible:false,
+                cache_write_possible:false,cache_write_ttl_ms:None}, vec!["Text".into()],None,None,(false,Some(before))).await;
+        assert!(matches!(result,Err(StorageError::Cancelled)));
+        assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty());
+        assert!(read(f.store.as_ref(), |s| s.router().route_request(&id("request"))).is_none());
+    });
+}
+
+struct SourceGateSecrets {
+    inner: SessionSecrets,
+    reads:AtomicUsize,
+    at:usize,
+    change:Mutex<Option<Box<dyn FnOnce()+Send>>>,
+}
+impl SecretStore for SourceGateSecrets {
+    fn name(&self)->&'static str { "controlled source-authority gate" }
+    fn put(&self,key:&SecretKey,value:&Secret)->Result<(),devworks_core::ports::secrets::SecretError>{self.inner.put(key,value)}
+    fn get(&self,key:&SecretKey)->Result<Option<Secret>,devworks_core::ports::secrets::SecretError>{
+        if self.reads.fetch_add(1,Ordering::SeqCst)+1==self.at {
+            if let Some(change)=self.change.lock().unwrap().take(){change();}
+        }
+        self.inner.get(key)
+    }
+    fn delete(&self,key:&SecretKey)->Result<bool,devworks_core::ports::secrets::SecretError>{self.inner.delete(key)}
+    fn list(&self,store:&str)->Result<Vec<Id>,devworks_core::ports::secrets::SecretError>{self.inner.list(store)}
+}
+#[test]
+fn original_auxiliary_authority_is_fenced_at_admission_and_after_credential_wait() {
+    runtime().block_on(async {
+        for at in [1,2] {
+            let secrets=Arc::new(SourceGateSecrets{inner:SessionSecrets::new(),reads:AtomicUsize::new(0),at,change:Mutex::new(None)});
+            let f=Fx::with_access("OpenAiResponses",Script::aggregate(r#"{"id":"resp_actual","model":"fixture-model","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"actual"}]}],"usage":{"input_tokens":3,"output_tokens":1}}"#),false,Arc::new(NoNetwork),secrets.clone());
+            let policy=read(f.store.as_ref(),|s|devworks_core::authority::policy::resolve_policy(s.configuration(),None));
+            *f.source_fences.lock().unwrap()=vec![devworks_core::ports::AuthorityFence::Policy{project_id:None,digest:policy.digest()}];
+            let store=f.store.clone();
+            *secrets.change.lock().unwrap()=Some(Box::new(move||{
+                write(store.as_ref(),|tx|{
+                    let key=devworks_core::authority::policy::ACCESS_PROFILE_KEY;
+                    let descriptor=devworks_core::settings::catalog::descriptor(key).unwrap();
+                    tx.configuration().append_revision(&ConfigScope::Workspace,"settings",1,1,
+                        json!({"values":{key:{"schema":descriptor.schema_ref(),"value":"projectScope"}}})).map(|_|())
+                }).unwrap();
+            }));
+            let result=f.produce(f.generation(vec![])).await;
+            assert!(result.is_err() || result.as_ref().is_ok_and(|r|r.result.outcome!=Some(AttemptEnd::Completed)));
+            assert!(f.http.lock().unwrap().requests.lock().unwrap().is_empty(),"revoked source cannot reach HTTP after source-authority phase {at}");
+            let route=read(f.store.as_ref(),|s|s.router().route_request(&id("request")));
+            if at==1 {assert!(route.is_none(),"no logical native intent is published under changed source authority");}
+            else {assert!(route.is_some(),"actual reservation exists before late credential gate; it must settle honestly");}
+            assert_ne!(read(f.store.as_ref(),|s|devworks_core::authority::policy::resolve_policy(s.configuration(),None)).digest(),policy.digest());
+        }
+    });
+}
+
+#[path = "providers/embedding_qualification.rs"]
+mod embedding_qualification;

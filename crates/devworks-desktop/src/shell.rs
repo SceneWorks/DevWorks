@@ -2547,6 +2547,17 @@ impl Shell {
                 }
                 Err(e) => self.resources.error = Some(e.describe()),
             },
+            (Slot::EmbeddingSpaces(g), Reply::Query(q)) => {
+                let panel = &mut self.settings.connections.embedding_spaces;
+                if g != panel.generation {
+                    return;
+                }
+                panel.loading = false;
+                match ops::embedding_space_page(q) {
+                    Ok(page) => panel.loaded(page),
+                    Err(error) => panel.error = Some(error.describe()),
+                }
+            }
             (Slot::Connections(g), Reply::Query(q)) => {
                 if g != self.settings.connections.generation {
                     return;
@@ -3038,6 +3049,29 @@ impl Shell {
             "router.catalog",
             |b| ops::router_catalog_all(b, None),
         );
+        self.load_embedding_spaces(None);
+    }
+
+    pub(crate) fn open_embedding_setup(&mut self) {
+        self.navigate(Route::Settings);
+        self.settings.show_connections = true;
+        self.settings.connections.embedding_spaces.open = true;
+        self.load_connections();
+    }
+    fn load_embedding_spaces(&mut self, cursor: Option<String>) {
+        let panel = &mut self.settings.connections.embedding_spaces;
+        panel.generation += 1;
+        panel.loading = true;
+        panel.last_load = Some(Instant::now());
+        let generation = panel.generation;
+        if !self.query(
+            Slot::EmbeddingSpaces(generation),
+            "Loading embedding spaces",
+            "router.embedding_spaces",
+            move |b| ops::router_embedding_spaces(b, cursor.as_deref()),
+        ) {
+            self.settings.connections.embedding_spaces.loading = false;
+        }
     }
 
     fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
@@ -3045,6 +3079,16 @@ impl Shell {
         let saving_editor = matches!(&action, A::ConfigureEdit { .. });
         match action {
             A::Reload => self.load_connections(),
+            A::EmbeddingSetup => self.open_embedding_setup(),
+            A::EmbeddingPrice(model) => {
+                self.usage.price_models = model;
+                self.usage.price_providers.clear();
+                self.usage.price_snapshots.clear();
+                self.usage.history = false;
+                self.routes.entry(Route::Usage).or_default().tab = 2;
+                self.navigate(Route::Usage);
+            }
+            A::EmbeddingSpaces { cursor } => self.load_embedding_spaces(cursor),
             A::UseSessionOnly => {
                 if let Some(b) = self.backend() {
                     match b.use_session_only_secrets() {
@@ -3126,7 +3170,8 @@ impl Shell {
                 )
             })
         });
-        if !self.settings.show_connections || !signing_in {
+        let qualifying = p.embedding_spaces.qualifying();
+        if !self.settings.show_connections || (!signing_in && !qualifying) {
             return;
         }
         let due = !p.loading && p.last_load.is_none_or(|t| t.elapsed() >= CONNECTION_POLL);

@@ -109,10 +109,17 @@ impl ApplicationStore for Flaky {
 impl CommandHandler for Docs {
     fn decide(
         &self,
-        _: &InvocationContext,
+        ctx: &InvocationContext,
         _: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        let run_id = ctx
+            .job_run_id()
+            .expect("native maintenance retains its actual run");
+        let run = tx.jobs().job_run(run_id)?.expect("actual stored job run");
+        assert_eq!(run.status, "Running");
+        assert_eq!(run.project_id.as_ref(), ctx.project_id());
+        assert_eq!(ctx.principal_kind(), PrincipalKind::Host);
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some((store, n)) = self.then_fail.lock().unwrap().take() {
             store.fail.store(n, Ordering::SeqCst);
@@ -888,6 +895,9 @@ impl devworks_core::services::jobs::runner::InferenceJobs for SlowPipeline {
         &self,
         run: &devworks_core::services::jobs::runner::InferenceStart,
     ) -> Result<Option<Id>, devworks_core::services::jobs::runner::InferenceRefusal> {
+        assert_eq!(run.ctx.job_run_id(), Some(&run.run_id));
+        assert_eq!(run.ctx.principal(), &run.agent);
+        assert_eq!(run.ctx.principal_kind(), PrincipalKind::Agent);
         self.entered.store(true, Ordering::SeqCst);
         let mut open = self.open.lock().unwrap();
         while !*open {

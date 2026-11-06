@@ -84,11 +84,21 @@ pub struct NativeProviders {
     composition: ProviderComposition,
     live: Arc<super::live::LiveTurns>,
 }
+/// Trusted native producer input. Cancellation is operational ownership, never wire authority.
+pub struct NativeInvocation {
+    pub source_fences: Vec<devworks_core::ports::AuthorityFence>,
+    pub context: InvocationContext,
+    pub logical: RequestAdmission,
+    pub category: ReportCategory,
+    pub attempt: AttemptRequest,
+    pub request: InferenceRequest,
+}
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
     pub result: ProviderResult,
 }
 pub(crate) struct NativeProduction {
+    pub source_fences: Vec<devworks_core::ports::AuthorityFence>,
     pub context: InvocationContext,
     pub logical: RequestAdmission,
     pub category: ReportCategory,
@@ -96,6 +106,7 @@ pub(crate) struct NativeProduction {
     pub source: Box<dyn OwnedInferenceSource>,
     pub sink: Box<dyn OwnedInferenceSink>,
     pub preparation: NativePreparation,
+    pub cancellation: Option<Cancellation>,
 }
 pub(crate) struct NativePreparation {
     owner: Arc<NativeProviders>,
@@ -339,11 +350,45 @@ impl NativeProviders {
     pub async fn produce(
         self: &Arc<Self>,
         context: InvocationContext,
-        mut logical: RequestAdmission,
+        logical: RequestAdmission,
         category: ReportCategory,
-        mut attempt: AttemptRequest,
+        attempt: AttemptRequest,
         request: InferenceRequest,
     ) -> Result<ProviderInvocation, StorageError> {
+        self.produce_cancellable(
+            NativeInvocation {
+                source_fences: Vec::new(),
+                context,
+                logical,
+                category,
+                attempt,
+                request,
+            },
+            None,
+        )
+        .await
+    }
+    /// An actual originating query/job cancellation joins the same owned producer token.
+    /// Dropping the caller's future still never drops source custody or resends a request.
+    pub async fn produce_cancellable(
+        self: &Arc<Self>,
+        invocation: NativeInvocation,
+        cancellation: Option<Cancellation>,
+    ) -> Result<ProviderInvocation, StorageError> {
+        let NativeInvocation {
+            source_fences,
+            context,
+            mut logical,
+            category,
+            mut attempt,
+            request,
+        } = invocation;
+        if cancellation
+            .as_ref()
+            .is_some_and(Cancellation::is_cancelled)
+        {
+            return Err(StorageError::Cancelled);
+        }
         request.validate().map_err(invalid)?;
         if let ModelSelection::Model { model_id } = &request.options.selection
             && model_id != &attempt.query.catalog_model_id
@@ -367,9 +412,12 @@ impl NativeProviders {
             .copied()
             .unwrap_or(match attempt.query.endpoint_profile.as_str() {
                 "AnthropicMessages" | "ClaudeSubscriptionMessages" => InputSemantics::Disjoint,
-                "OpenAiResponses" | "CodexSubscriptionResponses" | "OpenRouterChat" => {
-                    InputSemantics::Inclusive
-                }
+                // The embedding codec's prompt_tokens is total input; this profile has no
+                // cache sub-buckets to subtract. Actual usage remains provider-reported.
+                "Embedding"
+                | "OpenAiResponses"
+                | "CodexSubscriptionResponses"
+                | "OpenRouterChat" => InputSemantics::Inclusive,
                 _ => InputSemantics::Unknown,
             });
         let shared = Arc::new(Mutex::new(None));
@@ -380,6 +428,7 @@ impl NativeProviders {
             request: request.clone(),
             shared: shared.clone(),
             inner: None,
+            source_fences: source_fences.clone(),
         };
         let sink = LazySink {
             owner: self.clone(),
@@ -394,6 +443,8 @@ impl NativeProviders {
         let accounting = self
             .usage
             .produce_native(NativeProduction {
+                source_fences,
+                cancellation,
                 context,
                 logical,
                 category,
@@ -413,7 +464,7 @@ impl NativeProviders {
         };
         Ok(ProviderInvocation { accounting, result })
     }
-    fn recorded_result(
+    pub(crate) fn recorded_result(
         &self,
         request_id: &Id,
         admission_key: &Id,
@@ -469,6 +520,81 @@ impl NativeProviders {
             }
             Ok(ProviderResult::default())
         })
+    }
+    /// Only closed core metadata can scope an ephemeral producer registration. The actual
+    /// connection/access/current-route/accounting gates still run for every native attempt.
+    pub(crate) fn for_qualified_embedding(
+        &self,
+        context: &InvocationContext,
+        binding: &devworks_core::services::router::embedding_spaces::QualifiedEmbeddingBinding,
+    ) -> Result<Arc<Self>, StorageError> {
+        self.scoped_embedding(
+            context,
+            binding.connection(),
+            binding.space(),
+            binding.upstream_model_id(),
+            binding.dimension_mode(),
+        )
+    }
+    pub(crate) fn for_embedding_probe(
+        &self,
+        probe: &devworks_core::services::router::embedding_spaces::PreparedEmbeddingProbe,
+    ) -> Result<Arc<Self>, StorageError> {
+        self.scoped_embedding(
+            probe.context(),
+            probe.connection(),
+            probe.space(),
+            probe.upstream_model_id(),
+            probe.dimension_mode(),
+        )
+    }
+    fn scoped_embedding(
+        &self,
+        context: &InvocationContext,
+        connection: &StoredConnection,
+        space: &devworks_core::protocol::data::EmbeddingSpace,
+        upstream: &str,
+        dimensions: devworks_core::providers::capabilities::EmbeddingDimensions,
+    ) -> Result<Arc<Self>, StorageError> {
+        if connection.profile != "Embedding" {
+            return Err(StorageError::ScopeDenied);
+        }
+        let epoch = match context.session_id() {
+            Some(id) => read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                Ok(read.sessions().session(id)?.map(|s| s.context_epoch))
+            })?
+            .ok_or(StorageError::ScopeDenied)?,
+            None => 0,
+        };
+        let mut capabilities = Capabilities::unknown(NativeBinding {
+            connection_id: connection.id.clone(),
+            account_revision: Revision::new(connection.account_revision)
+                .map_err(|_| invalid("embedding account revision"))?,
+            endpoint_profile: EndpointProfile::Embedding,
+            model_id: devworks_core::services::router::connections::discovered_model_id(
+                "Embedding",
+                &connection.id,
+                upstream,
+            ),
+            context_epoch: Counter::new(epoch).map_err(|_| invalid("embedding context epoch"))?,
+        });
+        capabilities.embeddings = Support::Supported;
+        capabilities.embedding_dimensions = dimensions;
+        let mut composition = self.composition.clone();
+        composition.embedding_spaces = vec![EmbeddingRegistration {
+            space: space.clone(),
+            connection_id: connection.id.clone(),
+            upstream_model_id: upstream.into(),
+            capabilities,
+        }];
+        Ok(Self::new(
+            self.store.clone(),
+            self.artifacts.clone(),
+            self.connections.clone(),
+            self.usage.clone(),
+            self.schemas.clone(),
+            composition,
+        ))
     }
     /// Builds the internal admission selection from CURRENT discovery plus this host's explicit
     /// space registration. It cannot create a conversational model or mutate a session pin.
@@ -752,6 +878,7 @@ struct LazySource {
     request: InferenceRequest,
     shared: SharedPrepared,
     inner: Option<NativeProviderSource>,
+    source_fences: Vec<devworks_core::ports::AuthorityFence>,
 }
 impl OwnedInferenceSource for LazySource {
     fn start(&mut self, attempt: &StoredInferenceAttempt) -> Result<(), StorageError> {
@@ -788,6 +915,7 @@ impl OwnedInferenceSource for LazySource {
         let captured = attempt.clone();
         let publication = prepared.clone();
         let expected_revision = connection.revision;
+        let source_fences = self.source_fences.clone();
         source = source.with_send_gate(Box::new(move || {
             use devworks_core::providers::materialize::SchemaDocuments;
             for tool in &publication.tools {
@@ -806,11 +934,15 @@ impl OwnedInferenceSource for LazySource {
             let context = context.clone();
             let captured = captured.clone();
             let publication = publication.clone();
+            let source_fences = source_fences.clone();
             owner
                 .usage
                 .accounting_fence()
                 .write(owner.store.as_ref(), move |tx| {
                     super::sink::validate(tx, &context, &captured)?;
+                    if !devworks_core::authority::fences_hold(tx, &source_fences)? {
+                        return Err(StorageError::ScopeDenied);
+                    }
                     let connection = tx
                         .router()
                         .connection(&captured.connection_id)?

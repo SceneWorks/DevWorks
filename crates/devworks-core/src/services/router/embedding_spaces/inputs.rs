@@ -182,7 +182,7 @@ impl EmbeddingSpaceService {
         tx.operations().observe(
             p.operation_id(),
             p.operation_fence().attempt_no,
-            json!({"embeddingProbeInputs":{"version":1,"marker":marker(p),"inputs":inputs}}),
+            json!({"embeddingProbeInputs":{"version":1,"marker":marker(p),"inputs":inputs,"inputReservationEstimate":{"basis":"Utf8ByteCount","value":PROBE_TEXT.len(),"guaranteedUpperBound":false}}}),
         )?;
         Ok(())
     }

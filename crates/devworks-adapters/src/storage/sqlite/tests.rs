@@ -113,6 +113,7 @@ mod connections;
 mod conventions;
 mod decisions;
 mod diagnostics;
+mod embedding;
 mod evals;
 mod git;
 mod graph;

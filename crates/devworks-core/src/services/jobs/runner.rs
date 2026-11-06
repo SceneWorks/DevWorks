@@ -878,7 +878,8 @@ impl JobService {
                         native_namespace(&run.job_id),
                         invocation,
                         run.project_id.as_ref(),
-                    );
+                    )
+                    .with_job_run(run.id.clone());
                     return Ok(Some(Begun {
                         run: started,
                         operation: op_id,
@@ -908,7 +909,8 @@ impl JobService {
                         native_namespace(&run.job_id),
                         invocation,
                         run.project_id.as_ref(),
-                    ),
+                    )
+                    .with_job_run(run.id.clone()),
                     operation,
                     frame: frame.to_string().into_bytes(),
                 }
@@ -950,7 +952,8 @@ impl JobService {
                     counter(info.restore_epoch),
                     Revision::new(1).expect("positive"),
                 )
-                .with_lineage(scope.clone(), None, None);
+                .with_lineage(scope.clone(), None, None)
+                .with_job_run(run.id.clone());
                 let started = tx.jobs().update_run(
                     &StoredJobRun {
                         agent_actor: Some(agent.clone()),

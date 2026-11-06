@@ -32,8 +32,8 @@ mod connections;
 mod conventions;
 mod decisions;
 mod diagnostics;
-mod evals;
 mod embedding;
+mod evals;
 mod git;
 mod graph;
 mod handoff;
@@ -67,7 +67,7 @@ pub use migrations::{
     MIGRATION_0021_SHA256, MIGRATION_0022_SHA256, MIGRATION_0023_SHA256, MIGRATION_0024_SHA256,
     MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATION_0027_SHA256, MIGRATION_0028_SHA256,
     MIGRATION_0029_SHA256, MIGRATION_0030_SHA256, MIGRATION_0031_SHA256, MIGRATION_0032_SHA256,
-    MIGRATIONS, Migration,
+    MIGRATION_0033_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};

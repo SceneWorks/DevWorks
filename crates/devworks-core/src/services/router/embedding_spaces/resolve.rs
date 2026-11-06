@@ -245,6 +245,20 @@ fn resolved(
     })
 }
 
+pub(super) fn qualification_current_read(
+    read: &dyn ReadSnapshot,
+    q: Option<&StoredEmbeddingQualification>,
+) -> Result<bool, StorageError> {
+    let Some(probe) = q.and_then(|q| q.probe.as_ref()) else {
+        return Ok(false);
+    };
+    let current = probe.store_id==read.stamp().store_id && probe.restore_epoch==read.stamp().restore_epoch
+        && read.actors().actor_kind(&probe.actor_id)?==Some(PrincipalKind::Human)
+        // This only rechecks original facts; it is never returned as a permission.
+        && crate::authority::service::authorization_holds(read,&crate::ports::Authorization::direct().fenced_by(probe.authority_fences.clone()))?;
+    Ok(current && evidence_current(read.artifacts(), q)?)
+}
+
 /// Metadata and a freshness witness; this does not authorize an inference or spend.
 pub fn resolve_selected_read(
     read: &dyn ReadSnapshot,
@@ -268,17 +282,7 @@ pub fn resolve_selected_read(
         .map(|p| read.operations().operation(&p.operation_id))
         .transpose()?
         .flatten();
-    let source_current = match choice.qualification.as_ref().and_then(|q| q.probe.as_ref()) {
-        Some(probe) => {
-            probe.store_id==read.stamp().store_id && probe.restore_epoch==read.stamp().restore_epoch
-            && read.actors().actor_kind(&probe.actor_id)?==Some(PrincipalKind::Human)
-            // This value only rechecks original facts; it is never returned as a permission.
-            && crate::authority::service::authorization_holds(read,&crate::ports::Authorization::direct().fenced_by(probe.authority_fences.clone()))?
-        }
-        None => false,
-    };
-    let current =
-        source_current && evidence_current(read.artifacts(), choice.qualification.as_ref())?;
+    let current = qualification_current_read(read, choice.qualification.as_ref())?;
     resolved(
         choice,
         authority_witness(ctx, principal.as_ref(), &policy),

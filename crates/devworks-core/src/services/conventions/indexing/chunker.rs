@@ -90,9 +90,8 @@ pub struct MarkdownChunks {
 impl MarkdownChunks {
     pub fn new(markdown: &str, section_path: &str) -> Self {
         let source = markdown.replace("\r\n", "\n");
-        let start = if source.starts_with("---") {
-            source[3..]
-                .find("\n---")
+        let start = if let Some(rest) = source.strip_prefix("---") {
+            rest.find("\n---")
                 .map(|end| end + 3)
                 .map(|end| {
                     source[end + 4..]

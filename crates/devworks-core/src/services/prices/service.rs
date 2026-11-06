@@ -52,6 +52,18 @@ impl PriceService {
         }
         let model = refresh::model(tx.router(), &input.model_id)?
             .ok_or_else(|| not_found("model", &input.model_id))?;
+        if tx
+            .router()
+            .embedding_price_subject(&input.model_id)?
+            .is_some_and(|subject| subject.current_candidate_id.is_none())
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::SourceChanged,
+                "embedding_price_binding",
+                Some(input.model_id.clone()),
+            )
+            .into());
+        }
         let current = tx.usage().price_override_revision(&input.model_id)?;
         if current != input.expected_revision.get() {
             return Err(refresh::conflict(

@@ -132,6 +132,12 @@ fn connection(
     read: &dyn RouterRead,
     m: &StoredRouteModel,
 ) -> Result<Option<StoredConnection>, StorageError> {
+    if read
+        .embedding_price_subject(&m.id)?
+        .is_some_and(|subject| subject.current_candidate_id.is_none())
+    {
+        return Ok(None);
+    }
     if let Some(id) = &m.connection_id {
         return read.connection(id);
     }
@@ -333,7 +339,7 @@ pub(crate) fn query(
         })
         .into_iter()
         .collect();
-    let normalized = json!({"models":model_filter,"providers":provider_filter,"snapshots":snapshot_filter,"history":input.include_history.unwrap_or(false),"pageLimit":input.page.limit,"schema":schema,"viewSequence":s.stamp().committed_sequence});
+    let normalized = json!({"models":model_filter,"providers":provider_filter,"snapshots":snapshot_filter,"history":input.include_history.unwrap_or(false),"pageLimit":input.page.limit,"schema":schema,"viewSequence":s.stamp().committed_sequence,"embeddingInventory":s.router().embedding_inventory_revision()?});
     let serialized = normalized.to_string();
     let binding = CursorBinding::new(ctx, "router.price_status", &[&serialized], revision);
     let offset = input
@@ -456,7 +462,7 @@ pub(crate) fn query(
             legacy += 1;
             return Ok(legacy <= page.skip + page.limit);
         }
-        let view = json!({"modelId":m.id,"revision":s.usage().price_override_revision(&m.id)?.to_string(),"priceKind":f.kind,"snapshotId":f.snapshot.as_ref().map(|s|s.id.clone()),"overrideRevision":s.usage().price_override_revision(&m.id)?.to_string(),"untrackedReason":f.reason});
+        let view = json!({"modelId":m.id,"upstreamModelId":m.upstream_model_id,"endpointProfile":m.endpoint_profile,"revision":s.usage().price_override_revision(&m.id)?.to_string(),"priceKind":f.kind,"snapshotId":f.snapshot.as_ref().map(|s|s.id.clone()),"overrideRevision":s.usage().price_override_revision(&m.id)?.to_string(),"untrackedReason":f.reason});
         if f.kind == "Untracked" {
             if page.gaps.len() < 128 {
                 page.gaps.push(m.id.clone());

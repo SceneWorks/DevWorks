@@ -51,6 +51,7 @@ pub struct EmbeddedBatch {
 pub enum EmbeddingFailure {
     Unavailable(String),
     Unknown { request_id: Id, reason: String },
+    NotStarted { request_id: Id },
     Cancelled,
     Storage(StorageError),
 }
@@ -69,6 +70,7 @@ pub struct EmbeddingConfiguration {
     pub reason: Option<String>,
 }
 pub trait ConventionEmbeddings: Send + Sync {
+    fn is_available(&self) -> bool;
     /// Only the explicitly configured, currently compatible embedding space. No conversational
     /// model, first route, unqualified vector dimension or automatic paid default is allowed.
     fn configured_space(
@@ -77,6 +79,12 @@ pub trait ConventionEmbeddings: Send + Sync {
     ) -> Result<EmbeddingConfiguration, EmbeddingFailure>;
     /// Called outside any SQL snapshot/writer. At most 32 exact text inputs per native request.
     fn embed(
+        &self,
+        context: &InvocationContext,
+        request: EmbeddingRequest,
+    ) -> Result<EmbeddedBatch, EmbeddingFailure>;
+    /// Observe the exact original native journal only; absence is NotStarted, never a send.
+    fn observe(
         &self,
         context: &InvocationContext,
         request: EmbeddingRequest,

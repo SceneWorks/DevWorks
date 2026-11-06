@@ -185,3 +185,65 @@ fn cancelled_or_stopped_preparation_never_creates_an_input_fact() {
         Err(StorageError::Cancelled)
     ));
 }
+
+#[test]
+fn shutdown_drains_the_actual_writer_ack_without_a_reentrant_lock_cycle() {
+    use devworks_core::services::conventions::indexing::lifecycle::PublicationFence;
+    use std::sync::mpsc;
+    let h = Harness::new();
+    let store = h.open();
+    let fence = Arc::new(PublicationFence::default());
+    let (entered, waiting) = mpsc::sync_channel(1);
+    let (release, resume) = mpsc::sync_channel(1);
+    let worker_store = store.clone();
+    let worker_fence = fence.clone();
+    let writer = std::thread::spawn(move || {
+        let _phase = worker_fence.enter().unwrap();
+        write(worker_store.as_ref(), move |tx| {
+            event(tx, "NeverCommittedIndex")?;
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+            // The writer must be able to consult lifecycle state while shutdown waits for
+            // this SAME transaction's acknowledgment. A writer-preferring RwLock deadlocks.
+            assert!(worker_fence.is_closed());
+            Err::<(), _>(StorageError::Cancelled)
+        })
+    });
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let (closed, closing) = mpsc::sync_channel(1);
+    let closer = fence.clone();
+    let shutdown = std::thread::spawn(move || {
+        closer.begin_close();
+        closed.send(()).unwrap();
+        closer.drain();
+    });
+    closing
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(matches!(fence.enter(), Err(StorageError::Cancelled)));
+    release.send(()).unwrap();
+    assert!(matches!(
+        writer.join().unwrap(),
+        Err(StorageError::Cancelled)
+    ));
+    shutdown.join().unwrap();
+    assert_eq!(
+        read(store.as_ref(), |s| Ok(s
+            .history()
+            .page(
+                &EventFilter::Aggregate {
+                    kind: "fixture".into(),
+                    id: "fixture".into()
+                },
+                0,
+                50
+            )?
+            .events
+            .len())),
+        0
+    );
+    // The successful next transaction proves rollback completed and the writer remains usable.
+    write(store.as_ref(), |tx| event(tx, "WriterReusable")).unwrap();
+}

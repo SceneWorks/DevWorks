@@ -158,73 +158,16 @@ impl EmbeddingSpaceService {
         verified: VerifiedProbeEvidence,
     ) -> Result<(), StorageError> {
         run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            let p = &verified.prepared;
-            let q = tx
-                .router()
-                .embedding_qualification(p.candidate_id())?
-                .ok_or(StorageError::ScopeDenied)?;
-            let attempt = tx
-                .usage()
-                .inference_attempt(&verified.result.attempt_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let snapshot = crate::services::usage::accounting::snapshot(&attempt)?;
-            if serde_json::to_value(&snapshot.selection)
-                .map_err(|_| invalid("native selection JSON"))?
-                != verified.selection
-                || snapshot.admission_key != *p.admission_key()
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            for reference in [
-                &verified.result.result_artifact,
-                &verified.result.vector_artifact,
-            ] {
-                let artifact = tx
-                    .artifacts()
-                    .artifact(&reference.artifact_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                let derived = &artifact.provenance["derived"];
-                if artifact.provenance["principalKind"] != "Host"
-                    || derived["requestId"] != json!(verified.result.request_id)
-                    || derived["attemptId"] != json!(verified.result.attempt_id)
-                    || derived["binding"] != verified.binding
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-            }
-            let evidence = StoredEmbeddingEvidence {
-                request_id: verified.result.request_id,
-                native_operation_id: attempt.operation_id.clone(),
-                attempt_id: verified.result.attempt_id,
-                result_artifact: verified.result.result_artifact,
-                vector_artifact: verified.result.vector_artifact,
-                reported_model: verified.result.reported_model,
-                registration_digest: verified.registration_digest,
-                connection_revision: p.connection().revision,
-            };
-            tx.router().stage_embedding_probe_evidence(
-                p.candidate_id(),
-                q.revision,
-                p.operation_id(),
-                p.operation_fence(),
-                &evidence,
-            )?;
-            for reference in [&evidence.result_artifact, &evidence.vector_artifact] {
-                for operation in [p.operation_id(), &evidence.native_operation_id] {
-                    crate::services::artifacts::reference_from_host_owner(
-                        tx,
-                        p.context(),
-                        reference,
-                        &SubjectKey {
-                            kind: "operation",
-                            id: operation.0.clone(),
-                        },
-                        None,
-                    )?;
-                }
-            }
-            Ok(())
+            persist_verified_in(tx, verified)
         })
+    }
+    /// The native owner checks its atomic close fence inside this writer unit, before calling.
+    pub fn persist_verified_probe_evidence_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        verified: VerifiedProbeEvidence,
+    ) -> Result<(), StorageError> {
+        persist_verified_in(tx, verified)
     }
 
     /// Runs inside dispatcher transaction B after the actual operation transitioned complete.
@@ -248,7 +191,10 @@ impl EmbeddingSpaceService {
             .router()
             .embedding_qualification(&id)?
             .ok_or(StorageError::ScopeDenied)?;
-        if q.state == EmbeddingQualificationState::Qualified
+        if matches!(
+            q.state,
+            EmbeddingQualificationState::Qualified | EmbeddingQualificationState::Cancelled
+        ) && operation.state == crate::protocol::OperationState::ObservedComplete
             && q.probe
                 .as_ref()
                 .is_some_and(|p| p.operation_id == operation.id)
@@ -273,7 +219,7 @@ impl EmbeddingSpaceService {
             &id,
             q.revision,
             &operation.id,
-            &fence,
+            Some(&fence),
             if cancelled {
                 EmbeddingQualificationState::Cancelled
             } else {
@@ -283,4 +229,75 @@ impl EmbeddingSpaceService {
         )?;
         Ok(())
     }
+}
+
+fn persist_verified_in(
+    tx: &mut dyn WriteTransaction,
+    verified: VerifiedProbeEvidence,
+) -> Result<(), StorageError> {
+    let p = &verified.prepared;
+    let q = tx
+        .router()
+        .embedding_qualification(p.candidate_id())?
+        .ok_or(StorageError::ScopeDenied)?;
+    let attempt = tx
+        .usage()
+        .inference_attempt(&verified.result.attempt_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    let snapshot = crate::services::usage::accounting::snapshot(&attempt)?;
+    if serde_json::to_value(&snapshot.selection).map_err(|_| invalid("native selection JSON"))?
+        != verified.selection
+        || snapshot.admission_key != *p.admission_key()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    for reference in [
+        &verified.result.result_artifact,
+        &verified.result.vector_artifact,
+    ] {
+        let artifact = tx
+            .artifacts()
+            .artifact(&reference.artifact_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let derived = &artifact.provenance["derived"];
+        if artifact.provenance["principalKind"] != "Host"
+            || derived["requestId"] != json!(verified.result.request_id)
+            || derived["attemptId"] != json!(verified.result.attempt_id)
+            || derived["binding"] != verified.binding
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+    }
+    let evidence = StoredEmbeddingEvidence {
+        request_id: verified.result.request_id,
+        native_operation_id: attempt.operation_id.clone(),
+        attempt_id: verified.result.attempt_id,
+        result_artifact: verified.result.result_artifact,
+        vector_artifact: verified.result.vector_artifact,
+        reported_model: verified.result.reported_model,
+        registration_digest: verified.registration_digest,
+        connection_revision: p.connection().revision,
+    };
+    tx.router().stage_embedding_probe_evidence(
+        p.candidate_id(),
+        q.revision,
+        p.operation_id(),
+        p.operation_fence(),
+        &evidence,
+    )?;
+    for reference in [&evidence.result_artifact, &evidence.vector_artifact] {
+        for operation in [p.operation_id(), &evidence.native_operation_id] {
+            crate::services::artifacts::reference_from_host_owner(
+                tx,
+                p.context(),
+                reference,
+                &SubjectKey {
+                    kind: "operation",
+                    id: operation.0.clone(),
+                },
+                None,
+            )?;
+        }
+    }
+    Ok(())
 }

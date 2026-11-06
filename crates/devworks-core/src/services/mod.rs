@@ -247,6 +247,21 @@ impl UseCases {
         self
     }
 
+    /// Installs the persistent embedding configuration owner beside its actual connection owner.
+    pub fn with_embedding_spaces(
+        mut self,
+        service: Arc<router::embedding_spaces::EmbeddingSpaceService>,
+    ) -> Self {
+        if let Some(connections) = self.connection_service.as_ref() {
+            assert!(
+                connections.install_embedding_spaces(service.clone()),
+                "embedding configuration owner already installed"
+            );
+            self.register("router.embedding_spaces", Some(service), None);
+        }
+        self
+    }
+
     pub fn connection_service(&self) -> Option<Arc<router::connections::ConnectionService>> {
         self.connection_service.clone()
     }
