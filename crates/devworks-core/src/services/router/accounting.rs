@@ -40,6 +40,14 @@ pub enum AttemptSelection {
         required_capabilities: Vec<String>,
         pin: Option<PinFence>,
     },
+    /// Exact discovered embedding model and explicitly qualified native host space; no pin.
+    Embedding {
+        embedding_space_id: Id,
+        dimensions: u32,
+        upstream_model_id: String,
+        connection_revision: i64,
+        registration_digest: String,
+    },
     Decision {
         question_type: String,
         images: bool,
@@ -142,6 +150,40 @@ impl InferenceRouter {
                     ));
                 }
             }
+            AttemptSelection::Embedding {
+                dimensions,
+                upstream_model_id,
+                connection_revision,
+                registration_digest,
+                ..
+            } => {
+                let connection = tx.router().connection(&query.connection_id)?;
+                let eligible = connection.as_ref().is_some_and(|c| {
+                    c.enabled
+                        && c.lifecycle == "Connected"
+                        && c.profile == "Embedding"
+                        && c.revision == *connection_revision
+                        && *dimensions > 0
+                        && *dimensions <= 65536
+                        && c.discovered
+                            .as_ref()
+                            .is_some_and(|models| models.iter().any(|m| m.id == *upstream_model_id))
+                        && query.catalog_model_id
+                            == super::connections::discovered_model_id(
+                                "Embedding",
+                                &c.id,
+                                upstream_model_id,
+                            )
+                }) && query.endpoint_profile == "Embedding"
+                    && query.provider_model_id.as_ref() == Some(upstream_model_id)
+                    && registration_digest.len() == 64
+                    && registration_digest.bytes().all(|b| b.is_ascii_hexdigit());
+                if !eligible {
+                    return Ok(Some(
+                        "embedding model, connection or qualified native space changed".into(),
+                    ));
+                }
+            }
             AttemptSelection::Decision {
                 question_type,
                 images,
@@ -208,6 +250,13 @@ impl InferenceRouter {
             .ok_or_else(|| {
                 StorageError::InvalidRecord("missing logical inference request".into())
             })?;
+        if (route.purpose == "Embedding")
+            != matches!(request.selection, AttemptSelection::Embedding { .. })
+        {
+            return Ok(Admission::SourceChanged(
+                "embedding requires its qualified native route".into(),
+            ));
+        }
         if route.purpose == "TierClassification"
             && matches!(&request.selection,AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
         {

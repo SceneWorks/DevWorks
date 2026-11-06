@@ -113,6 +113,9 @@ impl UsageRuntime {
             status,
         })
     }
+    pub(crate) fn accounting_fence(&self) -> Arc<AccountingWriteFence> {
+        self.fence.clone()
+    }
     pub fn watch(&self) -> watch::Receiver<Option<Result<UsagePass, StorageError>>> {
         self.status.subscribe()
     }

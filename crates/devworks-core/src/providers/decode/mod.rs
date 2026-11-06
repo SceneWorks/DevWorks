@@ -201,6 +201,12 @@ impl Decoder {
         self.embedding_dimensions = dimensions.map(|n| n as usize);
         self
     }
+    /// A complete native protocol end, independently of the HTTP connection's EOF.
+    /// Chat finish_reason alone is not a transport end; its trailing usage must still be read.
+    pub fn protocol_ended(&self) -> bool {
+        self.ended
+    }
+
     /// Consume one already-framed SSE data event. The adapter owns byte fragmentation, UTF-8,
     /// comment/multiline framing and event-ID handling; event JSON remains native here.
     pub fn consume_data_event(&mut self, event: Option<&str>, data: &str) -> Vec<DecodedFrame> {
@@ -594,12 +600,8 @@ impl Decoder {
             DecodeErrorKind::ContextLimit
         } else if facts.contains("rate_limit")
             || facts.contains("rate limit")
-            || [
-                "usage_limit_reached",
-                "usage_not_included",
-                "insufficient_quota",
-            ]
-            .contains(&code.as_deref().unwrap_or(""))
+            || ["usage_limit_reached", "insufficient_quota"]
+                .contains(&code.as_deref().unwrap_or(""))
             || code.as_deref() == Some("429")
         {
             DecodeErrorKind::Cooldown
@@ -608,7 +610,9 @@ impl Decoder {
             || code.as_deref() == Some("503")
         {
             DecodeErrorKind::Overloaded
-        } else if facts.contains("model_not_found")
+        } else if facts.contains("usage_not_included")
+            || facts.contains("unsupported_model")
+            || facts.contains("model_not_found")
             || facts.contains("model_not_available")
             || facts.contains("invalid model")
         {

@@ -2,7 +2,7 @@
 use devworks_core::{
     ports::{
         http::HttpRequest,
-        provider_http::{HttpStream, StreamLimits, StreamingHttp},
+        provider_http::{HttpStream, SendPhase, StreamLimits, StreamingHttp},
         secrets::Secret,
         storage::*,
     },
@@ -37,6 +37,10 @@ pub struct NativeProviderSource {
     ended: bool,
     usage_sequence: i64,
     provider_model: Option<String>,
+    status: u16,
+    rejected: Option<Secret>,
+    start_failure: AttemptEnd,
+    send_gate: Option<Box<dyn Fn() -> Result<(), StorageError> + Send>>,
 }
 impl NativeProviderSource {
     pub fn new(
@@ -63,10 +67,24 @@ impl NativeProviderSource {
             ended: false,
             usage_sequence: 0,
             provider_model: None,
+            status: 0,
+            rejected: None,
+            start_failure: AttemptEnd::Failed,
+            send_gate: None,
         }
+    }
+    pub fn with_send_gate(
+        mut self,
+        gate: Box<dyn Fn() -> Result<(), StorageError> + Send>,
+    ) -> Self {
+        self.send_gate = Some(gate);
+        self
     }
     fn frames(&mut self, frames: Vec<DecodedFrame>) -> Result<(), StorageError> {
         for frame in frames {
+            if self.status >= 300 && matches!(frame, DecodedFrame::ToolCallComplete { .. }) {
+                continue;
+            }
             match &frame {
                 DecodedFrame::Identity { model, .. } => {
                     if model.is_some() {
@@ -137,7 +155,11 @@ impl NativeProviderSource {
                 }
                 DecodedFrame::Terminal { outcome, .. } => {
                     self.pending
-                        .push_back(InferenceFrame::Terminal(outcome_kind(outcome)));
+                        .push_back(InferenceFrame::Terminal(if self.status >= 300 {
+                            AttemptEnd::Failed
+                        } else {
+                            outcome_kind(outcome)
+                        }));
                     continue;
                 }
                 _ => {}
@@ -263,15 +285,57 @@ impl OwnedInferenceSource for NativeProviderSource {
         request.timeout_ms = self.limits.deadline_ms;
         request.max_response_bytes = usize::try_from(self.limits.max_response_bytes)
             .map_err(|_| invalid("response bound"))?;
-        let stream = self
-            .http
-            .open(&request, &self.limits, cancellation)
-            .map_err(|_| {
-                StorageError::unavailable(
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        if let Some(gate) = &self.send_gate {
+            gate()?;
+        }
+        let stream = match self.http.open(&request, &self.limits, cancellation) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.start_failure = if error.phase == SendPhase::NotSent {
+                    AttemptEnd::Failed
+                } else {
+                    AttemptEnd::UnknownTail
+                };
+                return Err(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "provider transport did not open",
+                ));
+            }
+        };
+        self.status = stream.head().status;
+        self.rejected = if self.status == 401 {
+            match &access.credential {
+                AccessCredential::Bearer { token, .. } => Some(token.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let headers = stream
+            .head()
+            .headers
+            .iter()
+            .filter(|(name, _)| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "retry-after" | "x-ratelimit-reset-requests" | "x-ratelimit-reset-tokens"
                 )
-            })?;
+            })
+            .map(|(n, v)| (n.clone(), v.chars().take(512).collect::<String>()))
+            .collect::<Vec<_>>();
+        self.frames(vec![DecodedFrame::Native {
+            observation: devworks_core::providers::decode::NativeObservation {
+                ordinal: None,
+                kind: "http_response".into(),
+                value: serde_json::json!({"status":self.status,"headers":headers}),
+                raw_json: serde_json::json!({"status":self.status,"headers":headers}).to_string(),
+                replay: devworks_core::providers::decode::NativeReplay::Unsupported,
+                continuation: None,
+            },
+        }])?;
         let streaming = matches!(
             self.prepared.profile,
             EndpointProfile::CodexSubscriptionResponses
@@ -280,7 +344,7 @@ impl OwnedInferenceSource for NativeProviderSource {
                 .next()
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
         }) || self.prepared.response_mode == ResponseMode::Streaming;
-        if streaming {
+        if streaming && self.status < 300 {
             self.sse = Some(
                 devworks_core::providers::sse::SseDecoder::new(
                     devworks_core::providers::sse::SseLimits {
@@ -339,6 +403,46 @@ impl OwnedInferenceSource for NativeProviderSource {
                         self.decoder.consume_aggregate(&self.aggregate)
                     };
                     self.frames(frames)?;
+                    if self.status >= 300 {
+                        let kind = match self.status {
+                            401 | 402 | 403 => {
+                                devworks_core::providers::decode::DecodeErrorKind::Authentication
+                            }
+                            404 => {
+                                devworks_core::providers::decode::DecodeErrorKind::ModelUnavailable
+                            }
+                            429 => devworks_core::providers::decode::DecodeErrorKind::Cooldown,
+                            _ => devworks_core::providers::decode::DecodeErrorKind::Provider,
+                        };
+                        // Keep the actual HTTP classification even if a proxy supplied a syntactically
+                        // successful body. No calls from a non-success response become dispatchable.
+                        self.pending
+                            .push_front(InferenceFrame::Output(DecodedFrame::Error {
+                                error: devworks_core::providers::decode::DecodeError {
+                                    kind,
+                                    code: Some(format!("http_{}", self.status)),
+                                    message: "provider HTTP request refused".into(),
+                                },
+                            }));
+                    }
+                    if let Some(rejected) = self.rejected.take() {
+                        self.stream
+                            .as_mut()
+                            .expect("started")
+                            .close()
+                            .map_err(|_| {
+                                StorageError::unavailable(
+                                    Unavailable::UnsupportedRuntime,
+                                    "provider transport closure unconfirmed",
+                                )
+                            })?;
+                        // Refresh lifecycle through its real owner. Never resend this inference
+                        // attempt or concatenate another response after any exposed prefix.
+                        let _ = self.connections.access(
+                            &self.prepared.identity.binding.connection_id,
+                            Some(&rejected),
+                        );
+                    }
                 }
                 Ok(n) => {
                     if let Some(sse) = self.sse.as_mut() {
@@ -352,6 +456,20 @@ impl OwnedInferenceSource for NativeProviderSource {
                         self.frames(frames)?;
                         if parsed.is_err() {
                             self.interrupted(DecodedOutcome::Incomplete, "malformed event stream")?;
+                        } else if self.decoder.protocol_ended() {
+                            self.stream
+                                .as_mut()
+                                .expect("started")
+                                .close()
+                                .map_err(|_| {
+                                    StorageError::unavailable(
+                                        Unavailable::UnsupportedRuntime,
+                                        "provider transport closure unconfirmed",
+                                    )
+                                })?;
+                            self.ended = true;
+                            let frames = self.decoder.finish();
+                            self.frames(frames)?;
                         }
                     } else {
                         if self.aggregate.len().saturating_add(n)
@@ -368,6 +486,9 @@ impl OwnedInferenceSource for NativeProviderSource {
                 }
             }
         }
+    }
+    fn start_failure_outcome(&self) -> AttemptEnd {
+        self.start_failure
     }
     fn close(&mut self) -> Result<(), StorageError> {
         if let Some(stream) = &mut self.stream {

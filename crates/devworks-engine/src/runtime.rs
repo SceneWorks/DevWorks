@@ -228,6 +228,8 @@ pub struct RuntimeConfig {
     pub approval_resume_interval: Duration,
     /// Native OS delivery adapter. Absent adapters keep the persistent inbox available.
     pub native_notifications: Option<Arc<dyn OsNotificationPort>>,
+    /// Native provider HTTP and explicit host capability/embedding-space qualification.
+    pub providers: Option<crate::providers::driver::ProviderComposition>,
     /// Durable notification catch-up interval; focus and committed commands also wake it.
     pub notification_interval: Duration,
 }
@@ -250,6 +252,7 @@ impl RuntimeConfig {
             eval_interval: Duration::from_secs(30),
             approval_resume_interval: Duration::from_secs(5),
             native_notifications: None,
+            providers: None,
             notification_interval: Duration::from_secs(5),
         }
     }
@@ -334,6 +337,7 @@ pub struct Runtime {
     housekeeper: Arc<Housekeeper>,
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
+    providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -641,6 +645,31 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let use_cases = use_cases
         .with_approvals(approvals.clone())
         .with_notifications(Arc::new(NotificationService::new(ids.clone())));
+    let providers = match config.providers.clone() {
+        Some(provider) => {
+            let connections = use_cases.connection_service().ok_or_else(|| {
+                BootError::Composition(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "native provider composition requires current ConnectionService",
+                ))
+            })?;
+            let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
+                store.clone(),
+                use_cases.clone(),
+                packages.as_ref().map(|p| p.service.clone()),
+                artifacts.clone(),
+            ));
+            Some(crate::providers::driver::NativeProviders::new(
+                store.clone(),
+                artifacts.clone(),
+                connections,
+                usage.clone(),
+                schemas,
+                provider,
+            ))
+        }
+        None => None,
+    };
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -882,6 +911,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         housekeeper,
         runs: run_supervisor,
         usage,
+        providers,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -1030,6 +1060,10 @@ impl Runtime {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
     /// Canonical native producers and bounded historical accounting over the same router.
+    pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
+        self.providers.as_ref()
+    }
+
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }

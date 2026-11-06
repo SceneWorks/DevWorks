@@ -71,6 +71,28 @@ pub fn estimate(
     let mut known = false;
     let mut unknown = Vec::new();
     let mut input = quantities.clone();
+    if context.input_semantics == InputSemantics::Unknown {
+        unknown.push("input_semantics".into());
+    }
+    // Provider audio counters are subsets of aggregate token counts, not a second complete
+    // input/output. Preserve the aggregate in the meter while pricing disjoint components.
+    for (kind, aggregate) in [
+        ("Input", &mut input.input_tokens),
+        ("Output", &mut input.output_tokens),
+    ] {
+        let audio = quantities
+            .additional
+            .iter()
+            .find(|q| q.modality == "Audio" && q.charge_kind == kind && q.unit == "Token");
+        if let Some(audio) = audio {
+            *aggregate = aggregate
+                .and_then(|total| total.checked_sub(audio.quantity))
+                .filter(|n| *n >= 0);
+            if aggregate.is_none() {
+                unknown.push(format!("{kind}_modality_breakdown"));
+            }
+        }
+    }
     // A missing category on a profile that cannot use it is inapplicable. A positive
     // contradictory observation remains unknown; it cannot disappear into a cheap estimate.
     let unexpected_read =
@@ -122,7 +144,7 @@ pub fn estimate(
         (
             "output",
             "Output",
-            quantities.output_tokens,
+            input.output_tokens,
             rates.and_then(|r| r.output_usd_per_million.as_deref()),
             true,
         ),

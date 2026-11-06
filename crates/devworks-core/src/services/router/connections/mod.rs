@@ -364,6 +364,12 @@ fn event(
     })?;
     Ok(())
 }
+fn next_account_revision(current: i64) -> Result<i64, StorageError> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| StorageError::InvalidRecord("provider account identity exhausted".into()))
+}
+
 /// The secret-free history payload of a connection.
 fn connection_payload(c: &StoredConnection) -> Value {
     json!({
@@ -373,6 +379,7 @@ fn connection_payload(c: &StoredConnection) -> Value {
         "endpoint": c.endpoint,
         "credentialRef": c.credential_ref.as_ref().map(Id::as_str),
         "credentialRevision": c.credential_revision,
+        "accountRevision": c.account_revision,
         "lifecycle": c.lifecycle,
         "subscriptionRiskAccepted": c.risk.is_some(),
         "enabled": c.enabled,
@@ -1381,6 +1388,7 @@ impl ConnectionService {
             c.access_expires_at_ms = Some(expires_at_ms);
             let account_changed = account_digest.is_some() && account_digest != c.account_digest;
             if account_changed {
+                c.account_revision = next_account_revision(c.account_revision)?;
                 // A refresh never changes the account; if the provider says otherwise, the risk
                 // acceptance and what was learned with the old account no longer cover it.
                 c.risk = None;
@@ -2038,7 +2046,9 @@ impl ConnectionService {
                 open_router: None,
                 credential_ref: None,
                 credential_revision: self.first_credential_revision(&id),
-                account_revision: 1,
+                account_revision: next_account_revision(
+                    tx.router().connection_account_revision(&id)?.unwrap_or(0),
+                )?,
                 credential_epoch: None,
                 lifecycle: without_credential(p).into(),
                 state_reason: None,
@@ -2141,6 +2151,9 @@ impl ConnectionService {
             // The open sign-in is cancelled below; its publication must fail even if the
             // profile or endpoint changes back before it runs.
             next.credential_revision += 1;
+        }
+        if current.is_some() && (credential_changed || profile_changed || endpoint_changed) {
+            next.account_revision = next_account_revision(next.account_revision)?;
         }
         next.updated_at_ms = now;
         let saved = tx
@@ -2324,6 +2337,7 @@ impl ConnectionService {
                     // running) compares the credential revision, so it is advanced.
                     let mut next = c.clone();
                     next.credential_revision += 1;
+                    next.account_revision = next_account_revision(next.account_revision)?;
                     next.updated_at_ms = tx.now_ms();
                     let saved = tx.router().put_connection(&next, Some(c.revision))?;
                     self.cancel_flows(&saved.id);
@@ -2339,6 +2353,7 @@ impl ConnectionService {
                 let mut next = c.clone();
                 next.credential_ref = None;
                 next.credential_revision += 1;
+                next.account_revision = next_account_revision(next.account_revision)?;
                 next.credential_epoch = None;
                 next.lifecycle = without_credential(p).into();
                 next.state_reason = None;
@@ -2801,6 +2816,12 @@ fn publish_tokens(
     }
     let mut next = c.clone();
     let old = c.credential_ref.clone();
+    if c.account_digest.is_none()
+        || t.account_digest.is_none()
+        || c.account_digest != t.account_digest
+    {
+        next.account_revision = next_account_revision(next.account_revision)?;
+    }
     next.credential_ref = Some(t.handle.clone());
     next.credential_revision += 1;
     next.credential_epoch = Some(t.restore_epoch);

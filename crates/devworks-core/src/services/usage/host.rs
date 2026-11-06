@@ -98,6 +98,10 @@ pub trait OwnedInferenceSource: Send {
     fn next(&mut self, cancellation: &Cancellation)
     -> Result<Option<InferenceFrame>, StorageError>;
     fn close(&mut self) -> Result<(), StorageError>;
+    /// A qualified source may prove no request was sent; unknown send boundaries stay unknown.
+    fn start_failure_outcome(&self) -> AttemptEnd {
+        AttemptEnd::UnknownTail
+    }
 }
 #[derive(Clone, Debug)]
 pub enum InferenceFrame {
@@ -194,7 +198,8 @@ impl AttemptHost {
                     .operations()
                     .operation(&prior.operation_id)?
                     .ok_or_else(|| StorageError::InvalidRecord("logical journal missing".into()))?;
-                if prior.project_id != logical.project_id
+                if op.args_digest != logical.args_digest
+                    || prior.project_id != logical.project_id
                     || prior.session_id != logical.session_id
                     || prior.purpose != logical.purpose.as_str()
                     || op.payload.get("actorId").and_then(|a| a.as_str())
@@ -259,6 +264,9 @@ impl AttemptHost {
         let bound = accounting::snapshot(&attempt)?;
         let mut outcome = AttemptEnd::UnknownTail;
         let mut failure = source.start_cancellable(&attempt, &cancellation).err();
+        if failure.is_some() {
+            outcome = source.start_failure_outcome();
+        }
         if failure.is_none() {
             loop {
                 match self.interrupted(&attempt) {

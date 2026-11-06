@@ -765,7 +765,10 @@ pub(crate) fn mark_dispatched(
         .usage()
         .inference_attempt(id)?
         .ok_or_else(|| invalid("unknown inference attempt"))?;
-    if attempt.state == "Dispatched" {
+    if matches!(
+        attempt.state.as_str(),
+        "Dispatched" | "Settled" | "UnknownTail" | "CancelledBeforeDispatch"
+    ) {
         return Ok(Admission::Admitted {
             attempt,
             reused: true,

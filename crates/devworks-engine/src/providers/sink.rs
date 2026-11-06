@@ -2,7 +2,7 @@
 use devworks_core::{
     context::InvocationContext,
     ports::{IdKind, storage::*},
-    protocol::{Counter, EventId, Id, Protocol, Revision, provider::*},
+    protocol::{Counter, EventId, Protocol, Revision, provider::*},
     providers::{
         PreparedRequest,
         decode::{DecodedFrame, DecodedToolCall},
@@ -42,7 +42,10 @@ pub struct ProviderSink {
     prepared: PreparedRequest,
     assembler: TurnAssembler,
     sequence: i64,
-    embedding: Option<(Id, u32, Vec<ArtifactRef>)>,
+    embedding: Option<(
+        devworks_core::protocol::data::EmbeddingSpace,
+        Vec<ArtifactRef>,
+    )>,
     vectors: BTreeMap<u64, Vec<f32>>,
     result: ResultChannel,
 }
@@ -52,7 +55,10 @@ impl ProviderSink {
         artifacts: Arc<ArtifactService>,
         context: InvocationContext,
         prepared: PreparedRequest,
-        embedding: Option<(Id, u32, Vec<ArtifactRef>)>,
+        embedding: Option<(
+            devworks_core::protocol::data::EmbeddingSpace,
+            Vec<ArtifactRef>,
+        )>,
         result: ResultChannel,
     ) -> Self {
         Self {
@@ -104,8 +110,10 @@ impl ProviderSink {
         let context = self.context.clone();
         let attempt = attempt.clone();
         let epoch = self.prepared.identity.binding.context_epoch.get();
+        let binding = self.prepared.identity.binding.clone();
         fence.write(store.as_ref(), move |tx| {
             validate(tx, &context, &attempt)?;
+            validate_binding(tx, &binding)?;
             let session = attempt
                 .session_id
                 .as_ref()
@@ -146,6 +154,7 @@ impl ProviderSink {
         let attempt = attempt.clone();
         let title = title.to_owned();
         let media_type = media_type.to_owned();
+        let binding = self.prepared.identity.binding.clone();
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
             let staged=service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"ProviderOutput","requestId":attempt.request_id,"attemptId":attempt.attempt_id}))?
@@ -153,6 +162,7 @@ impl ProviderSink {
             let pending=staged.clone(); let service_in=service.clone();
             let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
                 validate(tx,&context,&attempt)?;
+                validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
                 let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
                     scope,owner:attempt.actor_id.clone()})?;
@@ -220,8 +230,24 @@ impl ProviderSink {
 fn invalid(message: impl Into<String>) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
+pub(crate) fn validate_binding(
+    tx: &mut dyn WriteTransaction,
+    binding: &NativeBinding,
+) -> Result<(), StorageError> {
+    let current = tx
+        .router()
+        .connection(&binding.connection_id)?
+        .ok_or(StorageError::ScopeDenied)?;
+    if current.account_revision != binding.account_revision.get()
+        || current.profile != format!("{:?}", binding.endpoint_profile)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(())
+}
+
 /// Every publication rechecks captured authority and execution ownership in its commit unit.
-fn validate(
+pub(crate) fn validate(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     attempt: &StoredInferenceAttempt,
@@ -381,11 +407,11 @@ impl OwnedInferenceSink for ProviderSink {
                 )?;
             }
             DecodedFrame::Embedding { index, vector } => {
-                let Some((_, dimensions, inputs)) = &self.embedding else {
+                let Some((space, inputs)) = &self.embedding else {
                     return Err(invalid("unexpected embedding"));
                 };
                 if index >= inputs.len() as u64
-                    || vector.len() != *dimensions as usize
+                    || vector.len() != space.dimensions as usize
                     || vector.iter().any(|v| !v.is_finite())
                     || self.vectors.insert(index, vector).is_some()
                 {
@@ -430,33 +456,63 @@ impl OwnedInferenceSink for ProviderSink {
         outcome: AttemptEnd,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
-        if let Some((space, dimensions, inputs)) = &self.embedding {
+        if let Some((space, inputs)) = &self.embedding {
+            let dimensions = space.dimensions;
             if outcome == AttemptEnd::Completed {
                 if self.vectors.len() != inputs.len()
                     || !(0..inputs.len() as u64).all(|i| self.vectors.contains_key(&i))
                 {
                     return Err(invalid("embedding population incomplete"));
                 }
-                let mut artifacts = Vec::new();
-                for vector in self.vectors.values() {
-                    let bytes: Vec<_> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
-                    artifacts.push(self.artifact(
-                        attempt,
-                        &bytes,
-                        "Provider embedding vector",
-                        "application/vnd.devworks.float32-le",
-                        fence,
-                    )?);
-                }
-                let bytes=serde_json::to_vec(&json!({"version":1,"kind":"EmbeddingResult","spaceId":space,"dimensions":dimensions,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,
-                    "binding":self.prepared.identity.binding,"inputs":inputs,"vectors":artifacts})).map_err(|_|invalid("embedding result JSON"))?;
-                let result = self.artifact(
-                    attempt,
-                    &bytes,
-                    "Provider embedding result",
-                    "application/vnd.devworks.embedding-result+json",
-                    fence,
-                )?;
+                let vector_bytes: Vec<Vec<u8>> = self
+                    .vectors
+                    .values()
+                    .map(|vector| vector.iter().flat_map(|v| v.to_le_bytes()).collect())
+                    .collect();
+                let descriptors:Vec<_>=vector_bytes.iter().enumerate().map(|(index,bytes)|json!({"index":index,"sha256":devworks_core::fingerprint::sha256_hex(bytes),"byteCount":bytes.len()})).collect();
+                let manifest=serde_json::to_vec(&json!({"version":1,"kind":"EmbeddingResult","space":space,"dimensions":dimensions,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,
+                    "binding":self.prepared.identity.binding,"registration":accounting::snapshot(attempt)?.selection,"inputs":inputs,"vectors":descriptors})).map_err(|_|invalid("embedding result JSON"))?;
+                let mut bytes = vector_bytes;
+                bytes.push(manifest);
+                let service = self.artifacts.clone();
+                let store = self.store.clone();
+                let context = self.context.clone();
+                let current = attempt.clone();
+                let binding = self.prepared.identity.binding.clone();
+                let mut published=fence.publication(|| {
+                    let mut staged=Vec::new();
+                    for bytes in &bytes {
+                        match service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"EmbeddingResult","requestId":current.request_id,"attemptId":current.attempt_id}))? {
+                            Ok(file)=>staged.push(file),
+                            Err(_)=>{for file in &staged {service.settle_host_bytes(store.as_ref(),file,false);}return Err(invalid("embedding staging failed"));}
+                        }
+                    }
+                    let pending=staged.clone();let native=service.clone();
+                    let committed=run_write(store.as_ref(),WriteOptions::default(),move|tx| {
+                        validate(tx,&context,&current)?;
+                        validate_binding(tx,&binding)?;
+                        let mut references=Vec::new();
+                        for (index,file) in pending.iter().enumerate() {
+                            let version=native.commit_host_bytes_in_scope(tx,file,devworks_core::services::artifacts::host::HostArtifactPublication {
+                                title:if index+1==pending.len(){"Provider embedding result"}else{"Provider embedding vector"},
+                                media_type:if index+1==pending.len(){"application/vnd.devworks.embedding-result+json"}else{"application/vnd.devworks.float32-le"},
+                                provenance:json!({"requestId":current.request_id,"attemptId":current.attempt_id,"inputIndex":index,"binding":binding}),
+                                scope:current.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project),owner:current.actor_id.clone(),
+                            })?;
+                            references.push(version_ref(&version));
+                        }
+                        let event=EventId(tx.new_id(IdKind::Event));
+                        tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_output".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,
+                            kind:"ProviderEmbeddingResultRecorded".into(),payload:json!({"requestId":current.request_id,"attemptId":current.attempt_id,"binding":binding,"artifacts":references})})?;
+                        Ok(references)
+                    });
+                    for file in &staged {service.settle_host_bytes(store.as_ref(),file,committed.is_ok());}
+                    committed
+                })?;
+                let result = published
+                    .pop()
+                    .ok_or_else(|| invalid("missing embedding manifest"))?;
+                let artifacts = published;
                 let mut channel = self.result.lock().unwrap_or_else(|p| p.into_inner());
                 channel.vector_artifacts = artifacts;
                 channel.result_artifact = Some(result);

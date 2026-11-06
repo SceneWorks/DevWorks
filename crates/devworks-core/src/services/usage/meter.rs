@@ -9,6 +9,8 @@ pub enum ObservationSemantics {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputSemantics {
+    /// This endpoint has not qualified how input and cache counts overlap.
+    Unknown,
     /// The input count already contains cache reads/writes as subsets.
     Inclusive,
     /// Messages-style input, cache reads and cache writes are disjoint categories.
@@ -97,6 +99,7 @@ impl Quantities {
     /// An absent component remains unknown. A reported zero stays a known zero.
     pub fn total_input(&self, semantics: InputSemantics) -> Result<Option<i64>, MeterError> {
         match semantics {
+            InputSemantics::Unknown => Ok(None),
             InputSemantics::Inclusive => Ok(self.input_tokens),
             InputSemantics::Disjoint => match (
                 self.input_tokens,
@@ -115,6 +118,7 @@ impl Quantities {
 
     pub fn uncached_input(&self, semantics: InputSemantics) -> Result<Option<i64>, MeterError> {
         match semantics {
+            InputSemantics::Unknown => Ok(None),
             InputSemantics::Disjoint => Ok(self.input_tokens),
             InputSemantics::Inclusive => match (
                 self.input_tokens,
