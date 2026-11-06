@@ -7,7 +7,7 @@ CREATE TABLE convention_versions (
  convention_id TEXT NOT NULL REFERENCES convention_heads DEFERRABLE INITIALLY DEFERRED,
  revision INTEGER NOT NULL CHECK(revision>0), scope_key TEXT NOT NULL,
  project_id TEXT REFERENCES projects, slug TEXT NOT NULL, title TEXT NOT NULL,
- title_folded TEXT NOT NULL, parent_id TEXT REFERENCES convention_heads,
+ title_folded TEXT NOT NULL, slug_folded TEXT NOT NULL, parent_id TEXT REFERENCES convention_heads,
  sort_order INTEGER NOT NULL, lifecycle TEXT NOT NULL CHECK(lifecycle IN('Active','Retired','Deleted')),
  content_ref_json TEXT CHECK(content_ref_json IS NULL OR json_valid(content_ref_json)),
  content_version_id TEXT REFERENCES artifact_versions,
@@ -39,7 +39,7 @@ CREATE TABLE convention_resource_heads (
 CREATE TABLE convention_resource_versions (
  resource_id TEXT NOT NULL REFERENCES convention_resource_heads DEFERRABLE INITIALLY DEFERRED,
  revision INTEGER NOT NULL CHECK(revision>0), convention_id TEXT NOT NULL,
- convention_revision INTEGER NOT NULL CHECK(convention_revision>0), name TEXT NOT NULL,
+ convention_revision INTEGER NOT NULL CHECK(convention_revision>0), name TEXT NOT NULL, media_type TEXT NOT NULL,
  content_ref_json TEXT NOT NULL CHECK(json_valid(content_ref_json)),
  content_version_id TEXT NOT NULL REFERENCES artifact_versions,
  author_id TEXT NOT NULL REFERENCES actors, created_at INTEGER NOT NULL CHECK(created_at>=0),
@@ -125,3 +125,7 @@ CREATE TRIGGER convention_inputs_immutable_update BEFORE UPDATE ON convention_em
 CREATE TRIGGER convention_inputs_immutable_delete BEFORE DELETE ON convention_embedding_inputs BEGIN SELECT RAISE(ABORT,'retained convention embedding inputs'); END;
 CREATE TRIGGER convention_input_refs_immutable_update BEFORE UPDATE ON convention_embedding_input_refs BEGIN SELECT RAISE(ABORT,'immutable convention embedding input ref'); END;
 CREATE TRIGGER convention_input_refs_immutable_delete BEFORE DELETE ON convention_embedding_input_refs BEGIN SELECT RAISE(ABORT,'retained convention embedding input ref'); END;
+CREATE TABLE convention_index_scope_revisions (
+ scope_key TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, revision INTEGER NOT NULL CHECK(revision>0),
+ CHECK((project_id IS NULL AND scope_key='workspace') OR(project_id IS NOT NULL AND scope_key='project:'||project_id))
+) STRICT;

@@ -53,7 +53,7 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
             ],
         )?;
         tx.conventions()
-            .stage_convention_chunks(&generation.generation_id, &[a.clone()])?;
+            .stage_convention_chunks(&generation.generation_id, std::slice::from_ref(&a))?;
         let mut modified = a;
         modified.text = "tampered".into();
         assert!(
@@ -305,25 +305,13 @@ fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_byte
     let row = run_write(&store, WriteOptions::default(), |tx| {
         let scope = project(tx, "inputs-project")?;
         tx.conventions().put_convention_embedding_space(&space())?;
-        let first = artifact(tx, "input-1", &scope, "exact input")?;
-        let digest = sha256_hex(
-            devworks_core::jcs::canonicalize(&json!([{"sha256":first["sha256"],"byteCount":11}]))
-                .unwrap()
-                .as_bytes(),
-        );
-        let row = StoredConventionEmbeddingInputs {
-            request_id: id("embedding-request"),
-            actor_id: tx.store().host_actor.clone(),
-            project_id: scope.project().cloned(),
-            context_digest: "d".repeat(64),
-            embedding_space: "recorded-space".into(),
-            input_digest: digest,
-            input_refs: vec![first],
-            created_at_ms: T0,
-        };
-        let saved = tx.conventions().insert_convention_embedding_inputs(&row)?;
+        let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"exact input"),"byteCount":11}])).unwrap().as_bytes());
+        let provenance=json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"ConventionEmbeddingInput","requestId":"embedding-request","contextDigest":"d".repeat(64),"embeddingSpace":"recorded-space","inputDigest":digest,"inputIndex":0}});
+        let first=artifact_with_provenance(tx,"input-1",&scope,"exact input",provenance.clone())?;
+        let row=StoredConventionEmbeddingInputs {request_id:id("embedding-request"),actor_id:tx.store().host_actor.clone(),project_id:scope.project().cloned(),context_digest:"d".repeat(64),embedding_space:"recorded-space".into(),input_digest:digest,input_refs:vec![first],created_at_ms:T0};
+        let saved=tx.conventions().insert_convention_embedding_inputs(&row)?;
         let mut candidate = row.clone();
-        candidate.input_refs = vec![artifact(tx, "input-2", &scope, "exact input")?];
+        candidate.input_refs = vec![artifact_with_provenance(tx,"input-2",&scope,"exact input",provenance)?];
         assert_eq!(
             tx.conventions()
                 .insert_convention_embedding_inputs(&candidate)?,
@@ -368,4 +356,178 @@ fn embedding_input_replay_keeps_winner_refs_and_exact_actor_scope_space_and_byte
             .convention_embedding_inputs(&row.request_id)),
         Some(row)
     );
+}
+
+#[test]
+fn concurrent_embedding_cache_admission_keeps_one_exact_frame_and_rejects_forged_host_refs() {
+    let h = Harness::new();
+    let store = std::sync::Arc::new(h.store());
+    let candidates=run_write(&*store,WriteOptions::default(),|tx| {
+        tx.conventions().put_convention_embedding_space(&space())?;
+        let digest=sha256_hex(devworks_core::jcs::canonicalize(&json!([{"sha256":sha256_hex(b"same"),"byteCount":4}])).unwrap().as_bytes());
+        let marker=json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"ConventionEmbeddingInput","requestId":"racing-input-request","contextDigest":"d".repeat(64),"embeddingSpace":"recorded-space","inputDigest":digest,"inputIndex":0}});
+        let mut candidates=Vec::new();
+        for name in ["left-input","right-input"] {candidates.push(StoredConventionEmbeddingInputs {request_id:id("racing-input-request"),actor_id:tx.store().host_actor.clone(),project_id:None,context_digest:"d".repeat(64),embedding_space:"recorded-space".into(),input_digest:digest.clone(),input_refs:vec![artifact_with_provenance(tx,name,&KnowledgeScope::Workspace,"same",marker.clone())?],created_at_ms:T0});}
+        let mut forged_marker=marker;forged_marker["producedBy"]=json!("another-host");let mut forged=candidates[0].clone();forged.input_refs=vec![artifact_with_provenance(tx,"forged-input",&KnowledgeScope::Workspace,"same",forged_marker)?];assert!(tx.conventions().insert_convention_embedding_inputs(&forged).is_err());
+        Ok(candidates)
+    }).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let threads = candidates
+        .into_iter()
+        .map(|candidate| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                run_write(&*store, WriteOptions::default(), move |tx| {
+                    tx.conventions()
+                        .insert_convention_embedding_inputs(&candidate)
+                })
+                .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let rows = threads
+        .into_iter()
+        .map(|t| t.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(rows[0], rows[1]);
+    assert_eq!(
+        read(&store, |r| r
+            .conventions()
+            .convention_embedding_inputs(&id("racing-input-request"))),
+        Some(rows[0].clone())
+    );
+}
+
+#[test]
+fn pending_index_status_and_scoped_revision_track_actual_publication_without_catalog_changes() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store, WriteOptions::default(), |tx| {
+        let scope = KnowledgeScope::Workspace;
+        let owner = record(
+            "status-rules",
+            scope.clone(),
+            Some(artifact(tx, "status-body", &scope, "alpha")?),
+        );
+        tx.conventions().create_convention(&owner)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_index_revision(std::slice::from_ref(&scope))?,
+            1
+        );
+        assert!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .is_none()
+        );
+        let generation = index(tx, &owner, "status-generation", None)?;
+        tx.conventions().stage_convention_index(&generation)?;
+        let queued = tx
+            .conventions()
+            .convention_index_revision(std::slice::from_ref(&scope))?;
+        assert!(queued > 1);
+        assert_eq!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .unwrap()
+                .status,
+            "Queued"
+        );
+        assert_eq!(
+            tx.conventions()
+                .convention_chunk_count(&generation.generation_id)?,
+            0
+        );
+        tx.conventions().set_convention_index_status(
+            &generation.generation_id,
+            &generation.operation_id,
+            "Queued",
+            "Indexing",
+            None,
+        )?;
+        let indexing = tx
+            .conventions()
+            .convention_index_revision(std::slice::from_ref(&scope))?;
+        assert!(indexing > queued);
+        tx.conventions().stage_convention_chunks(
+            &generation.generation_id,
+            &[chunk(&generation, 0, "alpha", 1, None)],
+        )?;
+        tx.conventions()
+            .publish_convention_index(&generation.generation_id, 1, None, 1)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_chunk_count(&generation.generation_id)?,
+            1
+        );
+        let published = tx
+            .conventions()
+            .convention_index_revision(std::slice::from_ref(&scope))?;
+        assert!(published > indexing);
+        assert_eq!(
+            tx.conventions().convention_scope_revision(&scope)?,
+            1,
+            "index publication has its own source cursor generation"
+        );
+        assert_eq!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .unwrap()
+                .status,
+            "LexicalOnly"
+        );
+        let pending = index(tx, &owner, "status-generation-z", None)?;
+        tx.conventions().stage_convention_index(&pending)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .unwrap()
+                .generation_id,
+            pending.generation_id
+        );
+        tx.operations().transition(
+            &pending.operation_id,
+            1,
+            None,
+            devworks_core::protocol::OperationState::CancelledBeforeDispatch,
+            None,
+        )?;
+        assert_eq!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .unwrap()
+                .generation_id,
+            generation.generation_id,
+            "actual canceled operation is not queued work"
+        );
+        let next = next(&owner);
+        tx.conventions().revise_convention(&next, 1)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_index_status(&owner.id, None)?
+                .unwrap()
+                .status,
+            "Stale"
+        );
+        assert!(
+            tx.conventions()
+                .set_convention_index_status(
+                    &pending.generation_id,
+                    &pending.operation_id,
+                    "Stale",
+                    "Queued",
+                    None
+                )
+                .is_err()
+        );
+        assert!(
+            tx.conventions()
+                .convention_index_revision(std::slice::from_ref(&scope))?
+                > published
+        );
+        Ok(())
+    })
+    .unwrap();
 }

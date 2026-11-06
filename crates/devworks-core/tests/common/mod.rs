@@ -390,6 +390,9 @@ impl ReadSnapshot for MemSnapshot {
     fn evals(&self) -> &dyn EvalRead {
         &self.unsupported
     }
+    fn conventions(&self) -> &dyn ConventionRead {
+        &self.unsupported
+    }
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
@@ -500,6 +503,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
+        &mut self.unsupported
+    }
+    fn conventions(&mut self) -> &mut dyn ConventionRepository {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
@@ -3325,6 +3331,289 @@ impl GraphRepository for Unsupported {
         &mut self,
         _: &StoredGraphSourceCapture,
     ) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl ConventionRead for Unsupported {
+    fn convention(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: &[KnowledgeScope],
+    ) -> Result<Option<StoredConvention>, StorageError> {
+        nope()
+    }
+    fn conventions(
+        &self,
+        _: &ConventionQuery,
+        _: Option<&ConventionPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredConvention>, StorageError> {
+        nope()
+    }
+    fn convention_versions(
+        &self,
+        _: &Id,
+        _: &[KnowledgeScope],
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredConvention>, StorageError> {
+        nope()
+    }
+    fn convention_resource(
+        &self,
+        _: &Id,
+        _: &Id,
+        _: Option<i64>,
+        _: &[KnowledgeScope],
+    ) -> Result<Option<StoredConventionResource>, StorageError> {
+        nope()
+    }
+    fn convention_resources(
+        &self,
+        _: &ConventionResourceQuery,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredConventionResource>, StorageError> {
+        nope()
+    }
+    fn convention_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+}
+
+impl ConventionRepository for Unsupported {
+    fn create_convention(&mut self, _: &StoredConvention) -> Result<(), StorageError> {
+        nope()
+    }
+    fn revise_convention(&mut self, _: &StoredConvention, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn add_convention_resource(
+        &mut self,
+        _: &StoredConventionResource,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn revise_convention_resource(
+        &mut self,
+        _: &StoredConventionResource,
+        _: i64,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn bump_convention_scope(&mut self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
+}
+
+impl ConventionIndexRead for Unsupported {
+    fn convention_chunk_count(&self, _: &Id) -> Result<u64, StorageError> {
+        nope()
+    }
+    fn convention_index_status(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+    ) -> Result<Option<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_index_revision(&self, _: &[KnowledgeScope]) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn convention_embedding_inputs(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredConventionEmbeddingInputs>, StorageError> {
+        nope()
+    }
+    fn convention_embedding_space(
+        &self,
+        _: &str,
+    ) -> Result<Option<StoredConventionEmbeddingSpace>, StorageError> {
+        nope()
+    }
+    fn convention_index_head(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+    ) -> Result<Option<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_index_generation(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_index_generations(
+        &self,
+        _: Option<&Id>,
+        _: Option<&devworks_core::protocol::OperationId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredConventionIndex>, StorageError> {
+        nope()
+    }
+    fn convention_chunks(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredConventionChunk>, StorageError> {
+        nope()
+    }
+    fn convention_lexical_statistics(
+        &self,
+        _: &ConventionQuery,
+        _: &[String],
+    ) -> Result<ConventionLexicalStatistics, StorageError> {
+        nope()
+    }
+    fn convention_ranked_chunks(
+        &self,
+        _: &ConventionQuery,
+        _: &[ConventionWeightedTerm],
+        _: f64,
+        _: Option<&str>,
+        _: Option<&[f32]>,
+        _: u16,
+    ) -> Result<Vec<ConventionRankedChunk>, StorageError> {
+        nope()
+    }
+}
+
+impl ConventionIndexRepository for Unsupported {
+    fn insert_convention_embedding_inputs(
+        &mut self,
+        _: &StoredConventionEmbeddingInputs,
+    ) -> Result<StoredConventionEmbeddingInputs, StorageError> {
+        nope()
+    }
+    fn put_convention_embedding_space(
+        &mut self,
+        _: &StoredConventionEmbeddingSpace,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn stage_convention_index(&mut self, _: &StoredConventionIndex) -> Result<(), StorageError> {
+        nope()
+    }
+    fn stage_convention_chunks(
+        &mut self,
+        _: &Id,
+        _: &[StoredConventionChunk],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_convention_index_status(
+        &mut self,
+        _: &Id,
+        _: &devworks_core::protocol::OperationId,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish_convention_index(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: Option<&Id>,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn discard_convention_index_chunks(
+        &mut self,
+        _: &Id,
+        _: &devworks_core::protocol::OperationId,
+        _: u16,
+    ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+
+impl ConventionImportRead for Unsupported {
+    fn convention_import(
+        &self,
+        _: &devworks_core::protocol::OperationId,
+    ) -> Result<Option<StoredConventionImport>, StorageError> {
+        nope()
+    }
+    fn convention_imports_pending(
+        &self,
+        _: Option<&devworks_core::protocol::OperationId>,
+        _: u16,
+    ) -> Result<Vec<StoredConventionImport>, StorageError> {
+        nope()
+    }
+    fn convention_import_metadata(
+        &self,
+        _: &devworks_core::protocol::OperationId,
+    ) -> Result<Option<StoredConvention>, StorageError> {
+        nope()
+    }
+    fn convention_import_artifacts(
+        &self,
+        _: &devworks_core::protocol::OperationId,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredConventionImportArtifact>, StorageError> {
+        nope()
+    }
+}
+
+impl ConventionImportRepository for Unsupported {
+    fn begin_convention_import(
+        &mut self,
+        _: &StoredConventionImport,
+    ) -> Result<StoredConventionImport, StorageError> {
+        nope()
+    }
+    fn stage_convention_import_artifact(
+        &mut self,
+        _: &StoredConventionImportArtifact,
+    ) -> Result<StoredConventionImport, StorageError> {
+        nope()
+    }
+    fn set_convention_import_metadata(
+        &mut self,
+        _: &devworks_core::protocol::OperationId,
+        _: &StoredConvention,
+        _: Option<i64>,
+    ) -> Result<StoredConventionImport, StorageError> {
+        nope()
+    }
+    fn set_convention_import_phase(
+        &mut self,
+        _: &devworks_core::protocol::OperationId,
+        _: i64,
+        _: &str,
+        _: Option<i64>,
+        _: Option<&str>,
+        _: Option<&serde_json::Value>,
+    ) -> Result<StoredConventionImport, StorageError> {
+        nope()
+    }
+    fn publish_convention_import(
+        &mut self,
+        _: &devworks_core::protocol::OperationId,
+        _: i64,
+        _: i64,
+        _: i64,
+    ) -> Result<StoredConvention, StorageError> {
+        nope()
+    }
+    fn discard_convention_import_artifacts(
+        &mut self,
+        _: &devworks_core::protocol::OperationId,
+        _: u16,
+    ) -> Result<bool, StorageError> {
         nope()
     }
 }

@@ -35,6 +35,15 @@ fn artifact(
     scope: &KnowledgeScope,
     text: &str,
 ) -> Result<Value, StorageError> {
+    artifact_with_provenance(tx, name, scope, text, json!({}))
+}
+fn artifact_with_provenance(
+    tx: &mut dyn WriteTransaction,
+    name: &str,
+    scope: &KnowledgeScope,
+    text: &str,
+    provenance: Value,
+) -> Result<Value, StorageError> {
     let digest = sha256_hex(text.as_bytes());
     let blob = match tx.artifacts().blob(&digest)? {
         Some(b) => b,
@@ -63,7 +72,7 @@ fn artifact(
         current_version_id: None,
         state: ArtifactState::Live,
         created_at_ms: T0,
-        provenance: json!({}),
+        provenance,
     })?;
     let version = id(&format!("version-{name}"));
     tx.artifacts().insert_version(&StoredVersion {
@@ -95,7 +104,7 @@ fn record(name: &str, scope: KnowledgeScope, reference: Option<Value>) -> Stored
         content_ref: reference,
         raw_content_ref: None,
         applicability: vec!["Rust".into()],
-        provenance: json!({"kind":"Native"}),
+        provenance: json!({"kind":"Authored","actorId":"host"}),
         author_id: ActorId(id("host")),
         created_at_ms: T0,
         updated_at_ms: T0,
@@ -228,25 +237,25 @@ fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
     assert_eq!(
         read(&store, |r| r.conventions().convention_versions(
             &first.id,
-            &[scope.clone()],
+            std::slice::from_ref(&scope),
             None,
-            1
-        ))[0],
-        first
-    );
-    assert_eq!(
-        read(&store, |r| r.conventions().convention_versions(
-            &first.id,
-            &[scope.clone()],
-            Some(1),
             1
         ))[0],
         revision
     );
+    assert_eq!(
+        read(&store, |r| r.conventions().convention_versions(
+            &first.id,
+            std::slice::from_ref(&scope),
+            Some(2),
+            1
+        ))[0],
+        first
+    );
     assert!(
         read(&store, |r| r.conventions().conventions(
             &query(vec![scope.clone()]),
-            Some(&first.id),
+            Some(&first.position()),
             1
         ))
         .is_empty()
@@ -269,7 +278,7 @@ fn conventions32_migration_snapshot_cas_scoped_paging_and_reopen() {
         read(&store, |r| r.conventions().convention(
             &first.id,
             None,
-            &[scope.clone()]
+            std::slice::from_ref(&scope)
         )),
         Some(revision)
     );
@@ -296,6 +305,7 @@ fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
             revision: 1,
             convention_revision: 1,
             name: "rules.md".into(),
+            media_type: "text/markdown".into(),
             content_ref: artifact(tx, "attachment-a", &a, "private attachment")?,
             author_id: tx.store().host_actor.clone(),
             created_at_ms: T0,
@@ -338,7 +348,7 @@ fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
         read(&store, |r| r.conventions().convention(
             &owner.id,
             Some(1),
-            &[b.clone()]
+            std::slice::from_ref(&b)
         ))
         .is_none()
     );
@@ -346,7 +356,7 @@ fn convention_resource_history_is_immutable_and_move_never_leaks_old_scope() {
         read(&store, |r| r.conventions().convention(
             &owner.id,
             Some(1),
-            &[a.clone()]
+            std::slice::from_ref(&a)
         ))
         .is_none()
     );
@@ -460,5 +470,72 @@ fn convention_hierarchy_slug_and_cas_races_refuse_atomically() {
         2
     );
 }
+#[path = "conventions/lifecycle.rs"]
+mod lifecycle;
 #[path = "conventions/index.rs"]
 mod retrieval;
+
+#[test]
+fn source_metadata_limits_nul_and_organization_fuzzy_filters_precede_sql_paging() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store, WriteOptions::default(), |tx| {
+        for (key, title, sort) in [("x", "B", 0), ("y", "Z", -1), ("z", "A", 0)] {
+            let mut row = record(key, KnowledgeScope::Workspace, None);
+            row.title = title.into();
+            row.sort_order = sort;
+            tx.conventions().create_convention(&row)?;
+        }
+        let foreign = project(tx, "foreign")?;
+        let mut hidden = record("a-foreign", foreign, None);
+        hidden.title = "A".into();
+        tx.conventions().create_convention(&hidden)?;
+        let mut full = record("bounds", KnowledgeScope::Workspace, None);
+        full.title = format!("{}\0", "λ".repeat(499));
+        full.slug = format!("{}\0", "s".repeat(199));
+        tx.conventions().create_convention(&full)?;
+        let mut invalid = record("invalid-title", KnowledgeScope::Workspace, None);
+        invalid.title = "λ".repeat(501);
+        assert!(tx.conventions().create_convention(&invalid).is_err());
+        invalid.title = "okay".into();
+        invalid.slug = "s".repeat(201);
+        assert!(tx.conventions().create_convention(&invalid).is_err());
+        Ok(())
+    })
+    .unwrap();
+    let mut q = query(vec![KnowledgeScope::Workspace]);
+    q.order = ConventionOrder::Title;
+    let first = read(&store, |r| r.conventions().conventions(&q, None, 1)).remove(0);
+    assert_eq!(first.id, id("z"));
+    let second = read(&store, |r| {
+        r.conventions().conventions(&q, Some(&first.position()), 1)
+    })
+    .remove(0);
+    assert_eq!(second.id, id("x"));
+    q.order = ConventionOrder::Organization;
+    let first = read(&store, |r| r.conventions().conventions(&q, None, 1)).remove(0);
+    assert_eq!(first.id, id("y"));
+    let second = read(&store, |r| {
+        r.conventions().conventions(&q, Some(&first.position()), 1)
+    })
+    .remove(0);
+    assert_eq!(second.id, id("z"));
+    q.name_pattern = Some("%A%".into());
+    let results = read(&store, |r| r.conventions().conventions(&q, None, 2));
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].id,
+        id("z"),
+        "fuzzy titleORslug never materializes hidden scope candidates"
+    );
+    q.name_pattern = Some(format!("{}_%", "s".repeat(199)));
+    let result = read(&store, |r| r.conventions().conventions(&q, None, 2));
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].slug.chars().count(), 200);
+    q.name_pattern = Some(format!("%{}\0%", "λ".repeat(499)));
+    let result = read(&store, |r| r.conventions().conventions(&q, None, 2));
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].title.chars().count(), 500);
+    q.name_pattern = Some("not-a-match_%".into());
+    assert!(read(&store, |r| r.conventions().conventions(&q, None, 2)).is_empty());
+}

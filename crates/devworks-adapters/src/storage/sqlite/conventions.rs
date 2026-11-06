@@ -85,16 +85,42 @@ fn convention(
 fn conventions(
     conn: &Connection,
     q: &ConventionQuery,
-    after: Option<&Id>,
+    after: Option<&ConventionPosition>,
     limit: u16,
 ) -> Result<Vec<StoredConvention>, StorageError> {
     let limit = page(limit)?;
     states(&q.lifecycles)?;
     let scope = scopes(&q.scopes)?;
-    let filter=json!({"lifecycles":q.lifecycles,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase())}).to_string();
-    let mut stmt=db(conn.prepare_cached(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.scope_key IN(SELECT value FROM json_each(?1)) AND (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,'$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,json_extract(?2,'$.title'))>0) AND (?3 IS NULL OR h.id>?3) ORDER BY h.id LIMIT ?4")))?;
-    db(db(stmt.query_map(params![scope, filter, after.map(Id::as_str), limit], record))?.collect())
+    let filter=json!({"lifecycles":q.lifecycles,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase()),"name":q.name_pattern.as_ref().map(|s|s.to_lowercase())}).to_string();
+    let (position, order) = match q.order {
+        ConventionOrder::Id => ("h.id>?3", "h.id"),
+        ConventionOrder::Title => (
+            "(v.title COLLATE BINARY,h.id)>(?6,?3)",
+            "v.title COLLATE BINARY,h.id",
+        ),
+        ConventionOrder::Organization => (
+            "(v.sort_order,v.title COLLATE BINARY,h.id)>(?5,?6,?3)",
+            "v.sort_order,v.title COLLATE BINARY,h.id",
+        ),
+    };
+    let sql = format!(
+        "SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.scope_key IN(SELECT value FROM json_each(?1)) AND (json_array_length(?2,'$.lifecycles')=0 OR v.lifecycle IN(SELECT value FROM json_each(?2,'$.lifecycles'))) AND NOT EXISTS(SELECT 1 FROM json_each(?2,'$.applicability') a WHERE a.value NOT IN(SELECT value FROM json_each(v.applicability_json))) AND (NOT json_extract(?2,'$.filterParent') OR v.parent_id IS json_extract(?2,'$.parent')) AND (json_extract(?2,'$.slug') IS NULL OR v.slug=json_extract(?2,'$.slug')) AND (json_extract(?2,'$.title') IS NULL OR instr(v.title_folded,json_extract(?2,'$.title'))>0) AND (json_extract(?2,'$.name') IS NULL OR convention_like(json_extract(?2,'$.name'),v.slug_folded) OR convention_like(json_extract(?2,'$.name'),v.title_folded)) AND (?3 IS NULL OR {position}) AND (?5 IS ?5) AND (?6 IS ?6) ORDER BY {order} LIMIT ?4"
+    );
+    let mut stmt = db(conn.prepare_cached(&sql))?;
+    db(db(stmt.query_map(
+        params![
+            scope,
+            filter,
+            after.map(|p| p.id.as_str()),
+            limit,
+            after.map(|p| p.sort_order),
+            after.map(|p| p.title.as_str())
+        ],
+        record,
+    ))?
+    .collect())
 }
+
 fn versions(
     conn: &Connection,
     id: &Id,
@@ -107,7 +133,7 @@ fn versions(
     }
     let limit = page(limit)?;
     let allowed = scopes(allowed)?;
-    let mut stmt=db(conn.prepare_cached(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?2)) AND v.scope_key IN(SELECT value FROM json_each(?2)) AND v.revision>coalesce(?3,0) ORDER BY v.revision LIMIT ?4")))?;
+    let mut stmt=db(conn.prepare_cached(&format!("SELECT {COLUMNS} FROM convention_heads h JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions v ON v.convention_id=h.id WHERE h.id=?1 AND c.scope_key IN(SELECT value FROM json_each(?2)) AND v.scope_key IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR v.revision<?3) ORDER BY v.revision DESC LIMIT ?4")))?;
     db(db(stmt.query_map(params![id.as_str(), allowed, after, limit], record))?.collect())
 }
 fn resource(row: &Row<'_>) -> rusqlite::Result<StoredConventionResource> {
@@ -122,6 +148,7 @@ fn resource(row: &Row<'_>) -> rusqlite::Result<StoredConventionResource> {
         created_at_ms: row.get(7)?,
         deleted_at_ms: row.get(8)?,
         lifecycle: row.get(9)?,
+        media_type: row.get(10)?,
     })
 }
 fn resources(
@@ -129,6 +156,7 @@ fn resources(
     q: &ConventionResourceQuery,
     after: Option<&Id>,
     limit: u16,
+    resource_id: Option<&Id>,
 ) -> Result<Vec<StoredConventionResource>, StorageError> {
     if q.convention_revision.is_some_and(|r| r < 1)
         || (q.convention_revision.is_some() && q.convention_id.is_none())
@@ -140,7 +168,7 @@ fn resources(
     states(&q.lifecycles)?;
     let limit = page(limit)?;
     let allowed = scopes(&q.scopes)?;
-    let mut stmt=db(conn.prepare_cached("SELECT r.resource_id,r.convention_id,r.revision,r.convention_revision,r.name,r.content_ref_json,r.author_id,r.created_at,r.deleted_at,r.lifecycle FROM convention_resource_heads rh JOIN convention_heads h ON h.id=rh.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions requested ON requested.convention_id=h.id AND requested.revision=coalesce(?2,h.revision) JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=(SELECT max(p.revision) FROM convention_resource_versions p WHERE p.resource_id=rh.id AND p.convention_revision<=requested.revision) JOIN convention_versions origin ON origin.convention_id=r.convention_id AND origin.revision=r.convention_revision WHERE (?1 IS NULL OR h.id=?1) AND c.scope_key IN(SELECT value FROM json_each(?3)) AND requested.scope_key IN(SELECT value FROM json_each(?3)) AND origin.scope_key IN(SELECT value FROM json_each(?3)) AND (json_array_length(?4)=0 OR r.lifecycle IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR rh.id>?5) ORDER BY rh.id LIMIT ?6"))?;
+    let mut stmt=db(conn.prepare_cached("SELECT r.resource_id,r.convention_id,r.revision,r.convention_revision,r.name,r.content_ref_json,r.author_id,r.created_at,r.deleted_at,r.lifecycle,r.media_type FROM convention_resource_heads rh JOIN convention_heads h ON h.id=rh.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions requested ON requested.convention_id=h.id AND requested.revision=coalesce(?2,h.revision) JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=(SELECT max(p.revision) FROM convention_resource_versions p WHERE p.resource_id=rh.id AND p.convention_revision<=requested.revision) JOIN convention_versions origin ON origin.convention_id=r.convention_id AND origin.revision=r.convention_revision WHERE (?1 IS NULL OR h.id=?1) AND c.scope_key IN(SELECT value FROM json_each(?3)) AND requested.scope_key IN(SELECT value FROM json_each(?3)) AND origin.scope_key IN(SELECT value FROM json_each(?3)) AND (json_array_length(?4)=0 OR r.lifecycle IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR rh.id>?5) AND (?7 IS NULL OR rh.id=?7) ORDER BY rh.id LIMIT ?6"))?;
     db(db(stmt.query_map(
         params![
             q.convention_id.as_ref().map(Id::as_str),
@@ -148,7 +176,8 @@ fn resources(
             allowed,
             json!(q.lifecycles).to_string(),
             after.map(Id::as_str),
-            limit
+            limit,
+            resource_id.map(Id::as_str)
         ],
         resource,
     ))?
@@ -222,9 +251,10 @@ fn backing(
 }
 fn validate(conn: &Connection, r: &StoredConvention) -> Result<(), StorageError> {
     states(std::slice::from_ref(&r.lifecycle))?;
+    validate_provenance(r)?;
     if r.revision < 1
-        || !text(&r.slug, 1, 256)
-        || !text(&r.title, 1, 256)
+        || !(1..=200).contains(&r.slug.chars().count())
+        || !(1..=500).contains(&r.title.chars().count())
         || r.created_at_ms < 0
         || r.updated_at_ms < r.created_at_ms
         || r.applicability.len() > 128
@@ -262,11 +292,11 @@ fn insert_snapshot(
     let boot = boot
         .as_ref()
         .ok_or_else(|| invalid("convention writer boot missing"))?;
-    db(conn.execute("INSERT INTO convention_versions(convention_id,revision,scope_key,project_id,slug,title,title_folded,parent_id,sort_order,lifecycle,content_ref_json,raw_content_ref_json,applicability_json,provenance_json,author_id,created_at,updated_at,legacy_approved,content_version_id,raw_content_version_id,write_boot_id,write_transaction) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",params![r.id.as_str(),r.revision,r.scope.key(),r.scope.project().map(|p|p.0.as_str()),r.slug,r.title,r.title.to_lowercase(),r.parent_id.as_ref().map(Id::as_str),r.sort_order,r.lifecycle,r.content_ref.as_ref().map(Value::to_string),r.raw_content_ref.as_ref().map(Value::to_string),json!(r.applicability).to_string(),r.provenance.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.updated_at_ms,r.legacy_approved,r.content_ref.as_ref().and_then(|v|v["versionId"].as_str()),r.raw_content_ref.as_ref().and_then(|v|v["versionId"].as_str()),boot.as_str(),transaction.to_string()]))?;
+    db(conn.execute("INSERT INTO convention_versions(convention_id,revision,scope_key,project_id,slug,title,title_folded,parent_id,sort_order,lifecycle,content_ref_json,raw_content_ref_json,applicability_json,provenance_json,author_id,created_at,updated_at,legacy_approved,content_version_id,raw_content_version_id,write_boot_id,write_transaction,slug_folded) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",params![r.id.as_str(),r.revision,r.scope.key(),r.scope.project().map(|p|p.0.as_str()),r.slug,r.title,r.title.to_lowercase(),r.parent_id.as_ref().map(Id::as_str),r.sort_order,r.lifecycle,r.content_ref.as_ref().map(Value::to_string),r.raw_content_ref.as_ref().map(Value::to_string),json!(r.applicability).to_string(),r.provenance.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.updated_at_ms,r.legacy_approved,r.content_ref.as_ref().and_then(|v|v["versionId"].as_str()),r.raw_content_ref.as_ref().and_then(|v|v["versionId"].as_str()),boot.as_str(),transaction.to_string(),r.slug.to_lowercase()]))?;
     Ok(())
 }
 fn insert_resource(conn: &Connection, r: &StoredConventionResource) -> Result<(), StorageError> {
-    db(conn.execute("INSERT INTO convention_resource_versions(resource_id,revision,convention_id,convention_revision,name,content_ref_json,author_id,created_at,deleted_at,lifecycle,content_version_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![r.id.as_str(),r.revision,r.convention_id.as_str(),r.convention_revision,r.name,r.content_ref.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.deleted_at_ms,r.lifecycle,r.content_ref["versionId"].as_str()]))?;
+    db(conn.execute("INSERT INTO convention_resource_versions(resource_id,revision,convention_id,convention_revision,name,content_ref_json,author_id,created_at,deleted_at,lifecycle,content_version_id,media_type) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![r.id.as_str(),r.revision,r.convention_id.as_str(),r.convention_revision,r.name,r.content_ref.to_string(),r.author_id.0.as_str(),r.created_at_ms,r.deleted_at_ms,r.lifecycle,r.content_ref["versionId"].as_str(),r.media_type]))?;
     Ok(())
 }
 fn validate_resource(
@@ -283,7 +313,8 @@ fn validate_resource(
     }
     if r.convention_revision != expected
         || owner.lifecycle == "Deleted"
-        || !text(&r.name, 1, 256)
+        || !text(&r.name, 1, 255)
+        || !text(&r.media_type, 1, 200)
         || r.revision < 1
         || r.created_at_ms < 0
         || r.deleted_at_ms.is_some_and(|t| t < r.created_at_ms)
@@ -317,7 +348,7 @@ macro_rules! reads {
             fn conventions(
                 &self,
                 q: &ConventionQuery,
-                after: Option<&Id>,
+                after: Option<&ConventionPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredConvention>, StorageError> {
                 conventions(self.conn, q, after, limit)
@@ -331,13 +362,30 @@ macro_rules! reads {
             ) -> Result<Vec<StoredConvention>, StorageError> {
                 versions(self.conn, id, scopes, after, limit)
             }
+            fn convention_resource(
+                &self,
+                owner: &Id,
+                id: &Id,
+                revision: Option<i64>,
+                scopes: &[KnowledgeScope],
+            ) -> Result<Option<StoredConventionResource>, StorageError> {
+                let q = ConventionResourceQuery {
+                    scopes: scopes.to_vec(),
+                    convention_id: Some(owner.clone()),
+                    convention_revision: revision,
+                    ..Default::default()
+                };
+                Ok(resources(self.conn, &q, None, 1, Some(id))?
+                    .into_iter()
+                    .next())
+            }
             fn convention_resources(
                 &self,
                 q: &ConventionResourceQuery,
                 after: Option<&Id>,
                 limit: u16,
             ) -> Result<Vec<StoredConventionResource>, StorageError> {
-                resources(self.conn, q, after, limit)
+                resources(self.conn, q, after, limit, None)
             }
             fn convention_scope_revision(
                 &self,
@@ -459,7 +507,11 @@ impl ConventionRepository for Unit<'_> {
             params![r.convention_id.as_str(), owner_revision],
             |r| r.get(0),
         ))?;
-        if reference != r.content_ref.to_string() || previous_scope != owner.scope.key() {
+        if serde_json::from_str::<Value>(&reference)
+            .map_err(|_| invalid("invalid old resource reference"))?
+            != r.content_ref
+            || previous_scope != owner.scope.key()
+        {
             backing(self.conn, &owner.scope, &r.content_ref)?;
         }
         atomic(self.conn, || {
@@ -479,4 +531,117 @@ impl ConventionRepository for Unit<'_> {
         db(self.conn.execute("INSERT INTO convention_scope_revisions(scope_key,project_id,revision) VALUES(?1,?2,?3) ON CONFLICT(scope_key) DO UPDATE SET revision=excluded.revision",params![scope.key(),scope.project().map(|p|p.0.as_str()),revision]))?;
         Ok(revision)
     }
+}
+
+/// SQLite's built-in LIKE treats NUL as the end of a string. Retained source metadata can
+/// contain it, so this deterministic SQL predicate matches complete Unicode scalar strings.
+pub(super) fn register_functions(conn: &Connection) -> Result<(), StorageError> {
+    use rusqlite::functions::FunctionFlags;
+    db(conn.create_scalar_function(
+        "convention_like",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let pattern = ctx.get::<String>(0)?;
+            let value = ctx.get::<String>(1)?;
+            Ok(like_pattern(&pattern, &value))
+        },
+    ))
+}
+fn like_pattern(pattern: &str, value: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum Token {
+        Many,
+        One,
+        Literal(char),
+    }
+    let mut chars = pattern.chars();
+    let mut tokens = Vec::new();
+    while let Some(c) = chars.next() {
+        tokens.push(match c {
+            '%' => Token::Many,
+            '_' => Token::One,
+            '\\' => Token::Literal(chars.next().unwrap_or('\\')),
+            c => Token::Literal(c),
+        });
+    }
+    let value = value.chars().collect::<Vec<_>>();
+    let (mut p, mut v) = (0, 0);
+    let mut star = None;
+    while v < value.len() {
+        match tokens.get(p) {
+            Some(Token::Literal(c)) if *c == value[v] => {
+                p += 1;
+                v += 1;
+            }
+            Some(Token::One) => {
+                p += 1;
+                v += 1;
+            }
+            Some(Token::Many) => {
+                p += 1;
+                star = Some((p, v));
+            }
+            _ => {
+                if let Some((position, matched)) = star {
+                    if matched >= value.len() {
+                        return false;
+                    }
+                    v = matched + 1;
+                    p = position;
+                    star = Some((position, v));
+                } else {
+                    return false;
+                }
+            }
+        }
+    }
+    while matches!(tokens.get(p), Some(Token::Many)) {
+        p += 1;
+    }
+    p == tokens.len()
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+enum Provenance {
+    Authored {
+        actor_id: ActorId,
+    },
+    Imported {
+        actor_id: ActorId,
+        source: Box<ArtifactRef>,
+        schema: devworks_core::protocol::provider::SchemaRef,
+        imported_at_ms: devworks_core::protocol::Counter,
+    },
+}
+fn validate_provenance(row: &StoredConvention) -> Result<(), StorageError> {
+    let value: Provenance = serde_json::from_value(row.provenance.clone())
+        .map_err(|_| invalid("invalid closed convention provenance"))?;
+    let actor = match value {
+        Provenance::Authored { actor_id } => actor_id,
+        Provenance::Imported {
+            actor_id,
+            source,
+            schema,
+            imported_at_ms,
+        } => {
+            source
+                .check()
+                .map_err(|_| invalid("invalid import source reference"))?;
+            schema
+                .check()
+                .map_err(|_| invalid("invalid import schema reference"))?;
+            if imported_at_ms.get() < 0 {
+                return Err(invalid("invalid import timestamp"));
+            }
+            actor_id
+        }
+    };
+    if actor != row.author_id {
+        return Err(invalid(
+            "convention provenance actor differs from native author",
+        ));
+    }
+    Ok(())
 }

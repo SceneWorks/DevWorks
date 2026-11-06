@@ -142,12 +142,14 @@ fn vector_bytes(vector: &[f32]) -> Vec<u8> {
     vector.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 fn decode_vector(bytes: Vec<u8>) -> Result<Vec<f32>, StorageError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(invalid("corrupt convention vector length"));
     }
     let vector = bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect::<Vec<_>>();
     if vector.iter().any(|v| !v.is_finite()) {
         return Err(invalid("nonfinite stored convention vector"));
@@ -188,14 +190,14 @@ fn chunk(
 // A resource survives an unrelated body revision only when its exact active resource version
 // and every captured owner field used in the embedding breadcrumb still match. Body indexes
 // require the exact current convention revision. Artifact liveness/scope is checked again here.
-const ELIGIBLE: &str = "WITH eligible AS MATERIALIZED (SELECT g.generation_id,g.convention_id,g.resource_id,g.embedding_space,c.title,k.id,k.chunk_index,k.token_count,k.vector FROM convention_index_heads ih JOIN convention_indexes g ON g.generation_id=ih.generation_id JOIN convention_heads h ON h.id=g.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions captured ON captured.convention_id=g.convention_id AND captured.revision=g.convention_revision LEFT JOIN convention_resource_heads rh ON rh.id=g.resource_id LEFT JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=rh.revision JOIN convention_chunks k ON k.generation_id=g.generation_id JOIN artifact_versions av ON av.id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.versionId') JOIN artifacts a ON a.id=av.artifact_id JOIN blobs b ON b.digest=av.blob_digest WHERE g.state='Published' AND g.status IN('Ready','LexicalOnly') AND c.lifecycle='Active' AND c.scope_key=captured.scope_key AND c.title=captured.title AND ((g.resource_id IS NULL AND g.convention_revision=h.revision) OR (g.resource_id IS NOT NULL AND r.convention_id=h.id AND r.revision=g.resource_revision AND r.lifecycle='Active')) AND c.scope_key IN(SELECT value FROM json_each(?1,'$.scopes')) AND NOT EXISTS(SELECT 1 FROM json_each(?1,'$.applicability') f WHERE f.value NOT IN(SELECT value FROM json_each(c.applicability_json))) AND (NOT json_extract(?1,'$.filterParent') OR c.parent_id IS json_extract(?1,'$.parent')) AND (json_extract(?1,'$.slug') IS NULL OR c.slug=json_extract(?1,'$.slug')) AND (json_extract(?1,'$.title') IS NULL OR instr(c.title_folded,json_extract(?1,'$.title'))>0) AND av.deleted_at IS NULL AND a.state='Live' AND a.current_project_id IS c.project_id AND b.state='Present' AND av.artifact_id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.artifactId') AND av.blob_digest=g.source_digest AND av.blob_digest=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.sha256') AND b.byte_count=CAST(json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.byteLength') AS INTEGER))";
+const ELIGIBLE: &str = "WITH eligible AS MATERIALIZED (SELECT g.generation_id,g.convention_id,g.resource_id,g.embedding_space,c.title,k.id,k.chunk_index,k.token_count,k.vector FROM convention_index_heads ih JOIN convention_indexes g ON g.generation_id=ih.generation_id JOIN convention_heads h ON h.id=g.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions captured ON captured.convention_id=g.convention_id AND captured.revision=g.convention_revision LEFT JOIN convention_resource_heads rh ON rh.id=g.resource_id LEFT JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=rh.revision JOIN convention_chunks k ON k.generation_id=g.generation_id JOIN artifact_versions av ON av.id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.versionId') JOIN artifacts a ON a.id=av.artifact_id JOIN blobs b ON b.digest=av.blob_digest WHERE g.state='Published' AND g.status IN('Ready','LexicalOnly') AND c.lifecycle='Active' AND c.scope_key=captured.scope_key AND c.title=captured.title AND ((g.resource_id IS NULL AND g.convention_revision=h.revision) OR (g.resource_id IS NOT NULL AND r.convention_id=h.id AND r.revision=g.resource_revision AND r.lifecycle='Active')) AND c.scope_key IN(SELECT value FROM json_each(?1,'$.scopes')) AND NOT EXISTS(SELECT 1 FROM json_each(?1,'$.applicability') f WHERE f.value NOT IN(SELECT value FROM json_each(c.applicability_json))) AND (NOT json_extract(?1,'$.filterParent') OR c.parent_id IS json_extract(?1,'$.parent')) AND (json_extract(?1,'$.slug') IS NULL OR c.slug=json_extract(?1,'$.slug')) AND (json_extract(?1,'$.title') IS NULL OR instr(c.title_folded,json_extract(?1,'$.title'))>0) AND (json_extract(?1,'$.name') IS NULL OR convention_like(json_extract(?1,'$.name'),c.slug_folded) OR convention_like(json_extract(?1,'$.name'),c.title_folded)) AND av.deleted_at IS NULL AND a.state='Live' AND a.current_project_id IS c.project_id AND b.state='Present' AND av.artifact_id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.artifactId') AND av.blob_digest=g.source_digest AND av.blob_digest=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.sha256') AND b.byte_count=CAST(json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.byteLength') AS INTEGER))";
 fn query(q: &ConventionQuery) -> Result<String, StorageError> {
     states(&q.lifecycles)?;
     if !q.lifecycles.is_empty() && !q.lifecycles.iter().any(|s| s == "Active") {
         return Ok(json!({"scopes":[],"applicability":[]}).to_string());
     }
     let keys: Value = serde_json::from_str(&scopes(&q.scopes)?).expect("serialized scopes");
-    Ok(json!({"scopes":keys,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase())}).to_string())
+    Ok(json!({"scopes":keys,"applicability":q.applicability,"filterParent":q.parent_id.is_some(),"parent":q.parent_id.as_ref().and_then(|p|p.as_ref()).map(Id::as_str),"slug":q.slug,"title":q.title.as_ref().map(|s|s.to_lowercase()),"name":q.name_pattern.as_ref().map(|s|s.to_lowercase())}).to_string())
 }
 fn valid_term(term: &str) -> bool {
     let mut b = term.bytes();
@@ -325,6 +327,9 @@ fn validate_vector(vector: &[f32], dimensions: u32) -> Result<(), StorageError> 
     }
 }
 macro_rules! reads {($ty:ty)=>{impl ConventionIndexRead for $ty {
+    fn convention_chunk_count(&self,id:&Id)->Result<u64,StorageError>{let count:i64=db(self.conn.query_row("SELECT count(*) FROM convention_chunks WHERE generation_id=?1",[id.as_str()],|r|r.get(0)))?;u64::try_from(count).map_err(|_|invalid("negative chunk count"))}
+    fn convention_index_status(&self,id:&Id,resource:Option<&Id>)->Result<Option<StoredConventionIndex>,StorageError>{index_status(self.conn,id,resource)}
+    fn convention_index_revision(&self,scopes:&[KnowledgeScope])->Result<i64,StorageError>{index_revision(self.conn,scopes)}
     fn convention_embedding_inputs(&self,id:&Id)->Result<Option<StoredConventionEmbeddingInputs>,StorageError>{embedding_inputs(self.conn,id)}
     fn convention_embedding_space(&self,id:&str)->Result<Option<StoredConventionEmbeddingSpace>,StorageError>{space(self.conn,id)}
     fn convention_index_head(&self,id:&Id,resource:Option<&Id>)->Result<Option<StoredConventionIndex>,StorageError>{head(self.conn,id,resource)}
@@ -361,7 +366,10 @@ pub(super) fn invalidate(
     all: bool,
     now: i64,
 ) -> Result<(), StorageError> {
-    db(conn.execute("UPDATE convention_indexes SET status='Stale',error=NULL,updated_at=max(updated_at,?4) WHERE convention_id=?1 AND (?3 OR resource_id IS ?2) AND status NOT IN('Failed','Cancelled')",params![owner.as_str(),resource.map(Id::as_str),all,now]))?;
+    let changed=db(conn.execute("UPDATE convention_indexes SET status='Stale',error=NULL,updated_at=max(updated_at,?4) WHERE convention_id=?1 AND (?3 OR resource_id IS ?2) AND status NOT IN('Failed','Cancelled')",params![owner.as_str(),resource.map(Id::as_str),all,now]))?;
+    if changed > 0 {
+        bump_index_scope(conn, owner)?;
+    }
     Ok(())
 }
 impl ConventionIndexRepository for Unit<'_> {
@@ -385,6 +393,21 @@ impl ConventionIndexRepository for Unit<'_> {
         let mut descriptors = Vec::with_capacity(r.input_refs.len());
         for reference in &r.input_refs {
             let reference = backing(self.conn, &scope, reference)?;
+            let (provenance, owner) =
+                trusted_derivative(self.conn, &reference, &self.info.host_actor)?;
+            let derived = &provenance["derived"];
+            if owner.as_deref() != Some(r.actor_id.0.as_str())
+                || derived["kind"] != "ConventionEmbeddingInput"
+                || derived["requestId"].as_str() != Some(r.request_id.as_str())
+                || derived["contextDigest"] != r.context_digest
+                || derived["embeddingSpace"] != r.embedding_space
+                || derived["inputDigest"] != r.input_digest
+                || derived["inputIndex"].as_u64() != Some(descriptors.len() as u64)
+            {
+                return Err(invalid(
+                    "embedding input artifact lacks its exact owned request association",
+                ));
+            }
             descriptors
                 .push(json!({"sha256":reference.sha256,"byteCount":reference.byte_length.get()}));
         }
@@ -467,8 +490,11 @@ impl ConventionIndexRepository for Unit<'_> {
         if let Some(id) = &r.embedding_space {
             space(self.conn, id)?.ok_or_else(|| invalid("embedding space missing"))?;
         }
-        db(self.conn.execute("INSERT INTO convention_indexes(generation_id,convention_id,convention_revision,resource_id,resource_revision,operation_id,state,status,error,embedding_space,source_digest,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![r.generation_id.as_str(),r.convention_id.as_str(),r.convention_revision,r.resource_id.as_ref().map(Id::as_str),r.resource_revision,r.operation_id.0.as_str(),r.state,r.status,r.error,r.embedding_space,r.source_digest,r.created_at_ms,r.updated_at_ms]))?;
-        Ok(())
+        atomic(self.conn, || {
+            db(self.conn.execute("INSERT INTO convention_indexes(generation_id,convention_id,convention_revision,resource_id,resource_revision,operation_id,state,status,error,embedding_space,source_digest,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",params![r.generation_id.as_str(),r.convention_id.as_str(),r.convention_revision,r.resource_id.as_ref().map(Id::as_str),r.resource_revision,r.operation_id.0.as_str(),r.state,r.status,r.error,r.embedding_space,r.source_digest,r.created_at_ms,r.updated_at_ms]))?;
+            bump_index_scope(self.conn, &r.convention_id)?;
+            Ok(())
+        })
     }
     fn stage_convention_chunks(
         &mut self,
@@ -501,9 +527,8 @@ impl ConventionIndexRepository for Unit<'_> {
                     || c.resource_revision != index.resource_revision
                     || c.index < 0
                     || c.token_count < 0
-                    || c.text.contains('\0')
-                    || c.embedding_text.contains('\0')
-                    || c.section_path.contains('\0')
+                    || ((c.section_path.contains('\0') || c.section_path.chars().count() > 65_536)
+                        && c.section_path_ref.is_none())
                     || c.text.len() > 16_777_215
                     || c.embedding_text.len() as u64
                         > devworks_core::ports::packages::MAX_BUNDLE_BYTES
@@ -541,6 +566,20 @@ impl ConventionIndexRepository for Unit<'_> {
                 }
                 let path = if let Some(reference) = &c.section_path_ref {
                     let path = backing(self.conn, &owner.scope, reference)?;
+                    let (provenance, _) =
+                        trusted_derivative(self.conn, &path, &self.info.host_actor)?;
+                    let derived = &provenance["derived"];
+                    if derived["kind"] != "ConventionSectionPath"
+                        || derived["generationId"].as_str() != Some(index.generation_id.as_str())
+                        || derived["chunkId"].as_str() != Some(c.id.as_str())
+                        || derived["conventionId"].as_str() != Some(index.convention_id.as_str())
+                        || derived["operationId"].as_str() != Some(index.operation_id.0.as_str())
+                        || derived["sourceDigest"] != index.source_digest
+                    {
+                        return Err(invalid(
+                            "breadcrumb artifact lacks exact generation/chunk/source association",
+                        ));
+                    }
                     if path.byte_length.get() != c.section_path.len() as i64
                         || path.sha256.as_str()
                             != devworks_core::fingerprint::sha256_hex(c.section_path.as_bytes())
@@ -578,14 +617,23 @@ impl ConventionIndexRepository for Unit<'_> {
         {
             return Err(invalid("convention index status CAS refused"));
         }
-        if index.state != "Draft" || matches!(status, "Ready" | "LexicalOnly") {
+        let transition = index.status == status
+            || match index.status.as_str() {
+                "Queued" => matches!(status, "Indexing" | "Failed" | "Cancelled" | "Stale"),
+                "Indexing" => matches!(status, "Failed" | "Cancelled" | "Stale"),
+                _ => false,
+            };
+        if !transition || index.state != "Draft" || matches!(status, "Ready" | "LexicalOnly") {
             return Err(invalid("only atomic index publication sets ready status"));
         }
         if status != "Cancelled" && status != "Failed" {
             active_operation(self.conn, op)?;
         }
-        db(self.conn.execute("UPDATE convention_indexes SET status=?2,error=?3,updated_at=max(updated_at,?4) WHERE generation_id=?1 AND status=?5",params![id.as_str(),status,error,self.now,expected]))?;
-        Ok(())
+        atomic(self.conn, || {
+            db(self.conn.execute("UPDATE convention_indexes SET status=?2,error=?3,updated_at=max(updated_at,?4) WHERE generation_id=?1 AND status=?5",params![id.as_str(),status,error,self.now,expected]))?;
+            bump_index_scope(self.conn, &index.convention_id)?;
+            Ok(())
+        })
     }
     fn publish_convention_index(
         &mut self,
@@ -636,6 +684,7 @@ impl ConventionIndexRepository for Unit<'_> {
             }
             db(self.conn.execute("UPDATE convention_indexes SET state='Published',status=?2,error=NULL,updated_at=max(updated_at,?3) WHERE generation_id=?1",params![id.as_str(),index.status,self.now]))?;
             db(self.conn.execute("INSERT INTO convention_index_heads(convention_id,resource_key,generation_id) VALUES(?1,?2,?3) ON CONFLICT(convention_id,resource_key) DO UPDATE SET generation_id=excluded.generation_id",params![index.convention_id.as_str(),index.resource_id.as_ref().map_or("",Id::as_str),id.as_str()]))?;
+            bump_index_scope(self.conn, &index.convention_id)?;
             Ok(())
         })
     }
@@ -690,4 +739,57 @@ fn embedding_inputs(
         let refs=db(db(stmt.query_map([id.as_str()],|r|value(r,0)))?.collect())?;
         Ok(StoredConventionEmbeddingInputs {request_id:id.clone(),actor_id:ActorId(row.0),project_id:row.1.map(Id::new).transpose().map_err(|_|invalid("invalid embedding input project"))?.map(ProjectId),context_digest:row.2,embedding_space:row.3,input_digest:row.4,input_refs:refs,created_at_ms:row.5})
     }).transpose()
+}
+
+fn trusted_derivative(
+    conn: &Connection,
+    reference: &ArtifactRef,
+    host: &ActorId,
+) -> Result<(Value, Option<String>), StorageError> {
+    let (provenance, owner): (Value, Option<String>) = db(conn.query_row(
+        "SELECT provenance_json,owner_actor_id FROM artifacts WHERE id=?1",
+        [reference.artifact_id.as_str()],
+        |r| Ok((value(r, 0)?, r.get(1)?)),
+    ))?;
+    if provenance["principalKind"] != "Host"
+        || provenance["producedBy"].as_str() != Some(host.0.as_str())
+    {
+        return Err(invalid(
+            "convention derivative must name its actual producing Host",
+        ));
+    }
+    Ok((provenance, owner))
+}
+
+const VALID_HEADER: &str = "g.state IN('Draft','Published') AND c.lifecycle='Active' AND c.scope_key=captured.scope_key AND c.title=captured.title AND ((g.resource_id IS NULL AND g.convention_revision=h.revision) OR(g.resource_id IS NOT NULL AND r.convention_id=h.id AND r.revision=g.resource_revision AND r.lifecycle='Active')) AND av.deleted_at IS NULL AND a.state='Live' AND a.current_project_id IS c.project_id AND b.state='Present' AND av.artifact_id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.artifactId') AND av.blob_digest=g.source_digest AND av.blob_digest=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.sha256') AND b.byte_count=CAST(json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.byteLength') AS INTEGER)";
+const HEADER_JOINS: &str = "convention_indexes g JOIN convention_heads h ON h.id=g.convention_id JOIN convention_versions c ON c.convention_id=h.id AND c.revision=h.revision JOIN convention_versions captured ON captured.convention_id=g.convention_id AND captured.revision=g.convention_revision LEFT JOIN convention_resource_heads rh ON rh.id=g.resource_id LEFT JOIN convention_resource_versions r ON r.resource_id=rh.id AND r.revision=rh.revision JOIN artifact_versions av ON av.id=json_extract(CASE WHEN g.resource_id IS NULL THEN c.content_ref_json ELSE r.content_ref_json END,'$.versionId') JOIN artifacts a ON a.id=av.artifact_id JOIN blobs b ON b.digest=av.blob_digest";
+fn index_status(
+    conn: &Connection,
+    owner: &Id,
+    resource: Option<&Id>,
+) -> Result<Option<StoredConventionIndex>, StorageError> {
+    let pending:Option<Id>=db(conn.query_row(&format!("SELECT g.generation_id FROM {HEADER_JOINS} JOIN operations o ON o.id=g.operation_id WHERE g.convention_id=?1 AND g.resource_id IS ?2 AND {VALID_HEADER} AND g.state='Draft' AND g.status IN('Queued','Indexing') AND o.state NOT IN('Failed','NeedsInput','CancelledBeforeDispatch','ObservedComplete') ORDER BY g.created_at DESC,g.generation_id DESC LIMIT 1"),params![owner.as_str(),resource.map(Id::as_str)],|r|identifier(r,0)).optional())?;
+    if let Some(id) = pending {
+        return generation(conn, &id);
+    }
+    let Some(mut result) = head(conn, owner, resource)? else {
+        return Ok(None);
+    };
+    let valid:bool=db(conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {HEADER_JOINS} WHERE g.generation_id=?1 AND {VALID_HEADER})"),[result.generation_id.as_str()],|r|r.get(0)))?;
+    if !valid {
+        result.status = "Stale".into();
+    }
+    Ok(Some(result))
+}
+fn index_revision(conn: &Connection, allowed: &[KnowledgeScope]) -> Result<i64, StorageError> {
+    let scopes = scopes(allowed)?;
+    db(conn.query_row("SELECT 1+coalesce(sum(revision-1),0) FROM convention_index_scope_revisions WHERE scope_key IN(SELECT value FROM json_each(?1))",[scopes],|r|r.get(0)))
+}
+fn bump_index_scope(conn: &Connection, owner: &Id) -> Result<(), StorageError> {
+    let owner = current(conn, owner)?.ok_or_else(|| invalid("index scope owner missing"))?;
+    let revision = index_revision(conn, std::slice::from_ref(&owner.scope))?
+        .checked_add(1)
+        .ok_or_else(|| invalid("convention index revision overflow"))?;
+    db(conn.execute("INSERT INTO convention_index_scope_revisions(scope_key,project_id,revision) VALUES(?1,?2,?3) ON CONFLICT(scope_key) DO UPDATE SET revision=excluded.revision",params![owner.scope.key(),owner.scope.project().map(|p|p.0.as_str()),revision]))?;
+    Ok(())
 }

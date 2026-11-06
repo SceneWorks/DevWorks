@@ -33,6 +33,8 @@ pub struct StoredConventionResource {
     /// Exact owner revision that created this resource snapshot.
     pub convention_revision: i64,
     pub name: String,
+    /// Exact original resource media type, up to the retained source bound of 200 scalars.
+    pub media_type: String,
     pub content_ref: Value,
     pub author_id: ActorId,
     pub created_at_ms: i64,
@@ -42,8 +44,31 @@ pub struct StoredConventionResource {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ConventionOrder {
+    #[default]
+    Id,
+    Title,
+    Organization,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConventionPosition {
+    pub sort_order: i64,
+    pub title: String,
+    pub id: Id,
+}
+impl StoredConvention {
+    pub fn position(&self) -> ConventionPosition {
+        ConventionPosition {
+            sort_order: self.sort_order,
+            title: self.title.clone(),
+            id: self.id.clone(),
+        }
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConventionQuery {
     pub scopes: Vec<KnowledgeScope>,
+    pub order: ConventionOrder,
     pub lifecycles: Vec<String>,
     /// All requested applicability labels must be present; an empty filter matches all.
     pub applicability: Vec<String>,
@@ -52,6 +77,8 @@ pub struct ConventionQuery {
     pub slug: Option<String>,
     /// Literal case-folded title substring, rather than caller-supplied SQL/FTS syntax.
     pub title: Option<String>,
+    /// Scoped source-compatible LIKE pattern over folded slug OR title (% and _ wildcards).
+    pub name_pattern: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -72,21 +99,28 @@ pub trait ConventionRead: ConventionIndexRead {
         revision: Option<i64>,
         scopes: &[KnowledgeScope],
     ) -> Result<Option<StoredConvention>, StorageError>;
-    /// Ascending ID keyset page, exclusive after; limit 1..=MAX_PAGE.
+    /// Selected-order keyset page, exclusive after; limit 1..=MAX_PAGE.
     fn conventions(
         &self,
         query: &ConventionQuery,
-        after: Option<&Id>,
+        after: Option<&ConventionPosition>,
         limit: u16,
     ) -> Result<Vec<StoredConvention>, StorageError>;
-    /// Ascending immutable revision page, with current and historical scope filtering.
+    /// Descending immutable revision page, with current and historical scope filtering.
     fn convention_versions(
         &self,
         id: &Id,
         scopes: &[KnowledgeScope],
-        after_revision: Option<i64>,
+        before_revision: Option<i64>,
         limit: u16,
     ) -> Result<Vec<StoredConvention>, StorageError>;
+    fn convention_resource(
+        &self,
+        convention: &Id,
+        resource: &Id,
+        convention_revision: Option<i64>,
+        scopes: &[KnowledgeScope],
+    ) -> Result<Option<StoredConventionResource>, StorageError>;
     fn convention_resources(
         &self,
         query: &ConventionResourceQuery,
@@ -210,6 +244,15 @@ pub struct StoredConventionEmbeddingInputs {
 }
 
 pub trait ConventionIndexRead {
+    fn convention_chunk_count(&self, generation: &Id) -> Result<u64, StorageError>;
+    /// Current eligible pending draft, newest first; otherwise the published head's current validity.
+    fn convention_index_status(
+        &self,
+        convention: &Id,
+        resource: Option<&Id>,
+    ) -> Result<Option<StoredConventionIndex>, StorageError>;
+    /// Positive monotonic generation of the exact requested scopes, including publication/status changes.
+    fn convention_index_revision(&self, scopes: &[KnowledgeScope]) -> Result<i64, StorageError>;
     fn convention_embedding_inputs(
         &self,
         request: &Id,
@@ -304,6 +347,116 @@ pub trait ConventionIndexRepository: ConventionIndexRead {
     fn discard_convention_index_chunks(
         &mut self,
         generation: &Id,
+        operation: &crate::protocol::OperationId,
+        limit: u16,
+    ) -> Result<bool, StorageError>;
+}
+
+/// A new-only portable import. Its prospective catalog/artifact rows stay private until publication.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredConventionImport {
+    pub operation_id: crate::protocol::OperationId,
+    pub convention_id: Id,
+    pub scope: KnowledgeScope,
+    pub author_id: ActorId,
+    pub source_ref: Value,
+    pub expected_scope_revision: i64,
+    pub revision: i64,
+    /// Queued, Parsing, Ready, Published, Failed or Cancelled.
+    pub phase: String,
+    /// Closed core-owned resumable parser locator/checkpoint, never an authority context.
+    pub checkpoint: Value,
+    pub processed_resources: i64,
+    pub total_resources: Option<i64>,
+    pub error: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredConventionImportArtifact {
+    pub operation_id: crate::protocol::OperationId,
+    pub ordinal: i64,
+    /// Markdown, Raw or Resource. A document has one Markdown and at most one Raw source.
+    pub kind: String,
+    /// Fresh native resource identity, never a manifest-selected existing identity.
+    pub resource_id: Option<Id>,
+    /// Portable source entry key, unique within the import; never a native identity.
+    pub resource_key: Option<String>,
+    pub resource_name: Option<String>,
+    pub resource_lifecycle: Option<String>,
+    /// Original source media type (up to 200 scalars); native ArtifactRef media type keeps
+    /// its existing bound and uses an honest binary fallback when necessary.
+    pub resource_media_type: Option<String>,
+    pub artifact: super::StoredArtifact,
+    pub version: super::StoredVersion,
+    pub staging_operation_id: crate::protocol::OperationId,
+    pub staging_fence: super::AttemptFence,
+    pub managed_path: String,
+}
+
+pub trait ConventionImportRead {
+    fn convention_import(
+        &self,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<Option<StoredConventionImport>, StorageError>;
+    /// Nonpublished active imports and terminal imports with private captures awaiting cleanup.
+    fn convention_imports_pending(
+        &self,
+        after: Option<&crate::protocol::OperationId>,
+        limit: u16,
+    ) -> Result<Vec<StoredConventionImport>, StorageError>;
+    fn convention_import_metadata(
+        &self,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<Option<StoredConvention>, StorageError>;
+    fn convention_import_artifacts(
+        &self,
+        operation: &crate::protocol::OperationId,
+        after_ordinal: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<StoredConventionImportArtifact>, StorageError>;
+}
+pub trait ConventionImportRepository: ConventionImportRead {
+    fn begin_convention_import(
+        &mut self,
+        draft: &StoredConventionImport,
+    ) -> Result<StoredConventionImport, StorageError>;
+    /// The caller binds actual verified staged bytes into blobs first, and resolves the actual
+    /// staging journal after this private capture in the same UoW. No public artifacts exist yet.
+    fn stage_convention_import_artifact(
+        &mut self,
+        artifact: &StoredConventionImportArtifact,
+    ) -> Result<StoredConventionImport, StorageError>;
+    /// Immutable prospective revision one, including the exact captured parent revision.
+    fn set_convention_import_metadata(
+        &mut self,
+        operation: &crate::protocol::OperationId,
+        prototype: &StoredConvention,
+        expected_parent_revision: Option<i64>,
+    ) -> Result<StoredConventionImport, StorageError>;
+    fn set_convention_import_phase(
+        &mut self,
+        operation: &crate::protocol::OperationId,
+        expected_revision: i64,
+        phase: &str,
+        total_resources: Option<i64>,
+        error: Option<&str>,
+        checkpoint: Option<&Value>,
+    ) -> Result<StoredConventionImport, StorageError>;
+    /// One atomic publication of all private artifact/version rows and convention/resources.
+    /// No resource-count cap, no full resource Vec, and no file I/O inside the writer.
+    fn publish_convention_import(
+        &mut self,
+        operation: &crate::protocol::OperationId,
+        expected_revision: i64,
+        expected_scope_revision: i64,
+        expected_resource_count: i64,
+    ) -> Result<StoredConvention, StorageError>;
+    /// Failed/cancelled imports only. Caller releases the removed private blob references
+    /// through the existing lifecycle collector; caller-owned source artifacts are untouched.
+    fn discard_convention_import_artifacts(
+        &mut self,
         operation: &crate::protocol::OperationId,
         limit: u16,
     ) -> Result<bool, StorageError>;
