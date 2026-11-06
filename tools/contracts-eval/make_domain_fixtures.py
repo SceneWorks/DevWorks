@@ -1161,5 +1161,20 @@ for name,revisions in REVISIONS.items():
    output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
   case('dw13-r3-binding-'+name,'operation-result.r3',output)
 
+# DW33: exact source-scope revisions are distinct from listing/search pagination witnesses.
+for name in ['conventions.list','conventions.search','conventions.resources','conventions.version']:
+ source=next(json.loads(c['raw']) for c in CASES if c['typedValid'] and c['entry']=='domain-request.r3' and json.loads(c['raw']).get('body',{}).get('kind')==name)
+ source['schemaRevision']=4
+ case('dw33-r4-admission-'+name,'domain-request.r3',source)
+ output=next(copy.deepcopy(json.loads(c['raw'])) for c in CASES if c['typedValid'] and c['entry']=='operation-result.r3' and json.loads(c['raw']).get('kind')==name)
+ if name in ['conventions.list','conventions.search','conventions.version']:output['value']['sourceScopeRevision']='2'
+ case('dw33-r4-source-revision-'+name,'operation-result.r4',output)
+ if name in ['conventions.list','conventions.search']:
+  bad=copy.deepcopy(output);bad['value']['sourceScopeRevision']=None
+  case('dw33-reject-null-source-revision-'+name,'operation-result.r4',bad,False,False)
+  bad=copy.deepcopy(output);bad['value']['sourceScopeRevision']='0'
+  case('dw33-reject-zero-source-revision-'+name,'operation-result.r4',bad,False,False)
+  case('dw33-reject-source-revision-before4-'+name,'operation-result.r3',output,False,False)
+
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

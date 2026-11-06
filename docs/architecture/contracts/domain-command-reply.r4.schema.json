@@ -3698,6 +3698,10 @@
         },
         "scopeRevision": {
           "$ref": "#/$defs/Revision"
+        },
+        "sourceScopeRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 4
         }
       },
       "required": [
@@ -4292,6 +4296,10 @@
         },
         "scopeRevision": {
           "$ref": "#/$defs/Revision"
+        },
+        "sourceScopeRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 4
         }
       },
       "required": [

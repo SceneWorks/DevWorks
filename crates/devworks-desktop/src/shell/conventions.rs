@@ -306,8 +306,10 @@ impl Shell {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 let uncertain = search && cop::search_uncertain(&outcome);
+                let mut source_scope_revision = None;
                 let result = if search {
                     cop::search(outcome).map(|p| {
+                        source_scope_revision = p.source_scope_revision.as_ref().map(|v| v.get());
                         (
                             p.scope_revision.get(),
                             p.next_cursor.map(|c| c.0),
@@ -318,6 +320,7 @@ impl Shell {
                     })
                 } else {
                     cop::page(outcome).map(|p| {
+                        source_scope_revision = p.source_scope_revision.as_ref().map(|v| v.get());
                         (
                             p.scope_revision.get(),
                             p.next_cursor.map(|c| c.0),
@@ -399,6 +402,7 @@ impl Shell {
                         s.retrieval = retrieval;
                         s.next = next;
                         s.scope_revision = Some(revision);
+                        s.source_scope_revision = source_scope_revision;
                         s.searched = search;
                         s.loaded = true;
                         s.available = true;
@@ -894,7 +898,7 @@ impl Shell {
             return;
         };
         let (body, target) = if all {
-            let Some(revision) = state.scope_revision else {
+            let Some(revision) = state.source_scope_revision else {
                 return;
             };
             (

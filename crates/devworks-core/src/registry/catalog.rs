@@ -4137,7 +4137,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "ConventionPageResult",
         result_schema: schema_of::<ConventionPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(3)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3), SchemaRevision(4)],
     },
     OperationDescriptor {
         name: "conventions.read",
@@ -4203,7 +4203,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "ConventionPageResult",
         result_schema: schema_of::<ConventionPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(3)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3), SchemaRevision(4)],
     },
     OperationDescriptor {
         name: "conventions.applicability",
@@ -4357,7 +4357,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "ConventionResourcePageResult",
         result_schema: schema_of::<ConventionResourcePageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(3)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3), SchemaRevision(4)],
     },
     OperationDescriptor {
         name: "conventions.delete_resource",
@@ -4401,7 +4401,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "ConventionSearchPageResult",
         result_schema: schema_of::<ConventionSearchPageResult>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(3)],
+        revisions: &[SchemaRevision(1), SchemaRevision(3), SchemaRevision(4)],
     },
     OperationDescriptor {
         name: "skills.discover",

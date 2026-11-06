@@ -5614,7 +5614,11 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "scope_revision": "Revision",
-        "manifest_schema": "SchemaRef"
+        "manifest_schema": "SchemaRef",
+        "source_scope_revision": "?Revision"
+      },
+      "since": {
+        "source_scope_revision": 4
       }
     },
     "ConventionResourcePage": {
@@ -5661,7 +5665,11 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "scope_revision": "Revision",
-        "retrieval": "ConventionRetrieval"
+        "retrieval": "ConventionRetrieval",
+        "source_scope_revision": "?Revision"
+      },
+      "since": {
+        "source_scope_revision": 4
       }
     },
     "ConventionMutation": {
@@ -11124,15 +11132,18 @@
     ],
     "conventions.list": [
       1,
-      3
+      3,
+      4
     ],
     "conventions.search": [
       1,
-      3
+      3,
+      4
     ],
     "conventions.resources": [
       1,
-      3
+      3,
+      4
     ],
     "conventions.read": [
       1,
@@ -11140,7 +11151,8 @@
     ],
     "conventions.version": [
       1,
-      3
+      3,
+      4
     ],
     "conventions.edit": [
       1,
