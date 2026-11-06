@@ -27,6 +27,7 @@ pub struct TransportError {
 }
 #[derive(Clone, Debug)]
 pub struct StreamLimits {
+    pub max_request_bytes: usize,
     pub deadline_ms: u64,
     pub idle_timeout_ms: u64,
     pub max_response_bytes: u64,
@@ -35,7 +36,8 @@ pub struct StreamLimits {
 }
 impl StreamLimits {
     pub fn validate(&self) -> bool {
-        self.deadline_ms > 0
+        self.max_request_bytes > 0
+            && self.deadline_ms > 0
             && self.idle_timeout_ms > 0
             && self.idle_timeout_ms <= self.deadline_ms
             && self.max_response_bytes > 0
