@@ -81,6 +81,8 @@ pub struct InvocationContext {
     capability_registration: Option<Id>,
     authority_sources: Vec<Id>,
     worktree: Option<BoundWorktree>,
+    /// Bound only by the trusted host's dedicated human interaction path, never wire data.
+    human_decision: Option<String>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
 /// [`InvocationContext`]. It is created from the store itself, so only code the composition
@@ -103,6 +105,22 @@ impl HostIngress {
             store_id: store.info().store_id,
         }
     }
+    /// Binds the exact decision from a trusted native human interaction. Generic commands,
+    /// tools and model messages cannot add this marker to an invocation or serialize it.
+    /// The decision service also verifies the principal's registered human identity.
+    pub fn human_decision_context(
+        &self,
+        context: &InvocationContext,
+        decision: &crate::operations::approvals::RecordHumanDecisionInput,
+    ) -> Option<InvocationContext> {
+        if context.store_id != self.store_id || context.principal_kind != PrincipalKind::Human {
+            return None;
+        }
+        let mut bound = context.clone();
+        bound.human_decision = Some(decision_digest(decision)?);
+        Some(bound)
+    }
+
     /// Binds an invocation the host has authenticated (see [`InvocationContext`]).
     pub fn context(
         &self,
@@ -153,8 +171,21 @@ impl InvocationContext {
             capability_registration: None,
             authority_sources: Vec::new(),
             worktree: None,
+            human_decision: None,
         }
     }
+
+    /// Whether trusted human ingress bound this exact, complete decision. This is not a grant
+    /// and is never carried in an approval proposal, a tool argument or a response.
+    pub fn human_decision_matches(
+        &self,
+        decision: &crate::operations::approvals::RecordHumanDecisionInput,
+    ) -> bool {
+        self.principal_kind == PrincipalKind::Human
+            && self.human_decision.is_some()
+            && self.human_decision == decision_digest(decision)
+    }
+
     pub fn with_session(mut self, session_id: Id) -> Self {
         self.session_id = Some(session_id);
         self
@@ -233,6 +264,14 @@ impl InvocationContext {
     }
 }
 
+fn decision_digest(
+    decision: &crate::operations::approvals::RecordHumanDecisionInput,
+) -> Option<String> {
+    let value = serde_json::to_value(decision).ok()?;
+    let canonical = crate::jcs::canonicalize(&value).ok()?;
+    Some(crate::fingerprint::sha256_hex(canonical.as_bytes()))
+}
+
 /// Host encoding of store identity, restore epoch and ingress namespace. Opaque IDs cannot
 /// contain `/`, so the encoding is injective. A caller cannot choose it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -291,5 +330,76 @@ impl ReceiptIdentity {
     }
     pub fn request_key(&self) -> &RequestKey {
         &self.request_key
+    }
+}
+
+#[cfg(test)]
+mod human_decision_tests {
+    use super::*;
+    use crate::operations::approvals::RecordHumanDecisionInput;
+    use serde_json::json;
+
+    fn id(value: &str) -> Id {
+        Id::new(value).unwrap()
+    }
+    fn decision() -> RecordHumanDecisionInput {
+        serde_json::from_value(json!({"proposalId":"proposal-1", "expectedRevision":"1",
+            "contentDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "decision":"Approve", "rationale":"Approve this exact change"}))
+        .unwrap()
+    }
+    fn context(ingress: &HostIngress, kind: PrincipalKind) -> InvocationContext {
+        ingress.context(
+            ActorId(id("user-1")),
+            kind,
+            id("invocation-1"),
+            id("native-ui"),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+    }
+
+    #[test]
+    fn only_human_ingress_binds_the_exact_complete_decision() {
+        let ingress = HostIngress {
+            store_id: StoreId(id("store-1")),
+        };
+        let original = decision();
+        let generic = context(&ingress, PrincipalKind::Human);
+        assert!(!generic.human_decision_matches(&original));
+        let bound = ingress.human_decision_context(&generic, &original).unwrap();
+        assert!(bound.human_decision_matches(&original));
+        for kind in [
+            PrincipalKind::Agent,
+            PrincipalKind::Host,
+            PrincipalKind::Schedule,
+            PrincipalKind::Package,
+            PrincipalKind::McpClient,
+        ] {
+            assert!(
+                ingress
+                    .human_decision_context(&context(&ingress, kind), &original)
+                    .is_none()
+            );
+        }
+        let other = HostIngress {
+            store_id: StoreId(id("store-2")),
+        };
+        assert!(other.human_decision_context(&generic, &original).is_none());
+        for (field, value) in [
+            ("proposalId", json!("proposal-2")),
+            ("expectedRevision", json!("2")),
+            (
+                "contentDigest",
+                json!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            ),
+            ("decision", json!("Reject")),
+            ("rationale", json!("Different rationale")),
+        ] {
+            let mut changed = serde_json::to_value(&original).unwrap();
+            changed[field] = value;
+            let changed: RecordHumanDecisionInput = serde_json::from_value(changed).unwrap();
+            assert!(!bound.human_decision_matches(&changed));
+        }
     }
 }
