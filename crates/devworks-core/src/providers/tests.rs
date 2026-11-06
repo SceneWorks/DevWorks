@@ -665,7 +665,7 @@ fn compatible_text_only_content_and_system_prefix_remain_stable_strings() {
     );
     assert_eq!(
         v["messages"][1],
-        json!({"role":"user","content":"Hello\n\nSecond paragraph"})
+        json!({"role":"user","content":"Hello\nSecond paragraph"})
     );
     c.messages.push(Message {
         role: MessageRole::Assistant,
@@ -835,5 +835,86 @@ fn effort_encoding_is_exact_per_profile_and_never_silently_removed() {
             prepare(identity(b), &r, &cap, &m, None, &limits()),
             Err(ProviderError::Unsupported("effort"))
         ));
+    }
+}
+
+#[test]
+fn converted_message_and_tool_text_keep_frozen_newlines_without_changing_instructions() {
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+    ] {
+        let mut m = Material::new();
+        let args = m.put(b"{}", "application/json");
+        let mut c = context();
+        c.instructions.push(TextBlock {
+            text: "Second rule".into(),
+            cache: None,
+        });
+        c.messages[0].content.push(ContentBlock::Text {
+            text: "Next paragraph".into(),
+            cache: None,
+        });
+        c.messages.push(Message {
+            role: MessageRole::Assistant,
+            content: vec![
+                ContentBlock::Text {
+                    text: "First assistant".into(),
+                    cache: None,
+                },
+                ContentBlock::Text {
+                    text: "Second assistant".into(),
+                    cache: None,
+                },
+                ContentBlock::ToolCall {
+                    call_id: "call".into(),
+                    wire_name: "lookup".into(),
+                    arguments: args,
+                },
+            ],
+        });
+        c.messages.push(Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::ToolResult {
+                call_id: "call".into(),
+                content: vec![
+                    ResultBlock::Text {
+                        text: "First result".into(),
+                    },
+                    ResultBlock::Text {
+                        text: "Second result".into(),
+                    },
+                ],
+                is_error: false,
+                cache: None,
+            }],
+        });
+        let b = binding(profile.clone());
+        let r = request(&mut m, &c);
+        let p = prepare(identity(b.clone()), &r, &caps(b), &m, None, &limits()).unwrap();
+        let v = body(&p);
+        if matches!(
+            profile,
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+        ) {
+            assert_eq!(v["messages"][0]["content"], "Rules\n\nSecond rule");
+            assert_eq!(v["messages"][1]["content"], "Hello\nNext paragraph");
+            assert_eq!(
+                v["messages"][2]["content"],
+                "First assistant\nSecond assistant"
+            );
+            assert_eq!(v["messages"][3]["content"], "First result\nSecond result");
+        } else {
+            assert_eq!(v["instructions"], "Rules\n\nSecond rule");
+            let result = v["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["type"] == "function_call_output")
+                .unwrap();
+            assert_eq!(result["output"], "First result\nSecond result");
+        }
     }
 }

@@ -935,7 +935,7 @@ fn flush_chat(
                 .iter()
                 .map(|p| p["text"].as_str().expect("encoded text"))
                 .collect::<Vec<_>>()
-                .join("\n\n")
+                .join("\n")
         )
     } else {
         json!(parts)
@@ -1020,7 +1020,7 @@ fn result_text(content: &[ResultBlock], is_error: bool) -> Result<String, Provid
             _ => None,
         })
         .collect::<Vec<_>>()
-        .join("\n\n"))
+        .join("\n"))
 }
 fn flush_result_images(images: &mut Vec<Value>, out: &mut Vec<Value>) {
     if !images.is_empty() {
