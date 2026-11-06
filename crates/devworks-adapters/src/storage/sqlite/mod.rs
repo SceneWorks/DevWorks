@@ -465,7 +465,11 @@ impl ApplicationStore for SqliteStore {
         db(conn.execute_batch("BEGIN DEFERRED"))?;
         // The first read establishes the snapshot; everything in `work` sees exactly it.
         let stamp = repos::stamp(conn)?;
-        let snapshot = repos::Snapshot { conn, stamp };
+        let snapshot = repos::Snapshot {
+            conn,
+            stamp,
+            host_actor: &self.info.host_actor,
+        };
         work(&snapshot)?;
         db(conn.execute_batch("COMMIT"))
     }

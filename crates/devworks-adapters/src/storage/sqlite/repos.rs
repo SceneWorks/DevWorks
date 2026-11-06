@@ -1002,6 +1002,7 @@ macro_rules! read_impls {
 pub(crate) struct Snapshot<'c> {
     pub conn: &'c Connection,
     pub stamp: SnapshotStamp,
+    pub host_actor: &'c ActorId,
 }
 read_impls!(Snapshot<'_>);
 impl ReadSnapshot for Snapshot<'_> {
