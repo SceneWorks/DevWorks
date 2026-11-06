@@ -488,8 +488,11 @@ fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
         "no Git tree outlives shutdown: {unsettled:?}"
     );
     drop(runtime_);
+    // A new process boot owns a new executor; finish the old boot before reopening its root.
+    drop(rt);
     drop(store);
     // The next boot (with a working Git) resumes the run from its claim.
+    let rt = runtime();
     let store = h.open();
     let runtime_ = rt
         .block_on(boot(composition(&h, store.clone(), "git")))

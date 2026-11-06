@@ -48,3 +48,10 @@ fails DataRootInUse while retaining the first boot's executor; the unchanged cas
 alone (3.50 s). Its proposed test-only physical executor teardown is tracked as DW-129 and
 is awaiting user approval. No full-suite green claim is made. Adapter/engine all-target
 strict checks pass (4.57 s) after covering the exclusive permit entry in the helper test.
+
+DW-129 was approved in chat and applied exactly as prepared: the first executor is dropped
+before reopening the data root, and the second boot owns a fresh executor. Every original
+shutdown/process/recovery assertion and timeout remains. The complete default native indexing
+suite now passes 27/27 (90.23 s), including both large regressions. The permit helper1/1 and
+engine all-target strict checks (29.32 s) pass. The first full-run failure and unchanged isolated
+pass remain above as provenance; no product shutdown change or proven product-cause claim is made.
