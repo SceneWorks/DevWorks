@@ -1777,6 +1777,17 @@ impl ControlService {
                 ));
             }
         }
+        // Clearing Continue cannot hand a root to a new owner while an earlier owned
+        // transport is still physically unclosed. Current parallel dispatch is unaffected.
+        if !tx.runs().inference_quiescent(&root.id)? {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "inference_custody",
+                Some(root.id.0.clone()),
+            )
+            .retry(RetryAdvice::RefreshAndNewRequest)
+            .into());
+        }
         let mut cleared = Vec::new();
         for b in &clear {
             let grant = if human {

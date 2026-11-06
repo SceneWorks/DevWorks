@@ -1,18 +1,19 @@
 //! Host-owned inference accounting, bounded historical indexing and local cancellation.
 //! This driver executes injected metadata sources, never synthesizes provider inference.
 use crate::{dispatch::first, store};
+use devworks_core::ports::process::ProcessHost;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::Id;
 use devworks_core::services::{
     router::InferenceRouter,
     runs::ControlService,
     usage::{
-        host::{self, AttemptHost, DriveOutcome, OwnedInferenceSource},
+        host::{self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSource},
         ingest,
     },
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -27,16 +28,28 @@ pub struct UsagePass {
     pub indexing_complete: bool,
     pub recovery_complete: bool,
     pub cancelled: usize,
+    pub recovery_more: bool,
+    pub unresolved: usize,
 }
+#[derive(Clone, Debug)]
+pub struct UsageDrain {
+    pub unclosed: Vec<Id>,
+    pub pending_preparations: usize,
+}
+
 struct Recovery {
     after: Option<Id>,
     complete: bool,
+    unresolved: usize,
 }
 pub struct UsageRuntime {
     store: Arc<dyn ApplicationStore>,
     control: Arc<ControlService>,
     host: Option<Arc<AttemptHost>>,
     active: Mutex<HashMap<Id, Cancellation>>,
+    uncertain: Mutex<HashSet<Id>>,
+    fence: Arc<AccountingWriteFence>,
+    process_host: Option<Arc<dyn ProcessHost>>,
     stopping: AtomicBool,
     preparing: AtomicUsize,
     wake: Notify,
@@ -51,10 +64,36 @@ impl UsageRuntime {
         control: Arc<ControlService>,
         router: Option<Arc<InferenceRouter>>,
     ) -> Arc<Self> {
+        Self::build(store, control, router, None)
+    }
+    pub fn with_process_host(
+        store: Arc<dyn ApplicationStore>,
+        control: Arc<ControlService>,
+        router: Option<Arc<InferenceRouter>>,
+        process: Arc<dyn ProcessHost>,
+    ) -> Arc<Self> {
+        Self::build(store, control, router, Some(process))
+    }
+    fn build(
+        store: Arc<dyn ApplicationStore>,
+        control: Arc<ControlService>,
+        router: Option<Arc<InferenceRouter>>,
+        process_host: Option<Arc<dyn ProcessHost>>,
+    ) -> Arc<Self> {
         let (status, _) = watch::channel(None);
+        let fence = Arc::new(AccountingWriteFence::default());
         Arc::new(Self {
-            host: router
-                .map(|router| Arc::new(AttemptHost::new(store.clone(), control.clone(), router))),
+            host: router.map(|router| {
+                let mut host = AttemptHost::new(store.clone(), control.clone(), router)
+                    .with_write_fence(fence.clone());
+                if let Some(process) = &process_host {
+                    host = host.with_process_host(process.as_ref());
+                }
+                Arc::new(host)
+            }),
+            fence,
+            process_host,
+            uncertain: Mutex::new(HashSet::new()),
             store,
             control,
             active: Mutex::new(HashMap::new()),
@@ -65,6 +104,7 @@ impl UsageRuntime {
             recovery: Mutex::new(Recovery {
                 after: None,
                 complete: false,
+                unresolved: 0,
             }),
             ticking: tokio::sync::Mutex::new(()),
             status,
@@ -110,12 +150,7 @@ impl UsageRuntime {
             }
             impl Drop for Remove {
                 fn drop(&mut self) {
-                    self.runtime
-                        .active
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .remove(&self.id);
-                    self.runtime.changed.notify_one();
+                    self.runtime.retired(&self.id);
                 }
             }
             let _remove = Remove {
@@ -193,12 +228,7 @@ impl UsageRuntime {
             }
             impl Drop for Remove {
                 fn drop(&mut self) {
-                    self.runtime
-                        .active
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .remove(&self.id);
-                    self.runtime.changed.notify_one();
+                    self.runtime.retired(&self.id);
                 }
             }
             let _remove = Remove {
@@ -216,6 +246,93 @@ impl UsageRuntime {
         })
     }
 
+    fn retired(&self, id: &Id) {
+        let closed = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
+            s.usage().attempt_balance(id)
+        })
+        .ok()
+        .flatten()
+        .is_some_and(|b| b.local_quiescent);
+        if closed {
+            self.fence.forget_closed(id);
+        } else {
+            self.uncertain
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id.clone());
+        }
+        self.active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
+        self.changed.notify_one();
+    }
+    async fn write<T, F>(&self, work: F) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    {
+        let fence = self.fence.clone();
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || fence.write(store.as_ref(), work))
+            .await
+            .unwrap_or_else(|_| {
+                Err(StorageError::unavailable(
+                    Unavailable::HandlerPanicked,
+                    "accounting unit panicked",
+                ))
+            })
+    }
+    /// Bound local-source draining by the runtime's shared deadline, then close the accounting
+    /// write fence. Unknown local closure remains unknown; reservations and custody stay held.
+    pub async fn drain_until(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<UsageDrain, StorageError> {
+        self.stop();
+        let _ = first(tokio::time::sleep_until(deadline), self.drain()).await;
+        let fence = self.fence.clone();
+        tokio::task::spawn_blocking(move || fence.close())
+            .await
+            .map_err(|_| {
+                StorageError::unavailable(Unavailable::HandlerPanicked, "accounting fence panicked")
+            })?;
+        let pending_preparations = self.preparing.load(Ordering::SeqCst);
+        let mut ids = self.fence.admitted();
+        ids.extend(
+            self.uncertain
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .cloned(),
+        );
+        ids.extend(
+            self.active
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .keys()
+                .cloned(),
+        );
+        let unclosed = store::read(&self.store, move |s| {
+            let mut unclosed = Vec::new();
+            for id in ids {
+                if !s
+                    .usage()
+                    .attempt_balance(&id)?
+                    .is_some_and(|b| b.local_quiescent)
+                {
+                    unclosed.push(id);
+                }
+            }
+            unclosed.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            Ok(unclosed)
+        })
+        .await?;
+        Ok(UsageDrain {
+            unclosed,
+            pending_preparations,
+        })
+    }
     pub fn stop(&self) {
         let active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         self.stopping.store(true, Ordering::SeqCst);
@@ -282,30 +399,67 @@ impl UsageRuntime {
                 "inference cancellation check panicked",
             ))
         })?;
-        let page = store::write(&self.store, move |tx| ingest::bootstrap_page(tx, PAGE)).await?;
+        let page = self
+            .write(move |tx| ingest::bootstrap_page(tx, PAGE))
+            .await?;
         let (after, complete) = {
             let r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
             (r.after.clone(), r.complete)
         };
+        let mut recovery_more = false;
         let recovery_complete = if complete {
             true
         } else {
-            let control = self.control.clone();
-            let visited = store::write(&self.store, move |tx| {
-                host::recover_page(tx, &control, after.as_ref(), PAGE)
+            let boot = self
+                .store
+                .info()
+                .boot_id
+                .ok_or_else(|| StorageError::InvalidRecord("missing host boot".into()))?;
+            let candidates = store::read(&self.store, move |s| {
+                host::recovery_candidates(s, boot, after.as_ref(), PAGE)
             })
             .await?;
+            let process = self.process_host.clone();
+            let prepared = tokio::task::spawn_blocking(move || {
+                host::probe_recovery(candidates, process.as_deref())
+            })
+            .await
+            .unwrap_or_else(|_| {
+                Err(StorageError::unavailable(
+                    Unavailable::HandlerPanicked,
+                    "native owner probe panicked",
+                ))
+            })?;
+            let control = self.control.clone();
+            let progress = self
+                .write(move |tx| host::apply_recovery(tx, &control, prepared))
+                .await?;
+            self.uncertain
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .extend(progress.unclosed);
             let mut r = self.recovery.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(last) = visited.last() {
-                r.after = Some(last.clone());
+            r.unresolved += progress.unresolved;
+            recovery_more = progress.visited.len() == usize::from(PAGE);
+            if recovery_more {
+                r.after = progress.visited.last().cloned();
+            } else {
+                r.after = None;
+                r.complete = r.unresolved == 0;
+                r.unresolved = 0;
             }
-            r.complete = visited.len() < usize::from(PAGE);
             r.complete
         };
         Ok(UsagePass {
             indexed: page.visited,
             indexing_complete: page.complete,
             recovery_complete,
+            recovery_more,
+            unresolved: self
+                .uncertain
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
             cancelled,
         })
     }
@@ -314,7 +468,7 @@ impl UsageRuntime {
             let result = self.tick().await;
             let more = result
                 .as_ref()
-                .is_ok_and(|p| !p.indexing_complete || !p.recovery_complete);
+                .is_ok_and(|p| !p.indexing_complete || p.recovery_more);
             self.status.send_replace(Some(result));
             if self.stopping.load(Ordering::SeqCst) {
                 break;

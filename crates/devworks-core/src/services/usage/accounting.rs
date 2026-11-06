@@ -14,7 +14,7 @@ use crate::services::runs::{ControlService, Target};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchIdentity {
     pub root_id: RootId,
     pub execution_id: Id,
@@ -48,6 +48,21 @@ pub struct AttemptRequest {
     pub cache_diagnostics: Vec<crate::protocol::records::UsageCacheDiagnostic>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostProcessIdentity {
+    pub pid: u32,
+    pub birth: String,
+}
+impl HostProcessIdentity {
+    pub(super) fn native(&self) -> Option<crate::ports::process::NativeIdentity> {
+        (self.pid > 0 && !self.birth.is_empty()).then(|| crate::ports::process::NativeIdentity {
+            pid: self.pid,
+            birth: self.birth.clone(),
+            group: None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdmittedSnapshot {
     pub admission_key: Id,
@@ -63,6 +78,8 @@ pub struct AdmittedSnapshot {
     pub quoted_provider_model_id: Option<String>,
     pub reservation_micro_usd: Option<i64>,
     pub admitted_boot_id: Id,
+    #[serde(default)]
+    pub host_process: Option<HostProcessIdentity>,
     pub principal_revision: Option<i64>,
     pub policy_digest: Option<String>,
     pub authority_project_id: Option<crate::protocol::ProjectId>,
@@ -105,6 +122,8 @@ pub struct BalanceSummary {
     pub unknown_components: Vec<String>,
     pub finished_at_ms: Option<i64>,
     pub cancellation_requested: bool,
+    #[serde(default)]
+    pub custody_recovery_reason: Option<String>,
     pub outcome: Option<String>,
 }
 
@@ -190,12 +209,94 @@ fn intent(request: &AttemptRequest, route: &StoredRouteRequest) -> Result<String
         .map_err(|_| invalid("invalid accounting intent"))
 }
 
+fn prior_work_owner_unclosed(
+    tx: &mut dyn WriteTransaction,
+    work: &Id,
+    owner: &DispatchIdentity,
+) -> Result<bool, StorageError> {
+    let mut after = None;
+    loop {
+        let rows = tx.usage().inference_attempts(
+            &UsageAttemptFilter {
+                work_id: Some(work.clone()),
+                ..Default::default()
+            },
+            after.as_ref(),
+            MAX_PAGE,
+        )?;
+        for attempt in &rows {
+            let balance = tx.usage().attempt_balance(&attempt.attempt_id)?;
+            if balance.as_ref().is_some_and(|b| b.local_quiescent) {
+                continue;
+            }
+            let bound = snapshot(attempt)?;
+            let uncertain = balance
+                .as_ref()
+                .map(summary)
+                .transpose()?
+                .is_some_and(|s| s.custody_recovery_reason.is_some());
+            if bound.dispatch.as_ref() != Some(owner) || uncertain {
+                return Ok(true);
+            }
+        }
+        if rows.len() < usize::from(MAX_PAGE) {
+            return Ok(false);
+        }
+        after = rows.last().map(|a| a.attempt_id.clone());
+    }
+}
+
+fn prior_job_owner_unclosed(
+    tx: &mut dyn WriteTransaction,
+    run: &Id,
+    revision: i64,
+) -> Result<bool, StorageError> {
+    let boot = tx.store().boot_id.clone();
+    let mut after = None;
+    loop {
+        let rows = tx.usage().inference_attempts(
+            &UsageAttemptFilter {
+                job_run_id: Some(run.clone()),
+                ..Default::default()
+            },
+            after.as_ref(),
+            MAX_PAGE,
+        )?;
+        for attempt in &rows {
+            if attempt.work_id.is_some() {
+                continue;
+            }
+            let bound = snapshot(attempt)?;
+            let balance = tx.usage().attempt_balance(&attempt.attempt_id)?;
+            if balance.as_ref().is_some_and(|b| b.local_quiescent) {
+                continue;
+            }
+            let uncertain = balance
+                .as_ref()
+                .map(summary)
+                .transpose()?
+                .is_some_and(|s| s.custody_recovery_reason.is_some());
+            if Some(&bound.admitted_boot_id) != boot.as_ref()
+                || bound.job_run_revision != Some(revision)
+                || uncertain
+            {
+                return Ok(true);
+            }
+        }
+        if rows.len() < usize::from(MAX_PAGE) {
+            return Ok(false);
+        }
+        after = rows.last().map(|a| a.attempt_id.clone());
+    }
+}
+
 pub(crate) fn admit_attempt(
     tx: &mut dyn WriteTransaction,
     control: &ControlService,
     router: &crate::services::router::InferenceRouter,
     ctx: &crate::context::InvocationContext,
     request: &AttemptRequest,
+    host_process: Option<&HostProcessIdentity>,
 ) -> Result<Admission, StorageError> {
     if ctx.principal() != &request.actor_id
         || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
@@ -376,6 +477,13 @@ pub(crate) fn admit_attempt(
             return Ok(Admission::Fenced(Fenced::Blocked(Box::new(allowed))));
         }
     }
+    if let (Some(work), Some(owner)) = (&work_id, &request.dispatch)
+        && prior_work_owner_unclosed(tx, work, owner)?
+    {
+        return Ok(Admission::Fenced(Fenced::LeaseLost(
+            "an earlier work turn still has an unclosed inference transport".into(),
+        )));
+    }
     let feature_id = work.as_ref().and_then(|work| {
         if work.is_feature() {
             Some(work.id.clone())
@@ -398,6 +506,11 @@ pub(crate) fn admit_attempt(
             let owned = crate::services::jobs::discovery::owned_run(tx, run_id)?;
             if owned.cancel_requested || owned.hold.is_some() || owned.status != "Running" {
                 return Ok(Admission::Fenced(Fenced::StopRequested));
+            }
+            if prior_job_owner_unclosed(tx, run_id, owned.revision)? {
+                return Ok(Admission::Fenced(Fenced::LeaseLost(
+                    "an earlier job owner still has an unclosed inference transport".into(),
+                )));
             }
             job_run_revision = Some(owned.revision);
             if owned.agent_actor.as_ref() != Some(ctx.principal())
@@ -466,6 +579,7 @@ pub(crate) fn admit_attempt(
         quoted_provider_model_id: request.query.provider_model_id.clone(),
         reservation_micro_usd: reserved.tracked_micro_usd,
         admitted_boot_id: journal.boot_id.clone(),
+        host_process: host_process.cloned(),
         principal_revision,
         policy_digest,
         authority_project_id: ctx.project_id().cloned(),
@@ -987,6 +1101,40 @@ pub fn observe(
         budget::reconcile(tx, control, &work)?;
     }
     Ok(balance)
+}
+
+pub(super) fn note_unclosed_owner(
+    tx: &mut dyn WriteTransaction,
+    attempt: &StoredInferenceAttempt,
+    reason: &str,
+    unknown_tail: bool,
+) -> Result<(), StorageError> {
+    let Some(before) = tx.usage().attempt_balance(&attempt.attempt_id)? else {
+        return Ok(());
+    };
+    let mut state = summary(&before)?;
+    if state.custody_recovery_reason.as_deref() == Some(reason)
+        && (!unknown_tail || before.unknown_tail)
+    {
+        return Ok(());
+    }
+    state.custody_recovery_reason = Some(reason.into());
+    let balance = StoredAttemptBalance {
+        revision: before.revision + 1,
+        incomplete: true,
+        unknown_tail: before.unknown_tail || unknown_tail,
+        summary: encoded(&state)?,
+        ..before.clone()
+    };
+    tx.usage()
+        .put_attempt_balance(&balance, Some(before.revision))?;
+    log(
+        tx,
+        attempt,
+        "InferenceOwnerUnverified",
+        None,
+        json!({"reason":reason,"localTransportClosed":false,"reservationRetained":balance.reserved_micro_usd}),
+    )
 }
 
 /// Constructed only by the owned source driver after its local transport has actually exited.

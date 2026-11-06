@@ -223,16 +223,85 @@ impl OwnedInferenceSource for NeverOpened {
 fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() {
     runtime().block_on(async {
         within("managed inference closure", async {
-            for worker in [false, true] {
+            for (worker, bounded_shutdown, membership) in [
+                (false, false, false),
+                (true, false, false),
+                (false, true, false),
+                (false, false, true),
+            ] {
                 let f = Fx::new();
+                let selected_router = router(&f);
+                let physical_child = std::env::var_os("DW21_CAPTURE_OWNER").is_some();
+                if physical_child {
+                    f.tx(|_, tx| {
+                        let mut connection =
+                            tx.router().connection(&id("usage-connection"))?.unwrap();
+                        connection.local_free = false;
+                        connection.revision += 1;
+                        tx.router().put_connection(&connection, Some(1))?;
+                        let tariffs = ["Input", "Output"]
+                            .map(|kind| devworks_core::ports::usage::PublishedTariff {
+                                upstream_model_id: "native-metadata-source".into(),
+                                service_tier: "Standard".into(),
+                                context_lower_exclusive: None,
+                                context_upper_inclusive: None,
+                                modality: "Text".into(),
+                                charge_kind: kind.into(),
+                                cache_ttl_seconds: None,
+                                unit: "Token".into(),
+                                units: 1_000_000,
+                                amount_usd: if kind == "Input" {
+                                    "1".into()
+                                } else {
+                                    "2".into()
+                                },
+                                region: None,
+                                endpoint_profile: Some("CompatibleChat".into()),
+                            })
+                            .to_vec();
+                        tx.usage().put_price_override(
+                            &StoredPriceOverride {
+                                model_id: id("usage-model"),
+                                revision: 2,
+                                mode: "Set".into(),
+                                tariffs,
+                                updated_by: ActorId(id("user-a")),
+                                updated_at_ms: T0,
+                            },
+                            1,
+                        )
+                    });
+                }
+                let execution_root = if membership { "root-i" } else { "root-f" };
+                let destination = if membership {
+                    applied(&f.start(&f.user, "root-g", 1, 1));
+                    f.launch("destination-supervisor");
+                    Some(f.assign("root-g", "root-g", None, None))
+                } else {
+                    None
+                };
+                let app = if bounded_shutdown {
+                    let mut composed = composition_with(
+                        &f,
+                        None,
+                        Arc::new(FakePower::default()),
+                        Arc::new(Authority),
+                        Arc::new(devworks_adapters::process::NativeProcessHost),
+                    );
+                    composed.use_cases = UseCases::new().with_router(selected_router.clone());
+                    composed.config.shutdown_bound = Duration::from_millis(100);
+                    Some(boot(composed).await.unwrap())
+                } else {
+                    None
+                };
                 assert!(matches!(
-                    decision(&f.start(&f.user, "root-f", 1, 1)),
+                    decision(&f.start(&f.user, execution_root, 1, 1)),
                     DomainDecision::Applied { .. }
                 ));
                 let activation = f.launch("usage-supervisor");
-                let coordinator = f.assign("root-f", "root-f", None, None);
+                let coordinator = f.assign(execution_root, execution_root, None, None);
                 let assignment = if worker {
-                    f.assign("root-f", "task-f1", Some(&coordinator.id), None)
+                    f.assign(execution_root, "task-f1", Some(&coordinator.id), None)
                 } else {
                     coordinator
                 };
@@ -261,7 +330,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     )
                     .with_lineage(
                         Some(ProjectId(id("project-a"))),
-                        Some(RootId(id("root-f"))),
+                        Some(RootId(id(execution_root))),
                         None,
                     )
                     .with_session(assignment.session_id.clone());
@@ -277,7 +346,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     processing_region: None,
                     required_modalities: vec!["Text".into()],
                 };
-                let request = AttemptRequest {
+                let mut request = AttemptRequest {
                     admission_key: id("owned-admission"),
                     request_id: id("owned-request"),
                     actor_id: context.principal().clone(),
@@ -317,7 +386,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     unit_headroom: vec![],
                     expected_context_epoch: Some(0),
                     dispatch: Some(DispatchIdentity {
-                        root_id: RootId(id("root-f")),
+                        root_id: RootId(id(execution_root)),
                         execution_id: activation.id,
                         owner_epoch: activation.owner_epoch,
                         assignment_id: worker.then_some(assignment.id.clone()),
@@ -327,19 +396,40 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     }),
                     cache_diagnostics: vec![],
                 };
+                if physical_child {
+                    use devworks_core::ports::usage::PriceResolver;
+                    request.quote = read(&*f.store, |s| {
+                        devworks_core::services::prices::CatalogPriceResolver
+                            .quote(s, &request.query)
+                    });
+                    request.override_revision = 2;
+                    assert_eq!(
+                        request.quote.classification,
+                        CostClassification::ConfiguredEstimate
+                    );
+                }
                 let logical = RequestAdmission {
                     request_id: id("owned-request"),
                     purpose: Purpose::Conversation,
-                    session_id: Some(assignment.session_id),
+                    session_id: Some(assignment.session_id.clone()),
                     project_id: Some(ProjectId(id("project-a"))),
-                    root_id: Some(assignment.work_id),
+                    root_id: Some(assignment.work_id.clone()),
                     model_id: id("usage-model"),
                     connection_id: id("usage-connection"),
                     pin_id: None,
                     args_digest: "a".repeat(64),
                 };
-                let runtime =
-                    UsageRuntime::new(f.store.clone(), f.service.clone(), Some(router(&f)));
+                let runtime = app.as_ref().map_or_else(
+                    || {
+                        UsageRuntime::with_process_host(
+                            f.store.clone(),
+                            f.service.clone(),
+                            Some(selected_router),
+                            Arc::new(devworks_adapters::process::NativeProcessHost),
+                        )
+                    },
+                    |app| app.accounting().clone(),
+                );
                 let mut missing = request.clone();
                 missing.dispatch = None;
                 missing.request_id = id("missing-custody");
@@ -382,20 +472,134 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                         .await
                 });
                 start.await.unwrap();
+                if let Some(signal) = std::env::var_os("DW21_CAPTURE_OWNER") {
+                    let attempts = read(&*f.store, |s| {
+                        s.usage()
+                            .inference_attempts(&UsageAttemptFilter::default(), None, 64)
+                    });
+                    std::fs::write(
+                        signal,
+                        serde_json::to_vec(&(f.h.root.clone(), attempts[0].attempt_id.clone()))
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    std::future::pending::<()>().await;
+                }
                 assert!(!read(&*f.store, |s| s
                     .runs()
-                    .inference_quiescent(&RootId(id("root-f")))));
-                let stopped = f.stop(&f.user, "root-f");
-                assert!(
-                    matches!(decision(&stopped), DomainDecision::Accepted { .. }),
-                    "{stopped:?}"
-                );
+                    .inference_quiescent(&RootId(id(execution_root)))));
+                if let Some(app) = &app {
+                    let began = std::time::Instant::now();
+                    let report = app.shutdown().await;
+                    assert!(
+                        began.elapsed() < Duration::from_secs(2),
+                        "shutdown awaited foreign close"
+                    );
+                    close.await.unwrap();
+                    assert_eq!(report.unclosed_inference_attempts.len(), 1);
+                    let attempt_id = report.unclosed_inference_attempts[0].clone();
+                    assert!(matches!(report.into_result(), Err(StorageError::Busy)));
+                    let before = read(&*f.store, |s| {
+                        Ok((
+                            s.usage().inference_attempt(&attempt_id)?,
+                            s.usage().attempt_balance(&attempt_id)?,
+                        ))
+                    });
+                    assert!(!before.1.as_ref().unwrap().local_quiescent);
+                    let diagnostics = read(&*f.store, |s| {
+                        s.diagnostics().diagnostics(
+                            &DiagnosticFilter {
+                                component: Some("router.usage".into()),
+                                operation: Some("runtime.shutdown".into()),
+                                target_id: Some(attempt_id.clone()),
+                                ..Default::default()
+                            },
+                            64,
+                        )
+                    });
+                    assert!(!diagnostics.is_empty());
+                    assert_eq!(refused(&f.resume(&f.user, execution_root)).0, "Conflict");
+                    let owner = devworks_core::services::usage::accounting::snapshot(
+                        before.0.as_ref().unwrap(),
+                    )
+                    .unwrap()
+                    .host_process
+                    .unwrap();
+                    assert_eq!(owner.pid, std::process::id());
+                    assert!(!owner.birth.is_empty());
+                    {
+                        let (lock, changed) = &*gate;
+                        *lock.lock().unwrap() = true;
+                        changed.notify_all();
+                    }
+                    assert!(matches!(
+                        produce.await.unwrap(),
+                        Err(StorageError::Cancelled)
+                    ));
+                    let after = read(&*f.store, |s| {
+                        Ok((
+                            s.usage().inference_attempt(&attempt_id)?,
+                            s.usage().attempt_balance(&attempt_id)?,
+                        ))
+                    });
+                    assert_eq!(
+                        before, after,
+                        "fenced callback wrote after shutdown returned"
+                    );
+                    assert!(!read(&*f.store, |s| s
+                        .runs()
+                        .inference_quiescent(&RootId(id(execution_root)))));
+                    continue;
+                }
+                if membership {
+                    assert!(matches!(
+                        decision(&f.stop(&f.user, execution_root)),
+                        DomainDecision::Accepted { .. }
+                    ));
+                    let x = read(&*f.store, |s| {
+                        s.runs().live_activation(&RootId(id(execution_root)))
+                    })
+                    .unwrap();
+                    f.tx(move |service, tx| {
+                        service.finish_activation(
+                            tx,
+                            &x.id,
+                            x.owner_epoch,
+                            ActivationOutcome::Cancelled,
+                            None,
+                        )
+                    })
+                    .unwrap();
+                    applied(&f.set_feature(execution_root, Some("root-g")));
+                    f.tx(|service, tx| {
+                        devworks_core::services::work::membership::reconcile_project(
+                            tx,
+                            service,
+                            &ProjectId(id("project-a")),
+                        )
+                    });
+                    assert!(!read(&*f.store, |s| s
+                        .runs()
+                        .assignment_handoff_quiescent(&assignment.id)));
+                    assert_eq!(
+                        read(&*f.store, |s| s.runs().assignment(&assignment.id))
+                            .unwrap()
+                            .root_id,
+                        RootId(id(execution_root))
+                    );
+                } else {
+                    let stopped = f.stop(&f.user, execution_root);
+                    assert!(
+                        matches!(decision(&stopped), DomainDecision::Accepted { .. }),
+                        "{stopped:?}"
+                    );
+                }
                 runtime.tick().await.unwrap();
                 close.await.unwrap();
                 // Source has observed cancellation, but its actual local close is still blocked.
                 assert!(!read(&*f.store, |s| s
                     .runs()
-                    .inference_quiescent(&RootId(id("root-f")))));
+                    .inference_quiescent(&RootId(id(execution_root)))));
                 {
                     let (lock, changed) = &*gate;
                     *lock.lock().unwrap() = true;
@@ -407,17 +611,36 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                 assert!(balance.local_quiescent && balance.unknown_tail);
                 assert!(read(&*f.store, |s| s
                     .runs()
-                    .inference_quiescent(&RootId(id("root-f")))));
+                    .inference_quiescent(&RootId(id(execution_root)))));
                 let attempt = read(&*f.store, |s| {
                     s.usage().inference_attempt(&balance.attempt_id)
                 })
                 .unwrap();
                 assert_eq!(attempt.assignment_id.is_some(), worker);
-                assert_eq!(attempt.execution_root_id, Some(RootId(id("root-f"))));
+                assert_eq!(attempt.execution_root_id, Some(RootId(id(execution_root))));
                 assert_eq!(attempt.job_run_id, worker.then(|| id("feature-job-run")));
-                assert_eq!(attempt.feature_id, Some(id("root-f")));
-                let totals = read(&*f.store, |s| s.usage().feature_usage_totals(&id("root-f")));
-                assert_eq!(totals.attempts, 1);
+                assert_eq!(
+                    attempt.feature_id,
+                    (!membership).then(|| id(execution_root))
+                );
+                let totals = read(&*f.store, |s| {
+                    s.usage().feature_usage_totals(&id(execution_root))
+                });
+                assert_eq!(totals.attempts, if membership { 0 } else { 1 });
+                if let Some(destination) = destination {
+                    f.tx(|service, tx| {
+                        devworks_core::services::work::membership::reconcile_project(
+                            tx,
+                            service,
+                            &ProjectId(id("project-a")),
+                        )
+                    });
+                    let moved = read(&*f.store, |s| s.runs().assignment(&assignment.id)).unwrap();
+                    assert_eq!(moved.root_id, RootId(id("root-g")));
+                    assert_eq!(moved.parent_id, Some(destination.id));
+                    assert_eq!(moved.session_id, assignment.session_id);
+                    assert!(moved.generation > assignment.generation);
+                }
                 runtime.drain().await;
             }
         })
@@ -615,5 +838,89 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
             assert!(balance.local_quiescent && balance.unknown_tail);
             runtime.drain().await;
         }
+    }));
+}
+
+/// The old owner is a real process running the same managed metadata producer. A coherent
+/// SQLite clone represents a reopened/restored workspace while that owner is still alive.
+#[test]
+fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_exit() {
+    runtime().block_on(within("physical inference owner recovery", async {
+        use devworks_adapters::process::NativeProcessHost;
+        use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
+        use devworks_core::ports::{IdKind, IdSource};
+        struct FreshIds(AtomicUsize);
+        impl IdSource for FreshIds {
+            fn next_id(&self, kind: IdKind) -> Id {
+                id(&format!("recovery-{}-{kind:?}-{}", std::process::id(), self.0.fetch_add(1, Ordering::SeqCst)))
+            }
+        }
+        let h = Harness::new();
+        std::fs::create_dir_all(&h.root).unwrap();
+        let signal = h.root.join("owner-ready.json");
+        let mut spec = ProcessSpec::new(&[
+            std::env::current_exe().unwrap().to_string_lossy().into_owned(),
+            "--exact".into(),
+            "usage_tests::actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close".into(),
+            "--nocapture".into(),
+        ]).unwrap();
+        spec.env.push(("DW21_CAPTURE_OWNER".into(), signal.to_string_lossy().into_owned()));
+        let native = Arc::new(NativeProcessHost);
+        let mut child = native.spawn(&spec).unwrap();
+        let (original, attempt_id): (std::path::PathBuf, Id) = loop {
+            if let Ok(bytes) = std::fs::read(&signal)
+                && let Ok(ready) = serde_json::from_slice(&bytes) { break ready; }
+            assert!(!child.poll().unwrap().empty, "metadata owner exited before source start");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        let original_cleanup = original.clone();
+        struct ChildFiles(std::path::PathBuf);
+        impl Drop for ChildFiles { fn drop(&mut self) { let _=std::fs::remove_dir_all(&self.0); } }
+        let _files = ChildFiles(original_cleanup);
+        let connection = rusqlite::Connection::open(original.join("workspace.sqlite")).unwrap();
+        connection.execute("VACUUM INTO ?1", [h.root.join("workspace.sqlite").to_string_lossy().as_ref()]).unwrap();
+        drop(connection);
+        let ids = Arc::new(FreshIds(AtomicUsize::new(0)));
+        let store: Arc<dyn ApplicationStore> = Arc::new(SqliteStore::open(SqliteConfig::new(
+            h.root.clone(), h.clock(), ids.clone(), ActorId(id("host")),
+        )).unwrap());
+        let service = Arc::new(ControlService::with_scope(ids, Arc::new(ScriptedScope::new())));
+        let recovery_service = service.clone();
+        write(store.as_ref(), move |tx| recovery_service.recover_boot(tx, &NoLifecycleHooks)).unwrap();
+        let before = read(store.as_ref(), |s| s.usage().attempt_balance(&attempt_id)).unwrap();
+        assert_eq!(before.reserved_micro_usd, Some(30));
+        let attempt = read(store.as_ref(), |s| s.usage().inference_attempt(&attempt_id)).unwrap();
+        let admitted = devworks_core::services::usage::accounting::snapshot(&attempt).unwrap();
+        let owner = admitted.host_process.unwrap();
+        assert_eq!(owner.pid, child.identity().pid);
+        assert_eq!(owner.birth, child.identity().birth);
+        let identity = NativeIdentity { pid: owner.pid, birth: owner.birth, group: None };
+        assert_eq!(native.probe(&identity), Probe::Alive);
+        let host = UsageRuntime::with_process_host(store.clone(), service.clone(), None, native.clone());
+        let pass = host.tick().await.unwrap();
+        assert!(!pass.recovery_complete);
+        let live = read(store.as_ref(), |s| s.usage().attempt_balance(&attempt_id)).unwrap();
+        assert!(!live.local_quiescent);
+        assert_eq!(live.reserved_micro_usd, before.reserved_micro_usd);
+        assert!(!read(store.as_ref(), |s| s.runs().inference_quiescent(&RootId(id("root-f")))));
+        let holds = read(store.as_ref(), |s| s.runs().blockers(&BlockerFilter::Root(RootId(id("root-f"))), None, 64));
+        assert!(holds.iter().any(|b| b.state == BlockerState::Active && b.cause == HoldCause::RestartContinue));
+        let kill_result = child.kill();
+        // macOS may report an exiting group signal as EPERM after its root was killed.
+        // Only subsequent physical observations authorize retirement.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if child.poll().unwrap().empty { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap_or_else(|_| panic!("native owner did not exit: {kill_result:?}"));
+        assert_eq!(native.probe(&identity), Probe::Gone);
+        assert!(host.tick().await.unwrap().recovery_complete);
+        let retired = read(store.as_ref(), |s| s.usage().attempt_balance(&attempt_id)).unwrap();
+        assert!(retired.local_quiescent && retired.unknown_tail);
+        assert_eq!(retired.reserved_micro_usd, None);
+        assert!(read(store.as_ref(), |s| s.runs().inference_quiescent(&RootId(id("root-f")))));
+        assert_eq!(read(store.as_ref(), |s| s.runs().blockers(&BlockerFilter::Root(RootId(id("root-f"))), None, 64)), holds);
+        host.stop(); host.drain().await;
     }));
 }
