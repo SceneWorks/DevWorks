@@ -8,6 +8,8 @@ mod hierarchy;
 mod commands;
 mod operation;
 mod passages;
+mod paths;
+pub(crate) use paths::path_source;
 mod preparation;
 mod queries;
 
