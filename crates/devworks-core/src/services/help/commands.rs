@@ -4,8 +4,7 @@ use crate::gateway::AdmittedCommand;
 use crate::operations::{OperationInput, help as ops};
 use crate::ports::storage::*;
 use crate::ports::{AuthorityFence, CommandHandler, Decided, HandlerFailure, IdKind};
-use crate::protocol::records::OperationRef;
-use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::results::DomainDecision;
 use crate::protocol::{ActorId, DomainErrorCode, EventId, Id, OperationId, StoreId};
 use crate::services::sessions::{Failure, Refusal, decided};
 use serde::{Deserialize, Serialize};
@@ -61,17 +60,9 @@ impl HelpService {
             && let Some(operation) = tx.operations().operation(id)?
             && !is_terminal(operation.state)
         {
-            return Ok(Decided {
-                decision: DomainDecision::NoChange {
-                    result: OperationResult::HelpGenerateCapabilityDocs {
-                        value: OperationRef {
-                            operation_id: operation.id,
-                            state: operation.state,
-                        },
-                    },
-                },
-                operation_id: None,
-            });
+            // A second request has not completed merely because another generation is
+            // active. Keep its identity/cancellation ownership separate and admit no effect.
+            return Err(StorageError::Busy.into());
         }
         let operation = OperationId(tx.new_id(IdKind::Operation));
         let queue = tx.new_id(IdKind::QueueEntry);
