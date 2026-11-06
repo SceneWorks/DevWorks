@@ -86,6 +86,13 @@ impl UseCases {
         self
     }
 
+    pub fn with_prices(mut self, service: Arc<prices::PriceService>) -> Self {
+        for operation in prices::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

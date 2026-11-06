@@ -231,3 +231,5 @@ pub use runtime::{
     BootError, BootReport, CollectionPass, Composition, IndexComposition, PackageComposition,
     RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
 };
+
+pub mod prices;

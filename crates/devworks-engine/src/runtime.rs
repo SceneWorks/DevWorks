@@ -191,6 +191,8 @@ pub struct Composition {
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
+    pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
     /// Time between periodic artifact collection passes (one runs at boot and one after every
     /// applied `artifacts.delete` regardless). Each pass removes pending blob generations no
@@ -233,6 +235,7 @@ impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
         Self {
             dispatcher: DispatcherConfig::new(owner),
+            price_refresh: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -347,6 +350,9 @@ pub struct Runtime {
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
     resuming: Mutex<Option<JoinHandle<()>>>,
+    prices: Option<Arc<crate::prices::PriceSupervisor>>,
+    pricing: Mutex<Option<JoinHandle<()>>>,
+    price_service: Arc<devworks_core::services::prices::PriceService>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     notifying: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
@@ -491,6 +497,18 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         Some(p) => use_cases.with_packages(p.service.clone()),
         None => use_cases,
     };
+    let price_service = Arc::new(devworks_core::services::prices::PriceService::new(
+        ids.clone(),
+        clock.clone(),
+        config.price_refresh.is_some(),
+    ));
+    let prices = config.price_refresh.as_ref().map(|p| {
+        crate::prices::PriceSupervisor::new(store.clone(), price_service.clone(), p.source.clone())
+    });
+    if let Some(worker) = &prices {
+        consumers.push(worker.consumer());
+    }
+    let use_cases = use_cases.with_prices(price_service.clone());
     let work = Arc::new(
         WorkService::new(ids.clone(), runs.service.clone())
             .with_staged_plans(artifacts.clone())
@@ -802,6 +820,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         scheduler: OnceLock::new(),
         evals: evals.clone(),
         resumes: OnceLock::new(),
+        prices: prices.clone(),
         notifications: notifications.clone(),
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
@@ -824,6 +843,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
     let _ = admitter.resumes.set(Arc::downgrade(&resumes));
     let resuming = tokio::spawn(resumes.clone().run(config.approval_resume_interval));
+    let pricing = prices.as_ref().map(|worker| {
+        tokio::spawn(worker.clone().run(
+            config.price_refresh.as_ref().expect("composed").interval,
+            dispatcher.wakeup(),
+        ))
+    });
     Ok(Runtime {
         store,
         ids,
@@ -845,6 +870,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         approvals,
         resumes,
         resuming: Mutex::new(Some(resuming)),
+        prices,
+        pricing: Mutex::new(pricing),
+        price_service,
         notifications,
         notifying: Mutex::new(notifying),
         keep_awake,
@@ -1128,6 +1156,12 @@ impl Runtime {
             None => self.notification_permission(),
         }
     }
+    pub fn price_service(&self) -> &Arc<devworks_core::services::prices::PriceService> {
+        &self.price_service
+    }
+    pub fn price_refreshes(&self) -> Option<&Arc<crate::prices::PriceSupervisor>> {
+        self.prices.as_ref()
+    }
     pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
         &self.resumes
     }
@@ -1170,12 +1204,18 @@ impl Runtime {
         self.scheduler.stop();
         self.evals.stop();
         self.resumes.stop();
+        if let Some(worker) = &self.prices {
+            worker.stop();
+        }
         if let Some(worker) = &self.notifications {
             worker.stop();
         }
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
         // readmission or let its outbox CAS write after shutdown has returned.
         self.resumes.drain().await;
+        if let Some(worker) = &self.prices {
+            worker.drain().await;
+        }
         if let Some(worker) = &self.notifications {
             worker.drain().await;
         }
@@ -1218,6 +1258,7 @@ impl Runtime {
             &self.scheduling,
             &self.grading,
             &self.resuming,
+            &self.pricing,
             &self.notifying,
         ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
@@ -1280,6 +1321,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(worker) = &self.prices {
+            worker.stop();
+        }
         if let Some(worker) = &self.notifications {
             worker.stop();
         }
@@ -1386,6 +1430,9 @@ impl Drop for Runtime {
         self.stop();
         self.evals.close();
         self.resumes.close();
+        if let Some(worker) = &self.prices {
+            worker.close();
+        }
         if let Some(worker) = &self.notifications {
             worker.close();
         }
@@ -1417,6 +1464,7 @@ struct Admitter {
     scheduler: OnceLock<Weak<Scheduler>>,
     evals: Arc<EvalSupervisor>,
     resumes: OnceLock<Weak<ResumeDispatcher>>,
+    prices: Option<Arc<crate::prices::PriceSupervisor>>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
@@ -1476,6 +1524,11 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            if operation.starts_with("router.")
+                && let Some(worker) = &self.prices
+            {
+                worker.notify();
+            }
             if let Some(worker) = &self.notifications {
                 worker.notify();
             }
