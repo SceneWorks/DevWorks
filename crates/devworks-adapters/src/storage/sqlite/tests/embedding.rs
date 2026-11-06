@@ -215,7 +215,7 @@ fn artifact(
     Ok(ArtifactRef {
         artifact_id: id(name),
         version_id,
-        sha256: Digest::new(digest).unwrap(),
+        sha256: Digest::try_from(digest).unwrap(),
         byte_length: Counter::new(bytes.len() as i64).unwrap(),
         media_type: "application/octet-stream".into(),
     })
