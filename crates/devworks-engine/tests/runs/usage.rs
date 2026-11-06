@@ -219,15 +219,29 @@ impl OwnedInferenceSource for NeverOpened {
     }
 }
 
+struct PanickingSource;
+impl OwnedInferenceSource for PanickingSource {
+    fn start(&mut self, _: &StoredInferenceAttempt) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn next(&mut self, _: &Cancellation) -> Result<Option<InferenceFrame>, StorageError> {
+        panic!("scripted native metadata source failure")
+    }
+    fn close(&mut self) -> Result<(), StorageError> {
+        panic!("unwound source did not close")
+    }
+}
+
 #[test]
 fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() {
     runtime().block_on(async {
         within("managed inference closure", async {
-            for (worker, bounded_shutdown, membership) in [
-                (false, false, false),
-                (true, false, false),
-                (false, true, false),
-                (false, false, true),
+            for (worker, bounded_shutdown, membership, panic_source) in [
+                (false, false, false, false),
+                (true, false, false, false),
+                (false, true, false, false),
+                (false, false, true, false),
+                (false, false, false, true),
             ] {
                 let f = Fx::new();
                 let selected_router = router(&f);
@@ -430,6 +444,65 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     },
                     |app| app.accounting().clone(),
                 );
+                if panic_source {
+                    assert!(
+                        runtime
+                            .produce(
+                                context.clone(),
+                                logical.clone(),
+                                ReportCategory::Assistant,
+                                request.clone(),
+                                Box::new(PanickingSource)
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let rows = read(&*f.store, |s| {
+                        s.usage()
+                            .inference_attempts(&UsageAttemptFilter::default(), None, 64)
+                    });
+                    let balance = read(&*f.store, |s| {
+                        s.usage().attempt_balance(&rows[0].attempt_id)
+                    })
+                    .unwrap();
+                    assert!(!balance.local_quiescent && balance.unknown_tail);
+                    assert!(
+                        devworks_core::services::usage::accounting::summary(&balance)
+                            .unwrap()
+                            .custody_recovery_reason
+                            .is_some()
+                    );
+                    let mut retry = request;
+                    retry.request_id = id("same-turn-retry");
+                    retry.admission_key = id("same-turn-retry-key");
+                    let mut retry_logical = logical;
+                    retry_logical.request_id = retry.request_id.clone();
+                    assert!(matches!(
+                        runtime
+                            .produce(
+                                context,
+                                retry_logical,
+                                ReportCategory::Assistant,
+                                retry,
+                                Box::new(NeverOpened)
+                            )
+                            .await
+                            .unwrap(),
+                        DriveOutcome::Refused(
+                            devworks_core::services::usage::accounting::Admission::Fenced(_)
+                        )
+                    ));
+                    assert_eq!(
+                        read(&*f.store, |s| s
+                            .usage()
+                            .feature_usage_totals(&id(execution_root)))
+                        .attempts,
+                        1
+                    );
+                    runtime.stop();
+                    runtime.drain().await;
+                    continue;
+                }
                 let mut missing = request.clone();
                 missing.dispatch = None;
                 missing.request_id = id("missing-custody");

@@ -272,6 +272,32 @@ impl AttemptHost {
         Ok(DriveOutcome::Settled(balance))
     }
     /// Advisory cancellation for the runtime's independently polled owned transport registry.
+    /// A failed/panicking driver cannot certify physical closure. Persist that fact through
+    /// the same fence, so another call in the same managed turn cannot silently retry it.
+    pub fn retain_unclosed(&self, id: Id) -> Result<(), StorageError> {
+        self.write(move |tx| {
+            let Some(attempt) = tx.usage().inference_attempt(&id)? else {
+                return Ok(());
+            };
+            let Some(balance) = tx.usage().attempt_balance(&id)? else {
+                return Ok(());
+            };
+            if !balance.local_quiescent
+                && accounting::summary(&balance)?
+                    .custody_recovery_reason
+                    .is_none()
+            {
+                accounting::note_unclosed_owner(
+                    tx,
+                    &attempt,
+                    "owned inference driver ended without verified transport closure",
+                    true,
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn cancellation_required(&self, id: &Id) -> Result<bool, StorageError> {
         let attempt = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
             s.usage().inference_attempt(id)

@@ -256,6 +256,9 @@ impl UsageRuntime {
         if closed {
             self.fence.forget_closed(id);
         } else {
+            if let Some(host) = &self.host {
+                let _ = host.retain_unclosed(id.clone());
+            }
             self.uncertain
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
