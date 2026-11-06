@@ -4,7 +4,7 @@ use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
 use devworks_core::services::conventions::model;
 
-struct DirectNative(Arc<Runtime>);
+pub(super) struct DirectNative(pub(super) Arc<Runtime>);
 impl NativeJobDispatch for DirectNative {
     fn command(
         &self,
@@ -15,7 +15,7 @@ impl NativeJobDispatch for DirectNative {
         self.0.command(ctx, operation, raw)
     }
 }
-fn imported_body(app: &HelpApp, rt: &tokio::runtime::Runtime) -> Id {
+pub(super) fn imported_body(app: &HelpApp, rt: &tokio::runtime::Runtime) -> Id {
     let body = "# Native schedule\n\nRetain the actual source and scope.";
     let manifest = json!({"format":"devworks-convention","version":1,"slug":"native-schedule","title":"Native schedule","parentPath":[],"sortOrder":0,"lifecycle":"Active","applicability":[],"markdown":{"sha256":devworks_core::fingerprint::sha256_hex(body.as_bytes()),"byteLength":body.len().to_string(),"text":body},"resources":[]});
     let bytes = serde_json::to_vec(&manifest).unwrap();
@@ -195,5 +195,107 @@ fn scheduled_current_conventions_index_uses_real_running_job_and_fresh_scope_cap
         frame2["body"]["expectedRevision"]
     );
     assert_ne!(first.id, second.id);
+    rt.block_on(app.runtime.shutdown());
+}
+
+struct LostAcceptedAck {
+    runtime: Arc<Runtime>,
+    lost: AtomicBool,
+    frames: Mutex<Vec<(Vec<u8>, Id)>>,
+    receipts: Mutex<Vec<(Option<OperationId>, bool)>>,
+}
+impl NativeJobDispatch for LostAcceptedAck {
+    fn command(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+    ) -> devworks_core::gateway::CommandOutcome {
+        self.frames
+            .lock()
+            .unwrap()
+            .push((raw.to_vec(), ctx.invocation_id().clone()));
+        let reply = self.runtime.command(ctx, operation, raw)?;
+        if let CommandReply::Recorded {
+            receipt, replayed, ..
+        } = &reply
+        {
+            self.receipts
+                .lock()
+                .unwrap()
+                .push((receipt.operation_id.clone(), *replayed));
+        }
+        if self.lost.swap(false, Ordering::SeqCst) {
+            let frame: Value = serde_json::from_slice(raw).unwrap();
+            return Ok(serde_json::from_value(json!({"kind":"CommandStatusUnknown","protocol":PROTOCOL,"requestKey":frame["requestKey"],"correlationId":"lost-actual-index-ack"})).unwrap());
+        }
+        Ok(reply)
+    }
+}
+#[test]
+fn lost_accepted_convention_job_ack_replays_one_exact_source_operation() {
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let rt = runtime();
+    let app = boot_help(&rt, &h);
+    imported_body(&app, &rt);
+    let capability = app
+        .runtime
+        .jobs()
+        .catalog()
+        .capabilities()
+        .into_iter()
+        .find(|c| c.operation == "conventions.index")
+        .unwrap();
+    let job=app.create("Lost index acknowledgement",json!({"kind":"Manual"}),json!({"kind":"Native","capabilityId":capability.capability_id,"arguments":{"schema":capability.schema,"value":{}}}),true);
+    let native = Arc::new(LostAcceptedAck {
+        runtime: app.runtime.clone(),
+        lost: AtomicBool::new(true),
+        frames: Mutex::new(Vec::new()),
+        receipts: Mutex::new(Vec::new()),
+    });
+    let scheduler = devworks_engine::Scheduler::new(
+        app.store.clone(),
+        app.runtime.jobs().clone(),
+        native.clone(),
+        Arc::new(NoInferencePipeline),
+        app.runtime.processes().clone(),
+    );
+    value(app.command(
+        "jobs.run_now",
+        json!({"jobId":job,"expectedRevision":"1"}),
+        2,
+    ));
+    app.tick(&rt, &scheduler);
+    let run = app.settle(&rt, &scheduler, &job);
+    assert_eq!(run.status, "Succeeded", "{run:?}");
+    let frames = native.frames.lock().unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0], frames[1]);
+    drop(frames);
+    let receipts = native.receipts.lock().unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert!(!receipts[0].1 && receipts[1].1);
+    assert_eq!(receipts[0].0, receipts[1].0);
+    assert_eq!(receipts[0].0, run.inner_operation_id);
+    drop(receipts);
+    let operations = read(app.store.as_ref(), |s| {
+        s.operations().operations_for_capability(
+            "conventions.index",
+            &[OperationState::ObservedComplete],
+            None,
+            500,
+        )
+    });
+    assert_eq!(
+        operations
+            .iter()
+            .filter(
+                |op| op.payload["sourceContext"]["invocationContext"]["jobRun"] == json!(run.id)
+            )
+            .count(),
+        1
+    );
     rt.block_on(app.runtime.shutdown());
 }

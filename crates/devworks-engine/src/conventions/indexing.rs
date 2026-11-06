@@ -6,7 +6,9 @@ use crate::dispatch::{
 use devworks_core::{
     ports::storage::*,
     services::conventions::indexing::{
-        IndexService, commands::EFFECT_CONSUMER, publisher::IndexOutcome,
+        IndexService,
+        commands::{EFFECT_CONSUMER, JOB_KIND},
+        publisher::IndexOutcome,
     },
 };
 use std::sync::Arc;
@@ -39,6 +41,10 @@ impl Effects {
         let service = self.service.clone();
         let store = self.store.clone();
         Box::pin(async move {
+            // Only a captured lexical-only body job can prove no native request could
+            // have started. Paid/unknown tails keep their actual inference custody.
+            let lexical_only = operation.payload["kind"] == JOB_KIND
+                && operation.payload["embeddingSpace"].is_null();
             let token = Cancellation::new();
             let worker_token = token.clone();
             let delivery = serde_json::from_value::<devworks_core::protocol::Id>(
@@ -49,7 +55,27 @@ impl Effects {
             });
             loop {
                 if worker.is_finished() {
-                    return worker.await.map(outcome).unwrap_or_else(|_| {
+                    let result = worker.await;
+                    if lexical_only && matches!(&result, Ok(Err(StorageError::Cancelled))) {
+                        let store = store.clone();
+                        let delivery = delivery.as_ref().ok().cloned();
+                        let explicit = tokio::task::spawn_blocking(move || {
+                            read_snapshot(store.as_ref(), &ReadOptions::default(), |read| {
+                                match delivery {
+                                    Some(id) => Ok(read
+                                        .queue()
+                                        .entry(&id)?
+                                        .is_some_and(|e| e.cancel_requested)),
+                                    None => Ok(false),
+                                }
+                            })
+                        })
+                        .await;
+                        if matches!(explicit, Ok(Ok(true))) {
+                            return EffectResult::Failed("The lexical-only index was cancelled; no native request was selected.".into());
+                        }
+                    }
+                    return result.map(outcome).unwrap_or_else(|_| {
                         EffectResult::Unknown("Index worker stopped before acknowledgement".into())
                     });
                 }

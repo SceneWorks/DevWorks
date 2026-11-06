@@ -228,3 +228,6 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     ));
     rt.block_on(app.runtime.shutdown());
 }
+
+#[path = "conventions_cancel.rs"]
+mod conventions;
