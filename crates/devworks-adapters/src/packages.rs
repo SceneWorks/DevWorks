@@ -28,9 +28,12 @@
 //! path (no `..`, `.`, absolute, drive, backslash, control character, trailing dot or space, or
 //! Windows device name), no duplicate or case-aliased entry, no entry the manifest does not
 //! list, and every listed file present with its exact digest and length.
+use devworks_core::authority::destructive::{EntryKind, FilesystemResolver};
+use devworks_core::authority::reads::{ReadRequest, ReadRoot, VerifiedReader, VerifiedRewindFile};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::framing;
 use devworks_core::jcs;
+use devworks_core::ports::packages::VerifiedPackageFile;
 use devworks_core::ports::packages::{
     BundleFile, InspectError, InspectedBundle, InspectedContribution, InspectedDependency,
     InspectedFile, InspectedLimits, InspectedRuntime, InspectedTarget, Inspection,
@@ -43,8 +46,9 @@ use devworks_core::ports::packages::{
 use devworks_extension_protocol::package::{Contribution, PackageManifest, PermissionRequest};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -547,62 +551,219 @@ impl NativePackageFiles {
             && digest.len() == 64
             && digest.bytes().all(|b| b.is_ascii_hexdigit())
     }
-    fn check(&self, dir: &Path, expected: &[InspectedFile]) -> Result<(), PackageFileError> {
-        let meta = std::fs::symlink_metadata(dir)
-            .map_err(|_| PackageFileError::Missing(dir.display().to_string()))?;
-        if !meta.is_dir() {
+    fn stopped(stopped: &mut dyn FnMut() -> bool) -> Result<(), PackageFileError> {
+        if stopped() {
+            Err(PackageFileError::Io(
+                "package verification interrupted".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    fn read_root(&self, dir: &Path) -> Result<ReadRoot, PackageFileError> {
+        let location = dir
+            .to_str()
+            .ok_or_else(|| Self::io("unsupported install path"))?;
+        let resolved = crate::fs::NativeFilesystem::new()
+            .resolve(location, None)
+            .map_err(|_| PackageFileError::Missing("installed package directory".into()))?;
+        if resolved.entry_kind != EntryKind::Directory
+            || resolved
+                .linked_ancestors
+                .iter()
+                .any(|p| p.starts_with(&self.root))
+        {
             return Err(PackageFileError::Mismatch(
-                "the install location is not a directory".into(),
+                "installed package directory changed".into(),
             ));
         }
-        let mut want: BTreeSet<PathBuf> = BTreeSet::new();
-        for f in expected {
-            if !safe_path(&f.path) {
-                return Err(PackageFileError::Mismatch(format!(
-                    "unsafe path {:?}",
-                    f.path
-                )));
-            }
-            let p = dir.join(&f.path);
-            let m = std::fs::symlink_metadata(&p)
-                .map_err(|_| PackageFileError::Missing(f.path.clone()))?;
-            if !m.is_file() {
-                return Err(PackageFileError::Mismatch(format!(
-                    "{:?} is not a regular file",
-                    f.path
-                )));
-            }
-            let bytes = std::fs::read(&p).map_err(Self::io)?;
-            if bytes.len() as u64 != f.byte_length || sha256_hex(&bytes) != f.sha256 {
-                return Err(PackageFileError::Mismatch(format!(
-                    "{:?} was modified",
-                    f.path
-                )));
-            }
-            want.insert(p);
+        Ok(ReadRoot {
+            location: resolved.entry.path,
+            identity: resolved.entry.identity,
+        })
+    }
+    fn opened(
+        root: &ReadRoot,
+        file: &InspectedFile,
+    ) -> Result<VerifiedRewindFile, PackageFileError> {
+        if !safe_path(&file.path) || file.byte_length > MAX_BUNDLE_BYTES {
+            return Err(PackageFileError::Mismatch("invalid package file".into()));
         }
-        // Nothing else may have been added to a verified version.
-        let mut stack = vec![dir.to_path_buf()];
-        while let Some(d) = stack.pop() {
-            for e in std::fs::read_dir(&d).map_err(Self::io)? {
-                let e = e.map_err(Self::io)?;
-                let t = e.file_type().map_err(Self::io)?;
-                let p = e.path();
-                if t.is_dir() {
-                    stack.push(p);
-                } else if !want.contains(&p) {
+        crate::fs::NativeFilesystem::new()
+            .open_rewindable(&ReadRequest {
+                root,
+                relative: &file.path,
+                max_bytes: file.byte_length,
+                allow_hard_links: false,
+            })
+            .map_err(|_| {
+                PackageFileError::Mismatch(format!("{:?} is unavailable or changed", file.path))
+            })
+    }
+    fn hash(
+        reader: &mut dyn Read,
+        file: &InspectedFile,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<(), PackageFileError> {
+        let mut buffer = [0u8; 64 * 1024];
+        let mut hash = Sha256::new();
+        let mut bytes = 0u64;
+        loop {
+            Self::stopped(stopped)?;
+            let n = reader.read(&mut buffer).map_err(Self::io)?;
+            if n == 0 {
+                break;
+            }
+            bytes = bytes.saturating_add(n as u64);
+            if bytes > file.byte_length {
+                return Err(PackageFileError::Mismatch(format!(
+                    "{:?} length changed",
+                    file.path
+                )));
+            }
+            hash.update(&buffer[..n]);
+        }
+        Self::stopped(stopped)?;
+        if bytes != file.byte_length || hex(hash.finalize().as_slice()) != file.sha256 {
+            return Err(PackageFileError::Mismatch(format!(
+                "{:?} was modified",
+                file.path
+            )));
+        }
+        Ok(())
+    }
+    fn check(&self, dir: &Path, expected: &[InspectedFile]) -> Result<(), PackageFileError> {
+        let root = self.read_root(dir)?;
+        self.check_open(&root, expected, None, &mut || false)
+    }
+    fn check_open(
+        &self,
+        root: &ReadRoot,
+        expected: &[InspectedFile],
+        already_hashed: Option<&str>,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<(), PackageFileError> {
+        if expected.len() > MAX_FILES {
+            return Err(PackageFileError::Mismatch(
+                "invalid package file count".into(),
+            ));
+        }
+        let mut want = BTreeSet::new();
+        let mut directories = BTreeSet::new();
+        directories.insert(root.location.clone());
+        let mut total = 0u64;
+        for file in expected {
+            Self::stopped(stopped)?;
+            total = total
+                .checked_add(file.byte_length)
+                .filter(|total| *total <= MAX_BUNDLE_BYTES)
+                .ok_or_else(|| PackageFileError::Mismatch("invalid package byte count".into()))?;
+            if !safe_path(&file.path) || !want.insert(root.location.join(&file.path)) {
+                return Err(PackageFileError::Mismatch(
+                    "invalid package file list".into(),
+                ));
+            }
+            let mut parent = root.location.join(&file.path);
+            parent.pop();
+            while parent.starts_with(&root.location) {
+                directories.insert(parent.clone());
+                if parent == root.location {
+                    break;
+                }
+                parent.pop();
+            }
+            if already_hashed != Some(file.path.as_str()) {
+                let mut opened = Self::opened(root, file)?;
+                Self::hash(&mut opened.reader, file, stopped)?;
+            }
+        }
+        // Extra entries and all links are refused. Only manifest-declared ancestor directories
+        // are traversed, so added empty directory trees cannot turn verification unbounded.
+        let mut stack = vec![root.location.clone()];
+        while let Some(directory) = stack.pop() {
+            Self::stopped(stopped)?;
+            let now = self.read_root(&directory)?;
+            if now.location != directory {
+                return Err(PackageFileError::Mismatch(
+                    "package directory changed".into(),
+                ));
+            }
+            for entry in std::fs::read_dir(&directory).map_err(Self::io)? {
+                Self::stopped(stopped)?;
+                let entry = entry.map_err(Self::io)?;
+                let kind = entry.file_type().map_err(Self::io)?;
+                let path = entry.path();
+                if kind.is_dir() && directories.contains(&path) {
+                    stack.push(path);
+                } else if !kind.is_file() || !want.contains(&path) {
                     return Err(PackageFileError::Mismatch(format!(
                         "unexpected entry {}",
-                        p.strip_prefix(dir).unwrap_or(&p).display()
+                        path.strip_prefix(&root.location).unwrap_or(&path).display()
                     )));
                 }
             }
         }
-        Ok(())
+        let now = self.read_root(&root.location)?;
+        if now.identity != root.identity {
+            return Err(PackageFileError::Mismatch(
+                "installed package directory changed".into(),
+            ));
+        }
+        Self::stopped(stopped)
     }
 }
 
 impl PackageFiles for NativePackageFiles {
+    fn open_verified(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        expected: &InspectedFile,
+        all_files: &[InspectedFile],
+        max: u64,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<VerifiedPackageFile, PackageFileError> {
+        Self::stopped(stopped)?;
+        if !Self::valid_name(package_id, manifest_digest)
+            || expected.byte_length > max
+            || !all_files.iter().any(|file| file == expected)
+        {
+            return Err(PackageFileError::Mismatch(
+                "invalid installed package file identity".into(),
+            ));
+        }
+        let root = self.read_root(&self.directory(package_id, manifest_digest))?;
+        let mut opened = Self::opened(&root, expected)?;
+        Self::hash(&mut opened.reader, expected, stopped)?;
+        self.check_open(&root, all_files, Some(&expected.path), stopped)?;
+        let current = crate::fs::NativeFilesystem::new()
+            .resolve(
+                root.location
+                    .join(&expected.path)
+                    .to_str()
+                    .ok_or_else(|| Self::io("unsupported installed path"))?,
+                None,
+            )
+            .map_err(|_| PackageFileError::Mismatch("installed package file changed".into()))?;
+        if current.entry_kind != EntryKind::File
+            || current.entry.identity != opened.identity
+            || current
+                .linked_ancestors
+                .iter()
+                .any(|p| p.starts_with(&root.location))
+        {
+            return Err(PackageFileError::Mismatch(
+                "installed package file changed".into(),
+            ));
+        }
+        Self::stopped(stopped)?;
+        opened.reader.rewind().map_err(Self::io)?;
+        Ok(VerifiedPackageFile {
+            reader: opened.reader,
+            sha256: expected.sha256.clone(),
+            byte_length: expected.byte_length,
+        })
+    }
     fn read_verified(
         &self,
         package_id: &str,

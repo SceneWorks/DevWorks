@@ -243,8 +243,33 @@ impl std::fmt::Display for PackageFileError {
     }
 }
 
+/// Exact manifest-bound bytes from the same verified open file that was hashed. A caller
+/// must still hash each consumed pass before publishing: an open handle prevents path swaps,
+/// not in-place writes. No caller authority or package activation is carried by this stream.
+pub struct VerifiedPackageFile {
+    pub reader: Box<dyn crate::authority::reads::RewindRead>,
+    pub sha256: String,
+    pub byte_length: u64,
+}
+
 /// Content-addressed install directories `<root>/<package>/<manifest digest>/`.
 pub trait PackageFiles: Send + Sync {
+    /// Verifies every installed file in bounded chunks, checking `stopped` throughout, then
+    /// returns the selected file's SAME verified handle rewound. No buffered fallback.
+    fn open_verified(
+        &self,
+        _package_id: &str,
+        _manifest_digest: &str,
+        _expected: &InspectedFile,
+        _all_files: &[InspectedFile],
+        _max: u64,
+        _stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<VerifiedPackageFile, PackageFileError> {
+        Err(PackageFileError::Io(
+            "verified package streams are unavailable".into(),
+        ))
+    }
+
     /// Reads one manifest-declared regular file without following links, bounded by `max`.
     /// The returned bytes must match the exact installed inspection's digest and size.
     fn read_verified(

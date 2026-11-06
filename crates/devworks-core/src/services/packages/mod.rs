@@ -161,6 +161,8 @@ pub mod index;
 pub mod policy;
 mod review_evidence;
 pub mod view;
+/// A manifest-bound verified guide stream; no package activation or caller authority is added.
+pub use crate::ports::packages::VerifiedPackageFile as VerifiedHelp;
 
 /// The operations [`PackageService`] is registered for.
 pub const OPERATIONS: [&str; 10] = [
@@ -1810,6 +1812,55 @@ impl PackageService {
             row.availability_reason
                 .map_or(String::new(), |reason| reason.0),
         ))
+    }
+
+    /// Opens this exact installed guide without materializing its body. Compatibility and
+    /// enablement do not prevent reading documentation; no package process is activated.
+    pub fn open_verified_help(
+        &self,
+        version: &StoredPackageVersion,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<VerifiedHelp, crate::ports::packages::PackageFileError> {
+        use crate::ports::packages::{Inspection, MAX_BUNDLE_BYTES, PackageFileError};
+        if stopped() {
+            return Err(PackageFileError::Io(
+                "package verification interrupted".into(),
+            ));
+        }
+        let inspection: Inspection =
+            serde_json::from_value(version.inspection.clone()).map_err(|_| {
+                PackageFileError::Mismatch("installed package inspection is invalid".into())
+            })?;
+        if version.phase != VersionPhase::Installed
+            || inspection.package_id != version.package_id
+            || inspection.version != version.version
+            || inspection.manifest_digest != version.manifest_digest
+            || inspection.bundle_digest != version.bundle_digest
+        {
+            return Err(PackageFileError::Mismatch(
+                "installed package identity changed".into(),
+            ));
+        }
+        let guide = inspection
+            .files
+            .iter()
+            .find(|file| file.path == inspection.help_file)
+            .ok_or_else(|| {
+                PackageFileError::Missing("the installed manifest declares no guide file".into())
+            })?;
+        if guide.byte_length == 0 || guide.byte_length > MAX_BUNDLE_BYTES {
+            return Err(PackageFileError::Mismatch(
+                "package guide is empty or exceeds the bundle bound".into(),
+            ));
+        }
+        self.files.open_verified(
+            &version.package_id,
+            &version.manifest_digest,
+            guide,
+            &inspection.files,
+            MAX_BUNDLE_BYTES,
+            stopped,
+        )
     }
 
     /// Reads the guide of this exact installed inspection through the package file owner.
