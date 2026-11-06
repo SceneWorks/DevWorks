@@ -760,3 +760,6 @@ fn historical_body_never_borrows_new_body_index_but_unchanged_body_revisions_sha
     assert_eq!(current.source_revision.unwrap().get(), 2);
     assert!(current.indexed_chunks.unwrap().get() > 0);
 }
+
+#[path = "convention_publisher/controls.rs"]
+mod controls;
