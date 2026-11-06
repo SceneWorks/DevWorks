@@ -190,4 +190,20 @@
 <h2 id="anthropic-profile-clarification-2-november-2026">Anthropic profile clarification 2 November 2026</h2>
 <p>AD72 retains both <code>AnthropicMessages</code> and <code>ClaudeSubscriptionMessages</code>. <code>RouterConfigAction::SubscriptionRisk</code> requests acceptance/revocation for the current connection revision and exact notice digest. Host-authenticated human interaction, the current notice/profile/account binding and fresh eligibility remain mandatory; setting <code>accepted=true</code> in agent JSON cannot enable the connection. The host derives <code>ConnectionRecord.subscriptionRiskAccepted</code> and <code>riskNoticeSha256</code>. API-key access is separately configured and priced. Both remain routed through the shared native authority/accounting boundary. No public operation is added and the catalog remains 347.</p>
 <p>The baseline review rechecks 1,036 combined messages, including 714 domain fixtures and 49 negative cases, after the Anthropic profile/risk action and Helix engine removal. <a href="validation/architecture-gates/schema-model-results.json">Current evidence</a> supersedes the original checkpoint counts for the current schema bytes; actual host human-authority enforcement remains implementation acceptance.</p>
+<h2 id="exact-graph-revision-3">Exact graph revision 3</h2>
+<p>The existing twenty graph/repository-node operations retain their revision-1 envelopes and
+byte-exact schemas. Revision 3 adds closed typed name/file/line selectors, graph-specific
+<code>current:true</code> view selection, and rich result alternatives for search, nodes, relationships,
+architecture, overview, impact, lineage, source, dependencies, schema and scope lifecycle.
+Current means the actual host worktree mapping; missing views never select Published implicitly.
+Every returned endpoint carries repository/unit/node identity and belongs to the exact resolved
+view set. Source-less nodes remain inspectable without invented citations. Canonical unit keys
+include directory <code>/</code>/<code>/src</code> identities; source locations use relative files. Trust compares the
+actual opaque unit content identity or a known captured SHA-256 plus exact view and trust revisions.
+Bounded verbatim source and property fragments preserve offsets, including long lines, empty
+files and NUL source characters; continuation never silently truncates the logical request.
+The native reader and schemas reject partial mixed selector groups and present-null choices.
+Legacy projection uses actual representable source/artifact references, otherwise refuses.
+<a href="validation/graph-contracts/README.md">Field table and qualification</a> distinguish contract proof
+from GraphService, storage, UI and platform acceptance.</p>
 <footer class="footer">All catalog operation inputs/results have candidates. Schema/native DTO checks are not production authority, retained behavioral parity, SDK or platform acceptance.</footer></main></body></html>

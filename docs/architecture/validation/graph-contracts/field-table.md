@@ -1,6 +1,6 @@
 # Revision-3 graph field table
 
-Generated from canonical Code* authoring types.
+Generated from canonical Code* authoring types. GraphUnitKey and GraphText are checked support scalars.
 
 ## CodeSearchMode
 
@@ -236,6 +236,10 @@ Values: NodeWindow, WholeFile.
 | --- | --- |
 | `repositories` | `Rows<CodeOverviewRepository>` |
 | `dependencies` | `Rows<CodeRepositoryLink>` |
+| `stamp` | `ReadStamp` |
+| `graph_coverage` | `Coverage` |
+| `unavailable_reason` | `?Label` |
+| `graph_totals` | `?CodeOverviewTotals` |
 
 ## CodeHotspot
 
@@ -388,10 +392,10 @@ Values: Critical, High, Medium, Low, None.
 | --- | --- |
 | `status` | `Label` |
 | `manifest` | `?Content` |
-| `group_count` | `Counter` |
-| `semantic_groups` | `Counter` |
-| `fallback_groups` | `Counter` |
-| `skipped_groups` | `Counter` |
+| `group_count` | `?Counter` |
+| `semantic_groups` | `?Counter` |
+| `fallback_groups` | `?Counter` |
+| `skipped_groups` | `?Counter` |
 | `tree_sitter_groups` | `Rows<CodeSemanticGroup>` |
 
 ## CodeDependencies
@@ -420,6 +424,9 @@ Values: Critical, High, Medium, Low, None.
 | `properties` | `Rows<CodeSchemaProperty>` |
 | `notes` | `Rows<Content>` |
 | `artifact` | `?ArtifactRef` |
+| `origin` | `CodeSchemaOrigin` |
+| `stamp` | `ReadStamp` |
+| `unavailable_reason` | `?Label` |
 
 ## CodeRepositoryStatus
 
@@ -440,4 +447,15 @@ Values: Critical, High, Medium, Low, None.
 | `current` | `bool` |
 | `unavailable_reason` | `?Label` |
 | `repositories` | `Rows<CodeRepositoryStatus>` |
+
+## CodeSchemaOrigin
+
+Values: Declared, Observed.
+
+## CodeOverviewTotals
+
+| Field | Type |
+| --- | --- |
+| `node_count` | `Counter` |
+| `edge_count` | `Counter` |
 

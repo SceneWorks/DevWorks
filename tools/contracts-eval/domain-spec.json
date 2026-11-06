@@ -4891,7 +4891,15 @@
       "kind": "record",
       "fields": {
         "repositories": "Rows<CodeOverviewRepository>",
-        "dependencies": "Rows<CodeRepositoryLink>"
+        "dependencies": "Rows<CodeRepositoryLink>",
+        "stamp": "ReadStamp",
+        "graph_coverage": "Coverage",
+        "unavailable_reason": "?Label",
+        "graph_totals": "?CodeOverviewTotals"
+      },
+      "since": {
+        "unavailable_reason": 3,
+        "graph_totals": 3
       }
     },
     "CodeHotspot": {
@@ -5117,10 +5125,14 @@
         "edge_kinds": "Rows<Label>",
         "properties": "Rows<CodeSchemaProperty>",
         "notes": "Rows<Content>",
-        "artifact": "?ArtifactRef"
+        "artifact": "?ArtifactRef",
+        "origin": "CodeSchemaOrigin",
+        "stamp": "ReadStamp",
+        "unavailable_reason": "?Label"
       },
       "since": {
-        "artifact": 3
+        "artifact": 3,
+        "unavailable_reason": 3
       }
     },
     "CodeRepositoryStatus": {
@@ -5270,6 +5282,20 @@
       "revision": 3,
       "projection": "help_page",
       "earlierName": "Page"
+    },
+    "CodeSchemaOrigin": {
+      "kind": "enum",
+      "values": [
+        "Declared",
+        "Observed"
+      ]
+    },
+    "CodeOverviewTotals": {
+      "kind": "record",
+      "fields": {
+        "node_count": "Counter",
+        "edge_count": "Counter"
+      }
     }
   },
   "operations": {

@@ -1,0 +1,652 @@
+{
+  "frozenRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "operations": [
+    {
+      "operation": "code.search",
+      "retainedBehavior": "Ranked graph patterns (% wildcard) retain exact-first order, trust reordering only for wildcard searches, visible DoNotTrust nodes, neutral changed-overlay file trust and alphabetical ties. Node-list search retains repository/label/pagination; unified blank query returns empty, capped repository/node candidates combine exact-first then repositories before nodes.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/NodesController.cs:NodesController.Search:HttpGet(\"search\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/NodesController.cs",
+            "startLine": 65,
+            "endLine": 79,
+            "spanSha256": "abb0f63706f27f74759399eb64a320dafd829c2441cb5561614ceceaeddbfd83"
+          }
+        },
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/SearchController.cs:SearchController.Search:HttpGet",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/SearchController.cs",
+            "startLine": 12,
+            "endLine": 19,
+            "spanSha256": "0411de38adfc532f377f738feb14740c7a722dee2f1da747b7e0896845c478be"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:search_graph",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 348,
+            "endLine": 360,
+            "spanSha256": "e4f92bcde21486d02e2bb44e18ad8bfb6c3345d5ae232ed4f89779ecf7e5658a"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:codegraph_search",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 26,
+            "endLine": 49,
+            "spanSha256": "25378fef6203490d7f093696f7b79ccbfeb13e7465ff2a15eb692549aa952d78"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:search_graph",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 10,
+            "endLine": 20,
+            "spanSha256": "fdd6f32e17160d74537a1bb2ec2e3fa733bf325a60a0cd9ac303e2d63d3a89d0"
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:15",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 15,
+            "endLine": 15
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:19",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 19,
+            "endLine": 19
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:23",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 23,
+            "endLine": 23
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:39",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 39,
+            "endLine": 39
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:43",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 43,
+            "endLine": 43
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:47",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 47,
+            "endLine": 47
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:75",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 75,
+            "endLine": 75
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:79",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 79,
+            "endLine": 79
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.architecture",
+      "retainedBehavior": "Full selected-repository node/package counts are independent of listed rows: 10 hotspots, 10 supertypes, 25 packages; preserve summary/confidence, cross-repository dependencies and per-ecosystem counts.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_architecture",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 625,
+            "endLine": 642,
+            "spanSha256": "4f527fb387e3a5965dbcab60e14ea12952b8170ca00dbe384a9529b00c61c9ec"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:repository_report",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 127,
+            "endLine": 156,
+            "spanSha256": "290a5581e4d9f7c9782950d2579fdcb18f471e114c3c31ad1265ca97dfaf0585"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:get_architecture",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 90,
+            "endLine": 97,
+            "spanSha256": "db6acf3b98c699727b083c02e952dbf9bb9ba6d6af5110778404bd00f9d673cc"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.dependency",
+      "retainedBehavior": "Bounded typed directional relationship traversal over the exact composed visible view; current edges carry actual producing/endpoint unit identity and confidence/resolution.",
+      "sourceEntries": [],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.impact",
+      "retainedBehavior": "Select node ID or retained name/qualified-name target; preserve changed/affected rows, risk factors/buckets, cross-repository and low-confidence counts. Source depth clamps1..5.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/RepositoriesController.cs:RepositoriesController.Impact:HttpGet(\"{name}/impact\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/RepositoriesController.cs",
+            "startLine": 115,
+            "endLine": 131,
+            "spanSha256": "88238ee4f21699591153ac057106f4cd3aecffb1e4872fefa70c64e7ba394f99"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:analyze_impact",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 993,
+            "endLine": 1009,
+            "spanSha256": "4c70a96eae5eff114da94fa70f7b446a1df61e89346c36322dc565b894dd5df5"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_trace",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 71,
+            "endLine": 97,
+            "spanSha256": "4c5479d5dfc232bcd3a8d949e09fac7ee7513d49bd365023d28bcaf6c7cf2412"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.source",
+      "retainedBehavior": "Node source supports whole-file HTTP behavior and MCP window: 5 lines before/after the node, full file when <=200 lines. Preserve language, highlighted node range, exact captured raw SHA and source revision; page bytes including long lines and NUL.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/NodesController.cs:NodesController.Source:HttpGet(\"{id:long}/source\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/NodesController.cs",
+            "startLine": 45,
+            "endLine": 54,
+            "spanSha256": "9d0adc4fbc3ccba96e1c53deb863b5629886e193395c3b20f4f04a4f65f34933"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:read_node_source",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 835,
+            "endLine": 886,
+            "spanSha256": "61e8171d6b0242514754f6b35df354c1caf603f3ebc8c00b3ea2bbb7716ccaf5"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_source",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 99,
+            "endLine": 125,
+            "spanSha256": "1a1ab92ab29b3a83fa15997c7edf8133e70acdc5e1e41080bbd0171f69f67c69"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:read_node_source",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 124,
+            "endLine": 131,
+            "spanSha256": "8afb1187656bbbc6230bcdbdd3d6d0a83af8335534ead3b8f3c9c02858122edb"
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:15",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 15,
+            "endLine": 15
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:19",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 19,
+            "endLine": 19
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:23",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 23,
+            "endLine": 23
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:39",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 39,
+            "endLine": 39
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:43",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 43,
+            "endLine": 43
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:47",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 47,
+            "endLine": 47
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:75",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 75,
+            "endLine": 75
+          }
+        },
+        {
+          "id": "ui:CodeGraphWeb/src/app/app.routes.ts:79",
+          "source": {
+            "path": "CodeGraphWeb/src/app/app.routes.ts",
+            "startLine": 79,
+            "endLine": 79
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.traverse",
+      "retainedBehavior": "Bound limits, partial work/deadline/cancellation and visible endpoints before graph expansion; do not substitute another view.",
+      "sourceEntries": [],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.graph_scope_status",
+      "retainedBehavior": "Reuse actual freshness, language/semantic coverage and complete overlay states. Missing current mapping has no fabricated pin or main fallback.",
+      "sourceEntries": [],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.overview",
+      "retainedBehavior": "Repository metadata nodes and cross-repository relationships aggregated per repository pair/type. Source overview is global; native scope filters precede aggregation.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/GraphController.cs:GraphController.Overview:HttpGet(\"overview\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/GraphController.cs",
+            "startLine": 12,
+            "endLine": 16,
+            "spanSha256": "354c909ab9e249d4dd7604e4107ec08f708fa4a48707f7a9e289381c87ab97a7"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.nodes_by_file",
+      "retainedBehavior": "Optional containing line; candidate cap200, separator alternatives then filename fallback. Smallest containing span wins; exact frozen tie comparator is descending(Method0/Class1/Other2), then File/first-node fallback.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/NodesController.cs:NodesController.ByFile:HttpGet(\"by-file\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/NodesController.cs",
+            "startLine": 15,
+            "endLine": 30,
+            "spanSha256": "eb5f1324f639fb27cb51a5e455e80e3d8d2f63ba6d831a633edb653563f2de59"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.node_detail",
+      "retainedBehavior": "Qualified name, properties, DoNotTrust, analysis confidence, source span, incoming/outgoing typed neighbors and cross-repository details; actual overlay node IDs carry no invented baseline analysis.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/NodesController.cs:NodesController.Detail:HttpGet(\"{id:long}\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/NodesController.cs",
+            "startLine": 33,
+            "endLine": 42,
+            "spanSha256": "c4d9c9d27e0829f08498232d9af6e40c304fef61397c2ddc457204f4f4e54781"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.set_trust",
+      "retainedBehavior": "Retain trusted inverse of source DoNotTrust. Current CAS binds actual unit identity, content witness, view digest and trust revision; opaque Git/directory identities are not mislabeled SHA256.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/NodesController.cs:NodesController.SetDoNotTrust:HttpPut(\"{id:long}/do-not-trust\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/NodesController.cs",
+            "startLine": 57,
+            "endLine": 62,
+            "spanSha256": "c090127921ca1c88c506d1779573fe351f3b0fad80bacd25c52294924298c7c5"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.file_impact",
+      "retainedBehavior": "Exact case-sensitive file matching; retain found/language/languageIndexed distinction even when no nodes, risk counts, unmapped edges and package-level cross-repository dependents.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/RepositoriesController.cs:RepositoriesController.FileImpact:HttpGet(\"{name}/impact/file\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/RepositoriesController.cs",
+            "startLine": 134,
+            "endLine": 150,
+            "spanSha256": "46dedf49fcc02ae3eb6e8863b0a443485d476e6f424a5761f00f13a8067caa1d"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:analyze_impact_file",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 1029,
+            "endLine": 1130,
+            "spanSha256": "765fbaa1ad89a37e51f709c49f694813741b9ef07c5a219bcac93c0da7220577"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.graph_schema",
+      "retainedBehavior": "Retain actual node/edge/property descriptions, Rust/Swift provenance/fallback/package/linking metadata and inline readability; do not require artifact tools for the typed current view.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_graph_schema",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 127,
+            "endLine": 207,
+            "spanSha256": "65d3d0fd2833ef1170af0280b17b0973c5eaeeba7744a71afb118c7bca81c896"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:codegraph_search",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 26,
+            "endLine": 49,
+            "spanSha256": "25378fef6203490d7f093696f7b79ccbfeb13e7465ff2a15eb692549aa952d78"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:get_graph_schema",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 145,
+            "endLine": 148,
+            "spanSha256": "ddfbeab77ade99558afed0ae70fa5b3eb856dbbc2e2128e5a0c9b724e8191105"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.call_path",
+      "retainedBehavior": "Function-name start selects Method/Function preferentially then first candidate; inbound/outbound/both defaultboth and depth3; CALLS+HTTP_CALLS, ordered depth/parent entries.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:trace_call_path",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 452,
+            "endLine": 496,
+            "spanSha256": "2004474f240e5585a384949211bfc6c420533fa6ae45837f5bb2b8494c5cf656"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_trace",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 71,
+            "endLine": 97,
+            "spanSha256": "4c5479d5dfc232bcd3a8d949e09fac7ee7513d49bd365023d28bcaf6c7cf2412"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:trace_call_path",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 48,
+            "endLine": 58,
+            "spanSha256": "62d5ceaaacb2ed40f34ea20ce0c32961ddf16c5d46e1eac54da599a935fc0c8b"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.data_lineage",
+      "retainedBehavior": "Prefer Class/Record/Interface model; retain producers, consumers, model identity and cross-repository relationships; USES_TYPE/PUBLISHES/CONSUMES/HTTP_CALLS source traversal depth4.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:trace_data_lineage",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 498,
+            "endLine": 553,
+            "spanSha256": "94e01dc9b15abc22988d225ba977c201c0b86937a32ad181a7a9d329e5ddae68"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_trace",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 71,
+            "endLine": 97,
+            "spanSha256": "4c5479d5dfc232bcd3a8d949e09fac7ee7513d49bd365023d28bcaf6c7cf2412"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:trace_data_lineage",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 60,
+            "endLine": 68,
+            "spanSha256": "a13b4e7210cbfe936ca7a0fd16d54a7a03a65d9bd19715be4c6530bd92b19321"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.consumers",
+      "retainedBehavior": "Name targets; inbound CONSUMES/CALLS/HTTP_CALLS/USES_TYPE/HANDLES, qualified-name dedup, relationship kind, low-confidence and unmapped-edge counts.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:find_consumers",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 555,
+            "endLine": 584,
+            "spanSha256": "25a1f94369dc79fe579a6e54317fc6391315d4ef873c157d9c87d06ddaaf9057"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_trace",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 71,
+            "endLine": 97,
+            "spanSha256": "4c5479d5dfc232bcd3a8d949e09fac7ee7513d49bd365023d28bcaf6c7cf2412"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:find_consumers",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 70,
+            "endLine": 78,
+            "spanSha256": "0fa50f6ed6658d0cc6af637898acbd2591600fc375fb41f90a5e0ee4f8ce1acf"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.publishers",
+      "retainedBehavior": "Name targets; inbound PUBLISHES/CALLS, qualified-name dedup and actual low-confidence/unmapped-edge counts.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:find_publishers",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 586,
+            "endLine": 614,
+            "spanSha256": "1802cc1d2498309a6ff95d4b8ff1ae46620c40afada07b9e12361d3523b81eca"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_trace",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 71,
+            "endLine": 97,
+            "spanSha256": "4c5479d5dfc232bcd3a8d949e09fac7ee7513d49bd365023d28bcaf6c7cf2412"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:find_publishers",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 80,
+            "endLine": 88,
+            "spanSha256": "aaf2f75897c1331d0eeb6d2e5d7f929e9d1e86962003f7190eb972bc1fa8b89b"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.snippet",
+      "retainedBehavior": "Repository/file selectors retain start/end line0 semantics (beginning/end), exact pinned source and visible out-of-range faults; chunking does not redefine the logical requested window.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_code_snippet",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 799,
+            "endLine": 833,
+            "spanSha256": "172a05caf5d3d5f8eba8407259ed78dec660937d84992d002e241924f7f04243"
+          }
+        },
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs:graph_source",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/ConsolidatedMcpServer.cs",
+            "startLine": 99,
+            "endLine": 125,
+            "spanSha256": "1a1ab92ab29b3a83fa15997c7edf8133e70acdc5e1e41080bbd0171f69f67c69"
+          }
+        },
+        {
+          "id": "assistant_tool:src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs:get_code_snippet",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/GraphAssistant.ToolDefinitions.cs",
+            "startLine": 133,
+            "endLine": 143,
+            "spanSha256": "c997f0361b544c1845db699516235b4491001f883b27798ee313c56bebcce7f0"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "code.repository_dependencies",
+      "retainedBehavior": "Inbound/outbound links grouped by repository/type; weakest known confidence band, actual Rust semantic group outcomes, not_analyzed counts absent rather than invented0. Manifest is a source string.",
+      "sourceEntries": [
+        {
+          "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_repo_dependencies",
+          "source": {
+            "path": "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs",
+            "startLine": 1132,
+            "endLine": 1187,
+            "spanSha256": "4dc24f07bcf5719c7037208f45fd55dc1aaa3a471a5720ca478bf42bd515df2b"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    },
+    {
+      "operation": "repositories.nodes",
+      "retainedBehavior": "Repository/type/internal-module filters before paging/counts; actual code-module identity differs from work feature/project identity. Container expansion remains shared typed traversal.",
+      "sourceEntries": [
+        {
+          "id": "http:src/CodeGraph.Api/Controllers/RepositoriesController.cs:RepositoriesController.Nodes:HttpGet(\"{name}/nodes\")",
+          "source": {
+            "path": "src/CodeGraph.Api/Controllers/RepositoriesController.cs",
+            "startLine": 78,
+            "endLine": 87,
+            "spanSha256": "ce1c98156d78f826c30bdc31b7c10aede8cfaa0b65ec5f40243ee5a0ef79196b"
+          }
+        }
+      ],
+      "status": "Typed representability and source mapping qualified; native behavior remains owning GraphService acceptance"
+    }
+  ],
+  "files": {
+    "src/CodeGraph.Services/Query/GraphQueryEngine.cs": "424f66b8e414cc4d4dea5e1661a789584a02df594a75d093cf10f9e6565e06d2",
+    "src/CodeGraph.Services/Query/NodeQueryService.cs": "6ca0d8aa435fb7417d2c84c65bf71a115e802b1ac9d64ab6b91e28929d3152d9",
+    "src/CodeGraph.Services/Query/SearchService.cs": "66efaaed09a873ca11b90e9f1c0d86d71caf646b564300088b57e7c22f91c42e",
+    "src/CodeGraph.Services/Query/GraphOverviewService.cs": "1f557ae8125873f6de444fda94e2b66dc01ca67c4d4d247a851088de25c994df",
+    "src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs": "300a98885061c8494b816adafe9494d36007c0e81aa294ba0b994f03ffd2c11d",
+    "src/CodeGraph.Models/GraphNode.cs": "59182f8e6c23fd385dbe7e5e8a3f8c439e12fc9246202b7ab14c3f3f4bc27adc",
+    "src/CodeGraph.Models/Responses/NodeDetailResponse.cs": "b4df2e2ad5ff6a2832c94885f8870dc945bc500ac4ab2b72934abe440343e045",
+    "src/CodeGraph.Models/Responses/ImpactResponses.cs": "7fdc4d38f6ed5c0f25a2246d4fcaa5b36b7f52527c180d7bcb2d1319725b10f0",
+    "src/CodeGraph.Services/Pipeline/RustSemanticOutcomes.cs": "2d08cee17317eb45535a772a5020e3faafd1d97159d136967e2e7c09871fcfa9"
+  },
+  "confidence": "high for exact frozen source signatures/records and typed representability; native service parity not established",
+  "noInference": true
+}

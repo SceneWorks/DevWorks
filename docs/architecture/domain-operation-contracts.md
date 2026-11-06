@@ -180,3 +180,22 @@ Edit [domain-spec.json](../../tools/contracts-eval/domain-spec.json), regenerate
 AD72 retains both `AnthropicMessages` and `ClaudeSubscriptionMessages`. `RouterConfigAction::SubscriptionRisk` requests acceptance/revocation for the current connection revision and exact notice digest. Host-authenticated human interaction, the current notice/profile/account binding and fresh eligibility remain mandatory; setting `accepted=true` in agent JSON cannot enable the connection. The host derives `ConnectionRecord.subscriptionRiskAccepted` and `riskNoticeSha256`. API-key access is separately configured and priced. Both remain routed through the shared native authority/accounting boundary. No public operation is added and the catalog remains 347.
 
 The baseline review rechecks 1,036 combined messages, including 714 domain fixtures and 49 negative cases, after the Anthropic profile/risk action and Helix engine removal. [Current evidence](validation/architecture-gates/schema-model-results.json) supersedes the original checkpoint counts for the current schema bytes; actual host human-authority enforcement remains implementation acceptance.
+
+
+## Exact graph revision 3
+
+The existing twenty graph/repository-node operations retain their revision-1 envelopes and
+byte-exact schemas. Revision 3 adds closed typed name/file/line selectors, graph-specific
+`current:true` view selection, and rich result alternatives for search, nodes, relationships,
+architecture, overview, impact, lineage, source, dependencies, schema and scope lifecycle.
+Current means the actual host worktree mapping; missing views never select Published implicitly.
+Every returned endpoint carries repository/unit/node identity and belongs to the exact resolved
+view set. Source-less nodes remain inspectable without invented citations. Canonical unit keys
+include directory `/`/`/src` identities; source locations use relative files. Trust compares the
+actual opaque unit content identity or a known captured SHA-256 plus exact view and trust revisions.
+Bounded verbatim source and property fragments preserve offsets, including long lines, empty
+files and NUL source characters; continuation never silently truncates the logical request.
+The native reader and schemas reject partial mixed selector groups and present-null choices.
+Legacy projection uses actual representable source/artifact references, otherwise refuses.
+[Field table and qualification](validation/graph-contracts/README.md) distinguish contract proof
+from GraphService, storage, UI and platform acceptance.

@@ -13188,11 +13188,31 @@ impl Revisioned for CodeOverviewRepository {
 pub struct CodeOverview {
     pub repositories: Rows<CodeOverviewRepository>,
     pub dependencies: Rows<CodeRepositoryLink>,
+    pub stamp: ReadStamp,
+    pub graph_coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub unavailable_reason: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeOverviewTotals", extend("x-since" = 3))]
+    pub graph_totals: Option<CodeOverviewTotals>,
 }
 impl Check for CodeOverview {
     fn check(&self) -> Result<(), String> {
         self.repositories.check()?;
         self.dependencies.check()?;
+        self.stamp.check()?;
+        self.graph_coverage.check()?;
+        self.unavailable_reason.check()?;
+        self.graph_totals.check()?;
         super::domain_rules::record(
             "CodeOverview",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -13205,6 +13225,12 @@ impl Revisioned for CodeOverview {
     fn retain_revision(&mut self, revision: u32) {
         self.repositories.retain_revision(revision);
         self.dependencies.retain_revision(revision);
+        if revision < 3 {
+            self.unavailable_reason = None;
+        }
+        if revision < 3 {
+            self.graph_totals = None;
+        }
     }
 }
 
@@ -13885,6 +13911,15 @@ pub struct CodeSchema {
     )]
     #[schemars(with = "ArtifactRef", extend("x-since" = 3))]
     pub artifact: Option<ArtifactRef>,
+    pub origin: CodeSchemaOrigin,
+    pub stamp: ReadStamp,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub unavailable_reason: Option<Label>,
 }
 impl Check for CodeSchema {
     fn check(&self) -> Result<(), String> {
@@ -13893,6 +13928,9 @@ impl Check for CodeSchema {
         self.properties.check()?;
         self.notes.check()?;
         self.artifact.check()?;
+        self.origin.check()?;
+        self.stamp.check()?;
+        self.unavailable_reason.check()?;
         super::domain_rules::record(
             "CodeSchema",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -13905,6 +13943,9 @@ impl Revisioned for CodeSchema {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.artifact = None;
+        }
+        if revision < 3 {
+            self.unavailable_reason = None;
         }
     }
 }
@@ -14360,6 +14401,35 @@ impl Revisioned for HelpTopicPageResult {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSchemaOrigin {
+    Declared,
+    Observed,
+}
+impl Check for CodeSchemaOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverviewTotals {
+    pub node_count: Counter,
+    pub edge_count: Counter,
+}
+impl Check for CodeOverviewTotals {
+    fn check(&self) -> Result<(), String> {
+        self.node_count.check()?;
+        self.edge_count.check()?;
+        super::domain_rules::record(
+            "CodeOverviewTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
     }
 }
 

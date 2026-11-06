@@ -1345,6 +1345,13 @@ Disposition accounting: 187 direct native bindings, 226 adapted entries, 19 repl
 
 The audit also makes formerly broad catalog owners concrete: repository management/index removal, durable queue inspection/recovery, selected CodeGraph import, controlled maintenance and repository documentation have explicit operation families. Node trust, file impact/hotspots, data-lineage and publisher/consumer traversal, claim/entity bundles/frontiers, review diagnostics and usage filters remain represented. Do not substitute a generic `search` or `health` implementation for those retained operations.
 
+The graph contract registers the retained twenty operations at revisions 1 and 3. Qualified
+revision-3 selectors/results preserve actual per-repository views, composite unit/node identity,
+source-less nodes, opaque content witnesses, trust/confidence and paged source/property content.
+A current/own-view request without an actual host worktree mapping reports unavailable. Contract
+and frozen-source evidence is in [exact graph qualification](validation/graph-contracts/README.md);
+it does not establish native GraphService or UI acceptance.
+
 The source tree distinguishes two documentation flows: `RegenerateMcpDocsJob` generates tool documentation, while `AnalysisSynthesisCompletedConsumer` writes repository CODEGRAPH.md files. Preserve capability Help generation locally and repository-document generation through the normal owned-worktree/review/delivery boundary. Project analysis, repository synthesis and document generation are separate recoverable stages. A failed synthesis retains prior/project evidence and explicit partial state; publishing a source-style completion notification cannot fabricate successful analysis.
 
 Native scope changes are deliberate: one desktop user replaces web-login/admin/PAT mechanisms; one tagged Knowledge service replaces separate memory/lesson/wiki storage; conventions retain versioned content/resources without a mandatory wiki UI; enforced canonical resources replace advisory project holds. Existing CodeGraph work/history import replaces the old Shortcut/Kanban live-source import adapters. Pruning utilities remain controlled maintenance operations with explicit eligible target selection, not copied destructive default schedules. Preserve required history/artifact/reference rules.

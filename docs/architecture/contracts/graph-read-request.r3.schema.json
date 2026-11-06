@@ -1,0 +1,1129 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "CodeCallSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "$ref": "#/$defs/Depth"
+        },
+        "direction": {
+          "$ref": "#/$defs/CodeTraceDirection"
+        },
+        "target": {
+          "$ref": "#/$defs/CodeNodeSelection"
+        }
+      },
+      "required": [
+        "target",
+        "direction",
+        "depth"
+      ],
+      "type": "object"
+    },
+    "CodeFileSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "$ref": "#/$defs/Depth",
+          "x-since": 3
+        },
+        "line": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 3
+        },
+        "path": {
+          "$ref": "#/$defs/RelativePath"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "path"
+      ],
+      "type": "object"
+    },
+    "CodeImpactSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "$ref": "#/$defs/Depth"
+        },
+        "target": {
+          "$ref": "#/$defs/CodeNodeSelection"
+        }
+      },
+      "required": [
+        "target",
+        "depth"
+      ],
+      "type": "object"
+    },
+    "CodeNodeSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Node",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Name",
+              "type": "string"
+            },
+            "name": {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodeSearchMode": {
+      "enum": [
+        "RankedNodes",
+        "NodeList",
+        "Unified"
+      ],
+      "type": "string"
+    },
+    "CodeSearchSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "internalModule": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "mode": {
+          "$ref": "#/$defs/CodeSearchMode"
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "text": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "mode",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CodeSourceMode": {
+      "enum": [
+        "NodeWindow",
+        "WholeFile"
+      ],
+      "type": "string"
+    },
+    "CodeSourceSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Node",
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/CodeSourceMode"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "endLine": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "File",
+              "type": "string"
+            },
+            "path": {
+              "$ref": "#/$defs/RelativePath"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "startLine": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId",
+            "path",
+            "startLine",
+            "endLine"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodeTraceDirection": {
+      "enum": [
+        "Inbound",
+        "Outbound",
+        "Both"
+      ],
+      "type": "string"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "DataScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Depth": {
+      "maximum": 32,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Direction": {
+      "enum": [
+        "Forward",
+        "Reverse",
+        "Both"
+      ],
+      "type": "string"
+    },
+    "GraphQuery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "text",
+                "nodeKinds"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "text"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "nodeKinds"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "Search",
+              "type": "string"
+            },
+            "nodeKinds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeSearchSelection",
+              "x-since": 3
+            },
+            "text": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Overview",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Node",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "nodeId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "nodeId",
+                "maxLines"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "nodeId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "maxLines"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "Source",
+              "type": "string"
+            },
+            "maxLines": {
+              "format": "uint16",
+              "maximum": 2000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeSourceSelection",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/Direction"
+            },
+            "edgeKinds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "kind": {
+              "const": "Traverse",
+              "type": "string"
+            },
+            "maxDepth": {
+              "format": "uint16",
+              "maximum": 128,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "startIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "startIds",
+            "direction",
+            "edgeKinds",
+            "maxDepth"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "fromId",
+                "toId",
+                "maxDepth"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "fromId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "toId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "maxDepth"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "fromId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Path",
+              "type": "string"
+            },
+            "maxDepth": {
+              "format": "uint16",
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeCallSelection",
+              "x-since": 3
+            },
+            "toId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "nodeId"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "nodeId"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "NodeImpact",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeImpactSelection",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "repositoryId",
+                "unitKey"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "repositoryId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "unitKey"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "FileImpact",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeFileSelection",
+              "x-since": 3
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "repositoryId",
+                "unitKey"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "repositoryId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "unitKey"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "NodesByFile",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeFileSelection",
+              "x-since": 3
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RepositoryDependencies",
+              "type": "string"
+            },
+            "repositoryId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "nodeId"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "nodeId"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "Consumers",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeNodeSelection",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "nodeId"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "nodeId"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "Publishers",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeNodeSelection",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "selection"
+                ]
+              },
+              "required": [
+                "kind",
+                "nodeId"
+              ],
+              "x-since": 3
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "nodeId"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "selection"
+              ],
+              "x-since": 3
+            }
+          ],
+          "properties": {
+            "kind": {
+              "const": "DataLineage",
+              "type": "string"
+            },
+            "nodeId": {
+              "$ref": "#/$defs/Id"
+            },
+            "selection": {
+              "$ref": "#/$defs/CodeNodeSelection",
+              "x-since": 3
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ScopeStatus",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "PositiveCounter": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QueryLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "deadlineMs": {
+          "format": "uint32",
+          "maximum": 300000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxResults": {
+          "format": "uint16",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxVisited": {
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxResults",
+        "maxVisited",
+        "deadlineMs"
+      ],
+      "type": "object"
+    },
+    "RelativePath": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
+      "type": "string"
+    },
+    "Text0To65536": {
+      "maxLength": 65536,
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
+    },
+    "Text1To256": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
+    },
+    "ViewSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            },
+            "kind": {
+              "const": "SchemaPublished",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "connectionIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Published",
+              "type": "string"
+            },
+            "repositoryIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "repositoryIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Exact",
+              "type": "string"
+            },
+            "viewIds": {
+              "items": {
+                "$ref": "#/$defs/Id"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "viewIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pinned",
+              "type": "string"
+            },
+            "pinId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "pinId"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:graph-read-request.r3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "protocol",
+        "queryId",
+        "scope",
+        "view",
+        "query",
+        "limits"
+      ]
+    },
+    {
+      "required": [
+        "protocol",
+        "queryId",
+        "scope",
+        "current",
+        "query",
+        "limits"
+      ],
+      "x-since": 3
+    }
+  ],
+  "properties": {
+    "current": {
+      "const": true,
+      "type": "boolean",
+      "x-since": 3
+    },
+    "cursor": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "limits": {
+      "$ref": "#/$defs/QueryLimits"
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "query": {
+      "$ref": "#/$defs/GraphQuery"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "schemaRevision": {
+      "description": "Negotiated operation schema revision. Absent means 1. Only revisions the selected operation registers are admitted; any other is UnsupportedSchema before authority.",
+      "maximum": 65535,
+      "minimum": 3,
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/DataScope"
+    },
+    "view": {
+      "$ref": "#/$defs/ViewSelection"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "scope",
+    "query",
+    "limits",
+    "schemaRevision"
+  ],
+  "title": "GraphReadRequest",
+  "type": "object"
+}

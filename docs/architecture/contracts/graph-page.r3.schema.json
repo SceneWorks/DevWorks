@@ -1,0 +1,2736 @@
+{
+  "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/Id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediaType": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "versionId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "artifactId",
+        "versionId",
+        "sha256",
+        "byteLength",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "blockId": {
+          "$ref": "#/$defs/Id"
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "locator": {
+          "$ref": "#/$defs/Locator"
+        },
+        "source": {
+          "$ref": "#/$defs/CitationSource"
+        }
+      },
+      "required": [
+        "source",
+        "blockId",
+        "contentDigest",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "CitationSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "DatabaseSchema",
+              "type": "string"
+            },
+            "schemaDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "snapshotId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "connectionId",
+            "snapshotId",
+            "schemaDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "extractionRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "Managed",
+              "type": "string"
+            },
+            "version": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "version",
+            "extractionRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Repository",
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/RepositorySnapshot"
+            },
+            "sourceDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot",
+            "unitKey",
+            "sourceDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Knowledge",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "entryId",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Convention",
+              "type": "string"
+            },
+            "version": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "version"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodeAffectedNode": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "$ref": "#/$defs/Counter"
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "lowConfidence": {
+          "type": "boolean"
+        },
+        "node": {
+          "$ref": "#/$defs/CodeNode"
+        },
+        "risk": {
+          "$ref": "#/$defs/CodeRisk"
+        },
+        "riskFactors": {
+          "$ref": "#/$defs/List_Text0To65536_0_500"
+        }
+      },
+      "required": [
+        "node",
+        "depth",
+        "edgeKind",
+        "risk",
+        "riskFactors",
+        "lowConfidence"
+      ],
+      "type": "object"
+    },
+    "CodeArchitecture": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "hotspots": {
+          "$ref": "#/$defs/List_CodeHotspot_0_500"
+        },
+        "inbound": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "nodeCounts": {
+          "$ref": "#/$defs/List_CodeCount_0_500"
+        },
+        "outbound": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "packageCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "packageCountsByEcosystem": {
+          "$ref": "#/$defs/List_CodeCount_0_500"
+        },
+        "packages": {
+          "$ref": "#/$defs/List_CodePackageDependency_0_500"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "supertypes": {
+          "$ref": "#/$defs/List_CodeSupertype_0_500"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "nodeCounts",
+        "hotspots",
+        "inbound",
+        "outbound",
+        "packages",
+        "packageCount",
+        "packageCountsByEcosystem",
+        "supertypes"
+      ],
+      "type": "object"
+    },
+    "CodeCallTrace": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "$ref": "#/$defs/List_CodeTraversalEntry_0_500"
+        },
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "start": {
+          "$ref": "#/$defs/CodeNode",
+          "x-since": 3
+        },
+        "unmappedInboundEdges": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "entries",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "name",
+        "count"
+      ],
+      "type": "object"
+    },
+    "CodeDependencies": {
+      "additionalProperties": false,
+      "properties": {
+        "inbound": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "outbound": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "rustSemantic": {
+          "$ref": "#/$defs/CodeRustSemantic"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "inbound",
+        "outbound",
+        "rustSemantic"
+      ],
+      "type": "object"
+    },
+    "CodeEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Probability",
+          "x-since": 3
+        },
+        "confidenceBand": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "edgeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "producingUnit": {
+          "$ref": "#/$defs/GraphUnitKey",
+          "x-since": 3
+        },
+        "properties": {
+          "$ref": "#/$defs/List_CodeProperty_0_500"
+        },
+        "propertiesComplete": {
+          "type": "boolean"
+        },
+        "resolution": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "sourceId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceUnitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        },
+        "targetId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetUnitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        }
+      },
+      "required": [
+        "edgeId",
+        "sourceId",
+        "targetId",
+        "sourceRepositoryId",
+        "targetRepositoryId",
+        "edgeKind",
+        "properties",
+        "propertiesComplete",
+        "sourceUnitKey",
+        "targetUnitKey"
+      ],
+      "type": "object"
+    },
+    "CodeGraphResult": {
+      "additionalProperties": false,
+      "properties": {
+        "edges": {
+          "$ref": "#/$defs/List_CodeEdge_0_500"
+        },
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodes": {
+          "$ref": "#/$defs/List_CodeNode_0_500"
+        },
+        "unmappedInboundEdges": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeHotspot": {
+      "additionalProperties": false,
+      "properties": {
+        "fanIn": {
+          "$ref": "#/$defs/Counter"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "qualifiedName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "name",
+        "qualifiedName",
+        "fanIn",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CodeImpact": {
+      "additionalProperties": false,
+      "properties": {
+        "affected": {
+          "$ref": "#/$defs/List_CodeAffectedNode_0_500"
+        },
+        "blastRadius": {
+          "$ref": "#/$defs/CodeRisk"
+        },
+        "changed": {
+          "$ref": "#/$defs/List_CodeAffectedNode_0_500"
+        },
+        "crossRepository": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "found": {
+          "type": "boolean"
+        },
+        "language": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "languageIndexed": {
+          "type": "boolean",
+          "x-since": 3
+        },
+        "path": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "summary": {
+          "$ref": "#/$defs/CodeImpactSummary"
+        },
+        "unmappedInboundEdges": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "found",
+        "blastRadius",
+        "changed",
+        "affected",
+        "crossRepository",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "CodeImpactSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedRepositoryIds": {
+          "$ref": "#/$defs/List_Id_0_500"
+        },
+        "criticalCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "crossRepositoryCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "highCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lowCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mediumCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "totalAffected": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "totalAffected",
+        "crossRepositoryCount",
+        "criticalCount",
+        "highCount",
+        "mediumCount",
+        "lowCount",
+        "affectedRepositoryIds",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeLineage": {
+      "additionalProperties": false,
+      "properties": {
+        "consumers": {
+          "$ref": "#/$defs/List_CodeTraversalEntry_0_500"
+        },
+        "crossRepository": {
+          "$ref": "#/$defs/List_CodeEdge_0_500"
+        },
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "model": {
+          "$ref": "#/$defs/CodeNode",
+          "x-since": 3
+        },
+        "modelName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "producers": {
+          "$ref": "#/$defs/List_CodeTraversalEntry_0_500"
+        },
+        "relatedNodes": {
+          "$ref": "#/$defs/List_CodeNode_0_500"
+        },
+        "unmappedInboundEdges": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "modelName",
+        "producers",
+        "consumers",
+        "crossRepository",
+        "relatedNodes",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "analysisConfidence": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "confidence": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 3
+        },
+        "contentIdentity": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "description": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "doNotTrust": {
+          "type": "boolean"
+        },
+        "extractionSource": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "fallbackReason": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "internalModule": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "parentId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "properties": {
+          "$ref": "#/$defs/List_CodeProperty_0_500"
+        },
+        "propertiesComplete": {
+          "type": "boolean"
+        },
+        "qualifiedName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "source": {
+          "$ref": "#/$defs/CodeSourceLocation",
+          "x-since": 3
+        },
+        "trustRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "trustScore": {
+          "$ref": "#/$defs/Probability",
+          "x-since": 3
+        },
+        "unitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        },
+        "viewDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "nodeId",
+        "repositoryId",
+        "viewId",
+        "unitKey",
+        "nodeKind",
+        "name",
+        "qualifiedName",
+        "properties",
+        "propertiesComplete",
+        "doNotTrust",
+        "trustRevision",
+        "viewDigest",
+        "contentIdentity"
+      ],
+      "type": "object"
+    },
+    "CodeNodeDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "crossRepository": {
+          "$ref": "#/$defs/List_CodeEdge_0_500"
+        },
+        "incoming": {
+          "$ref": "#/$defs/List_CodeEdge_0_500"
+        },
+        "neighbors": {
+          "$ref": "#/$defs/List_CodeNode_0_500"
+        },
+        "node": {
+          "$ref": "#/$defs/CodeNode"
+        },
+        "outgoing": {
+          "$ref": "#/$defs/List_CodeEdge_0_500"
+        },
+        "relationshipsComplete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "node",
+        "neighbors",
+        "incoming",
+        "outgoing",
+        "crossRepository",
+        "relationshipsComplete"
+      ],
+      "type": "object"
+    },
+    "CodeNodesResult": {
+      "additionalProperties": false,
+      "properties": {
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodes": {
+          "$ref": "#/$defs/List_CodeNode_0_500"
+        },
+        "selectedNodeId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "total": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "nodes",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeOverview": {
+      "additionalProperties": false,
+      "properties": {
+        "dependencies": {
+          "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
+        },
+        "graphCoverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "graphTotals": {
+          "$ref": "#/$defs/CodeOverviewTotals",
+          "x-since": 3
+        },
+        "repositories": {
+          "$ref": "#/$defs/List_CodeOverviewRepository_0_500"
+        },
+        "stamp": {
+          "$ref": "#/$defs/ReadStamp"
+        },
+        "unavailableReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "repositories",
+        "dependencies",
+        "stamp",
+        "graphCoverage"
+      ],
+      "type": "object"
+    },
+    "CodeOverviewRepository": {
+      "additionalProperties": false,
+      "properties": {
+        "foundational": {
+          "type": "boolean"
+        },
+        "framework": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "language": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceGroup": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "repositoryId",
+        "name",
+        "foundational"
+      ],
+      "type": "object"
+    },
+    "CodeOverviewTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodeCount": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "nodeCount",
+        "edgeCount"
+      ],
+      "type": "object"
+    },
+    "CodePackageDependency": {
+      "additionalProperties": false,
+      "properties": {
+        "dependentCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "ecosystem": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "version": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "name",
+        "ecosystem",
+        "dependentCount"
+      ],
+      "type": "object"
+    },
+    "CodeProperty": {
+      "additionalProperties": false,
+      "properties": {
+        "jsonText": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "nextOffset": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "offset": {
+          "$ref": "#/$defs/Counter"
+        },
+        "totalBytes": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "name",
+        "jsonText",
+        "offset",
+        "totalBytes"
+      ],
+      "type": "object"
+    },
+    "CodeRelated": {
+      "additionalProperties": false,
+      "properties": {
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodes": {
+          "$ref": "#/$defs/List_CodeRelatedNode_0_500"
+        },
+        "unmappedInboundEdges": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "nodes",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeRelatedNode": {
+      "additionalProperties": false,
+      "properties": {
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "lowConfidence": {
+          "type": "boolean"
+        },
+        "node": {
+          "$ref": "#/$defs/CodeNode"
+        }
+      },
+      "required": [
+        "node",
+        "edgeKind",
+        "lowConfidence"
+      ],
+      "type": "object"
+    },
+    "CodeRepositoryLink": {
+      "additionalProperties": false,
+      "properties": {
+        "confidenceBand": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRepositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceRepositoryId",
+        "targetRepositoryId",
+        "edgeKind",
+        "count"
+      ],
+      "type": "object"
+    },
+    "CodeRepositoryStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "freshness": {
+          "$ref": "#/$defs/IndexFreshness"
+        },
+        "languages": {
+          "$ref": "#/$defs/List_LanguageCoverage_0_500"
+        },
+        "overlays": {
+          "$ref": "#/$defs/List_OverlayStatus_0_500"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "semanticPacks": {
+          "$ref": "#/$defs/List_SemanticPackStatus_0_500"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "freshness",
+        "languages",
+        "semanticPacks",
+        "overlays"
+      ],
+      "type": "object"
+    },
+    "CodeRisk": {
+      "enum": [
+        "Critical",
+        "High",
+        "Medium",
+        "Low",
+        "None"
+      ],
+      "type": "string"
+    },
+    "CodeRustSemantic": {
+      "additionalProperties": false,
+      "properties": {
+        "fallbackGroups": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "groupCount": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "manifest": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "semanticGroups": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "skippedGroups": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "status": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "treeSitterGroups": {
+          "$ref": "#/$defs/List_CodeSemanticGroup_0_500"
+        }
+      },
+      "required": [
+        "status",
+        "treeSitterGroups"
+      ],
+      "type": "object"
+    },
+    "CodeSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef",
+          "x-since": 3
+        },
+        "edgeKinds": {
+          "$ref": "#/$defs/List_Text1To256_0_500"
+        },
+        "nodeKinds": {
+          "$ref": "#/$defs/List_Text1To256_0_500"
+        },
+        "notes": {
+          "$ref": "#/$defs/List_Text0To65536_0_500"
+        },
+        "origin": {
+          "$ref": "#/$defs/CodeSchemaOrigin"
+        },
+        "properties": {
+          "$ref": "#/$defs/List_CodeSchemaProperty_0_500"
+        },
+        "stamp": {
+          "$ref": "#/$defs/ReadStamp"
+        },
+        "unavailableReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "nodeKinds",
+        "edgeKinds",
+        "properties",
+        "notes",
+        "origin",
+        "stamp"
+      ],
+      "type": "object"
+    },
+    "CodeSchemaOrigin": {
+      "enum": [
+        "Declared",
+        "Observed"
+      ],
+      "type": "string"
+    },
+    "CodeSchemaProperty": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "ownerKind": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "ownerKind",
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "CodeScopeStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "repositories": {
+          "$ref": "#/$defs/List_CodeRepositoryStatus_0_500"
+        },
+        "stamp": {
+          "$ref": "#/$defs/ReadStamp"
+        },
+        "unavailableReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "stamp",
+        "coverage",
+        "current",
+        "repositories"
+      ],
+      "type": "object"
+    },
+    "CodeSearchHit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Node",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/CodeNode"
+            }
+          },
+          "required": [
+            "kind",
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Repository",
+              "type": "string"
+            },
+            "repository": {
+              "$ref": "#/$defs/CodeSearchRepository"
+            }
+          },
+          "required": [
+            "kind",
+            "repository"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CodeSearchMode": {
+      "enum": [
+        "RankedNodes",
+        "NodeList",
+        "Unified"
+      ],
+      "type": "string"
+    },
+    "CodeSearchRepository": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "foundational": {
+          "type": "boolean"
+        },
+        "framework": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "language": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "name",
+        "foundational"
+      ],
+      "type": "object"
+    },
+    "CodeSearchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/List_CodeSearchHit_0_500"
+        },
+        "lowConfidenceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "mode": {
+          "$ref": "#/$defs/CodeSearchMode"
+        },
+        "total": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "mode",
+        "items",
+        "lowConfidenceCount"
+      ],
+      "type": "object"
+    },
+    "CodeSemanticGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "crates": {
+          "$ref": "#/$defs/List_Text0To65536_0_500"
+        },
+        "detailCode": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "failureCode": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "index": {
+          "$ref": "#/$defs/Counter"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "index",
+        "crates",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "CodeSourceLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "endByte": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "endLine": {
+          "$ref": "#/$defs/Counter"
+        },
+        "language": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "legacyCitation": {
+          "$ref": "#/$defs/Citation",
+          "x-since": 3
+        },
+        "path": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepositorySnapshot"
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "startByte": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "startLine": {
+          "$ref": "#/$defs/Counter"
+        },
+        "unitKey": {
+          "$ref": "#/$defs/RelativePath"
+        }
+      },
+      "required": [
+        "snapshot",
+        "unitKey",
+        "sourceDigest",
+        "path",
+        "startLine",
+        "endLine"
+      ],
+      "type": "object"
+    },
+    "CodeSourceText": {
+      "additionalProperties": false,
+      "properties": {
+        "endByte": {
+          "$ref": "#/$defs/Counter"
+        },
+        "firstLine": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lastLine": {
+          "$ref": "#/$defs/Counter"
+        },
+        "nodeEndLine": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "nodeId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "nodeStartLine": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "source": {
+          "$ref": "#/$defs/CodeSourceLocation"
+        },
+        "startByte": {
+          "$ref": "#/$defs/Counter"
+        },
+        "text": {
+          "$ref": "#/$defs/GraphSourceTextFragment"
+        },
+        "totalBytes": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "source",
+        "text",
+        "startByte",
+        "endByte",
+        "totalBytes",
+        "firstLine",
+        "lastLine"
+      ],
+      "type": "object"
+    },
+    "CodeSupertype": {
+      "additionalProperties": false,
+      "properties": {
+        "external": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "qualifiedName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "subtypeCount": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "name",
+        "qualifiedName",
+        "nodeKind",
+        "subtypeCount",
+        "external"
+      ],
+      "type": "object"
+    },
+    "CodeTraversalEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "$ref": "#/$defs/Counter"
+        },
+        "edgeId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "edgeKind": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "node": {
+          "$ref": "#/$defs/CodeNode"
+        },
+        "parentId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        }
+      },
+      "required": [
+        "node",
+        "depth"
+      ],
+      "type": "object"
+    },
+    "Counter": {
+      "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "moreGaps": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/CoverageState"
+        }
+      },
+      "required": [
+        "state",
+        "gaps",
+        "moreGaps"
+      ],
+      "type": "object"
+    },
+    "CoverageState": {
+      "enum": [
+        "Complete",
+        "Partial",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "Digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "GitOid": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/ObjectFormat"
+        },
+        "hex": {
+          "pattern": "^[a-f0-9]{40}([a-f0-9]{24})?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "hex"
+      ],
+      "type": "object"
+    },
+    "GraphResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "CodeSearch",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeSearchResult"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "CodeNodes",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeNodesResult"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "CodeGraph",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeGraphResult"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "NodeDetail",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeNodeDetail"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SourceText",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeSourceText"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "RepositoryOverview",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeOverview"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Architecture",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeArchitecture"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Impact",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeImpact"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "CallTrace",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeCallTrace"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Lineage",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeLineage"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Related",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeRelated"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Dependencies",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeDependencies"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SchemaDetails",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeSchema"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ScopeDetails",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/CodeScopeStatus"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object",
+          "x-since": 3
+        }
+      ]
+    },
+    "GraphSourceTextFragment": {
+      "maxLength": 65536,
+      "type": "string"
+    },
+    "GraphUnitKey": {
+      "description": "Exact canonical indexed unit: / for root, /path for a directory, or a relative file path; no backslashes, drive prefixes, empty/dot/dot-dot segments or NUL.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "IndexFreshness": {
+      "additionalProperties": false,
+      "properties": {
+        "configurationCurrent": {
+          "type": "boolean"
+        },
+        "headCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasons": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "state": {
+          "$ref": "#/$defs/IndexFreshnessState"
+        }
+      },
+      "required": [
+        "state",
+        "configurationCurrent",
+        "reasons"
+      ],
+      "type": "object"
+    },
+    "IndexFreshnessState": {
+      "enum": [
+        "Current",
+        "Stale",
+        "Indexing",
+        "NotIndexed",
+        "Failed"
+      ],
+      "type": "string"
+    },
+    "LanguageCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "$ref": "#/$defs/Counter"
+        },
+        "grammar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageId": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "mode": {
+          "$ref": "#/$defs/LanguageCoverageMode"
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parseErrorFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "skippedFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "structuralFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "textFiles": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "languageId",
+        "name",
+        "mode",
+        "files",
+        "structuralFiles",
+        "textFiles",
+        "parseErrorFiles",
+        "skippedFiles"
+      ],
+      "type": "object"
+    },
+    "LanguageCoverageMode": {
+      "enum": [
+        "Structural",
+        "TextFallback",
+        "NotSelected"
+      ],
+      "type": "string"
+    },
+    "LayerRef": {
+      "additionalProperties": false,
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "parentGenerationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "generationId",
+        "manifestDigest"
+      ],
+      "type": "object"
+    },
+    "List_CodeAffectedNode_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeAffectedNode"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeCount_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeCount"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeEdge_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeEdge"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeHotspot_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeHotspot"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeNode_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeNode"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeOverviewRepository_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeOverviewRepository"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodePackageDependency_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodePackageDependency"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeProperty_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeProperty"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeRelatedNode_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeRelatedNode"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeRepositoryLink_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeRepositoryLink"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeRepositoryStatus_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeRepositoryStatus"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeSchemaProperty_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeSchemaProperty"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeSearchHit_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeSearchHit"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeSemanticGroup_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeSemanticGroup"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeSupertype_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeSupertype"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeTraversalEntry_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeTraversalEntry"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Id_0_500": {
+      "items": {
+        "$ref": "#/$defs/Id"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_LanguageCoverage_0_500": {
+      "items": {
+        "$ref": "#/$defs/LanguageCoverage"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_OverlayStatus_0_500": {
+      "items": {
+        "$ref": "#/$defs/OverlayStatus"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_SemanticPackStatus_0_500": {
+      "items": {
+        "$ref": "#/$defs/SemanticPackStatus"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Text0To65536_0_500": {
+      "items": {
+        "$ref": "#/$defs/Text0To65536"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Text1To256_0_128": {
+      "items": {
+        "$ref": "#/$defs/Text1To256"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_Text1To256_0_500": {
+      "items": {
+        "$ref": "#/$defs/Text1To256"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "Locator": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SchemaObject",
+              "type": "string"
+            },
+            "objectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "objectId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firstLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "Text",
+              "type": "string"
+            },
+            "lastLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "firstLine",
+            "lastLine"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Pdf",
+              "type": "string"
+            },
+            "page": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "page"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Docx",
+              "type": "string"
+            },
+            "paragraph": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "part": {
+              "$ref": "#/$defs/Id"
+            },
+            "tableCell": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "paragraph"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "firstLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "Code",
+              "type": "string"
+            },
+            "lastLine": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/RepositorySnapshot"
+            },
+            "unitKey": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot",
+            "unitKey",
+            "firstLine",
+            "lastLine"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entryId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Knowledge",
+              "type": "string"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "entryId",
+            "revision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ObjectFormat": {
+      "enum": [
+        "Sha1",
+        "Sha256"
+      ],
+      "type": "string"
+    },
+    "OverlayState": {
+      "enum": [
+        "Queued",
+        "Indexing",
+        "Ready",
+        "Failed",
+        "Stale",
+        "Expired",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "OverlayStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "baseCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captureDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "headCommit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overlayId": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/OverlayState"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "viewId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "overlayId",
+        "revision",
+        "state",
+        "updatedAtMs",
+        "expiresAtMs"
+      ],
+      "type": "object"
+    },
+    "Probability": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "Protocol": {
+      "enum": [
+        "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "QueryCompletion": {
+      "enum": [
+        "Complete",
+        "ResultLimit",
+        "WorkLimit",
+        "Deadline",
+        "Cancelled"
+      ],
+      "type": "string"
+    },
+    "ReadStamp": {
+      "additionalProperties": false,
+      "properties": {
+        "policyRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "restoreEpoch": {
+          "$ref": "#/$defs/Counter"
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "storeId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "storeId",
+        "restoreEpoch",
+        "sequence",
+        "policyRevision",
+        "scopeRevision"
+      ],
+      "type": "object"
+    },
+    "RelativePath": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+)(?:[/\\\\](?:(?!\\.{1,2}(?:[/\\\\]|$))[^/\\\\\\u0000]+))*$",
+      "type": "string"
+    },
+    "RepositorySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "captureDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "worktreeId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repositoryId",
+        "base",
+        "head"
+      ],
+      "type": "object"
+    },
+    "RepositoryView": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/LayerRef"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepositorySnapshot"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "viewId",
+        "snapshot",
+        "sourceRevision",
+        "baseline",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "ResolvedViewSet": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "pinId": {
+          "$ref": "#/$defs/Id"
+        },
+        "schemaViews": {
+          "items": {
+            "$ref": "#/$defs/SchemaView"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "stamp": {
+          "$ref": "#/$defs/ReadStamp"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/RepositoryView"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "required": [
+        "pinId",
+        "stamp",
+        "expiresAtMs",
+        "views"
+      ],
+      "type": "object"
+    },
+    "Revision": {
+      "description": "Positive signed-64-bit counter; typed upper-bound validation required.",
+      "pattern": "^[1-9][0-9]{0,18}$",
+      "type": "string"
+    },
+    "SchemaView": {
+      "additionalProperties": false,
+      "properties": {
+        "accessRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "generationId": {
+          "$ref": "#/$defs/Id"
+        },
+        "schemaDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "snapshotId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "connectionId",
+        "snapshotId",
+        "generationId",
+        "schemaDigest",
+        "accessRevision",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "SemanticPackState": {
+      "enum": [
+        "NotInstalled",
+        "Unavailable",
+        "Enabled",
+        "Applied",
+        "Disabled"
+      ],
+      "type": "string"
+    },
+    "SemanticPackStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "languages": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "packId": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "$ref": "#/$defs/SemanticPackState"
+        }
+      },
+      "required": [
+        "packId",
+        "state",
+        "languages"
+      ],
+      "type": "object"
+    },
+    "Text0To65536": {
+      "maxLength": 65536,
+      "minLength": 0,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
+    },
+    "Text1To256": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[^\\u0000]*$",
+      "type": "string"
+    }
+  },
+  "$id": "urn:devworks:architecture:1.0-draft.1:graph-page.r3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "protocol",
+        "queryId",
+        "view",
+        "completion",
+        "result"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "view"
+        ]
+      },
+      "properties": {
+        "result": {
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "ScopeDetails"
+                },
+                "value": {
+                  "required": [
+                    "unavailableReason"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "SchemaDetails"
+                },
+                "value": {
+                  "properties": {
+                    "origin": {
+                      "const": "Declared"
+                    }
+                  },
+                  "required": [
+                    "unavailableReason"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "RepositoryOverview"
+                },
+                "value": {
+                  "not": {
+                    "required": [
+                      "graphTotals"
+                    ]
+                  },
+                  "properties": {
+                    "dependencies": {
+                      "maxItems": 0
+                    },
+                    "graphCoverage": {
+                      "properties": {
+                        "state": {
+                          "const": "Unavailable"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "unavailableReason"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "queryId",
+        "completion",
+        "result"
+      ],
+      "x-since": 3
+    }
+  ],
+  "properties": {
+    "completion": {
+      "$ref": "#/$defs/QueryCompletion"
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "protocol": {
+      "$ref": "#/$defs/Protocol"
+    },
+    "queryId": {
+      "$ref": "#/$defs/Id"
+    },
+    "result": {
+      "$ref": "#/$defs/GraphResult"
+    },
+    "view": {
+      "$ref": "#/$defs/ResolvedViewSet"
+    }
+  },
+  "required": [
+    "protocol",
+    "queryId",
+    "completion",
+    "result"
+  ],
+  "title": "GraphPage",
+  "type": "object"
+}

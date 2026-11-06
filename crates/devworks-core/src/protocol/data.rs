@@ -1825,7 +1825,7 @@ pub enum GraphResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"properties": {"kind": {"const": "ScopeDetails"}}}}, "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"oneOf": [{"properties": {"kind": {"const": "ScopeDetails"}, "value": {"required": ["unavailableReason"]}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "SchemaDetails"}, "value": {"required": ["unavailableReason"], "properties": {"origin": {"const": "Declared"}}}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "RepositoryOverview"}, "value": {"required": ["unavailableReason"], "properties": {"graphCoverage": {"properties": {"state": {"const": "Unavailable"}}}, "dependencies": {"maxItems": 0}}, "not": {"required": ["graphTotals"]}}}, "required": ["kind", "value"]}]}}, "x-since": 3}]))]
 pub struct GraphPage {
     pub protocol: Protocol,
     pub query_id: QueryId,
@@ -1846,9 +1846,24 @@ impl GraphPage {
     pub fn validate(&self) -> Result<(), &'static str> {
         if let Some(view) = &self.view {
             view.validate()?;
-        } else if !matches!(&self.result, GraphResult::ScopeDetails{value} if value.unavailable_reason.is_some())
-        {
-            return Err("only unavailable scope status can omit its graph view");
+        } else {
+            let metadata = match &self.result {
+                GraphResult::ScopeDetails { value } => value.unavailable_reason.is_some(),
+                GraphResult::SchemaDetails { value } => {
+                    matches!(value.origin, CodeSchemaOrigin::Declared)
+                        && value.unavailable_reason.is_some()
+                }
+                GraphResult::RepositoryOverview { value } => {
+                    matches!(value.graph_coverage.state, CoverageState::Unavailable)
+                        && value.unavailable_reason.is_some()
+                        && value.dependencies.0.is_empty()
+                        && value.graph_totals.is_none()
+                }
+                _ => false,
+            };
+            if !metadata {
+                return Err("view-less graph response requires explicit unavailable metadata");
+            }
         }
         self.validate_current()?;
         let Some(view) = &self.view else {
@@ -2101,7 +2116,7 @@ fn legacy_nodes<'a>(nodes: impl IntoIterator<Item = &'a CodeNode>) -> Option<Vec
 }
 impl Revisioned for GraphPage {
     fn retain_revision(&mut self, revision: u32) {
-        if revision >= 3 {
+        if revision >= 3 || self.view.is_none() {
             return;
         }
         let projected = match &self.result {
@@ -2171,6 +2186,10 @@ impl Revisioned for GraphPage {
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 3 && self.view.is_none() {
+            return Err("legacy graph results require a real resolved view".into());
+        }
+
         let current = !matches!(
             self.result,
             GraphResult::Nodes { .. }
