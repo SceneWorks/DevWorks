@@ -40,6 +40,8 @@ pub mod chat;
 pub mod connections_screen;
 pub mod decision_ops;
 pub mod files;
+pub mod graph_ops;
+pub mod graph_screen;
 pub mod host;
 pub mod knowledge_screen;
 pub mod memory;

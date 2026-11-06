@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub mod decisions;
+pub mod graph;
 pub mod indexing;
 pub mod jobs;
 pub mod projects;
@@ -173,6 +174,7 @@ pub struct Shell {
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
     pub usage: crate::usage_screen::UsageScreen,
+    pub graph: crate::graph_screen::GraphScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -318,6 +320,7 @@ impl Shell {
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
             usage: crate::usage_screen::UsageScreen::default(),
+            graph: crate::graph_screen::GraphScreen::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -1704,6 +1707,9 @@ impl Shell {
     }
 
     fn apply(&mut self, ctx: &egui::Context, slot: Slot, reply: Reply) {
+        let Some((slot, reply)) = self.apply_graph(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_projects(slot, reply) else {
             return;
         };
@@ -3317,6 +3323,10 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::GraphTrust(_) => {
+                    self.graph.trust_busy = true;
+                    self.graph.trust_unknown = true;
+                }
                 Slot::PriceOverride | Slot::PriceRefresh => {
                     self.restore_price_command(&slot, u.frame())
                 }

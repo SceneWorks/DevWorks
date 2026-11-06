@@ -146,6 +146,8 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    GraphRead(u64),
+    GraphTrust(String),
     Usage(u64, bool),
     UsageOptions(u64),
     Prices(u64, bool),
@@ -425,6 +427,7 @@ struct Pending {
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "code.set_trust",
     "router.price_refresh",
     "router.price_override",
     "approvals.record_human_decision",
