@@ -1813,7 +1813,8 @@
         "access_expires_at_ms": "?Counter",
         "sign_in": "?SignInChallenge",
         "enabled": "?bool",
-        "open_router": "?OpenRouterConstraints"
+        "open_router": "?OpenRouterConstraints",
+        "local_free": "?bool"
       },
       "since": {
         "endpoint": 2,
@@ -1828,7 +1829,8 @@
         "access_expires_at_ms": 2,
         "sign_in": 2,
         "enabled": 2,
-        "open_router": 2
+        "open_router": 2,
+        "local_free": 3
       }
     },
     "RouteChoice": {
@@ -2376,7 +2378,8 @@
           "endpoint": "Url",
           "credential_ref": "?Id",
           "enabled": "?bool",
-          "open_router": "?OpenRouterConstraints"
+          "open_router": "?OpenRouterConstraints",
+          "local_free": "?bool"
         },
         "Model": {
           "model": "RouteModel",
@@ -2410,7 +2413,8 @@
       "variantSince": {
         "Connection": {
           "enabled": 2,
-          "open_router": 2
+          "open_router": 2,
+          "local_free": 3
         }
       }
     },
@@ -4341,7 +4345,8 @@
         "cache_diagnostics": "Rows<UsageCacheDiagnostic>",
         "unknown_tail": "bool",
         "reasoning_tokens": "?Counter",
-        "unit_quantities": "Rows<UsageMeasuredQuantity>"
+        "unit_quantities": "Rows<UsageMeasuredQuantity>",
+        "connection_revision": "?Revision"
       }
     },
     "UsageTotals": {
@@ -7772,7 +7777,7 @@
       "result": "Page<ConnectionRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests."
+      "rules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests. Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag."
     },
     "router.route": {
       "operation": "router.route",
@@ -7931,7 +7936,7 @@
       "result": "MutationSummary",
       "effect": "External",
       "authority": "HumanConfiguration",
-      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value)."
+      "rules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value). Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag."
     },
     "router.decision_models": {
       "operation": "router.decision_models",
@@ -9016,11 +9021,13 @@
     ],
     "router.connections": [
       1,
-      2
+      2,
+      3
     ],
     "router.configure": [
       1,
-      2
+      2,
+      3
     ],
     "knowledge.search": [
       1,

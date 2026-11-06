@@ -4839,6 +4839,13 @@ pub struct ConnectionRecord {
     )]
     #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
     pub open_router: Option<OpenRouterConstraints>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub local_free: Option<bool>,
 }
 impl Check for ConnectionRecord {
     fn check(&self) -> Result<(), String> {
@@ -4863,6 +4870,7 @@ impl Check for ConnectionRecord {
         self.sign_in.check()?;
         self.enabled.check()?;
         self.open_router.check()?;
+        self.local_free.check()?;
         super::domain_rules::record(
             "ConnectionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -4911,6 +4919,9 @@ impl Revisioned for ConnectionRecord {
         }
         if revision < 2 {
             self.open_router = None;
+        }
+        if revision < 3 {
+            self.local_free = None;
         }
     }
 }
@@ -6625,6 +6636,13 @@ pub enum RouterConfigAction {
         )]
         #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
         open_router: Option<OpenRouterConstraints>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        local_free: Option<bool>,
     },
     Model {
         model: RouteModel,
@@ -6670,6 +6688,7 @@ impl Check for RouterConfigAction {
                 credential_ref,
                 enabled,
                 open_router,
+                local_free,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
@@ -6679,6 +6698,7 @@ impl Check for RouterConfigAction {
                 credential_ref.check()?;
                 enabled.check()?;
                 open_router.check()?;
+                local_free.check()?;
             }
             Self::Model {
                 model,
@@ -6741,6 +6761,7 @@ impl Revisioned for RouterConfigAction {
             Self::Connection {
                 enabled,
                 open_router,
+                local_free,
                 ..
             } => {
                 if revision < 2 {
@@ -6748,6 +6769,9 @@ impl Revisioned for RouterConfigAction {
                 }
                 if revision < 2 {
                     *open_router = None;
+                }
+                if revision < 3 {
+                    *local_free = None;
                 }
             }
             Self::Model { model, .. } => {
@@ -11516,6 +11540,8 @@ pub struct UsageAttemptRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<Counter>,
     pub unit_quantities: Rows<UsageMeasuredQuantity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_revision: Option<Revision>,
 }
 impl Check for UsageAttemptRecord {
     fn check(&self) -> Result<(), String> {
@@ -11555,6 +11581,7 @@ impl Check for UsageAttemptRecord {
         self.unknown_tail.check()?;
         self.reasoning_tokens.check()?;
         self.unit_quantities.check()?;
+        self.connection_revision.check()?;
         super::domain_rules::record(
             "UsageAttemptRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,

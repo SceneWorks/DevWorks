@@ -14783,11 +14783,19 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests.",
+          "semanticRules": "Read-only provider connections in ID order; never a credential value, token or key (credentialRef is an opaque handle). subscriptionRiskAccepted is the effective acceptance: false once the notice, profile, endpoint, account or restore epoch changed. Schema revision 2: the endpoint, the authentication lifecycle (Disconnected, Authorizing, Connected, Refreshing, ReauthenticationRequired, Unavailable, Disabled) with a safe reason, the credential revision, the last connection test (healthy, checkedAtMs), the last successful model discovery (discoveredAtMs, discoveredModelCount and, for at most 128 models, discoveredModelIds), the access-token expiry and, for a human caller only, the open sign-in challenge (device user code and verification URL, or browser authorization URL). Revision 2 also reports whether the connection is enabled (a disabled connection keeps its credential and is never routed through) and, for an OpenRouter connection, its constraints: allowed and excluded model patterns (applied to discovery and routing eligibility), the auto-router cost tier and the OpenRouter provider-routing object sent with its requests. Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -15261,11 +15269,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "HumanConfiguration",
           "effect": "External",
-          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value).",
+          "semanticRules": "Host credential flow/reference only; decision models cannot join tiers, model IDs/upstream IDs distinct. Trusted profile declares actual efforts/capabilities; no agent-written capability claim grants authority. ClaudeSubscriptionMessages is disabled until an authenticated human accepts the current exact risk notice for this connection/profile. SubscriptionRisk arguments alone mint no authority; host binds notice/profile/revision and actor. AnthropicMessages uses its own API key and billing. No implicit billing fallback; credentials/eligibility/native continuation stay profile-bound. Schema revision 2: a Model action may declare contextTokens and bind the model to one connectionId of its endpoint profile. A Connection action may set enabled and, for an OpenRouterChat connection only, its OpenRouter constraints (an omitted member keeps the stored value). Schema3 localFree is explicit connection billing policy. Only actual human authorization may author/change it; omitted updates preserve and newly configured connections defaultfalse. Never infer billing class from endpoint hostname. Current connection queries expose its stored flag; attempts retain admitted connection revision, never today's flag.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
