@@ -87,6 +87,7 @@ mod resources;
 mod router;
 mod runs;
 mod sessions;
+mod usage;
 mod work;
 pub use artifacts::*;
 pub use authority::*;
@@ -105,6 +106,7 @@ pub use resources::*;
 pub use router::*;
 pub use runs::*;
 pub use sessions::*;
+pub use usage::*;
 pub use work::*;
 
 // ---------------------------------------------------------------------------------------------
