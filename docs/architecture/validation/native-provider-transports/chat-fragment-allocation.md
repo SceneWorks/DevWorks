@@ -50,3 +50,9 @@ request. All five native subscription/access cases pass in 10.36 s, including ge
 31.81 s. Fixture setup initially used an invalid profile name; that failure was corrected
 before the causal regression. No learned inference, real account or OS credential store
 was accessed. CI cost is the added local HTTP case plus compilation; existing bounds remain.
+
+The complete native provider suite subsequently exposed an older expected classification for
+HTTP402 in `native_http_fault_categories_and_entitlement_precedence_survive_into_recorded_result`.
+Its matrix now expects Provider for402, retaining every status and entitlement assertion. All43
+native provider cases pass65.54s, including the full prior category matrix and explicit payment
+recovery. This is an owned behavior-expectation update for the reviewed classification change.
