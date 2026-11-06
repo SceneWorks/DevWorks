@@ -935,7 +935,16 @@ fn layouts_keep_the_conversation_and_essential_controls_at_every_width_and_text_
 fn completion_cards_float_below_the_toolbar_without_moving_content_or_taking_focus() {
     let root = Root::new("cards");
     let engine = start(&root);
-    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    // Synthetic presentation cards must not be replaced by unrelated background inbox hints.
+    // Keep the real online backend and original focus/layout/ack assertions.
+    let backend = Gate::new("notifications.list")
+        .missing_hints()
+        .over(engine.backend());
+    let mut h = harness(
+        shell_with(Ok(backend), &root, Script::default(), None),
+        1440.0,
+        900.0,
+    );
     settle(&mut h);
     h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
         .focus();
