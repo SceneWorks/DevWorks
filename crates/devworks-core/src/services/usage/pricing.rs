@@ -3,6 +3,7 @@
 use super::meter::{InputSemantics, Quantities};
 use super::money::{CostAccumulator, MoneyError, Rounding};
 use crate::ports::usage::{CostClassification, PriceQuote};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PricingContext {
@@ -20,24 +21,178 @@ pub struct Estimate {
     pub unknown_components: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+struct Rate<'a> {
+    amount_usd: &'a str,
+    units: i64,
+    ttl_ms: Option<i128>,
+}
+struct RateOptions<'a> {
+    declared: bool,
+    choices: Vec<Rate<'a>>,
+}
+
+// Exact tariffs are authoritative. Legacy per-million rates are a fallback for older quotes,
+// never a second charge or a way around an ambiguous/missing canonical tariff match.
+fn token_rates<'a>(
+    quote: &'a PriceQuote,
+    kind: &str,
+    ttl_ms: Option<i64>,
+    reserve: bool,
+) -> RateOptions<'a> {
+    let mut choices = quote
+        .tariffs
+        .iter()
+        .filter(|t| {
+            t.unit == "Token"
+                && matches!(t.modality.as_str(), "Text" | "Any")
+                && t.charge_kind == kind
+        })
+        .map(|t| Rate {
+            amount_usd: &t.amount_usd,
+            units: t.units,
+            ttl_ms: t.cache_ttl_seconds.map(|s| i128::from(s) * 1000),
+        })
+        .collect::<Vec<_>>();
+    if choices.is_empty()
+        && let Some(rates) = &quote.rates
+    {
+        if kind == "CacheWrite" && !rates.cache_writes.is_empty() {
+            choices.extend(rates.cache_writes.iter().map(|r| Rate {
+                amount_usd: &r.usd_per_million,
+                units: 1_000_000,
+                ttl_ms: r.ttl_ms.map(i128::from),
+            }));
+        } else {
+            let rate = match kind {
+                "Input" => rates.input_usd_per_million.as_deref(),
+                "Output" => rates.output_usd_per_million.as_deref(),
+                "CacheRead" => rates.cache_read_usd_per_million.as_deref(),
+                "CacheWrite" => rates.cache_write_usd_per_million.as_deref(),
+                _ => None,
+            };
+            choices.extend(rate.map(|amount_usd| Rate {
+                amount_usd,
+                units: 1_000_000,
+                ttl_ms: None,
+            }));
+        }
+    }
+    let declared = !choices.is_empty();
+    if !(reserve && kind == "CacheWrite" && ttl_ms.is_none()) {
+        // A missing lifetime cannot distinguish a specific write row from an overlapping
+        // unrestricted row. Only an entirely lifetime-independent schedule is then usable.
+        if kind == "CacheWrite" && ttl_ms.is_none() && choices.iter().any(|r| r.ttl_ms.is_some()) {
+            choices.clear();
+        } else {
+            choices.retain(|r| {
+                r.ttl_ms
+                    .is_none_or(|ttl| Some(ttl) == ttl_ms.map(i128::from))
+            });
+        }
+    }
+    RateOptions { declared, choices }
+}
+
 fn add_component(
     cost: &mut CostAccumulator,
     known: &mut bool,
     unknown: &mut Vec<String>,
     name: &str,
     quantity: Option<i64>,
-    rate: Option<&str>,
+    rates: &RateOptions<'_>,
 ) -> Result<(), MoneyError> {
-    match (quantity, rate) {
-        (Some(0), _) => *known = true,
-        (Some(n), Some(rate)) => {
-            cost.tokens(n, rate)?;
+    match quantity {
+        Some(0) => *known = true,
+        Some(n) if rates.choices.len() == 1 => {
+            let rate = rates.choices[0];
+            cost.measure(n, rate.amount_usd, rate.units)?;
             *known = true;
         }
-        (None, None) => {}
+        None if !rates.declared => {}
         _ => unknown.push(name.into()),
     }
     Ok(())
+}
+
+fn highest_rate<'a>(
+    rates: &[Rate<'a>],
+    ttl_alternatives: bool,
+) -> Result<Option<Rate<'a>>, MoneyError> {
+    if rates.is_empty() || (!ttl_alternatives && rates.len() != 1) {
+        return Ok(None);
+    }
+    // Different known lifetimes are valid reservation alternatives. Overlapping rows at
+    // any lifetime are ambiguous, even when one of them has no TTL restriction.
+    if ttl_alternatives && rates.len() > 1 {
+        let mut lifetimes = BTreeSet::new();
+        if rates
+            .iter()
+            .any(|rate| rate.ttl_ms.is_none() || !lifetimes.insert(rate.ttl_ms))
+        {
+            return Ok(None);
+        }
+    }
+    most_expensive(rates)
+}
+
+fn most_expensive<'a>(rates: &[Rate<'a>]) -> Result<Option<Rate<'a>>, MoneyError> {
+    let mut highest: Option<(CostAccumulator, Rate<'a>)> = None;
+    for &rate in rates {
+        let mut exact = CostAccumulator::default();
+        exact.measure(1, rate.amount_usd, rate.units)?;
+        if highest
+            .as_ref()
+            .map(|(old, _)| exact.compare(old))
+            .transpose()?
+            .is_none_or(|ordering| ordering.is_gt())
+        {
+            highest = Some((exact, rate));
+        }
+    }
+    Ok(highest.map(|(_, rate)| rate))
+}
+
+fn measured_rates<'a>(
+    quote: &'a PriceQuote,
+    quantity: &super::meter::MeasuredQuantity,
+    reserve: bool,
+) -> RateOptions<'a> {
+    if quantity.unit == "Token" && matches!(quantity.modality.as_str(), "Text" | "Any") {
+        return token_rates(
+            quote,
+            &quantity.charge_kind,
+            quantity.cache_write_ttl_ms,
+            reserve,
+        );
+    }
+    let rows = quote
+        .tariffs
+        .iter()
+        .filter(|r| {
+            r.unit == quantity.unit
+                && r.modality == quantity.modality
+                && r.charge_kind == quantity.charge_kind
+        })
+        .collect::<Vec<_>>();
+    RateOptions {
+        declared: !rows.is_empty(),
+        choices: rows
+            .into_iter()
+            .filter(|r| {
+                (reserve
+                    && quantity.charge_kind == "CacheWrite"
+                    && quantity.cache_write_ttl_ms.is_none())
+                    || r.cache_ttl_seconds
+                        .is_none_or(|s| s.checked_mul(1000) == quantity.cache_write_ttl_ms)
+            })
+            .map(|r| Rate {
+                amount_usd: &r.amount_usd,
+                units: r.units,
+                ttl_ms: r.cache_ttl_seconds.map(|s| i128::from(s) * 1000),
+            })
+            .collect(),
+    }
 }
 
 pub fn estimate(
@@ -71,6 +226,9 @@ pub fn estimate(
     let mut known = false;
     let mut unknown = Vec::new();
     let mut input = quantities.clone();
+    if context.input_semantics == InputSemantics::Unknown {
+        unknown.push("input_semantics".into());
+    }
     let ambiguous_audio_cache = quantities.additional.iter().any(|q| {
         q.modality == "Audio" && q.charge_kind == "Input" && q.unit == "Token" && q.quantity > 0
     }) && ((context.cache_read_possible
@@ -126,51 +284,19 @@ pub fn estimate(
     let uncached = input
         .uncached_input(context.input_semantics)
         .map_err(|_| MoneyError::InvalidDecimal)?;
-    let rates = quote.rates.as_ref();
-    let write = rates.and_then(|rates| {
-        let matching = rates
-            .cache_writes
-            .iter()
-            .filter(|rate| {
-                rate.ttl_ms
-                    .is_none_or(|ttl| Some(ttl) == context.cache_write_ttl_ms)
-            })
-            .collect::<Vec<_>>();
-        if matching.len() == 1 {
-            Some(matching[0].usd_per_million.as_str())
-        } else if rates.cache_writes.is_empty() {
-            rates.cache_write_usd_per_million.as_deref()
-        } else {
-            None
-        }
-    });
-    for (name, kind, quantity, rate, applicable) in [
-        (
-            "input",
-            "Input",
-            uncached,
-            rates.and_then(|r| r.input_usd_per_million.as_deref()),
-            true,
-        ),
-        (
-            "output",
-            "Output",
-            input.output_tokens,
-            rates.and_then(|r| r.output_usd_per_million.as_deref()),
-            true,
-        ),
+    for (name, kind, quantity, applicable) in [
+        ("input", "Input", uncached, true),
+        ("output", "Output", input.output_tokens, true),
         (
             "cache read",
             "CacheRead",
             quantities.cached_read_tokens,
-            rates.and_then(|r| r.cache_read_usd_per_million.as_deref()),
             context.cache_read_possible && !ambiguous_audio_cache,
         ),
         (
             "cache write",
             "CacheWrite",
             quantities.cache_write_tokens,
-            write,
             context.cache_write_possible && !ambiguous_audio_cache,
         ),
     ] {
@@ -187,7 +313,8 @@ pub fn estimate(
             })
             .collect::<Vec<_>>();
         if explicit.is_empty() {
-            add_component(&mut cost, &mut known, &mut unknown, name, quantity, rate)?;
+            let rates = token_rates(quote, kind, context.cache_write_ttl_ms, false);
+            add_component(&mut cost, &mut known, &mut unknown, name, quantity, &rates)?;
         } else if let Some(total) = quantity {
             let measured = explicit
                 .iter()
@@ -199,11 +326,14 @@ pub fn estimate(
             if measured < total {
                 unknown.push(format!("unmeasured {name} modality remainder"));
             }
+        } else if matches!(kind, "Input" | "Output") {
+            unknown.push(format!("unmeasured {name} aggregate"));
         }
     }
     for quantity in &quantities.additional {
-        if ambiguous_audio_cache
-            && quantity.modality == "Audio"
+        if (ambiguous_audio_cache
+            || ((unexpected_read || unexpected_write)
+                && context.input_semantics == InputSemantics::Inclusive))
             && quantity.charge_kind == "Input"
             && quantity.unit == "Token"
         {
@@ -218,34 +348,28 @@ pub fn estimate(
             }
             continue;
         }
-        let matching = quote
-            .tariffs
-            .iter()
-            .filter(|rate| {
-                rate.unit == quantity.unit
-                    && rate.modality == quantity.modality
-                    && rate.charge_kind == quantity.charge_kind
-                    && rate.cache_ttl_seconds.is_none_or(|seconds| {
-                        seconds.checked_mul(1000) == quantity.cache_write_ttl_ms
-                    })
-            })
-            .collect::<Vec<_>>();
-        if quantity.quantity == 0 {
-            known = true;
-        } else if matching.len() == 1 {
-            let rate = matching[0];
-            cost.measure(quantity.quantity, &rate.amount_usd, rate.units)?;
-            known = true;
-        } else {
-            unknown.push(format!(
+        let rates = measured_rates(quote, quantity, false);
+        add_component(
+            &mut cost,
+            &mut known,
+            &mut unknown,
+            &format!(
                 "{} {} {}",
                 quantity.modality, quantity.charge_kind, quantity.unit
-            ));
-        }
+            ),
+            Some(quantity.quantity),
+            &rates,
+        )?;
     }
+
     // Non-token/modal rates in this quote require their own observed dimensional quantity.
     // Alternative TTL rows describe one write category; they are not separate charges.
     for tariff in &quote.tariffs {
+        if (tariff.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (tariff.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            continue;
+        }
         if tariff.unit == "Token" && matches!(tariff.modality.as_str(), "Text" | "Any") {
             continue;
         }
@@ -336,13 +460,14 @@ pub fn cache_estimates(
     ))
 }
 
-/// Reserve validated total input plus output headroom. Cache reads never grant a provisional
-/// discount; if cache writes may occur, use the highest applicable complete write/input rate.
+/// Reserve validated total input plus output headroom at the highest host-applicable
+/// input/read/write rate. Provisional cache hits never grant a discount; missing rates stay
+/// explicit rather than supplying an invented maximum.
 pub fn reservation(
     quote: &PriceQuote,
     input_tokens: i64,
     output_headroom: i64,
-    cache_write_possible: bool,
+    context: &PricingContext,
     unit_headroom: &[super::meter::MeasuredQuantity],
 ) -> Result<Estimate, MoneyError> {
     if input_tokens < 0 || output_headroom < 0 {
@@ -371,58 +496,91 @@ pub fn reservation(
     let mut base = CostAccumulator::default();
     let mut known = false;
     let mut unknown = Vec::new();
+    let mut input_remainder = input_tokens;
+    let mut output_remainder = output_headroom;
     for quantity in unit_headroom {
-        let matching = quote
-            .tariffs
-            .iter()
-            .filter(|rate| {
-                rate.unit == quantity.unit
-                    && rate.modality == quantity.modality
-                    && rate.charge_kind == quantity.charge_kind
-                    && (quantity.cache_write_ttl_ms.is_none()
-                        || rate.cache_ttl_seconds.is_none_or(|seconds| {
-                            seconds.checked_mul(1000) == quantity.cache_write_ttl_ms
-                        }))
-            })
-            .collect::<Vec<_>>();
-        // For an unknown write TTL, independently price each valid option and take its
-        // conservative maximum. Other ambiguous unit rates are never guessed.
-        let choices = if (quantity.charge_kind == "CacheWrite"
-            && quantity.cache_write_ttl_ms.is_none())
-            || matching.len() == 1
+        if quantity.unit == "Token" {
+            let aggregate = match quantity.charge_kind.as_str() {
+                "Input" => Some(&mut input_remainder),
+                "Output" => Some(&mut output_remainder),
+                _ => None,
+            };
+            if let Some(aggregate) = aggregate {
+                *aggregate = aggregate
+                    .checked_sub(quantity.quantity)
+                    .filter(|n| *n >= 0)
+                    .ok_or(MoneyError::InvalidDecimal)?;
+            }
+        }
+        if (quantity.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (quantity.charge_kind == "CacheWrite" && !context.cache_write_possible)
         {
-            matching
-        } else {
-            Vec::new()
-        };
+            if quantity.quantity > 0 {
+                unknown.push("profile contradicts reserved cache unit".into());
+            }
+            continue;
+        }
         if quantity.quantity == 0 {
             known = true;
             continue;
         }
-        let mut highest: Option<(CostAccumulator, &crate::ports::usage::PublishedTariff)> = None;
-        for rate in choices {
-            let mut candidate = CostAccumulator::default();
-            candidate.measure(quantity.quantity, &rate.amount_usd, rate.units)?;
-            if highest
-                .as_ref()
-                .map(|(before, _)| candidate.compare(before))
-                .transpose()?
-                .is_none_or(|order| order.is_gt())
-            {
-                highest = Some((candidate, rate));
-            }
-        }
-        if let Some((_, rate)) = highest {
-            base.measure(quantity.quantity, &rate.amount_usd, rate.units)?;
-            known = true;
-        } else {
+        let options = measured_rates(quote, quantity, true);
+        let rate = highest_rate(
+            &options.choices,
+            quantity.charge_kind == "CacheWrite" && quantity.cache_write_ttl_ms.is_none(),
+        )?;
+        let mut alternatives = rate.into_iter().collect::<Vec<_>>();
+        if alternatives.is_empty() {
             unknown.push(format!(
                 "{} {} {} reservation",
                 quantity.modality, quantity.charge_kind, quantity.unit
             ));
         }
+        if context.cache_read_possible
+            && quantity.unit == "Token"
+            && quantity.charge_kind == "Input"
+        {
+            let read = super::meter::MeasuredQuantity {
+                charge_kind: "CacheRead".into(),
+                cache_write_ttl_ms: None,
+                ..quantity.clone()
+            };
+            let options = measured_rates(quote, &read, true);
+            if let Some(read) = highest_rate(&options.choices, false)? {
+                alternatives.push(read);
+            } else {
+                unknown.push(format!("{} cache read reservation", quantity.modality));
+            }
+        }
+        if context.cache_write_possible
+            && quantity.unit == "Token"
+            && quantity.charge_kind == "Input"
+        {
+            let write = super::meter::MeasuredQuantity {
+                charge_kind: "CacheWrite".into(),
+                cache_write_ttl_ms: context.cache_write_ttl_ms,
+                ..quantity.clone()
+            };
+            let options = measured_rates(quote, &write, true);
+            if let Some(write) =
+                highest_rate(&options.choices, context.cache_write_ttl_ms.is_none())?
+            {
+                alternatives.push(write);
+            } else {
+                unknown.push(format!("{} cache write reservation", quantity.modality));
+            }
+        }
+        if let Some(rate) = most_expensive(&alternatives)? {
+            base.measure(quantity.quantity, rate.amount_usd, rate.units)?;
+            known = true;
+        }
     }
     for tariff in &quote.tariffs {
+        if (tariff.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (tariff.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            continue;
+        }
         if tariff.unit == "Token" && matches!(tariff.modality.as_str(), "Text" | "Any") {
             continue;
         }
@@ -440,51 +598,49 @@ pub fn reservation(
             }
         }
     }
-    let rates = quote.rates.as_ref();
-    let mut input_rates = Vec::new();
-    if let Some(rate) = rates.and_then(|r| r.input_usd_per_million.as_deref()) {
-        input_rates.push(rate);
-    } else if input_tokens > 0 {
+    let output = token_rates(quote, "Output", None, false);
+    if let Some(rate) = highest_rate(&output.choices, false)? {
+        base.measure(output_remainder, rate.amount_usd, rate.units)?;
+        known = true;
+    } else if output_remainder > 0 {
+        unknown.push("output reservation".into());
+    }
+    let mut alternatives = Vec::new();
+    let input = token_rates(quote, "Input", None, false);
+    if let Some(rate) = highest_rate(&input.choices, false)? {
+        alternatives.push(rate);
+    } else if input_remainder > 0 {
         unknown.push("input reservation".into());
     }
-    if cache_write_possible && input_tokens > 0 {
-        if let Some(rates) = rates {
-            if let Some(rate) = &rates.cache_write_usd_per_million {
-                input_rates.push(rate.as_str());
-            }
-            input_rates.extend(
-                rates
-                    .cache_writes
-                    .iter()
-                    .map(|r| r.usd_per_million.as_str()),
-            );
-            if rates.cache_write_usd_per_million.is_none() && rates.cache_writes.is_empty() {
-                unknown.push("cache write reservation".into());
-            }
+    if context.cache_read_possible && input_remainder > 0 {
+        let read = token_rates(quote, "CacheRead", None, true);
+        if let Some(rate) = highest_rate(&read.choices, false)? {
+            alternatives.push(rate);
+        } else {
+            unknown.push("cache read reservation".into());
+        }
+    }
+    if context.cache_write_possible && input_remainder > 0 {
+        let write = token_rates(quote, "CacheWrite", context.cache_write_ttl_ms, true);
+        if let Some(rate) = highest_rate(&write.choices, context.cache_write_ttl_ms.is_none())? {
+            alternatives.push(rate);
         } else {
             unknown.push("cache write reservation".into());
         }
     }
-    if let Some(rate) = rates.and_then(|r| r.output_usd_per_million.as_deref()) {
-        base.tokens(output_headroom, rate)?;
-        known = true;
-    } else if output_headroom > 0 {
-        unknown.push("output reservation".into());
-    }
-    let mut candidates = Vec::new();
-    for rate in input_rates {
-        let mut cost = base.clone();
-        cost.tokens(input_tokens, rate)?;
-        candidates.push(cost.micro_usd(Rounding::Up)?);
+    if let Some(rate) = most_expensive(&alternatives)? {
+        base.measure(input_remainder, rate.amount_usd, rate.units)?;
         known = true;
     }
-    if candidates.is_empty()
-        && (known || (input_tokens == 0 && output_headroom == 0 && unknown.is_empty()))
-    {
-        candidates.push(base.micro_usd(Rounding::Up)?);
-    }
+
     Ok(Estimate {
-        tracked_micro_usd: candidates.into_iter().max(),
+        tracked_micro_usd: if known
+            || (input_tokens == 0 && output_headroom == 0 && unknown.is_empty())
+        {
+            Some(base.micro_usd(Rounding::Up)?)
+        } else {
+            None
+        },
         monetary_complete: unknown.is_empty(),
         unknown_components: unknown,
     })
@@ -605,11 +761,11 @@ mod tests {
         .unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(1));
         assert!(cost.monetary_complete);
-        let reserve = reservation(&quote, 0, 0, false, &units).unwrap();
+        let reserve = reservation(&quote, 0, 0, &plain_context(), &units).unwrap();
         assert_eq!(reserve.tracked_micro_usd, Some(1));
         assert!(reserve.monetary_complete);
         assert!(
-            !reservation(&quote, 0, 0, false, &[])
+            !reservation(&quote, 0, 0, &plain_context(), &[])
                 .unwrap()
                 .monetary_complete
         );
@@ -627,7 +783,7 @@ mod tests {
             ..Default::default()
         }));
         assert_eq!(
-            reservation(&quote, 100, 10, true, &[]).unwrap(),
+            reservation(&quote, 100, 10, &writing_context(), &[]).unwrap(),
             Estimate {
                 tracked_micro_usd: Some(480),
                 monetary_complete: true,
@@ -664,7 +820,7 @@ mod tests {
                 quantity: 1,
             },
         ];
-        let cost = reservation(&quote, 0, 0, true, &units).unwrap();
+        let cost = reservation(&quote, 0, 0, &writing_context(), &units).unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(2));
         assert!(cost.monetary_complete);
     }
@@ -780,5 +936,293 @@ mod tests {
         .unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(5_000_000));
         assert!(cost.monetary_complete);
+    }
+    fn token_tariff(
+        kind: &str,
+        modality: &str,
+        amount: &str,
+        units: i64,
+        ttl: Option<i64>,
+    ) -> crate::ports::usage::PublishedTariff {
+        crate::ports::usage::PublishedTariff {
+            upstream_model_id: "priced".into(),
+            service_tier: "Standard".into(),
+            context_lower_exclusive: None,
+            context_upper_inclusive: None,
+            modality: modality.into(),
+            charge_kind: kind.into(),
+            cache_ttl_seconds: ttl,
+            unit: "Token".into(),
+            units,
+            amount_usd: amount.into(),
+            region: None,
+            endpoint_profile: None,
+        }
+    }
+    fn writing_context() -> PricingContext {
+        PricingContext {
+            cache_write_possible: true,
+            ..plain_context()
+        }
+    }
+    fn plain_context() -> PricingContext {
+        PricingContext {
+            input_semantics: InputSemantics::Disjoint,
+            cache_read_possible: false,
+            cache_write_possible: false,
+            cache_write_ttl_ms: None,
+        }
+    }
+    #[test]
+    fn exact_aggregate_and_explicit_text_tokens_round_once_without_legacy_double_charges() {
+        let mut priced = quote(Some(UsageRates {
+            input_usd_per_million: Some("99".into()),
+            output_usd_per_million: Some("99".into()),
+            ..Default::default()
+        }));
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.000001", 3, None),
+            token_tariff("Output", "Text", "0.000001", 3, None),
+        ];
+        let mut quantities = Quantities {
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            ..Default::default()
+        };
+        for explicit in [false, true] {
+            if explicit {
+                quantities.additional = ["Input", "Output"]
+                    .map(|kind| MeasuredQuantity {
+                        modality: "Text".into(),
+                        charge_kind: kind.into(),
+                        unit: "Token".into(),
+                        cache_write_ttl_ms: None,
+                        quantity: 1,
+                    })
+                    .to_vec();
+            }
+            let cost = estimate(&priced, &quantities, &plain_context()).unwrap();
+            assert_eq!(cost.tracked_micro_usd, Some(1), "explicit={explicit}");
+            assert!(cost.monetary_complete);
+            let reserved =
+                reservation(&priced, 1, 1, &plain_context(), &quantities.additional).unwrap();
+            assert_eq!(reserved.tracked_micro_usd, Some(1), "explicit={explicit}");
+            assert!(reserved.monetary_complete);
+        }
+        let missing_total = estimate(
+            &priced,
+            &Quantities {
+                input_tokens: None,
+                ..quantities.clone()
+            },
+            &plain_context(),
+        )
+        .unwrap();
+        assert!(
+            !missing_total.monetary_complete,
+            "a measured modality subset does not establish an absent aggregate"
+        );
+        let legacy = quote(Some(UsageRates {
+            input_usd_per_million: Some("0.333333333333".into()),
+            output_usd_per_million: Some("0.333333333333".into()),
+            ..Default::default()
+        }));
+        assert_eq!(
+            estimate(&legacy, &quantities, &plain_context())
+                .unwrap()
+                .tracked_micro_usd,
+            Some(1)
+        );
+        assert_eq!(
+            reservation(&legacy, 1, 1, &plain_context(), &quantities.additional)
+                .unwrap()
+                .tracked_micro_usd,
+            Some(1)
+        );
+    }
+    #[test]
+    fn aggregate_large_denominators_cancel_before_rounding_and_zero_is_known() {
+        let mut priced = quote(None);
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "999999999999", i64::MAX, None),
+            token_tariff("Output", "Text", "0.000001", 3, None),
+        ];
+        let quantities = Quantities {
+            input_tokens: Some(i64::MAX),
+            output_tokens: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            estimate(&priced, &quantities, &plain_context())
+                .unwrap()
+                .tracked_micro_usd,
+            Some(999_999_999_999_000_000)
+        );
+        assert_eq!(
+            reservation(&priced, i64::MAX, 1, &plain_context(), &[])
+                .unwrap()
+                .tracked_micro_usd,
+            Some(999_999_999_999_000_001)
+        );
+        for row in &mut priced.tariffs {
+            row.amount_usd = "0".into();
+        }
+        let free = estimate(&priced, &quantities, &plain_context()).unwrap();
+        assert_eq!(free.tracked_micro_usd, Some(0));
+        assert!(free.monetary_complete);
+        assert_eq!(
+            reservation(&priced, i64::MAX, 1, &plain_context(), &[])
+                .unwrap()
+                .tracked_micro_usd,
+            Some(0)
+        );
+        let absent = reservation(&quote(None), 100, 0, &plain_context(), &[]).unwrap();
+        assert_eq!(absent.tracked_micro_usd, None);
+        assert!(!absent.monetary_complete);
+    }
+    #[test]
+    fn exact_write_rates_preserve_ttl_ambiguity_and_compare_ratios_not_decimal_amounts() {
+        let mut priced = quote(Some(UsageRates {
+            input_usd_per_million: Some("0".into()),
+            cache_write_usd_per_million: Some("0".into()),
+            ..Default::default()
+        }));
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.001", 1000, None),
+            token_tariff("CacheWrite", "Text", "0.002", 1000, Some(300)),
+            token_tariff("CacheWrite", "Text", "0.0004", 100, Some(3600)),
+        ];
+        let quantities = Quantities {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            cache_write_tokens: Some(100),
+            ..Default::default()
+        };
+        let context = PricingContext {
+            cache_write_possible: true,
+            cache_write_ttl_ms: Some(300_000),
+            ..plain_context()
+        };
+        assert_eq!(
+            estimate(&priced, &quantities, &context)
+                .unwrap()
+                .tracked_micro_usd,
+            Some(200)
+        );
+        let reserved = reservation(&priced, 100, 0, &writing_context(), &[]).unwrap();
+        assert_eq!(reserved.tracked_micro_usd, Some(400));
+        assert!(reserved.monetary_complete);
+        assert!(
+            !estimate(
+                &priced,
+                &quantities,
+                &PricingContext {
+                    cache_write_ttl_ms: None,
+                    ..context.clone()
+                }
+            )
+            .unwrap()
+            .monetary_complete
+        );
+        priced
+            .tariffs
+            .push(token_tariff("CacheWrite", "Text", "0.001", 1000, None));
+        assert!(
+            !estimate(&priced, &quantities, &context)
+                .unwrap()
+                .monetary_complete
+        );
+        assert!(
+            !reservation(&priced, 100, 0, &writing_context(), &[])
+                .unwrap()
+                .monetary_complete
+        );
+        priced
+            .tariffs
+            .push(token_tariff("Input", "Any", "0", 1_000_000, None));
+        assert!(
+            !estimate(
+                &priced,
+                &Quantities {
+                    input_tokens: Some(100),
+                    output_tokens: Some(0),
+                    ..Default::default()
+                },
+                &plain_context()
+            )
+            .unwrap()
+            .monetary_complete
+        );
+    }
+    #[test]
+    fn exact_audio_subsets_and_explicit_text_remainders_are_priced_and_reserved_once() {
+        let mut priced = quote(None);
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.002", 1000, None),
+            token_tariff("Output", "Text", "0.004", 1000, None),
+            token_tariff("Input", "Audio", "0.000001", 3, None),
+            token_tariff("Output", "Audio", "0.000001", 7, None),
+        ];
+        let mut quantities = Quantities {
+            input_tokens: Some(10),
+            output_tokens: Some(4),
+            additional: vec![
+                MeasuredQuantity {
+                    modality: "Audio".into(),
+                    charge_kind: "Input".into(),
+                    unit: "Token".into(),
+                    cache_write_ttl_ms: None,
+                    quantity: 4,
+                },
+                MeasuredQuantity {
+                    modality: "Audio".into(),
+                    charge_kind: "Output".into(),
+                    unit: "Token".into(),
+                    cache_write_ttl_ms: None,
+                    quantity: 1,
+                },
+            ],
+            ..Default::default()
+        };
+        for explicit in [false, true] {
+            if explicit {
+                quantities
+                    .additional
+                    .extend([("Input", 6), ("Output", 3)].map(|(kind, quantity)| {
+                        MeasuredQuantity {
+                            modality: "Text".into(),
+                            charge_kind: kind.into(),
+                            unit: "Token".into(),
+                            cache_write_ttl_ms: None,
+                            quantity,
+                        }
+                    }));
+            }
+            let cost = estimate(&priced, &quantities, &plain_context()).unwrap();
+            assert_eq!(cost.tracked_micro_usd, Some(25));
+            assert!(cost.monetary_complete);
+            let reserved =
+                reservation(&priced, 10, 4, &plain_context(), &quantities.additional).unwrap();
+            assert_eq!(reserved.tracked_micro_usd, Some(26));
+            assert!(reserved.monetary_complete);
+        }
+        quantities.cached_read_tokens = Some(1);
+        let uncertain = estimate(
+            &priced,
+            &quantities,
+            &PricingContext {
+                input_semantics: InputSemantics::Inclusive,
+                cache_read_possible: true,
+                ..plain_context()
+            },
+        )
+        .unwrap();
+        assert!(!uncertain.monetary_complete);
+        assert_eq!(uncertain.tracked_micro_usd, Some(12));
+        assert!(
+            uncertain
+                .unknown_components
+                .contains(&"input_modality_cache_breakdown".into())
+        );
     }
 }

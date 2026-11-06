@@ -34,11 +34,25 @@ pub struct PinFence {
 }
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub enum AttemptSelection {
+    /// Trusted native normalization retained alongside the existing exact route eligibility.
+    NativeGeneration {
+        route: Box<AttemptSelection>,
+        requested_effort: Option<String>,
+        effective_effort: Option<String>,
+    },
     Conversation {
         intent: RouteIntent,
         effort: EffortName,
         required_capabilities: Vec<String>,
         pin: Option<PinFence>,
+    },
+    /// Exact discovered embedding model and explicitly qualified native host space; no pin.
+    Embedding {
+        embedding_space_id: Id,
+        dimensions: u32,
+        upstream_model_id: String,
+        connection_revision: i64,
+        registration_digest: String,
     },
     Decision {
         question_type: String,
@@ -47,6 +61,14 @@ pub enum AttemptSelection {
     },
 }
 
+impl AttemptSelection {
+    fn route(&self) -> &Self {
+        match self {
+            Self::NativeGeneration { route, .. } => route,
+            _ => self,
+        }
+    }
+}
 impl InferenceRouter {
     pub(crate) fn attempt_route_current(
         &self,
@@ -56,7 +78,32 @@ impl InferenceRouter {
         query: &crate::ports::usage::PriceQuery,
     ) -> Result<Option<String>, StorageError> {
         let connections = self.connections.connections(tx.router())?;
+        if let AttemptSelection::NativeGeneration {
+            route,
+            effective_effort,
+            ..
+        } = selection
+        {
+            let mut selected = route.as_ref().clone();
+            let AttemptSelection::Conversation { effort, .. } = &mut selected else {
+                return Err(StorageError::ScopeDenied);
+            };
+            if let Some(level) = effective_effort.as_deref() {
+                *effort = match level {
+                    "none" => EffortName::Default,
+                    "minimal" => EffortName::Minimal,
+                    "low" => EffortName::Low,
+                    "medium" => EffortName::Medium,
+                    "high" => EffortName::High,
+                    "xhigh" => EffortName::XHigh,
+                    "max" => EffortName::Max,
+                    _ => return Err(StorageError::ScopeDenied),
+                };
+            }
+            return self.attempt_route_current(tx, session, &selected, query);
+        }
         match selection {
+            AttemptSelection::NativeGeneration { .. } => unreachable!("handled above"),
             AttemptSelection::Conversation {
                 intent,
                 effort,
@@ -128,8 +175,8 @@ impl InferenceRouter {
                 }
                 // An upstream auto route is unresolved until the provider responds. It cannot
                 // borrow a concrete model's tariff merely because both share a connection.
-                if model.upstream_model_id == "openrouter/auto"
-                    || model.upstream_model_id == "openrouter/auto:beta"
+                if model.endpoint_profile == select::OPEN_ROUTER_PROFILE
+                    && crate::ports::router::is_open_router_auto(&model.upstream_model_id)
                 {
                     if query.provider_model_id.is_some() {
                         return Ok(Some(
@@ -139,6 +186,46 @@ impl InferenceRouter {
                 } else if query.provider_model_id.as_ref() != Some(&model.upstream_model_id) {
                     return Ok(Some(
                         "concrete upstream identity changed before admission".into(),
+                    ));
+                }
+            }
+            AttemptSelection::Embedding {
+                dimensions,
+                upstream_model_id,
+                connection_revision,
+                registration_digest,
+                ..
+            } => {
+                let connection = tx.router().connection(&query.connection_id)?;
+                let eligible = connection.as_ref().is_some_and(|c| {
+                    c.enabled
+                        && c.lifecycle == "Connected"
+                        && c.profile == "Embedding"
+                        && c.revision == *connection_revision
+                        && *dimensions > 0
+                        && *dimensions <= 65536
+                        && c.discovered
+                            .as_ref()
+                            .is_some_and(|models| models.iter().any(|m| m.id == *upstream_model_id))
+                        && query.catalog_model_id
+                            == super::connections::discovered_model_id(
+                                "Embedding",
+                                &c.id,
+                                upstream_model_id,
+                            )
+                }) && query.endpoint_profile == "Embedding"
+                    && query.provider_model_id.as_ref() == Some(upstream_model_id)
+                    && registration_digest.len() == 64
+                    && registration_digest.bytes().all(|b| b.is_ascii_hexdigit());
+                if !eligible
+                    || tx
+                        .router()
+                        .cooldowns()?
+                        .iter()
+                        .any(|c| c.model_id == query.catalog_model_id && c.until_ms > tx.now_ms())
+                {
+                    return Ok(Some(
+                        "embedding model, connection or qualified native space changed".into(),
                     ));
                 }
             }
@@ -208,8 +295,18 @@ impl InferenceRouter {
             .ok_or_else(|| {
                 StorageError::InvalidRecord("missing logical inference request".into())
             })?;
+        if (route.purpose == "Embedding")
+            != matches!(
+                request.selection.route(),
+                AttemptSelection::Embedding { .. }
+            )
+        {
+            return Ok(Admission::SourceChanged(
+                "embedding requires its qualified native route".into(),
+            ));
+        }
         if route.purpose == "TierClassification"
-            && matches!(&request.selection,AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
+            && matches!(request.selection.route(),AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
         {
             return Ok(Admission::SourceChanged(
                 "the conversational classifier must target Low directly".into(),

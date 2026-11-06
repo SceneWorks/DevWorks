@@ -228,6 +228,8 @@ pub struct RuntimeConfig {
     pub approval_resume_interval: Duration,
     /// Native OS delivery adapter. Absent adapters keep the persistent inbox available.
     pub native_notifications: Option<Arc<dyn OsNotificationPort>>,
+    /// Native provider HTTP and explicit host capability/embedding-space qualification.
+    pub providers: Option<crate::providers::driver::ProviderComposition>,
     /// Durable notification catch-up interval; focus and committed commands also wake it.
     pub notification_interval: Duration,
 }
@@ -250,6 +252,7 @@ impl RuntimeConfig {
             eval_interval: Duration::from_secs(30),
             approval_resume_interval: Duration::from_secs(5),
             native_notifications: None,
+            providers: None,
             notification_interval: Duration::from_secs(5),
         }
     }
@@ -334,6 +337,7 @@ pub struct Runtime {
     housekeeper: Arc<Housekeeper>,
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
+    providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -362,6 +366,7 @@ pub struct Runtime {
     monitor: Arc<Monitor>,
     browser: Option<Arc<BrowserService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    help: Option<Arc<devworks_core::services::help::HelpService>>,
     browser_supervision: Arc<BrowserSupervision>,
     packages: Option<Arc<PackageHost>>,
     shutdown_grace: Duration,
@@ -537,6 +542,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
+    // A deliberately supplied native-job fixture may own DOCS. Production composes the
+    // complete Help family and its consumer together; it never attaches to a foreign journal.
+    let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
+        Arc::new(devworks_core::services::help::HelpService::new(
+            store.clone(),
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+            packages.as_ref().map(|package| package.service.clone()),
+        ))
+    });
+    let use_cases = if let Some(service) = &help {
+        consumers.push(crate::help::consumer(service.clone()));
+        use_cases.with_help(service.clone())
+    } else {
+        use_cases
+    };
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -650,6 +672,34 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let use_cases = use_cases
         .with_approvals(approvals.clone())
         .with_notifications(Arc::new(NotificationService::new(ids.clone())));
+    if let Some(service) = &help {
+        service.set_composition(&use_cases);
+    }
+    let providers = match config.providers.clone() {
+        Some(provider) => {
+            let connections = use_cases.connection_service().ok_or_else(|| {
+                BootError::Composition(StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "native provider composition requires current ConnectionService",
+                ))
+            })?;
+            let schemas = Arc::new(crate::providers::schemas::RegisteredSchemas::new(
+                store.clone(),
+                use_cases.clone(),
+                packages.as_ref().map(|p| p.service.clone()),
+                artifacts.clone(),
+            ));
+            Some(crate::providers::driver::NativeProviders::new(
+                store.clone(),
+                artifacts.clone(),
+                connections,
+                usage.clone(),
+                schemas,
+                provider,
+            ))
+        }
+        None => None,
+    };
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -855,6 +905,29 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
     });
+    if let Some(service) = &help {
+        let service = service.clone();
+        let command = admitter.clone();
+        tasks.push(tokio::spawn(async move {
+            while !service.is_stopped() {
+                let current = service.clone();
+                let target = command.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = current.cleanup();
+                    if let Ok(Some((context, frame))) = current.maintenance_request() {
+                        let _ = target.command_with(
+                            &context,
+                            "help.generate_capability_docs",
+                            &frame,
+                            WriteOptions::default(),
+                        );
+                    }
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     let mut scheduler = Scheduler::new(
         store.clone(),
         jobs.clone(),
@@ -891,6 +964,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         housekeeper,
         runs: run_supervisor,
         usage,
+        providers,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -912,6 +986,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         monitor,
         browser,
         git,
+        help,
         browser_supervision,
         shutdown_grace: config.shutdown_grace,
         shutdown_bound: config.shutdown_bound,
@@ -1039,6 +1114,10 @@ impl Runtime {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
     /// Canonical native producers and bounded historical accounting over the same router.
+    pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
+        self.providers.as_ref()
+    }
+
     pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
         &self.usage
     }
@@ -1239,6 +1318,11 @@ impl Runtime {
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
+        let refresh_shutdown = self
+            .use_cases
+            .connection_service()
+            .map(|connections| connections.close())
+            .transpose();
         self.usage.stop();
         self.evals.stop();
         self.resumes.stop();
@@ -1353,6 +1437,22 @@ impl Runtime {
             .housekeeper
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
+        match refresh_shutdown {
+            Err(error) if stopped.reconciliation.is_ok() => stopped.reconciliation = Err(error),
+            Ok(Some(report)) if !report.unknown_operations.is_empty() => {
+                stopped.reconciliation = Err(
+                    devworks_core::ports::storage::StorageError::unavailable(
+                        devworks_core::ports::storage::Unavailable::UnsupportedRuntime,
+                        format!(
+                            "{} token refreshes have unknown outcomes; {} external secret handles remain unpublished",
+                            report.unknown_operations.len(),
+                            report.unpublished_handles.len()
+                        ),
+                    ),
+                );
+            }
+            _ => {}
+        }
         match inference_shutdown {
             Ok(drain) => {
                 stopped.unclosed_inference_attempts = drain.unclosed;
@@ -1385,6 +1485,12 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(help) = &self.help {
+            help.stop();
+        }
+        if let Some(connections) = self.use_cases.connection_service() {
+            let _ = connections.close();
+        }
         self.usage.stop();
         if let Some(worker) = &self.prices {
             worker.stop();

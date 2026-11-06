@@ -2,9 +2,11 @@
 //! sources exercise publication/failure/races without network or any inference execution.
 mod common;
 use common::*;
+use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_core::authority::HostAuthority;
 use devworks_core::context::{InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
+use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use devworks_core::ports::storage::*;
 use devworks_core::ports::usage::*;
 use devworks_core::ports::{IdKind, IdSource};
@@ -18,6 +20,8 @@ use devworks_engine::prices::PriceSupervisor;
 use devworks_engine::{Dispatcher, DispatcherConfig};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::io::Read;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -246,6 +250,76 @@ fn catalog(provider: OfficialPriceProvider, now: i64, amount: &str) -> FetchedPr
         tariffs: vec![input, output],
     }
 }
+// Receipt files have a separate gate from the public price source. This makes their
+// independent history publication deterministic instead of attributing it to a late GET.
+struct GatedFiles {
+    inner: NativeArtifactFiles,
+    gate: Arc<Gate>,
+    started: Arc<AtomicUsize>,
+}
+impl ArtifactFiles for GatedFiles {
+    fn publish(
+        &self,
+        s: &str,
+        src: &mut dyn Read,
+        d: &str,
+        n: u64,
+        r: Option<&str>,
+        g: &str,
+    ) -> Result<PublishedBlob, FileFault> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.gate.started.notify_one();
+        let mut open = self.gate.open.lock().unwrap();
+        while !*open {
+            open = self.gate.release.wait(open).unwrap();
+        }
+        drop(open);
+        self.inner.publish(s, src, d, n, r, g)
+    }
+    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d, g)
+    }
+    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, g, n)
+    }
+    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d, g)
+    }
+    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+        self.inner.read_range(d, g, n, o, m)
+    }
+    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, g, n)
+    }
+    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.unlink(d, g)
+    }
+    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.quarantine(d, g)
+    }
+    fn staged(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
+        self.inner.remove_staged(n)
+    }
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
+        self.inner.stored_files()
+    }
+    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
+        self.inner.write_derived(k, b)
+    }
+    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
+        self.inner.read_derived(k, m)
+    }
+    fn collect_derived(&self) -> Result<u64, FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(&self, d: &str, g: &str, n: u64, dest: &Path, o: bool) -> Result<(), FileFault> {
+        self.inner.export(d, g, n, dest, o)
+    }
+}
+
 struct Source {
     outcomes: Mutex<VecDeque<Result<String, PriceFetchError>>>,
     calls: AtomicUsize,
@@ -1324,112 +1398,235 @@ fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes
 #[test]
 fn runtime_shutdown_bounds_stalled_price_fetches_and_fences_every_late_write() {
     runtime().block_on(within("bounded price-source shutdown", async {
-        struct Release(Arc<Gate>);
-        impl Drop for Release {
-            fn drop(&mut self) {
-                self.0.release();
-            }
-        }
         for recovering in [false, true] {
-            let fx = Fx::new();
-            let (first_worker, first_dispatcher) = fx.dispatcher(Source::new(vec![]));
-            fx.refresh(&["openai"]);
-            deliver(&first_dispatcher).await;
-            let last_good =
-                read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
-            first_worker.drain().await;
-            first_dispatcher.stop();
-            drop(first_dispatcher);
-            drop(first_worker);
-
-            let (_, operation) = fx.refresh(&["openai"]);
-            if recovering {
-                let gate = Gate::new();
-                let _release = Release(gate.clone());
-                let source = Arc::new(Source {
-                    outcomes: Mutex::new(VecDeque::new()),
-                    calls: AtomicUsize::new(0),
-                    gate: Some(gate.clone()),
-                });
-                let (worker, dispatcher) = fx.dispatcher(source);
-                dispatcher.recover().await.unwrap();
-                dispatcher.tick().await.unwrap();
-                gate.started.notified().await;
-                worker.stop();
-                gate.release();
-                worker.drain().await;
-                dispatcher.idle().await;
-                assert_eq!(
-                    read(&*fx.store, |s| s.operations().operation(&operation))
-                        .unwrap()
-                        .state,
-                    devworks_core::protocol::OperationState::OutcomeUnknown
-                );
-                dispatcher.stop();
-            }
-            let gate = Gate::new();
-            let source = Arc::new(Source {
-                outcomes: Mutex::new(VecDeque::new()),
-                calls: AtomicUsize::new(0),
-                gate: Some(gate.clone()),
-            });
-            let mut composed = composition(&fx.h, fx.store.clone(), source.clone());
-            composed.config.shutdown_bound = std::time::Duration::from_millis(100);
-            let app = devworks_engine::boot(composed).await.unwrap();
-            let _release = Release(gate.clone());
-            gate.started.notified().await;
-            let began = std::time::Instant::now();
-            tokio::time::timeout(std::time::Duration::from_secs(2), app.shutdown())
-                .await
-                .expect("price fetch exceeded the shutdown bound");
-            assert!(
-                began.elapsed() < std::time::Duration::from_secs(2),
-                "shutdown waited for the price source"
-            );
-            let snapshot = || {
-                read(&*fx.store, |s| {
-                    Ok((
-                        s.stamp().clone(),
-                        s.usage().price_revision()?,
-                        s.usage().current_price_snapshot("openai")?,
-                        s.usage().current_price_snapshot("anthropic")?,
-                        s.usage().price_status("openai")?,
-                        s.usage().price_status("anthropic")?,
-                        s.operations().operation(&operation)?,
-                        s.queue()
-                            .deliveries(
-                                &DeliveryFilter {
-                                    consumer: Some(refresh::CONSUMER.into()),
-                                    operation_id: None,
-                                },
-                                None,
-                                64,
-                            )?
-                            .entries,
-                    ))
-                })
-            };
-            let before = snapshot();
-            assert_eq!(before.2, Some(last_good));
-            assert_eq!(
-                before.6.as_ref().unwrap().state,
-                devworks_core::protocol::OperationState::OutcomeUnknown
-            );
-            assert!(before.4.as_ref().unwrap().refresh_pending);
-            gate.release();
-            // This graceful wait acknowledges the actual detached callback returning; it is
-            // deliberately outside Runtime.shutdown's shared deadline.
-            app.price_refreshes().unwrap().drain().await;
-            app.dispatcher().idle().await;
-            assert_eq!(
-                snapshot(),
-                before,
-                "late source changed catalog, operation or delivery after shutdown"
-            );
-            assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
-            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+            price_shutdown_case(recovering, false).await;
         }
     }));
+}
+
+#[test]
+fn gated_setup_receipts_explain_the_shutdown_history_race_without_any_late_price_write() {
+    runtime().block_on(within(
+        "receipt publication shutdown control",
+        price_shutdown_case(false, true),
+    ));
+}
+
+// ReceiptReplyPublished and the delivery's Completed state commit in the same unit of work.
+async fn wait_for_receipts(store: &dyn ApplicationStore, ids: &[devworks_core::protocol::Id]) {
+    loop {
+        if read(store, |s| {
+            for id in ids {
+                if s.queue().entry(id)?.unwrap().state != QueueState::Completed {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }) {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
+    struct Release(Arc<Gate>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+    let fx = Fx::new();
+    let (first_worker, first_dispatcher) = fx.dispatcher(Source::new(vec![]));
+    fx.refresh(&["openai"]);
+    deliver(&first_dispatcher).await;
+    let last_good = read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+    first_worker.drain().await;
+    first_dispatcher.stop();
+    drop(first_dispatcher);
+    drop(first_worker);
+
+    let (_, operation) = fx.refresh(&["openai"]);
+    if recovering {
+        let gate = Gate::new();
+        let _release = Release(gate.clone());
+        let source = Arc::new(Source {
+            outcomes: Mutex::new(VecDeque::new()),
+            calls: AtomicUsize::new(0),
+            gate: Some(gate.clone()),
+        });
+        let (worker, dispatcher) = fx.dispatcher(source);
+        dispatcher.recover().await.unwrap();
+        dispatcher.tick().await.unwrap();
+        gate.started.notified().await;
+        worker.stop();
+        gate.release();
+        worker.drain().await;
+        dispatcher.idle().await;
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&operation))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::OutcomeUnknown
+        );
+        dispatcher.stop();
+    }
+    let gate = Gate::new();
+    let source = Arc::new(Source {
+        outcomes: Mutex::new(VecDeque::new()),
+        calls: AtomicUsize::new(0),
+        gate: Some(gate.clone()),
+    });
+    let setup_receipts = read(&*fx.store, |s| {
+        Ok(s.queue()
+            .deliveries(
+                &DeliveryFilter {
+                    consumer: Some("receipt_replies".into()),
+                    operation_id: None,
+                },
+                None,
+                64,
+            )?
+            .entries)
+    });
+    assert_eq!(
+        setup_receipts.len(),
+        2,
+        "the fixture created two refresh command receipts"
+    );
+    let receipt_ids = setup_receipts
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let command_ids = setup_receipts
+        .iter()
+        .map(|entry| entry.payload["commandId"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let mut composed = composition(&fx.h, fx.store.clone(), source.clone());
+    let receipt_starts = Arc::new(AtomicUsize::new(0));
+    let receipt_gate = Gate::new();
+    let _release_receipts = Release(receipt_gate.clone());
+    composed.artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
+        Arc::new(GatedFiles {
+            inner: NativeArtifactFiles::new(fx.h.root.clone(), fx.h.root.with_extension("cache")),
+            gate: receipt_gate.clone(),
+            started: receipt_starts.clone(),
+        }),
+        Arc::new(devworks_adapters::fs::sources::HostArtifactSources::new(
+            fx.h.clock(),
+            fx.h.ids.clone(),
+        )),
+        Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
+        fx.h.clock(),
+        fx.h.ids.clone(),
+    ));
+    composed.config.shutdown_bound = std::time::Duration::from_millis(100);
+    let app = devworks_engine::boot(composed).await.unwrap();
+    let _release = Release(gate.clone());
+    gate.started.notified().await;
+    while receipt_starts.load(Ordering::SeqCst) < receipt_ids.len() {
+        receipt_gate.started.notified().await;
+    }
+    if !receipt_race_control {
+        // These are independent setup receipts, not part of the stalled HTTP callback. Observe
+        // their actual publication before shutdown so the whole-store baseline remains exact.
+        receipt_gate.release();
+        wait_for_receipts(&*fx.store, &receipt_ids).await;
+    }
+    let began = std::time::Instant::now();
+    tokio::time::timeout(std::time::Duration::from_secs(2), app.shutdown())
+        .await
+        .expect("price fetch exceeded the shutdown bound");
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(2),
+        "shutdown waited for the price source"
+    );
+    let snapshot = || {
+        read(&*fx.store, |s| {
+            Ok((
+                s.stamp().clone(),
+                s.usage().price_revision()?,
+                s.usage().current_price_snapshot("openai")?,
+                s.usage().current_price_snapshot("anthropic")?,
+                s.usage().price_status("openai")?,
+                s.usage().price_status("anthropic")?,
+                s.operations().operation(&operation)?,
+                s.queue()
+                    .deliveries(
+                        &DeliveryFilter {
+                            consumer: Some(refresh::CONSUMER.into()),
+                            operation_id: None,
+                        },
+                        None,
+                        64,
+                    )?
+                    .entries,
+            ))
+        })
+    };
+    let mut before = snapshot();
+    assert_eq!(before.2, Some(last_good));
+    assert_eq!(
+        before.6.as_ref().unwrap().state,
+        devworks_core::protocol::OperationState::OutcomeUnknown
+    );
+    assert!(before.4.as_ref().unwrap().refresh_pending);
+    if receipt_race_control {
+        // Causal control: keep both receipt publications blocked across shutdown, then let only
+        // them finish while the price callback is still physically blocked. This reproduces the
+        // exact +2 CI history delta without a price publication, journal or delivery change.
+        assert!(!*gate.open.lock().unwrap());
+        receipt_gate.release();
+        wait_for_receipts(&*fx.store, &receipt_ids).await;
+        assert!(!*gate.open.lock().unwrap());
+        let receipts_finished = snapshot();
+        let events = read(&*fx.store, |s| {
+            s.history()
+                .page(&EventFilter::All, before.0.committed_sequence, 500)
+        });
+        assert_eq!(events.events.len(), command_ids.len());
+        assert!(!events.has_more);
+        assert!(
+            events
+                .events
+                .iter()
+                .all(|event| event.kind == "ReceiptReplyPublished"
+                    && event.aggregate_kind == "receipt_reply"
+                    && command_ids.contains(&event.aggregate_id))
+        );
+        assert_eq!(
+            receipts_finished.0.committed_sequence,
+            before.0.committed_sequence + command_ids.len() as i64
+        );
+        assert_eq!(
+            (
+                &receipts_finished.1,
+                &receipts_finished.2,
+                &receipts_finished.3,
+                &receipts_finished.4,
+                &receipts_finished.5,
+                &receipts_finished.6,
+                &receipts_finished.7
+            ),
+            (
+                &before.1, &before.2, &before.3, &before.4, &before.5, &before.6, &before.7
+            ),
+            "unrelated receipt publication changed price state"
+        );
+        before = receipts_finished;
+    }
+    gate.release();
+    // This graceful wait acknowledges the actual detached callback returning; it is
+    // deliberately outside Runtime.shutdown's shared deadline.
+    app.price_refreshes().unwrap().drain().await;
+    app.dispatcher().idle().await;
+    let after = snapshot();
+    assert_eq!(
+        after, before,
+        "late source changed catalog, operation or delivery after shutdown"
+    );
+    assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
+    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

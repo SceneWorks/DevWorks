@@ -101,6 +101,9 @@ pub struct DesktopConfig {
     /// Outbound HTTP for sign-in, discovery and connection tests. `None` (production) is
     /// native HTTPS; tests use a fake or none, never the real network.
     pub http: Option<Arc<dyn HttpTransport>>,
+    /// Inference-only streaming transport and explicit native model/space qualification.
+    /// None composes the real native HTTP client; tests inject controlled streaming ports.
+    pub providers: Option<devworks_engine::providers::driver::ProviderComposition>,
     /// The interval of the connection service's background tick (device-code polling, flow
     /// expiry, periodic connection checks, secret reconciliation); `None` disables it.
     pub connection_tick: Option<Duration>,
@@ -136,6 +139,7 @@ impl DesktopConfig {
             connections: None,
             secrets: None,
             http: None,
+            providers: None,
             connection_tick: Some(CONNECTION_TICK),
             web: Arc::new(native_ports),
             indexing: IndexingConfig::default(),
@@ -341,6 +345,14 @@ async fn compose(
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.providers = Some(match config.providers.clone() {
+        Some(providers) => providers,
+        None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
+            devworks_adapters::provider_stream::NativeStreamingHttp::new().map_err(|_| {
+                StartError::Thread("native inference HTTP client could not be initialized".into())
+            })?,
+        )),
+    });
     runtime_config.price_refresh = Some(devworks_engine::prices::PriceComposition::new(Arc::new(
         devworks_adapters::prices::OfficialPriceSource::new(http.clone()),
     )));
@@ -886,6 +898,10 @@ impl Backend for DesktopBackend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "host/provider_refresh_shutdown_tests.rs"]
+mod provider_refresh_shutdown_tests;
 
 #[cfg(test)]
 #[path = "host/usage_shutdown_tests.rs"]

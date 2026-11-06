@@ -1788,6 +1788,80 @@ impl PackageService {
         view::load(read)
     }
 
+    /// Help reports the same current runtime/prerequisite/enablement status as addons.catalog.
+    /// Only this status leaves the owner; configuration and secret bindings are never returned.
+    pub fn help_availability(
+        &self,
+        read: &dyn PackageRegistryRead,
+        package: &StoredPackage,
+        project: Option<&str>,
+    ) -> Result<(String, String), StorageError> {
+        let row = view::package_record(
+            read,
+            &self.registry(read)?,
+            package,
+            &self.platform,
+            &*self.runtimes,
+            project,
+        )?;
+        Ok((
+            row.availability
+                .map_or("Unknown".into(), |state| format!("{state:?}")),
+            row.availability_reason
+                .map_or(String::new(), |reason| reason.0),
+        ))
+    }
+
+    /// Reads the guide of this exact installed inspection through the package file owner.
+    /// It never activates or launches the package and never consults a remote documentation URL.
+    pub fn verified_help(
+        &self,
+        version: &StoredPackageVersion,
+    ) -> Result<String, crate::ports::packages::PackageFileError> {
+        use crate::ports::packages::{Inspection, MAX_BUNDLE_BYTES, PackageFileError};
+        let inspection: Inspection =
+            serde_json::from_value(version.inspection.clone()).map_err(|_| {
+                PackageFileError::Mismatch("installed package inspection is invalid".into())
+            })?;
+        if version.phase != VersionPhase::Installed
+            || inspection.package_id != version.package_id
+            || inspection.version != version.version
+            || inspection.manifest_digest != version.manifest_digest
+            || inspection.bundle_digest != version.bundle_digest
+        {
+            return Err(PackageFileError::Mismatch(
+                "installed package identity changed".into(),
+            ));
+        }
+        let file = inspection
+            .files
+            .iter()
+            .find(|file| file.path == inspection.help_file)
+            .ok_or_else(|| {
+                PackageFileError::Missing("the installed manifest declares no guide file".into())
+            })?;
+        self.files.verify(
+            &version.package_id,
+            &version.manifest_digest,
+            &inspection.files,
+        )?;
+        let bytes = self.files.read_verified(
+            &version.package_id,
+            &version.manifest_digest,
+            file,
+            MAX_BUNDLE_BYTES,
+        )?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            PackageFileError::Mismatch("the package guide is not UTF-8 text".into())
+        })?;
+        if text.is_empty() || text.contains('\0') {
+            return Err(PackageFileError::Mismatch(
+                "the package guide is empty or contains NUL".into(),
+            ));
+        }
+        Ok(text)
+    }
+
     // -----------------------------------------------------------------------------------------
     // Host seams (the package host's own units of work)
 

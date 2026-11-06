@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "date": "2026-11-06",
+  "confidence": "High for the bounded composed native and contract checks; not full project acceptance",
+  "sourceParents": {
+    "help": "3a007c606febb239b32eb555996155cb32bc9815",
+    "providers": "3a94ac1b607c0dc10cbc40e61be55d0e4a1c0740"
+  },
+  "resolvedBoundaries": [
+    "Keep Help migration30 unchanged after actual refreshed migration29 SQL and checksum.",
+    "Keep strict Help maxChars/screen XOR rules and independent clearBudgetProposal rules in both pure readers.",
+    "Preserve every parent fixture ID and regenerate actual merged schema/manifest/fixtures/reference; never select a parent hash or count.",
+    "Keep the complete native Help worker, consumer, composition and shutdown alongside native providers, connection refresh closing and price stop/drain/close.",
+    "Keep both real signed Help guide and provider SDK schema modules."
+  ],
+  "migrationChecksums": {
+    "0029_connection_account_identity.sql": "7200b277333537224ca24390534988203f57286d8f6158633bed767fded2713e",
+    "0030_help.sql": "173fa5720b9913758994fc2c8c0526476f5468f7758659d9902e21762150cdec"
+  },
+  "checks": [
+    {
+      "name": "Core, engine, adapters all-target compilation",
+      "passed": true
+    },
+    {
+      "name": "Desktop all-target compilation",
+      "passed": true
+    },
+    {
+      "name": "Composed native Help service and scheduling tests",
+      "passed": true,
+      "cases": 16,
+      "seconds": 43.91
+    },
+    {
+      "name": "Real signed installed guide integrity/version/uninstall test",
+      "passed": true,
+      "cases": 1,
+      "seconds": 16.84
+    },
+    {
+      "name": "Help projection, recorded fixtures, registry and schema revision tests",
+      "passed": true,
+      "cases": 25
+    },
+    {
+      "name": "Generator tests",
+      "passed": true,
+      "cases": 11
+    },
+    {
+      "name": "Merged schema/strict-probe qualification",
+      "passed": true,
+      "schemaFiles": 67,
+      "messageFixtures": 1944,
+      "domainFixtures": 1615,
+      "negativeDomainFixtures": 390,
+      "scenarios": 12,
+      "scenarioSteps": 26
+    },
+    {
+      "name": "Every parent fixture ID retained",
+      "passed": true,
+      "helpParentCount": 1610,
+      "providersParentCount": 1592,
+      "missing": 0
+    },
+    {
+      "name": "Immutable legacy revision1/2 schema byte hashes",
+      "passed": true,
+      "files": 56,
+      "mismatches": 0
+    },
+    {
+      "name": "Generated manifest hashes match emitted schemas",
+      "passed": true,
+      "files": 67,
+      "mismatches": 0
+    },
+    {
+      "name": "Second complete generator/emit pass has zero unstaged drift",
+      "passed": true
+    },
+    {
+      "name": "Strict core, engine, adapters and desktop all-target Clippy with -D warnings",
+      "passed": true,
+      "seconds": 28.95
+    },
+    {
+      "name": "Formatting and staged diff checks",
+      "passed": true
+    }
+  ],
+  "remaining": [
+    "No reproducible source integration gap found in these checks.",
+    "Full workspace and platform/CI acceptance remains with the parent. Prior Help UI13 qualification was reused; no Help UI behavior or Help input semantics changed in this merge.",
+    "Parent-owned additional price-barrier test-only and Windows qualification followups are not claimed by this bounded merge report."
+  ],
+  "execution": "Actual merged source and real SQLite/runtime/shared gateway; retained source data and declared unsupported package target only. No model inference, provider inference request, push or tracker write."
+}

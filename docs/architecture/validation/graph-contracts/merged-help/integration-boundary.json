@@ -1,0 +1,23 @@
+{
+  "base": "0ca8a639",
+  "mergedHelp": "205b9652dc4c370bce2d6756aa174542a11e3bd5",
+  "schemaComparison": {
+    "priorSchemas": 70,
+    "changed": [
+      "domain-request.r3.schema.json"
+    ],
+    "legacySchemasChanged": 0
+  },
+  "contractQualification": {
+    "types": 419,
+    "operations": 359,
+    "schemas": 70,
+    "domainFixtures": 1769,
+    "combinedFixtures": 2098,
+    "scenarios": 12,
+    "steps": 26,
+    "allPassed": true,
+    "noInference": true
+  },
+  "nativeBoundary": "The prior 0ca8a639 graph build and 11 real native graph cases passed before composing full Help. This report qualifies current contract composition only; full composed runtime/platform acceptance remains pending."
+}

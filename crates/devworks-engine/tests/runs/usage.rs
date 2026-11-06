@@ -1388,3 +1388,6 @@ let owned=UsageRuntime::new(f.store.clone(),f.service.clone(),Some(selected_rout
  }
 });
 }
+
+#[path = "../providers/managed.rs"]
+mod native_provider_fences;

@@ -71,7 +71,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
-            'browser.upload', 'browser.console', 'browser.network'})
+            'browser.upload', 'browser.console', 'browser.network',
+            'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides'})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})

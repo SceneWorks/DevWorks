@@ -1450,10 +1450,17 @@ fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_
     let scratch = Scratch::new("child-policy");
     let root = scratch.path("root-marker");
     let marker = scratch.path("child-marker");
+    let finished = scratch.path("root-finished");
     let executable = std::env::current_exe().unwrap();
     let mut spec = if cfg!(windows) {
-        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
-        ProcessSpec::new(&[cmd.to_string_lossy().into_owned(), "/D".into(), "/C".into(), format!("echo root>\"{root}\" & \"{}\" --exact no_child_policy_marker_fixture --nocapture & echo finished",executable.display())]).unwrap()
+        ProcessSpec::new(&[
+            executable.to_string_lossy().into_owned(),
+            "--exact".into(),
+            "no_child_policy_root_fixture".into(),
+            "--nocapture".into(),
+            "--test-threads=1".into(),
+        ])
+        .unwrap()
     } else {
         shell(&format!(
             "printf root > '{root}'; '{}' --exact no_child_policy_marker_fixture --nocapture; printf finished",
@@ -1462,6 +1469,10 @@ fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_
     };
     spec.env
         .push(("DEVWORKS_NO_CHILD_POLICY_MARKER".into(), marker.clone()));
+    spec.env
+        .push(("DEVWORKS_NO_CHILD_POLICY_ROOT".into(), root.clone()));
+    spec.env
+        .push(("DEVWORKS_NO_CHILD_POLICY_FINISHED".into(), finished.clone()));
     assert!(!spec.no_child_processes);
     spec.no_child_processes = true;
     spec.capture_output = true;
@@ -1484,6 +1495,12 @@ fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_
         !std::path::Path::new(&marker).exists(),
         "an unreviewed child ran: {status:?} {error}"
     );
+    if cfg!(windows) {
+        assert!(
+            std::path::Path::new(&finished).exists(),
+            "the constrained native root remains usable: {status:?} {error}"
+        );
+    }
     spec.no_child_processes = false;
     let (control, error) = policy_result(&spec).unwrap();
     assert_eq!(control.exit_code, Some(0), "{error}");
@@ -1639,6 +1656,31 @@ fn no_child_policy_marker_fixture() {
     if let Some(marker) = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_MARKER") {
         std::fs::write(marker, "the external child actually executed").unwrap();
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn no_child_policy_root_fixture() {
+    let Some(root) = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_ROOT") else {
+        return;
+    };
+    std::fs::write(root, "the constrained native root actually executed").unwrap();
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "no_child_policy_marker_fixture",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .status();
+    if let Err(error) = child {
+        eprintln!("native child launch was refused: {error}");
+    }
+    std::fs::write(
+        std::env::var_os("DEVWORKS_NO_CHILD_POLICY_FINISHED").unwrap(),
+        "the constrained root remains usable after attempting a child",
+    )
+    .unwrap();
 }
 
 #[cfg(unix)]

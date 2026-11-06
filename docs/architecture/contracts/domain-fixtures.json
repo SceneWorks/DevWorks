@@ -10661,6 +10661,41 @@
     "schemaValid": true
   },
   {
+    "id": "dw21-plan-editor-withdraw-budget",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"clearBudgetProposal\":true},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw21-withdraw-before3",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"clearBudgetProposal\":true},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw21-withdraw-null",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"clearBudgetProposal\":null},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw21-withdraw-false",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"clearBudgetProposal\":false},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw21-withdraw-budget-xor",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"clearBudgetProposal\":true,\"budget\":{\"kind\":\"Off\"}},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
     "id": "dw21-plan-editor-budget-before3",
     "entry": "domain-request.r2",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"budget\":{\"kind\":\"Limit\",\"microUsd\":\"1000000\"}},\"schemaRevision\":2}",

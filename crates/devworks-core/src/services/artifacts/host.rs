@@ -22,6 +22,15 @@ use serde_json::{Value, json};
 /// History aggregate of host-produced artifacts.
 pub const HOST_ARTIFACT_AGGREGATE: &str = "host_artifact";
 
+/// Original scope and attribution of trusted host-produced bytes.
+pub struct HostArtifactPublication<'a> {
+    pub title: &'a str,
+    pub media_type: &'a str,
+    pub provenance: Value,
+    pub scope: ArtifactScope,
+    pub owner: crate::protocol::ActorId,
+}
+
 impl ArtifactService {
     /// Stages `bytes` as a new blob generation (or verifies and reuses the existing one) under
     /// a journaled staging operation. `Ok(Err(cause))` is a publication failure already
@@ -89,6 +98,34 @@ impl ArtifactService {
         media_type: &str,
         provenance: Value,
     ) -> Result<StoredVersion, StorageError> {
+        let owner = tx.store().host_actor.clone();
+        self.commit_host_bytes_in_scope(
+            tx,
+            staged,
+            HostArtifactPublication {
+                title,
+                media_type,
+                provenance,
+                scope: ArtifactScope::Workspace,
+                owner,
+            },
+        )
+    }
+
+    /// Publishes trusted host output in its original invocation's artifact scope.
+    pub fn commit_host_bytes_in_scope(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        staged: &StagedFile,
+        publication: HostArtifactPublication<'_>,
+    ) -> Result<StoredVersion, StorageError> {
+        let HostArtifactPublication {
+            title,
+            media_type,
+            provenance,
+            scope,
+            owner,
+        } = publication;
         let generation = put_staged_blob(tx, &*self.files, staged)?;
         let host = tx.store().host_actor.clone();
         let now = tx.now_ms();
@@ -96,12 +133,12 @@ impl ArtifactService {
         let version_id = tx.new_id(IdKind::ArtifactVersion);
         let mut artifact = StoredArtifact {
             id: artifact_id.clone(),
-            origin_project_id: None,
+            origin_project_id: scope.project().cloned(),
             origin_work_id: None,
             title: title.chars().take(256).collect(),
             revision: 1,
-            scope: ArtifactScope::Workspace,
-            owner: Some(host.clone()),
+            scope,
+            owner: Some(owner),
             retention: ArtifactRetention::Explicit,
             scope_revision: 1,
             reference_revision: 1,
@@ -190,5 +227,45 @@ impl ArtifactService {
         if matches!(bound, Ok(false)) {
             let _ = self.files.unlink(&staged.digest, own.as_str());
         }
+    }
+}
+
+impl ArtifactService {
+    /// Internal cleanup for a terminal, unpublished Help draft. Public mutations cannot mint
+    /// trusted host provenance, and a reused published reference has a different generation.
+    pub(crate) fn retire_help_draft(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        reference: &crate::protocol::provider::ArtifactRef,
+        generation: &crate::protocol::Id,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<(), StorageError> {
+        let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+            return Ok(());
+        };
+        if !super::retained_help(&artifact, &tx.store().host_actor)
+            || artifact.provenance["derived"]["generationId"] != serde_json::json!(generation)
+            || artifact.provenance["derived"]["operationId"] != serde_json::json!(operation)
+        {
+            return Ok(());
+        }
+        let record = tx
+            .operations()
+            .operation(operation)?
+            .ok_or_else(|| StorageError::InvalidRecord("Help cleanup operation missing".into()))?;
+        if !crate::ports::storage::is_terminal(record.state) {
+            return Err(StorageError::Busy);
+        }
+        let now = tx.now_ms();
+        for version in tx.artifacts().versions(&artifact.id)? {
+            if version.live() {
+                tx.artifacts().tombstone_version(&version.id, now)?;
+                super::release_blob(tx, &version.blob_digest)?;
+            }
+        }
+        self.retire(tx, &mut artifact)?;
+        artifact.revision += 1;
+        tx.artifacts().update_artifact(&artifact)?;
+        Ok(())
     }
 }

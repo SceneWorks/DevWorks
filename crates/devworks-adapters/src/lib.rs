@@ -9,6 +9,7 @@ pub mod paths;
 pub mod power;
 pub mod prices;
 pub mod process;
+pub mod provider_stream;
 pub mod secrets;
 pub mod storage;
 pub mod web;

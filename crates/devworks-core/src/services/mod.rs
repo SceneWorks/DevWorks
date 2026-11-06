@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod evals;
 pub mod git;
 pub mod graph;
+pub mod help;
 pub mod history;
 pub mod indexing;
 pub mod jobs;
@@ -70,6 +71,7 @@ pub struct UseCases {
     queries: BTreeMap<&'static str, Arc<dyn QueryHandler>>,
     commands: BTreeMap<&'static str, Arc<dyn CommandHandler>>,
     inference_router: Option<Arc<router::InferenceRouter>>,
+    connection_service: Option<Arc<router::connections::ConnectionService>>,
 }
 
 impl UseCases {
@@ -162,6 +164,14 @@ impl UseCases {
         self
     }
 
+    /// The same offline Help owner serves every gateway entry path.
+    pub fn with_help(mut self, service: Arc<help::HelpService>) -> Self {
+        for operation in help::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the sessions family (`ConversationService`).
     pub fn with_sessions(mut self, service: Arc<sessions::SessionService>) -> Self {
         for op in sessions::OPERATIONS {
@@ -229,10 +239,15 @@ impl UseCases {
         mut self,
         service: Arc<router::connections::ConnectionService>,
     ) -> Self {
+        self.connection_service = Some(service.clone());
         for op in router::connections::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
+    }
+
+    pub fn connection_service(&self) -> Option<Arc<router::connections::ConnectionService>> {
+        self.connection_service.clone()
     }
 
     /// Registers the unified Knowledge operations of the slice that manages claims, entities,

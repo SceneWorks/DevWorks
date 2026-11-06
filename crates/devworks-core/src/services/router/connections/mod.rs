@@ -48,6 +48,7 @@
 //! persisted whatever happens to the request that needed them.
 pub mod auth;
 pub mod discovery;
+pub mod lifecycle;
 pub mod profiles;
 
 use crate::context::{InvocationContext, PrincipalKind};
@@ -243,6 +244,7 @@ pub struct ConnectionService {
     endpoints: AuthEndpoints,
     live: Mutex<Live>,
     refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    lifecycle: lifecycle::Lifecycle,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -364,6 +366,54 @@ fn event(
     })?;
     Ok(())
 }
+fn next_account_revision(current: i64) -> Result<i64, StorageError> {
+    current
+        .checked_add(1)
+        .ok_or_else(|| StorageError::InvalidRecord("provider account identity exhausted".into()))
+}
+
+/// Host-observed access rejection, committed by the native output owner in its fenced unit.
+/// A late response cannot mark a replacement credential, account, endpoint or profile unusable.
+pub fn record_inference_rejection(
+    tx: &mut dyn WriteTransaction,
+    basis: &crate::providers::ProviderAccessBasis,
+    status: u16,
+) -> Result<bool, StorageError> {
+    if !matches!(status, 401..=403) {
+        return Ok(false);
+    }
+    let Some(mut current) = tx.router().connection(&basis.connection_id)? else {
+        return Ok(false);
+    };
+    if current.credential_revision != basis.credential_revision
+        || current.account_revision != basis.account_revision
+        || current.profile != format!("{:?}", basis.profile)
+        || crate::fingerprint::sha256_hex(current.endpoint.as_bytes()) != basis.endpoint_digest
+    {
+        return Ok(false);
+    }
+    if current.lifecycle == "ReauthenticationRequired" {
+        return Ok(false);
+    }
+    let expected = current.revision;
+    current.lifecycle = "ReauthenticationRequired".into();
+    current.state_reason = Some(format!(
+        "the provider rejected current access (HTTP {status}); inspect the connection or sign in again"
+    ));
+    current.healthy = Some(false);
+    current.updated_at_ms = tx.now_ms();
+    let saved = tx.router().put_connection(&current, Some(expected))?;
+    let host = tx.store().host_actor.clone();
+    event(
+        tx,
+        &host,
+        (CONNECTION_AGGREGATE, &saved.id, saved.revision),
+        "InferenceAccessRejected",
+        connection_payload(&saved),
+    )?;
+    Ok(true)
+}
+
 /// The secret-free history payload of a connection.
 fn connection_payload(c: &StoredConnection) -> Value {
     json!({
@@ -373,6 +423,7 @@ fn connection_payload(c: &StoredConnection) -> Value {
         "endpoint": c.endpoint,
         "credentialRef": c.credential_ref.as_ref().map(Id::as_str),
         "credentialRevision": c.credential_revision,
+        "accountRevision": c.account_revision,
         "lifecycle": c.lifecycle,
         "subscriptionRiskAccepted": c.risk.is_some(),
         "enabled": c.enabled,
@@ -518,8 +569,13 @@ pub fn open_router_request_fields(
     upstream_model: &str,
 ) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
-    if upstream_model == select::OPEN_ROUTER_AUTO_UPSTREAM {
-        let mut plugin = json!({"id": "auto-router"});
+    let plugin_id = match upstream_model {
+        select::OPEN_ROUTER_AUTO_UPSTREAM => Some("auto-router"),
+        "openrouter/auto-beta" => Some("auto-beta-router"),
+        _ => None,
+    };
+    if let Some(plugin_id) = plugin_id {
+        let mut plugin = json!({"id": plugin_id});
         if let Some(t) = &constraints.cost_tier {
             plugin["cost_tier"] = json!(wire(t));
         }
@@ -671,6 +727,7 @@ impl ConnectionService {
             endpoints: AuthEndpoints::default(),
             live: Mutex::new(Live::default()),
             refresh_locks: Mutex::new(BTreeMap::new()),
+            lifecycle: Default::default(),
         }
     }
     /// Replaces the subscription OAuth endpoints (tests point them at a local fake).
@@ -774,20 +831,28 @@ impl ConnectionService {
         credential: &Credential,
     ) -> Result<Id, SecretError> {
         let handle = self.ids.next_id(IdKind::Credential);
-        self.live().staged.insert(
-            handle.as_str().to_owned(),
-            Staged {
-                principal: principal.clone(),
-                api_key,
-                created_at_ms: self.now(),
-            },
-        );
+        self.write_handle_reserved(principal, api_key, credential, handle)
+    }
+    fn write_handle_reserved(
+        &self,
+        principal: &ActorId,
+        api_key: bool,
+        credential: &Credential,
+        handle: Id,
+    ) -> Result<Id, SecretError> {
+        self.register_stage(&handle, principal, api_key)?;
         if let Err(e) = self.noted(
             self.secrets
                 .put(&self.key(&handle), &credential.to_secret()),
         ) {
             self.live().staged.remove(handle.as_str());
             return Err(e);
+        }
+        if self.is_closed() {
+            self.discard(&handle);
+            return Err(SecretError::Failed(
+                "provider connection owner closed after external secret write".into(),
+            ));
         }
         Ok(handle)
     }
@@ -1042,6 +1107,12 @@ impl ConnectionService {
         testing: bool,
     ) -> Result<Access, AccessError> {
         for _ in 0..CREDENTIAL_READ_ATTEMPTS {
+            if self.is_closed() {
+                return Err(AccessError::Unavailable(
+                    "the provider connection owner is closed".into(),
+                ));
+            }
+
             let Some(a) = self.access_once(connection_id, rejected, force, testing)? else {
                 continue;
             };
@@ -1089,6 +1160,7 @@ impl ConnectionService {
             .map_err(unavailable)?
             .ok_or(AccessError::NotFound)?;
         let p = self.usable(&c, testing)?;
+        self.check_refresh_owner(&c)?;
         // Profile, destination and credential all come from this one read.
         let base = |credential| Access {
             connection_id: c.id.clone(),
@@ -1185,7 +1257,7 @@ impl ConnectionService {
     fn mark(&self, c: &StoredConnection, lifecycle: &'static str, reason: &str) {
         let (id, seen, reason) = (c.id.clone(), c.credential_revision, reason.to_owned());
         let host = self.store.info().host_actor;
-        let _ = run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let _ = self.publication(move |tx| {
             let Some(mut cur) = tx.router().connection(&id)? else {
                 return Ok(());
             };
@@ -1265,6 +1337,10 @@ impl ConnectionService {
         }
         self.live().refreshing.insert(c.id.as_str().to_owned());
         let _guard = Refreshing(self, c.id.as_str().to_owned());
+        self.check_refresh_owner(&c)?;
+        let owner = self
+            .begin_refresh(&c)
+            .map_err(|e| AccessError::Unavailable(format!("refresh custody: {e:?}")))?;
         let now = self.now();
         let outcome = match c.profile.as_str() {
             "CodexSubscriptionResponses" => {
@@ -1280,12 +1356,23 @@ impl ConnectionService {
                 let expires = rotated.expires_at_ms;
                 let digest = rotated.account.as_deref().map(profiles::account_digest);
                 let host = self.store.info().host_actor;
-                let new_handle = self
-                    .write_handle(&host, false, &Credential::OAuth(rotated))
-                    .map_err(|e| AccessError::Unavailable(e.to_string()))?;
-                let published = self.publish_rotation(&c, &new_handle, digest, expires);
+                let new_handle = match self.write_handle_reserved(
+                    &host,
+                    false,
+                    &Credential::OAuth(rotated),
+                    owner.handle.clone(),
+                ) {
+                    Ok(handle) => handle,
+                    Err(error) => {
+                        let _=self.finish_refresh(&owner,crate::protocol::OperationState::OutcomeUnknown,json!({"credentialPublication":"NotPublished","externalSecretWrite":"Unknown","allocatedHandle":owner.handle}));
+                        self.mark(&c,"ReauthenticationRequired","the refresh succeeded but its credential could not be safely published");
+                        return Err(AccessError::Unavailable(error.to_string()));
+                    }
+                };
+                let published = self.publish_rotation(&c, &new_handle, digest, expires, &owner);
                 match published {
                     Ok(Some(revision)) => {
+                        self.refresh_published(&owner);
                         self.unstage(&new_handle);
                         self.delete_unreferenced(&[handle]);
                         Ok(Some(base(access, account, revision)))
@@ -1295,12 +1382,18 @@ impl ConnectionService {
                         // rotation is not published and its tokens are not used; the caller
                         // reads the new credential instead.
                         self.discard(&new_handle);
+                        let _ = self.finish_refresh(
+                            &owner,
+                            crate::protocol::OperationState::Failed,
+                            json!({"credentialPublication":"Superseded"}),
+                        );
                         Ok(None)
                     }
                     Err(e) => {
                         // Not published: the old refresh token may already be spent, so the
                         // connection needs a new sign-in rather than a repeat of it.
                         self.discard(&new_handle);
+                        let _ = self.finish_refresh(&owner, crate::protocol::OperationState::OutcomeUnknown, json!({"credentialPublication":"NotPublished","allocatedHandle":new_handle}));
                         self.mark(
                             &c,
                             "ReauthenticationRequired",
@@ -1311,11 +1404,21 @@ impl ConnectionService {
                 }
             }
             Err(AuthFailure::Rejected(status)) => {
+                let _ = self.finish_refresh(
+                    &owner,
+                    crate::protocol::OperationState::Failed,
+                    json!({"httpStatus":status,"credentialPublication":"NotPublished"}),
+                );
                 let why = AuthFailure::Rejected(status).reason();
                 self.mark(&c, "ReauthenticationRequired", &why);
                 Err(AccessError::ReauthenticationRequired(why))
             }
             Err(e @ AuthFailure::Transport(_)) | Err(e @ AuthFailure::Malformed(_)) => {
+                let _ = self.finish_refresh(
+                    &owner,
+                    crate::protocol::OperationState::OutcomeUnknown,
+                    json!({"credentialPublication":"NotPublished","refreshOutcome":"Unknown"}),
+                );
                 // The request may have reached the issuer and rotated the refresh token: allow
                 // a bounded number of such outcomes, then require a new sign-in.
                 let n = {
@@ -1337,7 +1440,14 @@ impl ConnectionService {
                 }
                 Err(AccessError::Unavailable(e.reason()))
             }
-            Err(e @ AuthFailure::Status(_)) => Err(AccessError::Unavailable(e.reason())),
+            Err(e @ AuthFailure::Status(_)) => {
+                let _ = self.finish_refresh(
+                    &owner,
+                    crate::protocol::OperationState::Failed,
+                    json!({"credentialPublication":"NotPublished","refreshOutcome":"Rejected"}),
+                );
+                Err(AccessError::Unavailable(e.reason()))
+            }
         }
     }
 
@@ -1349,6 +1459,7 @@ impl ConnectionService {
         handle: &Id,
         account_digest: Option<String>,
         expires_at_ms: i64,
+        owner: &lifecycle::RefreshOwner,
     ) -> Result<Option<i64>, StorageError> {
         let (id, old_ref, old_rev) = (
             seen.id.clone(),
@@ -1360,11 +1471,13 @@ impl ConnectionService {
             self.store.info().host_actor,
             self.restore_epoch(),
         );
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
+        let owner = owner.clone();
+        self.publication(move |tx| {
             let Some(mut c) = tx.router().connection(&id)? else {
                 return Ok(None);
             };
-            if c.credential_ref != old_ref || c.credential_revision != old_rev {
+            if c.credential_ref != old_ref || c.credential_revision != old_rev || c.refresh_operation_id.as_ref() != Some(&owner.operation) || c.account_revision != owner.account_revision {
+
                 return Ok(None);
             }
             let expected = c.revision;
@@ -1376,6 +1489,7 @@ impl ConnectionService {
             c.access_expires_at_ms = Some(expires_at_ms);
             let account_changed = account_digest.is_some() && account_digest != c.account_digest;
             if account_changed {
+                c.account_revision = next_account_revision(c.account_revision)?;
                 // A refresh never changes the account; if the provider says otherwise, the risk
                 // acceptance and what was learned with the old account no longer cover it.
                 c.risk = None;
@@ -1394,6 +1508,7 @@ impl ConnectionService {
                 "CredentialRotated",
                 connection_payload(&saved),
             )?;
+            lifecycle::finish_in(tx, &owner, crate::protocol::OperationState::ObservedComplete, json!({"credentialPublication":"Published","allocatedHandle":saved.credential_ref,"credentialRevision":saved.credential_revision}))?;
             Ok(Some(saved.credential_revision))
         })
     }
@@ -1548,9 +1663,7 @@ impl ConnectionService {
     fn check_as_host(&self, c: &StoredConnection) -> Result<(), StorageError> {
         let checked = self.check(c, false);
         let (id, host) = (c.id.clone(), self.store.info().host_actor);
-        run_write(&*self.store, WriteOptions::default(), move |tx| {
-            apply_check(tx, &host, &id, &checked).map(|_| ())
-        })
+        self.publication(move |tx| apply_check(tx, &host, &id, &checked).map(|_| ()))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1561,6 +1674,9 @@ impl ConnectionService {
     /// unavailable connections, rediscovers stale model lists and reconciles orphaned secret
     /// handles hourly. A tick that is still running makes the next one a no-op.
     pub fn tick(&self) {
+        if self.is_closed() {
+            return;
+        }
         {
             let mut live = self.live();
             if live.ticking {
@@ -1690,7 +1806,7 @@ impl ConnectionService {
                 };
                 publish.restore_epoch = self.restore_epoch();
                 let connection = publish.connection_id.clone();
-                let result = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let result = self.publication(move |tx| {
                     publish_tokens(tx, &actor, &publish).map(|r| r.map(|(c, old)| (c.id, old)))
                 });
                 self.live().flows.remove(flow_id.as_str());
@@ -2033,7 +2149,9 @@ impl ConnectionService {
                 open_router: None,
                 credential_ref: None,
                 credential_revision: self.first_credential_revision(&id),
-                account_revision: 1,
+                account_revision: next_account_revision(
+                    tx.router().connection_account_revision(&id)?.unwrap_or(0),
+                )?,
                 refresh_operation_id: None,
                 credential_epoch: None,
                 lifecycle: without_credential(p).into(),
@@ -2137,6 +2255,9 @@ impl ConnectionService {
             // The open sign-in is cancelled below; its publication must fail even if the
             // profile or endpoint changes back before it runs.
             next.credential_revision += 1;
+        }
+        if current.is_some() && (credential_changed || profile_changed || endpoint_changed) {
+            next.account_revision = next_account_revision(next.account_revision)?;
         }
         next.updated_at_ms = now;
         let saved = tx
@@ -2320,6 +2441,7 @@ impl ConnectionService {
                     // running) compares the credential revision, so it is advanced.
                     let mut next = c.clone();
                     next.credential_revision += 1;
+                    next.account_revision = next_account_revision(next.account_revision)?;
                     next.updated_at_ms = tx.now_ms();
                     let saved = tx.router().put_connection(&next, Some(c.revision))?;
                     self.cancel_flows(&saved.id);
@@ -2335,6 +2457,7 @@ impl ConnectionService {
                 let mut next = c.clone();
                 next.credential_ref = None;
                 next.credential_revision += 1;
+                next.account_revision = next_account_revision(next.account_revision)?;
                 next.credential_epoch = None;
                 next.lifecycle = without_credential(p).into();
                 next.state_reason = None;
@@ -2797,6 +2920,12 @@ fn publish_tokens(
     }
     let mut next = c.clone();
     let old = c.credential_ref.clone();
+    if c.account_digest.is_none()
+        || t.account_digest.is_none()
+        || c.account_digest != t.account_digest
+    {
+        next.account_revision = next_account_revision(next.account_revision)?;
+    }
     next.credential_ref = Some(t.handle.clone());
     next.credential_revision += 1;
     next.credential_epoch = Some(t.restore_epoch);
@@ -2970,7 +3099,8 @@ fn apply_discovery(
                 ) || crate::services::router::latest::parse(&m.id).is_some()
                     || d.conversational.contains(&m.id))
         }) {
-            if found.id == select::OPEN_ROUTER_AUTO_UPSTREAM
+            if (c.profile == select::OPEN_ROUTER_PROFILE
+                && crate::ports::router::is_open_router_auto(&found.id))
                 || models.iter().any(|m| {
                     m.endpoint_profile == c.profile
                         && m.upstream_model_id == found.id
@@ -3023,7 +3153,8 @@ fn apply_discovery(
     for m in models.iter().filter(|m| {
         m.endpoint_profile == c.profile && m.connection_id.as_ref().is_none_or(|b| b == &c.id)
     }) {
-        if m.upstream_model_id == select::OPEN_ROUTER_AUTO_UPSTREAM
+        if (c.profile == select::OPEN_ROUTER_PROFILE
+            && crate::ports::router::is_open_router_auto(&m.upstream_model_id))
             || !select::lists(&c.profile, &listed, &m.upstream_model_id)
         {
             continue;
@@ -3435,6 +3566,9 @@ impl CommandHandler for ConnectionService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
+        if self.is_closed() {
+            return Err(StorageError::Cancelled);
+        }
         let OperationInput::Router(ops::Input::Configure(i)) = command.input() else {
             return Ok(None);
         };
@@ -3477,6 +3611,9 @@ impl CommandHandler for ConnectionService {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        if self.is_closed() {
+            return Err(HandlerFailure::Storage(StorageError::Cancelled));
+        }
         let outcome = match command.input() {
             OperationInput::Router(ops::Input::Configure(i)) => {
                 let slot = command.prepared::<Arc<Mutex<Option<Prep>>>>();

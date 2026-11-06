@@ -1067,6 +1067,13 @@ case('dw21-admitted-local-policy-revision','operation-result.r3',observed)
 # Proposed plan-editor cap changes round-trip separately from effective feature configuration.
 edit_plan=request('features.edit_plan','Command');edit_plan['schemaRevision']=3;edit_plan['body']['budget']={'kind':'Limit','microUsd':'1000000'}
 case('dw21-plan-editor-budget','domain-request.r3',edit_plan)
+withdraw=copy.deepcopy(edit_plan);withdraw['body'].pop('budget');withdraw['body']['clearBudgetProposal']=True
+case('dw21-plan-editor-withdraw-budget','domain-request.r3',withdraw)
+mutate('dw21-withdraw-before3','dw21-plan-editor-withdraw-budget',['schemaRevision'],2,entry='domain-request.r2')
+mutate('dw21-withdraw-null','dw21-plan-editor-withdraw-budget',['body','clearBudgetProposal'],None,False,False)
+mutate('dw21-withdraw-false','dw21-plan-editor-withdraw-budget',['body','clearBudgetProposal'],False,False,False)
+mutate('dw21-withdraw-budget-xor','dw21-plan-editor-withdraw-budget',['body','budget'],{'kind':'Off'},False,True)
+
 mutate('dw21-plan-editor-budget-before3','dw21-plan-editor-budget',['schemaRevision'],2,entry='domain-request.r2')
 pending=sample('WorkRecord');pending['kind']='Feature';pending['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'budget':{'kind':'Off'}}
 case('dw21-reopen-pending-budget','operation-result.r3',{'kind':'features.get','value':pending})

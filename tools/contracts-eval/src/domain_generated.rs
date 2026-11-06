@@ -17829,6 +17829,13 @@ pub enum DomainCommand {
         )]
         #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
         budget: Option<FeatureBudgetInput>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        clear_budget_proposal: Option<bool>,
     },
     #[serde(rename = "features.dependencies")]
     FeaturesDependencies {
@@ -19502,11 +19509,13 @@ impl Check for DomainCommand {
                 expected_revision,
                 plan,
                 budget,
+                clear_budget_proposal,
             } => {
                 feature_id.check()?;
                 expected_revision.check()?;
                 plan.check()?;
                 budget.check()?;
+                clear_budget_proposal.check()?;
             }
             Self::FeaturesDependencies {
                 feature_id,
@@ -21166,9 +21175,16 @@ impl Revisioned for DomainCommand {
                     *placement = None;
                 }
             }
-            Self::FeaturesEditPlan { budget, .. } => {
+            Self::FeaturesEditPlan {
+                budget,
+                clear_budget_proposal,
+                ..
+            } => {
                 if revision < 3 {
                     *budget = None;
+                }
+                if revision < 3 {
+                    *clear_budget_proposal = None;
                 }
             }
             Self::TasksSyncPlan {

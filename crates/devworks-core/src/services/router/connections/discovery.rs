@@ -330,7 +330,7 @@ fn list_inner(
             for m in data {
                 let id = model_id(m, "id")?;
                 // Auto routers pick a different model per request: no fixed facts.
-                if id.starts_with("openrouter/auto") {
+                if crate::ports::router::is_open_router_auto(id) {
                     out.models.push(DiscoveredModel {
                         id: id.to_owned(),
                         context_tokens: None,

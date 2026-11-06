@@ -1,0 +1,752 @@
+[
+  {
+    "id": "help",
+    "title": "Using local Help",
+    "file": "topics/help.md",
+    "screenIds": [
+      "help"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "help.search",
+      "help.read",
+      "help.topic_for_screen",
+      "help.package_guides",
+      "help.generate_capability_docs"
+    ]
+  },
+  {
+    "id": "chat",
+    "title": "Chat and conversation history",
+    "file": "topics/chat.md",
+    "screenIds": [
+      "chat"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "sessions.start",
+      "sessions.append_message",
+      "sessions.transcript",
+      "sessions.list",
+      "router.route",
+      "router.pin"
+    ]
+  },
+  {
+    "id": "projects",
+    "title": "Projects, archives, and deletion",
+    "file": "topics/projects.md",
+    "screenIds": [
+      "portfolio"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "projects.list",
+      "projects.create",
+      "projects.archive",
+      "projects.restore",
+      "projects.delete"
+    ]
+  },
+  {
+    "id": "overview",
+    "title": "Project overview and activity",
+    "file": "topics/overview.md",
+    "screenIds": [
+      "overview"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "history.events",
+      "projects.get"
+    ]
+  },
+  {
+    "id": "features",
+    "title": "Feature plans, tasks, and readiness",
+    "file": "topics/features.md",
+    "screenIds": [
+      "features"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "features.list",
+      "features.get",
+      "features.create",
+      "features.edit",
+      "features.edit_plan",
+      "features.request_plan_approval",
+      "features.dependencies",
+      "tasks.create",
+      "tasks.edit"
+    ]
+  },
+  {
+    "id": "issues",
+    "title": "Standalone issues and feature membership",
+    "file": "topics/issues.md",
+    "screenIds": [
+      "issues"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "issues.list",
+      "issues.get",
+      "issues.create",
+      "issues.edit",
+      "tasks.dependency_links",
+      "issues.prioritize",
+      "tasks.edit"
+    ]
+  },
+  {
+    "id": "approvals",
+    "title": "Exact decisions and notification history",
+    "file": "topics/approvals.md",
+    "screenIds": [
+      "approvals"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "approvals.list",
+      "approvals.inspect",
+      "approvals.propose",
+      "approvals.record_human_decision",
+      "approvals.review_queue",
+      "notifications.list",
+      "notifications.read",
+      "notifications.mark_read",
+      "notifications.acknowledge"
+    ]
+  },
+  {
+    "id": "repositories",
+    "title": "Repositories, source, and Git ownership",
+    "file": "topics/repositories.md",
+    "screenIds": [
+      "repositories"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "repositories.list",
+      "projects.membership",
+      "repositories.get",
+      "repositories.readme",
+      "repositories.remove_index"
+    ]
+  },
+  {
+    "id": "agents",
+    "title": "Agents, sessions, and execution availability",
+    "file": "topics/agents.md",
+    "screenIds": [
+      "agents"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "runs.inspect",
+      "sessions.list",
+      "history.work_lineage"
+    ]
+  },
+  {
+    "id": "artifacts",
+    "title": "Artifacts and exact versions",
+    "file": "topics/artifacts.md",
+    "screenIds": [
+      "artifacts"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "artifacts.save",
+      "artifacts.read",
+      "artifacts.list",
+      "artifacts.delete",
+      "artifacts.reference"
+    ]
+  },
+  {
+    "id": "knowledge",
+    "title": "Knowledge, lessons, and decisions",
+    "file": "topics/knowledge.md",
+    "screenIds": [
+      "knowledge"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "knowledge.search",
+      "knowledge.read",
+      "knowledge.record",
+      "knowledge.revise",
+      "knowledge.challenge",
+      "knowledge.promote",
+      "knowledge.relate"
+    ]
+  },
+  {
+    "id": "dreaming",
+    "title": "Dreaming and knowledge consolidation",
+    "file": "topics/dreaming.md",
+    "screenIds": [
+      "dreaming"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "databases",
+    "title": "Databases and schema capabilities",
+    "file": "topics/databases.md",
+    "screenIds": [
+      "databases"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "jobs",
+    "title": "Jobs, schedules, and run history",
+    "file": "topics/jobs.md",
+    "screenIds": [
+      "jobs"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "jobs.list",
+      "jobs.create",
+      "jobs.edit",
+      "jobs.enable",
+      "jobs.disable",
+      "jobs.run_now",
+      "jobs.inspect",
+      "jobs.cancel",
+      "jobs.delete"
+    ]
+  },
+  {
+    "id": "usage",
+    "title": "Usage, prices, and budget coverage",
+    "file": "topics/usage.md",
+    "screenIds": [
+      "usage"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "settings",
+    "title": "Settings scopes, proposals, and adoption",
+    "file": "topics/settings.md",
+    "screenIds": [
+      "settings"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "resources",
+    "title": "Resource reservations and waits",
+    "file": "topics/resources.md",
+    "screenIds": [
+      "resources"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "resources.list",
+      "resources.acquire",
+      "resources.renew",
+      "resources.release"
+    ]
+  },
+  {
+    "id": "browser",
+    "title": "Owned browser sessions and evidence",
+    "file": "topics/browser.md",
+    "screenIds": [
+      "browser"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "browser.sessions",
+      "browser.inspect",
+      "browser.navigate",
+      "browser.input",
+      "browser.upload",
+      "browser.screenshot",
+      "browser.console",
+      "browser.network"
+    ]
+  },
+  {
+    "id": "indexing",
+    "title": "Indexing runs, sources, and diagnostics",
+    "file": "topics/indexing.md",
+    "screenIds": [
+      "indexing"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "indexing.discover",
+      "indexing.index",
+      "indexing.status",
+      "indexing.cancel"
+    ]
+  },
+  {
+    "id": "addons",
+    "title": "Install, configure, update, and roll back add-ons",
+    "file": "topics/addons.md",
+    "screenIds": [
+      "addons"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "addons.catalog",
+      "addons.install",
+      "addons.update",
+      "addons.enable",
+      "addons.disable",
+      "addons.rollback",
+      "addons.configure",
+      "addons.propose"
+    ]
+  },
+  {
+    "id": "workflow",
+    "title": "Workflow statuses and eligible allocation",
+    "file": "topics/workflow.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "next_work.claim_project_queue",
+      "next_work.claim_feature_task",
+      "next_work.inspect_claim",
+      "next_work.inspect_queue",
+      "next_work.release_claim"
+    ]
+  },
+  {
+    "id": "work-controls",
+    "title": "Start, Pause, Continue, Stop, and waits",
+    "file": "topics/work-controls.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "runs.start",
+      "runs.pause",
+      "runs.continue",
+      "runs.stop",
+      "runs.redirect",
+      "runs.inspect"
+    ]
+  },
+  {
+    "id": "git-delivery",
+    "title": "Git, reviews, and delivery evidence",
+    "file": "topics/git-delivery.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "git.worktree",
+      "git.commit",
+      "git.push",
+      "git.pull_request"
+    ]
+  },
+  {
+    "id": "routing-context",
+    "title": "Models, routing, and context boundaries",
+    "file": "topics/routing-context.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "router.catalog",
+      "router.availability",
+      "router.route",
+      "router.pin",
+      "router.connections"
+    ]
+  },
+  {
+    "id": "documents-retrieval",
+    "title": "Documents, extraction, and retrieval",
+    "file": "topics/documents-retrieval.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "permissions",
+    "title": "Permissions, roles, and exact human authority",
+    "file": "topics/permissions.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "storage-lifecycle",
+    "title": "Data roots, retention, backup, and restore",
+    "file": "topics/storage-lifecycle.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "diagnostics",
+    "title": "Diagnostics, logs, and evidence",
+    "file": "topics/diagnostics.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "workspace.diagnostics",
+      "workspace.logs",
+      "workspace.record_diagnostic"
+    ]
+  },
+  {
+    "id": "recovery",
+    "title": "Conflicts, uncertain outcomes, and safe recovery",
+    "file": "topics/recovery.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "capability-reference",
+    "title": "Operation reference and local documentation refresh",
+    "file": "topics/capability-reference.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "help.generate_capability_docs",
+      "help.search",
+      "help.read"
+    ]
+  },
+  {
+    "id": "settings-General",
+    "title": "General settings and repository paths",
+    "file": "topics/settings-General.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-General"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Routing",
+    "title": "Providers and routing settings",
+    "file": "topics/settings-Routing.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Routing"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Tools",
+    "title": "Agent tools, web search, and page fetching",
+    "file": "topics/settings-Tools.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Tools"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Safety",
+    "title": "Access and safety settings",
+    "file": "topics/settings-Safety.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Safety"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-GitHub",
+    "title": "GitHub account and synchronization settings",
+    "file": "topics/settings-GitHub.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-GitHub"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Delivery",
+    "title": "Review and delivery settings",
+    "file": "topics/settings-Delivery.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Delivery"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Agents",
+    "title": "Agent limits and context settings",
+    "file": "topics/settings-Agents.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Agents"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Instructions",
+    "title": "Role instructions and adoption",
+    "file": "topics/settings-Instructions.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Instructions"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Containers",
+    "title": "Container runtime preferences",
+    "file": "topics/settings-Containers.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Containers"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Knowledge",
+    "title": "Documents and retrieval settings",
+    "file": "topics/settings-Knowledge.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Knowledge"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Notifications",
+    "title": "Notifications and power settings",
+    "file": "topics/settings-Notifications.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Notifications"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-Storage",
+    "title": "Storage, quotas, logs, and import settings",
+    "file": "topics/settings-Storage.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-Storage"
+    ],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.validate",
+      "settings.save_revision",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "settings-connections",
+    "title": "Provider connection setup and credential recovery",
+    "file": "topics/settings-connections.md",
+    "screenIds": [],
+    "settingsSections": [
+      "settings-connections"
+    ],
+    "relatedCapabilityIds": [
+      "router.connections",
+      "router.configure"
+    ]
+  },
+  {
+    "id": "sdk-start",
+    "title": "Build and test a native add-on",
+    "file": "topics/sdk-start.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-manifest",
+    "title": "Manifest, schemas, signing, and packaging",
+    "file": "topics/sdk-manifest.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-protocol",
+    "title": "Package process protocol and cancellation",
+    "file": "topics/sdk-protocol.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-tools",
+    "title": "Tool and command contributions",
+    "file": "topics/sdk-tools.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-workflows-events",
+    "title": "Workflow gates, events, and durable state",
+    "file": "topics/sdk-workflows-events.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-context",
+    "title": "Skills, roles, prompts, and context hooks",
+    "file": "topics/sdk-context.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-native-ui",
+    "title": "Declarative native UI contributions",
+    "file": "topics/sdk-native-ui.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-provider",
+    "title": "Provider adapters and codec contributions",
+    "file": "topics/sdk-provider.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "sdk-semantic",
+    "title": "Semantic language packs and index producers",
+    "file": "topics/sdk-semantic.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": []
+  },
+  {
+    "id": "settings-reference",
+    "title": "Complete settings reference",
+    "file": "topics/settings-reference.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "settings.read_effective",
+      "settings.explain_source"
+    ]
+  },
+  {
+    "id": "evaluations",
+    "title": "Recorded evaluations and verification limits",
+    "file": "topics/evaluations.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "evals.grade",
+      "evals.results"
+    ]
+  },
+  {
+    "id": "integrations",
+    "title": "Integrations and availability",
+    "file": "topics/integrations.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "web.search",
+      "web.fetch"
+    ]
+  },
+  {
+    "id": "code-exploration",
+    "title": "Source, nodes, graph, and schema exploration",
+    "file": "topics/code-exploration.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "repositories.readme",
+      "repositories.summary",
+      "repositories.search"
+    ]
+  },
+  {
+    "id": "sdk-echo-source",
+    "title": "Complete native echo example source",
+    "file": "topics/sdk-echo-source.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "addons.install",
+      "addons.catalog"
+    ]
+  }
+]
