@@ -20,6 +20,7 @@ pub struct DecisionsUi {
     /// The inspected proposal is the exact displayed snapshot; a refresh never replaces a draft.
     pub selected: Option<ApprovalViewRecord>,
     inspecting: Option<String>,
+    current: Option<ApprovalStatus>,
     pub rationale: String,
     pub text: Option<ApprovalText>,
     pub decision_error: Option<String>,
@@ -44,6 +45,25 @@ pub struct DecisionsUi {
     pub config: Option<(NotificationConfig, String)>,
     pub config_draft: Option<NotificationConfig>,
     config_saving: Option<NotificationConfig>,
+}
+
+struct ApprovalStatus {
+    revision: String,
+    state: ApprovalState,
+    stale: Option<bool>,
+    content_digest: String,
+    target_revision: String,
+}
+impl From<&ApprovalViewRecord> for ApprovalStatus {
+    fn from(p: &ApprovalViewRecord) -> Self {
+        Self {
+            revision: p.revision.as_str().into(),
+            state: p.state.clone(),
+            stale: p.stale,
+            content_digest: p.content_digest.as_str().into(),
+            target_revision: p.target_revision.as_str().into(),
+        }
+    }
 }
 
 pub struct ApprovalText {
@@ -177,6 +197,27 @@ impl Shell {
             move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
         );
     }
+    fn refresh_selected_approval(&mut self) {
+        let Some(p) = &self.decisions.selected else {
+            return;
+        };
+        if let Some(row) = self
+            .decisions
+            .approvals
+            .iter()
+            .find(|row| row.id.as_str() == p.id.as_str())
+        {
+            self.decisions.current = Some(row.into());
+            return;
+        }
+        let id = p.id.as_str().to_owned();
+        self.query(
+            Slot::ApprovalRefresh(id.clone()),
+            "Checking inspected proposal status",
+            "approvals.inspect",
+            move |b| dops::query(b, "approvals.inspect", json!({"proposalId":id})),
+        );
+    }
     fn load_approval_text(&mut self) {
         let (Some(p), Some(text)) = (&self.decisions.selected, &self.decisions.text) else {
             return;
@@ -184,9 +225,6 @@ impl Shell {
         let id = p.id.as_str().to_owned();
         let artifact = text.artifact.clone();
         let cursor = text.next.clone();
-        if self.pending(&Slot::ApprovalContent(id.clone())) {
-            return;
-        }
         self.query(
             Slot::ApprovalContent(id),
             "Reading exact proposal artifact",
@@ -312,6 +350,7 @@ impl Shell {
                         self.decisions.approvals = std::mem::take(&mut self.decisions.gathering);
                         self.decisions.loaded = true;
                         self.decisions.error = None;
+                        self.refresh_selected_approval();
                     }
                 }
                 Err(e) => self.decisions.error = Some(e.describe()),
@@ -333,6 +372,7 @@ impl Shell {
                         next: None,
                         error: None,
                     });
+                    self.decisions.current = Some((&p).into());
                     self.decisions.selected = Some(p);
                     self.decisions.inspecting = None;
                     self.decisions.decision_error = None;
@@ -343,6 +383,19 @@ impl Shell {
                     self.decisions.decision_error = Some(e.describe());
                 }
             },
+            (Slot::ApprovalRefresh(id), Reply::Query(q)) => {
+                if self
+                    .decisions
+                    .selected
+                    .as_ref()
+                    .is_some_and(|p| p.id.as_str() == id)
+                {
+                    match dops::approval(q) {
+                        Ok(p) => self.decisions.current = Some((&p).into()),
+                        Err(e) => self.decisions.decision_error = Some(e.describe()),
+                    }
+                }
+            }
             (Slot::ApprovalContent(id), Reply::Query(q)) => {
                 if self
                     .decisions
@@ -380,6 +433,7 @@ impl Shell {
             }
             (Slot::ApprovalDecision(_), Reply::Command(q)) => match dops::decided(q) {
                 Ok(p) => {
+                    self.decisions.current = Some((&p).into());
                     self.decisions.selected = Some(p);
                     self.decisions.decision_error = None;
                     self.decisions.rationale.clear();
@@ -979,19 +1033,26 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if let Some(digest) = &p.scope_digest {
         ui.label(format!("Scope digest: {}", digest.as_str()));
     }
-    let changed = d
-        .approvals
-        .iter()
-        .find(|x| x.id.as_str() == p.id.as_str())
-        .is_some_and(|x| x.revision.as_str() != p.revision.as_str());
+    let changed = d.current.as_ref().is_some_and(|current| {
+        current.revision != p.revision.as_str()
+            || current.content_digest != p.content_digest.as_str()
+            || current.target_revision != p.target_revision.as_str()
+    });
     if changed {
         ui.colored_label(theme::AMBER,"A newer proposal revision is available. This draft remains bound to the inspected revision.");
     }
     let stale = p.stale == Some(true)
-        || d.approvals
-            .iter()
-            .find(|x| x.id.as_str() == p.id.as_str())
-            .is_some_and(|x| x.stale == Some(true));
+        || d.current
+            .as_ref()
+            .is_some_and(|current| current.stale == Some(true));
+    if let Some(current) = &d.current {
+        if changed || !matches!(current.state, ApprovalState::Pending) {
+            ui.label(format!(
+                "Current proposal: {:?} @ {}",
+                current.state, current.revision
+            ));
+        }
+    }
     if stale {
         ui.colored_label(
             theme::AMBER,
@@ -1151,8 +1212,10 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     rationale_input.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Decision rationale")
     });
-    let can =
-        enabled && matches!(p.state, ApprovalState::Pending) && !d.rationale.trim().is_empty();
+    let can = enabled
+        && matches!(p.state, ApprovalState::Pending)
+        && !changed
+        && !d.rationale.trim().is_empty();
     let approve = can
         && !stale
         && !changed

@@ -101,7 +101,7 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
         json!({"proposalId":p.id,"expectedRevision":p.revision,"contentDigest":p.content_digest,"decision":"Approve","rationale":"Generic command cannot mint a Human witness"}),
     );
     assert!(ops::command_result(b.command("approvals.record_human_decision", &generic)).is_err());
-    assert!(get(&*b, &feature).approved_plan.is_none());
+    assert!(get(&*b, &feature).approval.is_none());
     let mut h = open(&engine, &root, &p);
     assert!(has_text(&h, "Exact proposed plan"));
     assert!(has_text(
@@ -112,7 +112,11 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
             p.target_revision.as_str()
         )
     ));
-    press(&mut h, "Exact proposal artifact text");
+    click(
+        &mut h,
+        Role::DisclosureTriangle,
+        "Exact proposal artifact text",
+    );
     assert!(has_text(&h, "Ship the inspected plan"));
     rationale(
         &mut h,
@@ -121,7 +125,7 @@ fn native_approval_inspects_frozen_content_and_promotes_only_through_trusted_hum
     press(&mut h, "Approve exact proposal");
     let current = get(&*b, &feature);
     assert!(current.pending_plan.is_none());
-    assert!(current.approved_plan.is_some());
+    assert!(current.approval.is_some());
     assert!(has_text(&h, "Recorded rationale:"));
     assert!(
         current.attempts.0.is_empty(),
@@ -170,7 +174,7 @@ fn a_refreshed_inbox_keeps_the_inspected_draft_and_reports_target_staleness() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(get(&*b, &feature).approved_plan.is_none());
+    assert!(get(&*b, &feature).approval.is_none());
 }
 #[test]
 fn unknown_native_decisions_retain_the_exact_trusted_dispatch_across_restart() {
@@ -207,7 +211,7 @@ fn unknown_native_decisions_retain_the_exact_trusted_dispatch_across_restart() {
     settle(&mut h);
     assert!(h.state().client().unwrap().unresolved().is_empty());
     assert!(honest.frames.lock().unwrap().iter().all(|f| f == &frame));
-    assert!(get(&*real, &feature).approved_plan.is_some());
+    assert!(get(&*real, &feature).approval.is_some());
 }
 
 fn seed_notification(
@@ -283,7 +287,7 @@ fn durable_completion_cards_open_actual_work_and_separate_read_from_individual_a
             .collect::<Vec<_>>(),
         ["notice-b", "notice-a"]
     );
-    press(&mut h, "View completed work");
+    click(&mut h, Role::Link, "View completed work");
     assert_eq!(h.state().route(), Route::Features);
     assert_eq!(
         h.state().route_memory(Route::Features).selection.as_deref(),
@@ -386,7 +390,7 @@ fn rejected_native_plan_never_promotes_or_starts_work() {
         devworks_core::protocol::records::ApprovalState::Rejected
     ));
     let current = get(&*b, &feature);
-    assert!(current.approved_plan.is_none());
+    assert!(current.approval.is_none());
     assert!(current.attempts.0.is_empty());
 }
 #[test]

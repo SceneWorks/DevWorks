@@ -148,6 +148,7 @@ pub struct SecretStoreStatus {
 pub enum Slot {
     ApprovalsList,
     ApprovalInspect(String),
+    ApprovalRefresh(String),
     ApprovalContent(String),
     ApprovalDecision(String),
     ReviewQueue,
