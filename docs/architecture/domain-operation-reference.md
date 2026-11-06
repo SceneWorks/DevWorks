@@ -4330,6 +4330,7 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `language` | `?Label` · *revision 3+* |
 | `framework` | `?Label` · *revision 3+* |
 | `foundational` | `bool` |
+| `readmeSource` | `?CodeSourceLocation` · *revision 3+* |
 
 ### CodeOverview
 

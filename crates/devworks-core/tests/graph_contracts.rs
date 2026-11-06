@@ -301,9 +301,16 @@ fn trust_current_scope_and_optional_retained_pin_are_strict_revision_fields() {
 fn architecture_preserves_unknown_package_total_under_work_limit() {
     let mut value = fixture("dw28-result-code.architecture");
     value["value"]["completion"] = json!("WorkLimit");
-    value["value"]["result"]["value"].as_object_mut().unwrap().remove("packageCount");
+    value["value"]["result"]["value"]
+        .as_object_mut()
+        .unwrap()
+        .remove("packageCount");
     let decoded = result(value.clone()).unwrap();
-    assert!(serde_json::to_value(decoded).unwrap()["value"]["result"]["value"].get("packageCount").is_none());
+    assert!(
+        serde_json::to_value(decoded).unwrap()["value"]["result"]["value"]
+            .get("packageCount")
+            .is_none()
+    );
     value["value"]["result"]["value"]["packageCount"] = Value::Null;
     assert!(result(value).is_err());
 }
@@ -311,10 +318,26 @@ fn architecture_preserves_unknown_package_total_under_work_limit() {
 #[test]
 fn overview_readme_keeps_only_actual_same_view_source_provenance() {
     let mut value = fixture("dw28-result-code.overview");
+    value["value"]["result"]["value"]["repositories"] = json!([{"repositoryId":"repo-a","name":"Actual registered repository","foundational":false}]);
     let source = fixture("dw28-result-code.source")["value"]["result"]["value"]["source"].clone();
     assert!(source.is_object());
     value["value"]["result"]["value"]["repositories"][0]["readmeSource"] = source;
     result(value.clone()).unwrap();
+    let mut wrong = value.clone();
+    wrong["value"]["result"]["value"]["repositories"][0]["readmeSource"]["snapshot"]["repositoryId"] =
+        json!("wrong-repo");
+    assert!(result(wrong).is_err());
+    let mut wrong = value.clone();
+    wrong["value"]["result"]["value"]["repositories"][0]["readmeSource"]["snapshot"]["head"]["hex"] =
+        json!("c".repeat(40));
+    assert!(result(wrong).is_err());
+    let mut absent = value.clone();
+    absent["value"].as_object_mut().unwrap().remove("view");
+    let metadata = &mut absent["value"]["result"]["value"];
+    metadata["graphCoverage"] = json!({"state":"Unavailable","gaps":[],"moreGaps":false});
+    metadata["unavailableReason"] = json!("not_indexed");
+    metadata.as_object_mut().unwrap().remove("graphTotals");
+    assert!(result(absent).is_err());
     value["value"]["result"]["value"]["repositories"][0]["readmeSource"] = Value::Null;
     assert!(result(value).is_err());
 }

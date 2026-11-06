@@ -1,0 +1,174 @@
+{
+  "sourceCheckpoint": "5fc03091",
+  "change": "Optional actual same-view captured README source, absent without graph view. Wrong repository/view, viewless metadata source, and present-null refused.",
+  "legacySchemasByteExact": 56,
+  "domainFixtures": 1762,
+  "operationRevisionAdmissions": 570,
+  "newFixtureCheck": {
+    "allPassed": true,
+    "cases": [
+      {
+        "entry": "operation-result.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw28-overview-captured-readme",
+        "normalized": {
+          "kind": "code.overview",
+          "value": {
+            "completion": "Complete",
+            "protocol": "1.0-draft.1",
+            "queryId": "query-a",
+            "result": {
+              "kind": "RepositoryOverview",
+              "value": {
+                "dependencies": [],
+                "graphCoverage": {
+                  "gaps": [],
+                  "moreGaps": false,
+                  "state": "Complete"
+                },
+                "internalModules": [],
+                "repositories": [
+                  {
+                    "foundational": false,
+                    "name": "Actual registered repository",
+                    "readmeSource": {
+                      "endLine": "4",
+                      "language": "Rust",
+                      "path": "src/main.rs",
+                      "snapshot": {
+                        "base": {
+                          "format": "Sha1",
+                          "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        },
+                        "captureDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "head": {
+                          "format": "Sha1",
+                          "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        },
+                        "repositoryId": "repo-a",
+                        "worktreeId": "work-a"
+                      },
+                      "sourceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "startLine": "1",
+                      "unitKey": "src/main.rs"
+                    },
+                    "repositoryId": "repo-a"
+                  }
+                ],
+                "stamp": {
+                  "policyRevision": "1",
+                  "restoreEpoch": "0",
+                  "scopeRevision": "1",
+                  "sequence": "1",
+                  "storeId": "store-a"
+                }
+              }
+            },
+            "scopeCoverage": {
+              "coverage": {
+                "gaps": [],
+                "moreGaps": false,
+                "state": "Complete"
+              },
+              "unavailableRepositories": []
+            },
+            "view": {
+              "expiresAtMs": "100",
+              "pinId": "pin-a",
+              "stamp": {
+                "policyRevision": "1",
+                "restoreEpoch": "0",
+                "scopeRevision": "1",
+                "sequence": "1",
+                "storeId": "store-a"
+              },
+              "views": [
+                {
+                  "baseline": {
+                    "generationId": "g-base",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  },
+                  "branch": {
+                    "generationId": "g-branch",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "parentGenerationId": "g-base"
+                  },
+                  "coverage": {
+                    "gaps": [],
+                    "moreGaps": false,
+                    "state": "Complete"
+                  },
+                  "snapshot": {
+                    "base": {
+                      "format": "Sha1",
+                      "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    "captureDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "head": {
+                      "format": "Sha1",
+                      "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    },
+                    "repositoryId": "repo-a",
+                    "worktreeId": "work-a"
+                  },
+                  "sourceRevision": "1",
+                  "viewId": "view-a",
+                  "worktree": {
+                    "generationId": "g-capture",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "parentGenerationId": "g-branch"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": "view-less graph response requires explicit unavailable metadata",
+        "expectedSchemaValid": true,
+        "id": "dw28-reject-viewless-overview-readme",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": "a revision-gated member is omitted, never null",
+        "expectedSchemaValid": false,
+        "id": "dw28-reject-null-overview-readme",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": "README source repository mismatch",
+        "expectedSchemaValid": true,
+        "id": "dw28-reject-cross-repository-overview-readme",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": "source outside resolved graph view",
+        "expectedSchemaValid": true,
+        "id": "dw28-reject-other-view-overview-readme",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      }
+    ],
+    "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"
+  },
+  "nativeTest": {
+    "command": "cargo test --locked -p devworks-core --test graph_contracts overview_readme_keeps_only_actual_same_view_source_provenance",
+    "passed": 1,
+    "failed": 0
+  }
+}

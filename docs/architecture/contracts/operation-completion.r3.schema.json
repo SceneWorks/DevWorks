@@ -2287,6 +2287,10 @@
         "name": {
           "$ref": "#/$defs/Text0To65536"
         },
+        "readmeSource": {
+          "$ref": "#/$defs/CodeSourceLocation",
+          "x-since": 3
+        },
         "repositoryId": {
           "$ref": "#/$defs/Id"
         },

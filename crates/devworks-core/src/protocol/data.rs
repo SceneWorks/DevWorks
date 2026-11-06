@@ -1887,6 +1887,11 @@ impl GraphPage {
                         && value.dependencies.0.is_empty()
                         && value.internal_modules.0.is_empty()
                         && value.graph_totals.is_none()
+                        && value
+                            .repositories
+                            .0
+                            .iter()
+                            .all(|r| r.readme_source.is_none())
                 }
                 _ => false,
             };
@@ -2087,7 +2092,15 @@ impl GraphPage {
                 self.validate_modules(&value.internal_modules.0)?
             }
             GraphResult::RepositoryOverview { value } => {
-                self.validate_modules(&value.internal_modules.0)?
+                self.validate_modules(&value.internal_modules.0)?;
+                for repository in &value.repositories.0 {
+                    if let Some(source) = &repository.readme_source {
+                        if source.snapshot.repository_id != repository.repository_id {
+                            return Err("README source repository mismatch");
+                        }
+                        self.current_source(source)?;
+                    }
+                }
             }
             _ => {}
         }
