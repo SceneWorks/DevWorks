@@ -110,7 +110,9 @@ fn narrow(
             }
         }
     } else {
-        if model::scope_storage(&bound_scope(ctx)) != model::scope_storage(scope) {
+        if model::scope_storage(&bound_scope(ctx)) != model::scope_storage(scope)
+            && !matches!(scope, DataScope::Workspace)
+        {
             return Err(StorageError::ScopeDenied);
         }
         ctx.clone()
@@ -386,7 +388,13 @@ impl IndexService {
             let mut scopes = if progress.anchor_done {
                 Vec::new()
             } else {
-                vec![bound_scope(&context)]
+                if context.principal_kind() == PrincipalKind::Human
+                    && context.project_id().is_some()
+                {
+                    vec![DataScope::Workspace, bound_scope(&context)]
+                } else {
+                    vec![bound_scope(&context)]
+                }
             };
             scopes.extend(projects.iter().map(|p| DataScope::Project {
                 project_id: p.id.clone(),
