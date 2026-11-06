@@ -29,6 +29,17 @@ pub struct OwnerPreview {
 /// reuses owner rules inside the deciding transaction; actual dispatch runs them again.
 pub trait SavedOperationOwners: Send + Sync {
     fn supports(&self, operation: &str) -> bool;
+    fn decide_source(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _human: &InvocationContext,
+        _request: &DecodedRequest,
+        _preview: &OwnerPreview,
+        _approve: bool,
+    ) -> Result<(), Failure> {
+        Ok(())
+    }
+
     fn prepare(
         &self,
         ctx: &InvocationContext,
@@ -49,3 +60,9 @@ mod service;
 mod writes;
 pub use replay::{ApprovedCommand, ResumePreparation};
 pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};
+
+pub use writes::stage_saved;
+/// Canonical digest for a source-typed risk proposal; saved operations use requests::decode().fingerprint.
+pub fn content_digest(content: &crate::protocol::records::ApprovalContent) -> String {
+    model::hash(&serde_json::to_value(content).expect("typed approval content"))
+}

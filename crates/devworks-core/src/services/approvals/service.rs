@@ -135,6 +135,19 @@ impl ApprovalService {
             None
         })
     }
+    pub(crate) fn validate_owner(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        request: &DecodedRequest,
+        preview: &OwnerPreview,
+    ) -> Result<(), Failure> {
+        if builtin(request.descriptor.name) {
+            crate::services::projects::validate_approval_preview(tx, ctx, request, preview)
+        } else {
+            self.owners.validate(tx, ctx, request, preview)
+        }
+    }
     pub(crate) fn decoded(
         &self,
         op: &str,
@@ -145,7 +158,7 @@ impl ApprovalService {
             op,
             revision,
             input,
-            self.catalog.contains(op) && self.owners.supports(op),
+            self.catalog.contains(op) && (builtin(op) || self.owners.supports(op)),
         )
         .map_err(|e| match e {
             requests::RequestFailure::Unsupported => unsupported(),
@@ -167,7 +180,13 @@ impl ApprovalService {
                 .configuration()
                 .current(&p.scope, "settings")?
                 .map_or(1, |c| c.revision);
-            return Ok(model::settings(&p, n, full)?);
+            let mut view = model::settings(&p, n, full)?;
+            view.rationale = s
+                .decisions()
+                .human_decision(ApprovalSource::Settings, id)?
+                .and_then(|a| a.rationale)
+                .map(|v| crate::services::sessions::content(&v));
+            return Ok(view);
         }
         if let Some(p) = s.work().proposal(id)? {
             let f = s
@@ -175,23 +194,34 @@ impl ApprovalService {
                 .work(&p.feature_id)?
                 .filter(|f| project_visible(ctx, Some(&f.project_id)))
                 .ok_or_else(|| not_found("approval", id))?;
-            return Ok(model::plan(
+            let mut view = model::plan(
                 &p,
                 &f.project_id,
                 s.work().feature_plan(&f.id)?.as_ref(),
                 full,
-            )?);
+            )?;
+            view.rationale = s
+                .decisions()
+                .human_decision(ApprovalSource::FeaturePlan, id)?
+                .and_then(|a| a.rationale)
+                .map(|v| crate::services::sessions::content(&v));
+            return Ok(view);
         }
         let p = s
             .decisions()
             .approval(id)?
             .filter(|p| project_visible(ctx, p.scope.project_id()))
             .ok_or_else(|| not_found("approval", id))?;
-        Ok(model::generic(
-            &p,
-            full,
-            s.decisions().approval_resume(id)?.as_ref(),
-        )?)
+        let mut view = model::generic(&p, full, s.decisions().approval_resume(id)?.as_ref())?;
+        if p.payload["content"]["kind"] == "FindingRisk" {
+            let feature: Id = serde_json::from_value(p.payload["content"]["featureId"].clone())
+                .map_err(|_| invalid("finding_risk"))?;
+            view.stale =
+                Some(s.work().readiness(&feature)?.is_none_or(|r| {
+                    model::hash(&r.body) != p.payload["binding"]["assessmentDigest"]
+                }));
+        }
+        Ok(view)
     }
     fn list(
         &self,
@@ -309,13 +339,13 @@ impl QueryHandler for ApprovalService {
     ) -> Result<QueryAnswer, DomainFault> {
         let result = match q.input() {
             OperationInput::Approvals(ops::Input::List(i)) => {
-                self.list(s, ctx, i, q.schema_revision().0.into())
+                self.list(s, ctx, i, q.schema_revision().0)
             }
             OperationInput::Approvals(ops::Input::Inspect(i)) => self
                 .inspect(s, ctx, &i.proposal_id, true)
                 .map(|value| OperationResult::ApprovalsInspect { value }),
             OperationInput::Approvals(ops::Input::ReviewQueue(i)) => {
-                super::review_queue::query(s, ctx, i, q.schema_revision().0.into())
+                super::review_queue::query(s, ctx, i, q.schema_revision().0)
             }
             _ => Err(unsupported()),
         }
@@ -362,6 +392,9 @@ impl CommandHandler for ApprovalService {
             OperationInput::Approvals(ops::Input::RecordHumanDecision(i)) => env.read(|s| {
                 let p = s.decisions().approval(&i.proposal_id)?;
                 Ok(p.and_then(|p| {
+                    if p.state != "Pending" {
+                        return None;
+                    }
                     let c = p.payload.get("content")?;
                     if c["kind"] != "SavedOperation" {
                         return None;
@@ -388,7 +421,20 @@ impl CommandHandler for ApprovalService {
             Ok(r) => r,
             Err(_) => return Ok(None),
         };
-        match self.owners.prepare(&original, &request, env) {
+        let prepared = if builtin(&op) {
+            env.read(|s| {
+                Ok(crate::services::projects::approval_preview(
+                    s.projects(),
+                    &original,
+                    &request,
+                ))
+            })
+            .map_err(Failure::Storage)
+            .and_then(|v| v)
+        } else {
+            self.owners.prepare(&original, &request, env)
+        };
+        match prepared {
             Ok(preview) => Ok(Some(Prepared::new(PreparedOwner { preview }))),
             Err(Failure::Storage(e)) => Err(e),
             Err(Failure::Refused(_)) => Ok(None),
@@ -409,4 +455,11 @@ impl CommandHandler for ApprovalService {
         };
         crate::services::sessions::decided(tx, out.map(|result| DomainDecision::Applied { result }))
     }
+}
+
+fn builtin(op: &str) -> bool {
+    matches!(
+        op,
+        "projects.archive" | "projects.delete" | "repositories.remove_index"
+    )
 }

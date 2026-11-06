@@ -218,7 +218,10 @@ impl OsNotificationSupervisor {
         let mut submitted = 0;
         let mut failure = None;
         loop {
-            if self.stopping.load(Ordering::SeqCst) || self.focus.load(Ordering::SeqCst) != 2 {
+            if self.stopping.load(Ordering::SeqCst)
+                || self.focus.load(Ordering::SeqCst) != 2
+                || !self.permission().can_submit()
+            {
                 break;
             }
             let cursor = after.clone();
@@ -273,7 +276,10 @@ impl OsNotificationSupervisor {
                         }
                     }
                 }
-                if self.stopping.load(Ordering::SeqCst) || self.focus.load(Ordering::SeqCst) != 2 {
+                if self.stopping.load(Ordering::SeqCst)
+                    || self.focus.load(Ordering::SeqCst) != 2
+                    || !self.permission().can_submit()
+                {
                     break;
                 }
             }
@@ -334,7 +340,7 @@ impl OsNotificationSupervisor {
             // Keep this one admitted external attempt owned through its durable outcome. Drain
             // fences new effects and waits for this section rather than orphaning a callback.
             let closed = fence.read().unwrap_or_else(|p| p.into_inner());
-            if *closed { return Ok(false); }
+            if *closed { return Ok((false, None)); }
             let permitted = !*closed && !stopping.load(Ordering::SeqCst) && focus.load(Ordering::SeqCst) == 2;
             let current = if permitted {
                 read_snapshot(&*store, &ReadOptions::default(), |snapshot| {
@@ -346,6 +352,12 @@ impl OsNotificationSupervisor {
                 port.submit(&OsNotification { notification_id: row.id.clone(), title: row.title.clone(), body: row.body.clone() })
             } else { OsDeliveryOutcome::Suppressed(format!("{DEFERRED} focus, lifecycle or source eligibility changed")) };
             let submitted = matches!(outcome, OsDeliveryOutcome::Submitted { .. });
+            let permission = match &outcome {
+                OsDeliveryOutcome::Denied => Some(OsNotificationPermission::Denied),
+                OsDeliveryOutcome::Suppressed(reason) if !reason.starts_with(DEFERRED) => Some(OsNotificationPermission::Suppressed(reason.clone())),
+                OsDeliveryOutcome::Unavailable(reason) => Some(OsNotificationPermission::Unavailable(reason.clone())),
+                _ => None,
+            };
             let (state, detail) = outcome_record(outcome);
             run_write(&*store, WriteOptions::default(), move |tx| {
                 tx.decisions().settle_os_notification_delivery(&row.user_id, &row.id, &claim.fence(), state, detail.as_deref())?;
@@ -356,8 +368,12 @@ impl OsNotificationSupervisor {
                     kind: "OsNotificationDeliverySettled".into(), payload: json!({"notificationId":row.id.as_str(), "userId":row.user_id.0.as_str(), "state":state, "detail":detail, "attempt":claim.attempt, "submittedIsVisibilityConfirmed":false}) })?;
                 Ok(())
             })?;
-            Ok(submitted)
+            Ok((submitted, permission))
         }).await.unwrap_or_else(|_| Err(StorageError::unavailable(Unavailable::HandlerPanicked, "Native notification delivery task failed")))
+        .map(|(submitted, permission)| {
+            if let Some(value) = permission { self.cache_permission(value, false); }
+            submitted
+        })
     }
 }
 fn retryable(previous: Option<&StoredOsNotificationDelivery>, explicit: bool) -> bool {

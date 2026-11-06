@@ -137,7 +137,18 @@ fn a_refreshed_inbox_keeps_the_inspected_draft_and_reports_target_staleness() {
     let p = request(&*b, &feature);
     let mut h = open(&engine, &root, &p);
     rationale(&mut h, "A draft bound to the original target.");
-    wops::work_changed(b.command("features.edit",&wops::work_command(&*b,"features.edit",json!({"workId":feature.id,"expectedRevision":feature.revision,"changes":{"title":"A changed target"}})))).unwrap();
+    let current = get(&*b, &feature);
+    let mut revised = serde_json::to_value(&current.pending_plan.as_ref().unwrap().draft).unwrap();
+    revised["goals"] = json!(["A changed frozen plan target"]);
+    wops::work_changed(b.command(
+        "features.edit_plan",
+        &wops::work_command(
+            &*b,
+            "features.edit_plan",
+            json!({"featureId":feature.id,"expectedRevision":current.revision,"plan":revised}),
+        ),
+    ))
+    .unwrap();
     press(&mut h, "Refresh approvals");
     assert!(has_text(&h, "This proposal is stale"));
     assert_eq!(

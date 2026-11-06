@@ -12,6 +12,7 @@ use serde_json::json;
 pub struct DecisionsUi {
     pub project: Option<String>,
     pub tab: usize,
+    pub history_state: Option<String>,
     pub approvals: Vec<ApprovalViewRecord>,
     gathering: Vec<ApprovalViewRecord>,
     pub loaded: bool,
@@ -89,6 +90,8 @@ impl Shell {
         let mut body = json!({"scope":dops::scope(self.decisions.project.as_deref()), "page":dops::page(cursor.as_deref())});
         if self.decisions.tab == 0 {
             body["state"] = json!("Pending");
+        } else if let Some(state) = &self.decisions.history_state {
+            body["state"] = json!(state);
         }
         self.query(
             Slot::ApprovalsList,
@@ -689,6 +692,40 @@ impl Shell {
                         if state.0.project != old {
                             state.1.push(Action::Reload);
                         }
+                        if tab == 1 {
+                            let old = state.0.history_state.clone();
+                            let filter = egui::ComboBox::from_id_salt("approval-history-state")
+                                .selected_text(
+                                    state.0.history_state.as_deref().unwrap_or("All states"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut state.0.history_state,
+                                        None,
+                                        "All states",
+                                    );
+                                    for name in
+                                        ["Pending", "Approved", "Rejected", "Superseded", "Expired"]
+                                    {
+                                        ui.selectable_value(
+                                            &mut state.0.history_state,
+                                            Some(name.into()),
+                                            name,
+                                        );
+                                    }
+                                });
+                            filter.response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::ComboBox,
+                                    true,
+                                    "Approval state filter",
+                                )
+                            });
+                            if old != state.0.history_state {
+                                state.1.push(Action::Reload);
+                            }
+                        }
+
                         if ui.button("Refresh approvals").clicked() {
                             state.1.push(Action::Reload);
                         }
@@ -1039,7 +1076,12 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if let Some(content) = &p.reviewed_content {
         json_view(ui, "Reviewed binding and evidence", content);
     }
-    let exact_content = p.reviewed_source.is_some() || p.reviewed_content.is_some();
+    let exact_content = match &p.payload {
+        Some(ApprovalContent::FeaturePlan { .. } | ApprovalContent::Settings { .. }) => {
+            p.reviewed_source.is_some()
+        }
+        _ => p.reviewed_source.is_some() || p.reviewed_content.is_some(),
+    };
     if !exact_content {
         ui.colored_label(
             theme::AMBER,

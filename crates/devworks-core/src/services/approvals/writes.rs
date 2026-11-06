@@ -75,7 +75,7 @@ impl ApprovalService {
                 let prepared = c
                     .prepared::<PreparedOwner>()
                     .ok_or_else(|| invalid("owner_preview"))?;
-                self.owners.validate(tx, ctx, &request, &prepared.preview)?;
+                self.validate_owner(tx, ctx, &request, &prepared.preview)?;
                 if request.fingerprint.as_str() != i.content_digest.0
                     || prepared.preview.scope != scope
                     || prepared.preview.target_id != i.target.id
@@ -151,7 +151,7 @@ impl ApprovalService {
         let approve = matches!(i.decision, ProposalDecision::Approve);
         let id = &i.proposal_id;
         let expected = i.expected_revision.get();
-        let (source, before, after) = if let Some(p) = tx.configuration().proposal(id)? {
+        let (source, before, mut after) = if let Some(p) = tx.configuration().proposal(id)? {
             if p.namespace != "settings" || !project_visible(ctx, p.scope.project_id()) {
                 return Err(not_found("approval", id).into());
             }
@@ -264,11 +264,36 @@ impl ApprovalService {
                         {
                             return Err(conflict(id));
                         }
-                        self.owners
-                            .validate(tx, &original, &request, &prepared.preview)?;
+                        self.validate_owner(tx, &original, &request, &prepared.preview)?;
                     }
                     _ => return Err(unsupported()),
                 }
+            }
+            if p.payload["content"]["kind"] == "SavedOperation" {
+                let content: ApprovalContent = serde_json::from_value(p.payload["content"].clone())
+                    .map_err(|_| invalid("saved_operation"))?;
+                let ApprovalContent::SavedOperation {
+                    schema_revision,
+                    input,
+                } = content
+                else {
+                    unreachable!()
+                };
+                let request = self.decoded(
+                    &p.operation_kind,
+                    schema_revision.0.parse().unwrap_or(0),
+                    &input.0,
+                )?;
+                let stored = OwnerPreview {
+                    scope: p.scope.clone(),
+                    target_id: p.target_id.clone(),
+                    target_revision: p.target_revision,
+                    summary: p.summary.clone(),
+                    reviewed: p.payload["reviewed"].clone(),
+                    binding: p.payload["binding"].clone(),
+                };
+                self.owners
+                    .decide_source(tx, ctx, &request, &stored, approve)?;
             }
             let mut changed = p.clone();
             changed.revision += 1;
@@ -305,6 +330,7 @@ impl ApprovalService {
                 self.create_resume(tx, ctx, &p)?;
             }
         }
+        after.rationale = Some(i.rationale.clone());
         Ok(OperationResult::ApprovalsRecordHumanDecision { value: after })
     }
 }
@@ -327,10 +353,19 @@ pub fn stage_saved(
     request: &crate::admission::DecodedRequest,
     preview: &OwnerPreview,
 ) -> Result<StoredApproval, Failure> {
+    if request.fingerprint.as_str() != i.content_digest.0
+        || preview.target_id != i.target.id
+        || preview.target_revision != i.target.revision.get()
+        || scope(ctx, &i.scope)? != preview.scope
+    {
+        return Err(invalid("reviewed_binding"));
+    }
+    let mut input = i.clone();
+    input.summary = crate::services::sessions::content(&preview.summary);
     stage_generic(
         tx,
         ctx,
-        i,
+        &input,
         preview.scope.clone(),
         json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"invocation":super::replay::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
     )

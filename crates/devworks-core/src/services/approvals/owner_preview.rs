@@ -152,26 +152,58 @@ pub(crate) fn artifact_binding(
 /// the owner's deciding transaction. The original actor remains unchanged. This is exact
 /// operation consent, never a publisher-trust, role, pause or general native-execution bypass.
 pub(crate) fn approved_binding(
-    tx:&mut dyn WriteTransaction,ctx:&InvocationContext,command:&crate::gateway::AdmittedCommand,
-)->Result<Option<serde_json::Value>,Failure> {
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    command: &crate::gateway::AdmittedCommand,
+) -> Result<Option<serde_json::Value>, Failure> {
     use crate::context::PrincipalKind;
     use crate::ports::storage::ApprovalSource;
-    let Some(evidence)=ctx.reviewed_operation() else {return Ok(None);};
-    let denied=||Refusal::new(DomainErrorCode::PermissionDenied,"reviewed_operation",Some(evidence.approval_id().clone()));
-    if evidence.operation()!=command.descriptor().name || evidence.schema_revision()!=command.schema_revision().0
-        || evidence.request_digest()!=command.fingerprint().as_str() {return Err(denied().into());}
-    let proposal=tx.decisions().approval(evidence.approval_id())?.ok_or_else(denied)?;
-    let audit=tx.decisions().human_decision(ApprovalSource::Generic,evidence.approval_id())?.ok_or_else(denied)?;
-    let scope_digest=crate::fingerprint::sha256_hex(crate::jcs::canonicalize(evidence.owner_binding())
-        .map_err(|e|crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?.as_bytes());
-    if proposal.state!="Approved" || proposal.author!=*ctx.principal() || proposal.author_kind!=ctx.principal_kind()
-        || proposal.operation_kind!=evidence.operation() || proposal.content_digest!=evidence.request_digest()
-        || proposal.payload["binding"]!=*evidence.owner_binding() || proposal.scope_digest!=scope_digest
-        || proposal.decided_by.as_ref()!=Some(evidence.approver()) || proposal.restore_epoch!=tx.store().restore_epoch
-        || proposal.restore_epoch!=ctx.restore_epoch().get() || audit.actor!=*evidence.approver()
-        || audit.decision!="Approved" || audit.content_digest!=proposal.content_digest || audit.scope_digest!=proposal.scope_digest
-        || audit.reviewed_proposal_revision.checked_add(1)!=Some(proposal.revision)
-        || tx.actors().actor_kind(evidence.approver())?!=Some(PrincipalKind::Human) {
+    let Some(evidence) = ctx.reviewed_operation() else {
+        return Ok(None);
+    };
+    let denied = || {
+        Refusal::new(
+            DomainErrorCode::PermissionDenied,
+            "reviewed_operation",
+            Some(evidence.approval_id().clone()),
+        )
+    };
+    if evidence.operation() != command.descriptor().name
+        || evidence.schema_revision() != command.schema_revision().0
+        || evidence.request_digest() != command.fingerprint().as_str()
+    {
+        return Err(denied().into());
+    }
+    let proposal = tx
+        .decisions()
+        .approval(evidence.approval_id())?
+        .ok_or_else(denied)?;
+    let audit = tx
+        .decisions()
+        .human_decision(ApprovalSource::Generic, evidence.approval_id())?
+        .ok_or_else(denied)?;
+    let scope_digest = crate::fingerprint::sha256_hex(
+        crate::jcs::canonicalize(evidence.owner_binding())
+            .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?
+            .as_bytes(),
+    );
+    if proposal.state != "Approved"
+        || proposal.author != *ctx.principal()
+        || proposal.author_kind != ctx.principal_kind()
+        || proposal.operation_kind != evidence.operation()
+        || proposal.content_digest != evidence.request_digest()
+        || proposal.payload["binding"] != *evidence.owner_binding()
+        || proposal.scope_digest != scope_digest
+        || proposal.decided_by.as_ref() != Some(evidence.approver())
+        || proposal.restore_epoch != tx.store().restore_epoch
+        || proposal.restore_epoch != ctx.restore_epoch().get()
+        || audit.actor != *evidence.approver()
+        || audit.decision != "Approved"
+        || audit.content_digest != proposal.content_digest
+        || audit.scope_digest != proposal.scope_digest
+        || audit.reviewed_proposal_revision.checked_add(1) != Some(proposal.revision)
+        || tx.actors().actor_kind(evidence.approver())? != Some(PrincipalKind::Human)
+    {
         return Err(denied().into());
     }
     Ok(Some(evidence.owner_binding().clone()))

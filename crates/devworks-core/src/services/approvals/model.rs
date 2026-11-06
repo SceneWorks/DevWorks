@@ -67,7 +67,7 @@ pub(crate) fn generic(
     full: bool,
     resume: Option<&crate::ports::storage::StoredApprovalResume>,
 ) -> Result<ApprovalViewRecord, StorageError> {
-    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.content_digest,"state":p.state,"operationKind":label(&p.operation_kind,"operation"),"targetId":p.target_id,"targetRevision":rev(p.target_revision),"summary":content(&p.summary),"scope":scope_wire(&p.scope),"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":p.scope_digest,"stale":false});
+    let mut v = json!({"id":p.id,"revision":rev(p.revision),"contentDigest":p.content_digest,"state":p.state,"operationKind":label(&p.operation_kind,"operation"),"targetId":p.target_id,"targetRevision":rev(p.target_revision),"summary":content(&p.summary),"scope":scope_wire(&p.scope),"requestedBy":p.author,"createdAtMs":counter(p.created_at_ms),"scopeDigest":p.scope_digest});
     if let Some(a) = &p.artifact {
         v["artifact"] = a.clone();
     }

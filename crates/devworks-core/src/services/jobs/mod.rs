@@ -1417,10 +1417,10 @@ impl CommandHandler for JobService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
             );
         };
-        if ctx.reviewed_operation().is_some() {
-            if let Err(f) = self.validate_reviewed_consent(tx, ctx, command) {
-                return crate::services::sessions::decided(tx, Err(f));
-            }
+        if ctx.reviewed_operation().is_some()
+            && let Err(f) = self.validate_reviewed_consent(tx, ctx, command)
+        {
+            return crate::services::sessions::decided(tx, Err(f));
         }
         let outcome = match input {
             ops::Input::Create(i) => self.create(tx, ctx, i).map(|d| (d, None)),
@@ -1487,26 +1487,6 @@ pub(crate) fn undispatched(
             .operation(op)?
             .is_none_or(|o| cancellable_before_dispatch(o.state)),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_list_position_round_trips_any_title() {
-        for title in ["Docs", "two\nlines", "\n", "trailing\n", "a\nb\nc"] {
-            let id = Id::new("job-1").unwrap();
-            let at = list_position(title, &id);
-            assert_eq!(
-                parse_list_position(&at),
-                Some((title.to_owned(), "job-1".to_owned())),
-                "{title:?}"
-            );
-        }
-        assert_eq!(parse_list_position("no newline"), None);
-        assert_eq!(parse_list_position("bad id\ntitle"), None);
-    }
 }
 
 fn authorizer(ctx: &InvocationContext) -> crate::protocol::ActorId {
@@ -1594,11 +1574,7 @@ impl JobService {
                 crate::ports::storage::ActivationPurpose::Implementation,
             )?;
             if !eligibility.eligible {
-                return Err(refuse(
-                    DomainErrorCode::Conflict,
-                    "independent_work_hold",
-                    None,
-                ));
+                return Err(StorageError::Busy.into());
             }
         }
         let job = match c.input() {
@@ -1609,12 +1585,11 @@ impl JobService {
         };
         if let Some(id) = job {
             let job = tx.jobs().job(&id)?.ok_or_else(|| not_found(JOB, &id))?;
-            if job.hold.is_some() || runner::fence_of(tx, &job)?.is_some() {
-                return Err(refuse(
-                    DomainErrorCode::Conflict,
-                    "independent_job_hold",
-                    Some(&id),
-                ));
+            if job.hold.is_some()
+                || runner::fence_of(tx, &job)?
+                    .is_some_and(|(kind, _)| kind != "AuthorizationRequired")
+            {
+                return Err(StorageError::Busy.into());
             }
         }
         Ok(())
@@ -1907,5 +1882,25 @@ impl JobService {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_list_position_round_trips_any_title() {
+        for title in ["Docs", "two\nlines", "\n", "trailing\n", "a\nb\nc"] {
+            let id = Id::new("job-1").unwrap();
+            let at = list_position(title, &id);
+            assert_eq!(
+                parse_list_position(&at),
+                Some((title.to_owned(), "job-1".to_owned())),
+                "{title:?}"
+            );
+        }
+        assert_eq!(parse_list_position("no newline"), None);
+        assert_eq!(parse_list_position("bad id\ntitle"), None);
     }
 }
