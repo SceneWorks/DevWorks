@@ -237,12 +237,20 @@ fn native_attempt_replay_stream_zero_and_late_reported_correction() {
     let merged = accounting::summary(&late).unwrap();
     assert_eq!(merged.meter.quantities.input_tokens, Some(110));
     let (src, events) = source(vec![], false);
-    assert!(
-        f.host()
-            .drive(attempt.attempt_id, src, Cancellation::new())
-            .is_err()
-    );
+    let replayed = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap();
+    let DriveOutcome::Settled(replayed) = replayed else {
+        panic!("settled admission must replay its existing balance")
+    };
+    assert_eq!(replayed, late);
     assert!(events.lock().unwrap().is_empty());
+    assert_eq!(
+        f.fx.read(|s| s.usage().attempt_balance(&attempt.attempt_id))
+            .unwrap(),
+        late
+    );
 }
 #[test]
 fn eof_unknown_tail_closes_local_transport_but_failed_close_keeps_guard() {
