@@ -6758,6 +6758,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PriceOverrideOutcome_0_500": {
+      "items": {
+        "$ref": "#/$defs/PriceOverrideOutcome"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_PriceSourceSnapshot_0_500": {
       "items": {
         "$ref": "#/$defs/PriceSourceSnapshot"
@@ -16395,6 +16403,10 @@
             }
           ]
         },
+        "overrideHistory": {
+          "$ref": "#/$defs/List_PriceOverrideOutcome_0_500",
+          "x-since": 3
+        },
         "providers": {
           "$ref": "#/$defs/List_ProviderPriceStatus_0_500"
         },
@@ -16461,6 +16473,14 @@
             },
             "tariffs": {
               "$ref": "#/$defs/List_PriceTariff_1_128"
+            },
+            "updatedAtMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
+            "updatedBy": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
             }
           },
           "required": [
@@ -16483,6 +16503,14 @@
             },
             "revision": {
               "$ref": "#/$defs/Revision"
+            },
+            "updatedAtMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
+            "updatedBy": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
             }
           },
           "required": [
@@ -19894,7 +19922,7 @@
         "model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             {
               "type": "null"
@@ -19914,7 +19942,7 @@
         "provider": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             {
               "type": "null"
@@ -19964,7 +19992,7 @@
         "tool": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             {
               "type": "null"
@@ -19974,7 +20002,7 @@
         "user": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             {
               "type": "null"
@@ -20248,7 +20276,14 @@
           ]
         },
         "requestId": {
-          "$ref": "#/$defs/Id"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resolvedModelId": {
           "anyOf": [
@@ -20328,7 +20363,6 @@
       },
       "required": [
         "id",
-        "requestId",
         "sourceKind",
         "sourceId",
         "purpose",
@@ -20505,7 +20539,7 @@
           "$ref": "#/$defs/Text1To256"
         },
         "value": {
-          "$ref": "#/$defs/Text1To4096"
+          "$ref": "#/$defs/Text0To65536"
         }
       },
       "required": [
@@ -20792,10 +20826,10 @@
       "additionalProperties": false,
       "properties": {
         "endMs": {
-          "$ref": "#/$defs/Counter"
+          "$ref": "#/$defs/SignedCounter"
         },
         "startMs": {
-          "$ref": "#/$defs/Counter"
+          "$ref": "#/$defs/SignedCounter"
         }
       },
       "required": [
@@ -20835,7 +20869,7 @@
           "additionalProperties": false,
           "properties": {
             "bucketStartMs": {
-              "$ref": "#/$defs/Counter"
+              "$ref": "#/$defs/SignedCounter"
             },
             "key": {
               "$ref": "#/$defs/Text1To256"
@@ -20845,7 +20879,7 @@
               "type": "string"
             },
             "label": {
-              "$ref": "#/$defs/Text1To256"
+              "$ref": "#/$defs/Text0To65536"
             },
             "value": {
               "$ref": "#/$defs/Counter"
@@ -20867,14 +20901,14 @@
               "$ref": "#/$defs/Text1To256"
             },
             "key": {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             "kind": {
               "const": "Breakdown",
               "type": "string"
             },
             "label": {
-              "$ref": "#/$defs/Text1To4096"
+              "$ref": "#/$defs/Text0To65536"
             },
             "value": {
               "$ref": "#/$defs/Counter"

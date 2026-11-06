@@ -563,7 +563,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
 | `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
 | `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteAvailability` |
-| `router.usage` | **Query**<br>`rootId`: `?RootId`<br>`sessionId`: `?Id`<br>`jobRunId`: `?Id`<br>`page`: `PageRequest`<br>`reportKind`: `?UsageReportKind`<br>`scope`: `?DataScope`<br>`projectId`: `?ProjectId`<br>`startMs`: `?Counter`<br>`endMs`: `?Counter`<br>`interval`: `?Content`<br>`user`: `?Content`<br>`provider`: `?Content`<br>`model`: `?Content`<br>`tool`: `?Content`<br>`purpose`: `?Label`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouterUsageResult` |
+| `router.usage` | **Query**<br>`rootId`: `?RootId`<br>`sessionId`: `?Id`<br>`jobRunId`: `?Id`<br>`page`: `PageRequest`<br>`reportKind`: `?UsageReportKind`<br>`scope`: `?DataScope`<br>`projectId`: `?ProjectId`<br>`startMs`: `?SignedCounter`<br>`endMs`: `?SignedCounter`<br>`interval`: `?Content`<br>`user`: `?Content`<br>`provider`: `?Content`<br>`model`: `?Content`<br>`tool`: `?Content`<br>`purpose`: `?Label`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouterUsageResult` |
 | `router.request_status` | **Query**<br>`requestId`: `Id` | `OperationRef` |
 | `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest`<br>`providerIds`: `?Items<Id>`<br>`includeHistory`: `?bool`<br>`snapshotIds`: `?Items<Id>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `PriceCatalogResult` |
 | `router.price_refresh` | **Command**<br>`providerIds`: `NonEmpty<Id>`<br>`expectedPriceRevision`: `Revision` | `OperationRef` |
@@ -3834,6 +3834,7 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `hasMore` | `bool` |
 | `coverage` | `Coverage` |
 | `models` | `Rows<ModelPriceView>` |
+| `overrideHistory` | `?Rows<PriceOverrideOutcome>` · *revision 3+* |
 
 ### PriceCatalogResult
 
@@ -3850,8 +3851,8 @@ Before revision 3: exact legacy `Page<ModelPriceStatus>`. Revision 3 and later: 
 
 | Kind | Fields |
 | --- | --- |
-| `Set` | `modelId`: `Id`<br>`revision`: `Revision`<br>`tariffs`: `NonEmpty<PriceTariff>` |
-| `Cleared` | `modelId`: `Id`<br>`revision`: `Revision` |
+| `Set` | `modelId`: `Id`<br>`revision`: `Revision`<br>`tariffs`: `NonEmpty<PriceTariff>`<br>`updatedBy`: `?ActorId`<br>`updatedAtMs`: `?Counter` |
+| `Cleared` | `modelId`: `Id`<br>`revision`: `Revision`<br>`updatedBy`: `?ActorId`<br>`updatedAtMs`: `?Counter` |
 
 ### PriceOverrideResult
 
@@ -3865,8 +3866,8 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 
 | Field | Type |
 | --- | --- |
-| `startMs` | `Counter` |
-| `endMs` | `Counter` |
+| `startMs` | `SignedCounter` |
+| `endMs` | `SignedCounter` |
 
 ### UsageAppliedFilters
 
@@ -3877,10 +3878,10 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | `rootId` | `?RootId` |
 | `sessionId` | `?Id` |
 | `jobRunId` | `?Id` |
-| `user` | `?Text` |
-| `provider` | `?Text` |
-| `model` | `?Text` |
-| `tool` | `?Text` |
+| `user` | `?Content` |
+| `provider` | `?Content` |
+| `model` | `?Content` |
+| `tool` | `?Content` |
 | `purpose` | `?Label` |
 
 ### UsageQueryContext
@@ -3926,7 +3927,7 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | Field | Type |
 | --- | --- |
 | `id` | `Id` |
-| `requestId` | `Id` |
+| `requestId` | `?Id` |
 | `attemptId` | `?Id` |
 | `attemptNumber` | `?Revision` |
 | `sourceKind` | `Label` |
@@ -3997,8 +3998,8 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | Kind | Fields |
 | --- | --- |
 | `Total` | `key`: `Label`<br>`label`: `Label`<br>`value`: `Counter` |
-| `SeriesPoint` | `key`: `Label`<br>`label`: `Label`<br>`bucketStartMs`: `Counter`<br>`value`: `Counter` |
-| `Breakdown` | `dimension`: `Label`<br>`key`: `Text`<br>`label`: `Text`<br>`value`: `Counter` |
+| `SeriesPoint` | `key`: `Label`<br>`label`: `Content`<br>`bucketStartMs`: `SignedCounter`<br>`value`: `Counter` |
+| `Breakdown` | `dimension`: `Label`<br>`key`: `Content`<br>`label`: `Content`<br>`value`: `Counter` |
 
 ### UsageAggregatePage
 
@@ -4015,7 +4016,7 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | Field | Type |
 | --- | --- |
 | `dimension` | `Label` |
-| `value` | `Text` |
+| `value` | `Content` |
 
 ### UsageFilterOptions
 

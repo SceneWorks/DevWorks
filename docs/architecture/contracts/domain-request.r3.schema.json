@@ -9367,7 +9367,7 @@
           "additionalProperties": false,
           "properties": {
             "endMs": {
-              "$ref": "#/$defs/Counter",
+              "$ref": "#/$defs/SignedCounter",
               "x-since": 3
             },
             "interval": {
@@ -9436,7 +9436,7 @@
               ]
             },
             "startMs": {
-              "$ref": "#/$defs/Counter",
+              "$ref": "#/$defs/SignedCounter",
               "x-since": 3
             },
             "tool": {

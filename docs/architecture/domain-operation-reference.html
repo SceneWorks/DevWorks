@@ -1883,7 +1883,7 @@
 </tr>
 <tr>
 <td><code>router.usage</code></td>
-<td><strong>Query</strong><br><code>rootId</code>: <code>?RootId</code><br><code>sessionId</code>: <code>?Id</code><br><code>jobRunId</code>: <code>?Id</code><br><code>page</code>: <code>PageRequest</code><br><code>reportKind</code>: <code>?UsageReportKind</code><br><code>scope</code>: <code>?DataScope</code><br><code>projectId</code>: <code>?ProjectId</code><br><code>startMs</code>: <code>?Counter</code><br><code>endMs</code>: <code>?Counter</code><br><code>interval</code>: <code>?Content</code><br><code>user</code>: <code>?Content</code><br><code>provider</code>: <code>?Content</code><br><code>model</code>: <code>?Content</code><br><code>tool</code>: <code>?Content</code><br><code>purpose</code>: <code>?Label</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><strong>Query</strong><br><code>rootId</code>: <code>?RootId</code><br><code>sessionId</code>: <code>?Id</code><br><code>jobRunId</code>: <code>?Id</code><br><code>page</code>: <code>PageRequest</code><br><code>reportKind</code>: <code>?UsageReportKind</code><br><code>scope</code>: <code>?DataScope</code><br><code>projectId</code>: <code>?ProjectId</code><br><code>startMs</code>: <code>?SignedCounter</code><br><code>endMs</code>: <code>?SignedCounter</code><br><code>interval</code>: <code>?Content</code><br><code>user</code>: <code>?Content</code><br><code>provider</code>: <code>?Content</code><br><code>model</code>: <code>?Content</code><br><code>tool</code>: <code>?Content</code><br><code>purpose</code>: <code>?Label</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>RouterUsageResult</code></td>
 </tr>
 <tr>
@@ -10971,6 +10971,10 @@
 <td><code>models</code></td>
 <td><code>Rows&lt;ModelPriceView&gt;</code></td>
 </tr>
+<tr>
+<td><code>overrideHistory</code></td>
+<td><code>?Rows&lt;PriceOverrideOutcome&gt;</code> · <em>revision 3+</em></td>
+</tr>
 </tbody></table>
 <h3 id="pricecatalogresult">PriceCatalogResult</h3>
 <p>Before revision 3: exact legacy <code>Page&lt;ModelPriceStatus&gt;</code>. Revision 3 and later: <code>PriceCatalogView</code>. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.</p>
@@ -11001,11 +11005,11 @@
 </thead>
 <tbody><tr>
 <td><code>Set</code></td>
-<td><code>modelId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code><br><code>tariffs</code>: <code>NonEmpty&lt;PriceTariff&gt;</code></td>
+<td><code>modelId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code><br><code>tariffs</code>: <code>NonEmpty&lt;PriceTariff&gt;</code><br><code>updatedBy</code>: <code>?ActorId</code><br><code>updatedAtMs</code>: <code>?Counter</code></td>
 </tr>
 <tr>
 <td><code>Cleared</code></td>
-<td><code>modelId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code></td>
+<td><code>modelId</code>: <code>Id</code><br><code>revision</code>: <code>Revision</code><br><code>updatedBy</code>: <code>?ActorId</code><br><code>updatedAtMs</code>: <code>?Counter</code></td>
 </tr>
 </tbody></table>
 <h3 id="priceoverrideresult">PriceOverrideResult</h3>
@@ -11022,11 +11026,11 @@
 </thead>
 <tbody><tr>
 <td><code>startMs</code></td>
-<td><code>Counter</code></td>
+<td><code>SignedCounter</code></td>
 </tr>
 <tr>
 <td><code>endMs</code></td>
-<td><code>Counter</code></td>
+<td><code>SignedCounter</code></td>
 </tr>
 </tbody></table>
 <h3 id="usageappliedfilters">UsageAppliedFilters</h3>
@@ -11059,19 +11063,19 @@
 </tr>
 <tr>
 <td><code>user</code></td>
-<td><code>?Text</code></td>
+<td><code>?Content</code></td>
 </tr>
 <tr>
 <td><code>provider</code></td>
-<td><code>?Text</code></td>
+<td><code>?Content</code></td>
 </tr>
 <tr>
 <td><code>model</code></td>
-<td><code>?Text</code></td>
+<td><code>?Content</code></td>
 </tr>
 <tr>
 <td><code>tool</code></td>
-<td><code>?Text</code></td>
+<td><code>?Content</code></td>
 </tr>
 <tr>
 <td><code>purpose</code></td>
@@ -11211,7 +11215,7 @@
 </tr>
 <tr>
 <td><code>requestId</code></td>
-<td><code>Id</code></td>
+<td><code>?Id</code></td>
 </tr>
 <tr>
 <td><code>attemptId</code></td>
@@ -11462,11 +11466,11 @@
 </tr>
 <tr>
 <td><code>SeriesPoint</code></td>
-<td><code>key</code>: <code>Label</code><br><code>label</code>: <code>Label</code><br><code>bucketStartMs</code>: <code>Counter</code><br><code>value</code>: <code>Counter</code></td>
+<td><code>key</code>: <code>Label</code><br><code>label</code>: <code>Content</code><br><code>bucketStartMs</code>: <code>SignedCounter</code><br><code>value</code>: <code>Counter</code></td>
 </tr>
 <tr>
 <td><code>Breakdown</code></td>
-<td><code>dimension</code>: <code>Label</code><br><code>key</code>: <code>Text</code><br><code>label</code>: <code>Text</code><br><code>value</code>: <code>Counter</code></td>
+<td><code>dimension</code>: <code>Label</code><br><code>key</code>: <code>Content</code><br><code>label</code>: <code>Content</code><br><code>value</code>: <code>Counter</code></td>
 </tr>
 </tbody></table>
 <h3 id="usageaggregatepage">UsageAggregatePage</h3>
@@ -11512,7 +11516,7 @@
 </tr>
 <tr>
 <td><code>value</code></td>
-<td><code>Text</code></td>
+<td><code>Content</code></td>
 </tr>
 </tbody></table>
 <h3 id="usagefilteroptions">UsageFilterOptions</h3>

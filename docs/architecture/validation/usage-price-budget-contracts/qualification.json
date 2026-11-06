@@ -38,9 +38,9 @@
   "operationModeBindings": 364,
   "operationModeRevisionBindings": 546,
   "legacySchemasByteIdentical": 56,
-  "schemaFixtures": 1907,
-  "domainFixtures": 1578,
-  "negativeDomainFixtures": 373,
+  "schemaFixtures": 1915,
+  "domainFixtures": 1586,
+  "negativeDomainFixtures": 375,
   "generatorTestsPassed": 11,
   "nativeProbeIntegrationTests": {
     "usage_projection": 4,
@@ -228,10 +228,20 @@
   },
   "validationCoverage": {
     "lastFullVerifierMessages": 1905,
-    "currentUniqueMessages": 1907,
+    "currentUniqueMessages": 1915,
     "focusedPlanEditorCases": 6,
     "priorCasesRechecked": 4,
     "newDigestCases": 2,
-    "strategy": "Reuse passed full baseline; native/schema-check every changed plan budget/digest case, plus all56legacy hashes; no broader campaign repeated"
+    "strategy": "Reuse full baseline and prior focusedplan/saved-input proofs; verify finalchanged report cases and all56legacy hashes on combined source",
+    "focusedFinalRepresentationCases": 9
+  },
+  "finalRepresentabilityDelta": {
+    "assembledSource": "85e85c25552859fac8c9a28b1eb9f5df8e0d120a",
+    "results": "final-representability-delta-results.json",
+    "nativeSchemaCasesPassed": 9,
+    "legacySchemasByteIdentical": 56,
+    "operationModeRevisionBindings": 546,
+    "noBroadCampaignRepeated": true,
+    "scope": "Full64KContent, signed source-time range/default/bucket, truthfulmissinglegacyidentity andtypedoverridehistory; actualownerbehavior remains owningservice evidence"
   }
 }

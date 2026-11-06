@@ -995,10 +995,10 @@ page=sample('UsageAttemptPage');page.update(items=[attempt]);page['totals'].upda
 case('dw21-partial-known-cost','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':page}})
 # Missing input/cache metrics remain absent; a known subtotal is distinct from full monetary coverage.
 mutate('dw21-nullable-counter-is-not-zero','dw21-partial-known-cost',['value','page','items',0,'inputTokens'],None,True,True)
-legacy_attempt=copy.deepcopy(attempt);legacy_attempt.pop('attemptId');legacy_attempt.pop('attemptNumber');legacy_attempt.pop('actorId');legacy_attempt['sourceKind']='LegacySessionUsage';legacy_attempt['sourceId']='legacy-source-session-a-batch-a-1'
+legacy_attempt=copy.deepcopy(attempt);legacy_attempt.pop('attemptId');legacy_attempt.pop('attemptNumber');legacy_attempt.pop('actorId');legacy_attempt.pop('requestId',None);legacy_attempt['sourceKind']='LegacySessionUsage';legacy_attempt['sourceId']='legacy-source-session-a-batch-a-1'
 for unknown in ['role','featureId','workId','assignmentId','providerId','connectionId','resolvedModelId']:legacy_attempt.pop(unknown,None)
 legacy_attempt['cost'].pop('priceSnapshotId',None)
-legacy_page=copy.deepcopy(page);legacy_page['items']=[legacy_attempt];legacy_page['totals'].update(attempts='0',trackedMicroUsd='0',estimatedMicroUsd='0',monetaryIncompleteAttempts='0',legacyUsageFacts='1',legacyObservationMicroUsd='12')
+legacy_page=copy.deepcopy(page);legacy_page['items']=[legacy_attempt];legacy_page['coverage']={'state':'Partial','gaps':['legacy-request-identity-unavailable'],'moreGaps':False};legacy_page['totals'].update(attempts='0',trackedMicroUsd='0',estimatedMicroUsd='0',monetaryIncompleteAttempts='0',legacyUsageFacts='1',legacyObservationMicroUsd='12')
 case('dw21-historical-missing-attribution','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':legacy_page}})
 for kind in ['Unknown','Untracked','Free','Reported','Estimated']:
  observed=copy.deepcopy(attempt);cost=sample('UsageCostSnapshot');cost['priceKind']=kind
@@ -1072,6 +1072,24 @@ case('dw21-pending-budget-before3','operation-result.r2',{'kind':'features.get',
 digest_view=sample('WorkRecord');digest_view['kind']='Feature';digest_view['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'planDigest':'b'*64}
 case('dw21-pending-approval-digest','operation-result.r3',{'kind':'features.get','value':digest_view})
 case('dw21-pending-digest-before3','operation-result.r2',{'kind':'features.get','value':digest_view},False,False)
+# Final retained-report representability: full labels, pre-epoch dates and truthful Clear history.
+long_value='x'*65536
+full_filters=request('router.usage','Query');full_filters['schemaRevision']=3;full_filters['body'].update(startMs='-315619200000',endMs='-283996800000',user=long_value,provider=long_value,model=long_value,tool=long_value)
+case('dw21-full-filter-echo-input','domain-request.r3',full_filters)
+negative_end=request('router.usage','Query');negative_end['schemaRevision']=3;negative_end['body']['endMs']='-1'
+case('dw21-negative-end-default-start','domain-request.r3',negative_end)
+invalid_range=copy.deepcopy(negative_end);invalid_range['body']['startMs']='0'
+case('dw21-invalid-signed-range','domain-request.r3',invalid_range,False,True)
+old_range=copy.deepcopy(negative_end);old_range['schemaRevision']=2
+case('dw21-signed-range-before3','domain-request.r2',old_range,False,False)
+long_page=sample('UsageAggregatePage');long_page['context']['appliedFilters'].update(user=long_value,provider=long_value,model=long_value,tool=long_value);long_page['items']=[{'kind':'SeriesPoint','key':'breakdown-user-stable-opaque-hash','label':long_value,'bucketStartMs':'-259200000','value':'1'},{'kind':'Breakdown','dimension':'user','key':long_value,'label':long_value,'value':'1'}]
+case('dw21-long-labels-negative-week','operation-result.r3',{'kind':'router.usage','value':{'kind':'Report','report':long_page}})
+options=sample('UsageFilterOptions');options['items']=[{'dimension':'user','value':long_value}]
+case('dw21-long-filter-option','operation-result.r3',{'kind':'router.usage','value':{'kind':'Filters','filters':options}})
+resolved=sample('UsageAttemptPage');resolved['context']['range']={'startMs':'-2592000001','endMs':'-1'}
+case('dw21-negative-resolved-default-range','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':resolved}})
+price_history=sample('PriceCatalogView');price_history['overrideHistory']=[{'kind':'Set','modelId':'model-a','revision':'2','tariffs':[sample('PriceTariff')],'updatedBy':'actor-a','updatedAtMs':'100'},{'kind':'Cleared','modelId':'model-a','revision':'3','updatedBy':'actor-b','updatedAtMs':'200'}]
+case('dw21-clear-history-actor-time','operation-result.r3',{'kind':'router.price_status','value':price_history})
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
