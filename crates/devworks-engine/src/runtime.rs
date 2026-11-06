@@ -11,6 +11,7 @@ use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryRepo
 use crate::evals::EvalSupervisor;
 use crate::indexing::{IndexSupervisor, IndexingConfig};
 use crate::jobs::Scheduler;
+use crate::notifications::OsNotificationSupervisor;
 use crate::package_host::{HostConfig, LaunchPorts, PackageHost};
 use crate::replies::reply_consumer;
 use crate::resources::{BootReport as ResourceBootReport, Housekeeper};
@@ -18,6 +19,7 @@ use crate::runs::{ActivationLauncher, RunGate, RunSupervisor};
 use devworks_core::context::InvocationContext;
 use devworks_core::gateway::{CommandOutcome, Gateway, QueryOutcome};
 use devworks_core::ports::files::FileFault;
+use devworks_core::ports::os_notifications::{OsNotificationPermission, OsNotificationPort};
 use devworks_core::ports::process::{PowerPort, ProcessHost};
 use devworks_core::ports::storage::{ApplicationStore, StorageError, Unavailable, WriteOptions};
 use devworks_core::ports::{AuthorityPort, Clock, IdSource};
@@ -222,6 +224,10 @@ pub struct RuntimeConfig {
     pub eval_interval: Duration,
     /// Periodic repair of missed approval/hold wakeups; saved operations retain their keys.
     pub approval_resume_interval: Duration,
+    /// Native OS delivery adapter. Absent adapters keep the persistent inbox available.
+    pub native_notifications: Option<Arc<dyn OsNotificationPort>>,
+    /// Durable notification catch-up interval; focus and committed commands also wake it.
+    pub notification_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -240,6 +246,8 @@ impl RuntimeConfig {
             automatic_eval_suites: Vec::new(),
             eval_interval: Duration::from_secs(30),
             approval_resume_interval: Duration::from_secs(5),
+            native_notifications: None,
+            notification_interval: Duration::from_secs(5),
         }
     }
 }
@@ -339,6 +347,8 @@ pub struct Runtime {
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
     resuming: Mutex<Option<JoinHandle<()>>>,
+    notifications: Option<Arc<OsNotificationSupervisor>>,
+    notifying: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
@@ -588,7 +598,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }),
             runs.service.clone(),
         )
-        .with_catalog(ApprovalCatalog::qualified(&use_cases)),
+        .with_catalog(ApprovalCatalog::qualified(&use_cases))
+        .with_owners(Arc::new(
+            devworks_core::services::approvals::owner_preview::NativeOwnerPreviews::new(
+                git.clone(),
+                packages.as_ref().map(|p| p.service.clone()),
+                Some(jobs.clone()),
+            ),
+        )),
     );
     let use_cases = use_cases
         .with_approvals(approvals.clone())
@@ -625,7 +642,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     };
     let mut run_supervisor = RunSupervisor::new(
         store.clone(),
-        clock,
+        clock.clone(),
         runs.service.clone(),
         supervisor.clone(),
         runs.launcher.clone(),
@@ -755,6 +772,18 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let indexing_task = index_supervisor
         .clone()
         .map(|ix| tokio::spawn(async move { ix.run().await }));
+    // Earlier submissions remain uncertain even if this boot has no native adapter.
+    crate::store::write(&store, |tx| {
+        tx.decisions().recover_os_notification_deliveries()
+    })
+    .await
+    .map_err(BootError::Composition)?;
+    let notifications = config
+        .native_notifications
+        .map(|port| OsNotificationSupervisor::new(store.clone(), ids.clone(), clock.clone(), port));
+    let notifying = notifications
+        .as_ref()
+        .map(|worker| tokio::spawn(worker.clone().run(config.notification_interval)));
     // Recovery has settled prior-boot activations before the first evaluation sweep.
     let evals = EvalSupervisor::new(store.clone(), eval_service, config.automatic_eval_suites);
     let grading = tokio::spawn(evals.clone().run(config.eval_interval));
@@ -773,6 +802,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         scheduler: OnceLock::new(),
         evals: evals.clone(),
         resumes: OnceLock::new(),
+        notifications: notifications.clone(),
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
     });
@@ -815,6 +845,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         approvals,
         resumes,
         resuming: Mutex::new(Some(resuming)),
+        notifications,
+        notifying: Mutex::new(notifying),
         keep_awake,
         diagnostics,
         monitor,
@@ -1066,6 +1098,36 @@ impl Runtime {
     pub fn approvals(&self) -> &Arc<ApprovalService> {
         &self.approvals
     }
+    /// Host hint after binding the canonical local user or producing persistent inbox rows.
+    pub fn notification_wakeup(&self) {
+        self.resumes.notify();
+        if let Some(worker) = &self.notifications {
+            worker.notify();
+        }
+    }
+    /// Unknown focus is conservative; only explicit unfocused state permits OS delivery.
+    pub fn set_notification_focus(&self, focused: Option<bool>) {
+        if let Some(worker) = &self.notifications {
+            worker.set_focus(focused);
+        }
+    }
+    pub fn notification_permission(&self) -> OsNotificationPermission {
+        self.notifications.as_ref().map_or_else(
+            || {
+                OsNotificationPermission::Unavailable(
+                    "no native notification adapter configured".into(),
+                )
+            },
+            |worker| worker.permission(),
+        )
+    }
+    /// Run through the host worker, never on the GUI thread.
+    pub async fn request_notification_permission(&self) -> OsNotificationPermission {
+        match &self.notifications {
+            Some(worker) => worker.request_permission().await,
+            None => self.notification_permission(),
+        }
+    }
     pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
         &self.resumes
     }
@@ -1108,9 +1170,15 @@ impl Runtime {
         self.scheduler.stop();
         self.evals.stop();
         self.resumes.stop();
+        if let Some(worker) = &self.notifications {
+            worker.stop();
+        }
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
         // readmission or let its outbox CAS write after shutdown has returned.
         self.resumes.drain().await;
+        if let Some(worker) = &self.notifications {
+            worker.drain().await;
+        }
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
@@ -1150,6 +1218,7 @@ impl Runtime {
             &self.scheduling,
             &self.grading,
             &self.resuming,
+            &self.notifying,
         ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
@@ -1211,6 +1280,9 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        if let Some(worker) = &self.notifications {
+            worker.stop();
+        }
         self.resumes.stop();
         self.evals.stop();
         self.browser_supervision.stop();
@@ -1314,6 +1386,9 @@ impl Drop for Runtime {
         self.stop();
         self.evals.close();
         self.resumes.close();
+        if let Some(worker) = &self.notifications {
+            worker.close();
+        }
         // Package helpers are killed at once (no grace): their host threads would otherwise
         // keep the process owner, and so the helper trees, alive.
         if let Some(h) = &self.packages {
@@ -1342,6 +1417,7 @@ struct Admitter {
     scheduler: OnceLock<Weak<Scheduler>>,
     evals: Arc<EvalSupervisor>,
     resumes: OnceLock<Weak<ResumeDispatcher>>,
+    notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
@@ -1400,6 +1476,9 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            if let Some(worker) = &self.notifications {
+                worker.notify();
+            }
             if wake_resumes && let Some(resumes) = self.resumes.get().and_then(Weak::upgrade) {
                 resumes.notify();
             }

@@ -109,6 +109,40 @@ impl ResumeDispatcher {
     pub async fn tick(&self) -> Result<ResumePass, StorageError> {
         let _one = self.ticking.lock().await;
         let mut report = ResumePass::default();
+        // Required-input projections also catch up after first-user binding and a crash.
+        // They share this worker's write fence, so shutdown drains these writes as well.
+        let mut notification_after = None;
+        loop {
+            if self.stopping.load(Ordering::SeqCst) {
+                return Ok(report);
+            }
+            let (store, service, fence, stopping, cursor) = (
+                self.store.clone(),
+                self.service.clone(),
+                self.fence.clone(),
+                self.stopping.clone(),
+                notification_after.clone(),
+            );
+            let next = tokio::task::spawn_blocking(move || {
+                let closed = fence.read().unwrap_or_else(|p| p.into_inner());
+                if *closed || stopping.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
+                devworks_core::ports::storage::run_write(
+                    &*store,
+                    WriteOptions::default(),
+                    move |tx| service.publish_pending_notifications(tx, cursor.as_ref(), PAGE),
+                )
+            })
+            .await
+            .map_err(|_| {
+                StorageError::InvalidRecord("approval notification catch-up task panicked".into())
+            })??;
+            notification_after = next;
+            if notification_after.is_none() {
+                break;
+            }
+        }
         let mut after = None;
         let mut failure = None;
         loop {
