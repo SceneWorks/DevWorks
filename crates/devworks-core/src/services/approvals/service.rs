@@ -392,6 +392,9 @@ impl CommandHandler for ApprovalService {
             OperationInput::Approvals(ops::Input::RecordHumanDecision(i)) => env.read(|s| {
                 let p = s.decisions().approval(&i.proposal_id)?;
                 Ok(p.and_then(|p| {
+                    if p.state != "Pending" {
+                        return None;
+                    }
                     let c = p.payload.get("content")?;
                     if c["kind"] != "SavedOperation" {
                         return None;

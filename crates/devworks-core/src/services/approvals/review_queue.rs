@@ -24,7 +24,7 @@ pub(crate) fn query(
             project_id,
         });
     let scoped = knowledge::resolve_scope(s.artifacts(), s.authority(), ctx, &requested, false)?;
-    let scopes = scoped.readable.clone();
+    let scopes = vec![scoped.exact.clone()];
     let thresholds = knowledge::thresholds(s.configuration(), &scopes)?;
     let q = ClaimQuery {
         scopes: scopes.iter().map(KnowledgeScope::key).collect(),
@@ -54,7 +54,7 @@ pub(crate) fn query(
     let mut nc = 0;
     let mut np = 0;
     for c in claims.values() {
-        let events = s.knowledge().knowledge_lesson_event_count(&c.id)?;
+        let events = s.knowledge().knowledge_lesson_event_count(&c.id)?.max(1);
         let (rank, priority) = priority(c);
         let wire = knowledge::claim_wire(s.knowledge(), c, &thresholds)?;
         let open = s.knowledge().knowledge_open_challenges(&c.id)?;

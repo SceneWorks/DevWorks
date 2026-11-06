@@ -154,10 +154,7 @@ impl ApprovalService {
                 operation: p.operation_kind.clone(),
                 action: request.action.map(str::to_owned),
                 request_digest: Some(p.content_digest.clone()),
-                project_id: original
-                    .project_id()
-                    .cloned()
-                    .or_else(|| p.scope.project_id().cloned()),
+                project_id: original.project_id().cloned(),
                 root_id: original.root_id().cloned(),
                 policy_digest: Some(policy),
             },
