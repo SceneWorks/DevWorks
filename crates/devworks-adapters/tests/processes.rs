@@ -1417,7 +1417,25 @@ fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_
     let executable = std::env::current_exe().unwrap();
     let mut spec = if cfg!(windows) {
         let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
-        ProcessSpec::new(&[cmd.to_string_lossy().into_owned(), "/D".into(), "/C".into(), format!("echo root>\"{root}\" & \"{}\" --exact no_child_policy_marker_fixture --nocapture & echo finished",executable.display())]).unwrap()
+        // Command arguments use Win32 quoting, whereas an embedded /C program uses cmd's
+        // different quote rules. A batch file keeps its quoted executable out of argv.
+        std::fs::write(
+            scratch.0.join("policy-root.cmd"),
+            format!(
+                "@echo off\r\necho root>root-marker\r\n\"{}\" --exact no_child_policy_marker_fixture --nocapture\r\necho finished\r\n",
+                executable.display()
+            ),
+        )
+        .unwrap();
+        let mut native = ProcessSpec::new(&[
+            cmd.to_string_lossy().into_owned(),
+            "/D".into(),
+            "/C".into(),
+            "policy-root.cmd".into(),
+        ])
+        .unwrap();
+        native.cwd = Some(scratch.0.clone());
+        native
     } else {
         shell(&format!(
             "printf root > '{root}'; '{}' --exact no_child_policy_marker_fixture --nocapture; printf finished",
