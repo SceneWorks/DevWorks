@@ -57,6 +57,7 @@ pub struct WorkBrief {
     /// A feature's recorded results of its active plan's acceptance tests.
     pub acceptance_tests: Vec<AcceptanceCriterion>,
     pub inherits: Vec<Id>,
+    pub previous_inheritance: Option<crate::protocol::records::WorkInheritanceOrigin>,
     pub touches: Vec<TouchRef>,
     pub links: Vec<WorkLink>,
     pub comments: Vec<Noted<WorkComment>>,
@@ -356,6 +357,7 @@ pub fn record(
         requirements: BoundedList(requirements.into_iter().take(128).collect()),
         acceptance: BoundedList(acceptance.into_iter().take(128).collect()),
         inherits_requirement_ids: BoundedList(brief.inherits.iter().take(128).cloned().collect()),
+        previous_inheritance: brief.previous_inheritance.clone(),
         touches: BoundedList(brief.touches.iter().take(128).cloned().collect()),
         links: BoundedList(brief.links.iter().take(128).cloned().collect()),
         comments: BoundedList(comments.into_iter().map(|c| c.item).collect()),

@@ -7,7 +7,10 @@ use crate::context::InvocationContext;
 use crate::operations::next_work as ops;
 use crate::ports::IdKind;
 use crate::ports::storage::*;
-use crate::protocol::records::{AllocationClaimRecord, ClaimRecord, LeaseState, WorkKind};
+use crate::protocol::records::{
+    AllocationClaimRecord, AllocationOutcome, AllocationRecovery, AllocationSelection, ClaimRecord,
+    CriterionState, LeaseState, WorkItemType, WorkKind,
+};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{ActorId, DomainErrorCode, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::runs::scope::{PlanState, Readiness};
@@ -24,6 +27,14 @@ pub const OPERATIONS: [&str; 5] = [
 ];
 const PAGE: u16 = 500;
 const MAX_LEASE_MS: i64 = 86_400_000;
+#[derive(Clone, serde::Serialize)]
+struct Filters {
+    repository_id: Option<Id>,
+    task_type: Option<WorkItemType>,
+    label: Option<String>,
+    another: bool,
+    idempotency_key: Option<String>,
+}
 
 fn live(c: &StoredAllocationClaim) -> bool {
     matches!(c.state.as_str(), "Active" | "Transferred" | "Yielding")
@@ -148,6 +159,99 @@ fn wire(c: &StoredAllocationClaim, now: i64) -> AllocationClaimRecord {
         },
     }
 }
+fn selection(
+    tx: &mut dyn WriteTransaction,
+    c: &StoredAllocationClaim,
+    previous: &[StoredAllocationClaim],
+    reused: bool,
+    recovered: bool,
+) -> R<AllocationSelection> {
+    let w = tx
+        .work()
+        .work(&c.work_id)?
+        .ok_or_else(|| super::not_found("work", &c.work_id))?;
+    let work = super::items::tx_record(tx, &w)?;
+    let claim = wire(c, tx.now_ms());
+    let outcome = if recovered {
+        let before = previous
+            .iter()
+            .filter(|old| old.work_id == c.work_id && old.id != c.id)
+            .max_by_key(|old| old.fence);
+        let brief = super::model::WorkBrief::of(&w)?;
+        let mut after = 0;
+        let mut last_activity = None;
+        if brief.handoffs.is_empty() {
+            loop {
+                let page = tx.history().page(
+                    &EventFilter::Aggregate {
+                        kind: super::WORK_AGGREGATE.into(),
+                        id: w.id.as_str().into(),
+                    },
+                    after,
+                    PAGE,
+                )?;
+                for event in &page.events {
+                    if event.kind == "WorkAllocated"
+                        || before.is_some_and(|claim| claim.owner_id != event.actor)
+                    {
+                        continue;
+                    }
+                    let payload = serde_json::from_value::<crate::protocol::support::DynamicJson>(
+                        event.payload.clone(),
+                    )
+                    .ok()
+                    .map(|value| crate::protocol::records::AllocationActivityPayload { value });
+                    let unavailable = payload.is_none();
+                    last_activity = Some(crate::protocol::records::AllocationActivity {
+                        event_id: event.id.0.clone(),
+                        sequence: crate::services::sessions::rev(event.sequence),
+                        actor_id: event.actor.clone(),
+                        occurred_at_ms: counter(event.created_at_ms),
+                        kind: crate::services::sessions::label(&event.kind, "work_change"),
+                        work_id: w.id.clone(),
+                        payload,
+                        payload_unavailable_reason: unavailable.then(|| {
+                            crate::protocol::support::BoundedText(
+                                "payload_exceeds_protocol_bounds".into(),
+                            )
+                        }),
+                    });
+                }
+                if page.events.len() < usize::from(PAGE) {
+                    break;
+                }
+                after = page.events.last().expect("full page").sequence;
+            }
+        }
+        AllocationOutcome::Recovered {
+            claim,
+            work: Some(work.clone()),
+            reused,
+            recovery: AllocationRecovery {
+                previous_owner_id: before.map(|c| c.owner_id.clone()),
+                previous_session_id: before.and_then(|c| c.session_id.clone()),
+                links: work.links.clone(),
+                latest_handoff: brief.handoffs.last().map(|h| h.item.clone()),
+                last_activity,
+                unmet_acceptance: crate::protocol::support::BoundedList(
+                    work.acceptance
+                        .0
+                        .iter()
+                        .filter(|criterion| !matches!(criterion.state, CriterionState::Met))
+                        .cloned()
+                        .collect(),
+                ),
+            },
+        }
+    } else {
+        AllocationOutcome::Claimed {
+            claim,
+            work: Some(work),
+            reused,
+        }
+    };
+    Ok(AllocationSelection::Current(outcome))
+}
 fn root(w: &StoredWork) -> WorkRoot {
     WorkRoot {
         id: RootId(w.id.clone()),
@@ -164,13 +268,20 @@ fn has_execution(tx: &mut dyn WriteTransaction, w: &StoredWork) -> Result<bool, 
     if tx.runs().live_activation(&RootId(w.id.clone()))?.is_some() {
         return Ok(true);
     }
-    let r = RootId(w.parent_feature_id.clone().unwrap_or_else(|| w.id.clone()));
-    Ok(root_assignments(tx.runs(), &r, true)?.iter().any(|a| {
-        a.work_id.0 == w.id
-            && a.execution_id
-                .as_ref()
-                .is_some_and(|_| a.state == AssignmentState::Active)
-    }))
+    if let Some(assignment) = tx.runs().live_assignment_for_work(&RootId(w.id.clone()))? {
+        if assignment.work_id != assignment.root_id || w.parent_feature_id.is_some() {
+            return Ok(true);
+        }
+        if let Some(execution) = assignment.execution_id
+            && tx
+                .runs()
+                .activation(&execution)?
+                .is_some_and(|a| a.phase != ActivationPhase::Stopped)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 /// Eligibility shared by both queue scopes. Ownership is filtered separately, after these gates.
 fn eligible(
@@ -210,6 +321,20 @@ fn eligible(
         }
         if control_of(tx.runs(), &RootId(w.id.clone()))?.desired == DesiredExecution::Paused {
             return Ok(false);
+        }
+        if let Some(assignment) = tx.runs().live_assignment_for_work(&RootId(w.id.clone()))? {
+            if assignment.root_id == r.id
+                && !service
+                    .evaluate(
+                        tx.runs(),
+                        &r,
+                        &Target::Assignment(assignment.id),
+                        ActivationPurpose::Implementation,
+                    )?
+                    .eligible
+            {
+                return Ok(false);
+            }
         }
         let plan = service.scope().plan(tx.runs(), &r)?;
         let PlanState::Approved { feature: unit, .. } = &plan else {
@@ -270,6 +395,14 @@ fn eligible(
     };
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
+        if let PlanState::Approved { units, .. } = &plan {
+            if units
+                .values()
+                .any(|u| matches!(u.readiness, Readiness::Blocked { .. }))
+            {
+                return Ok(false);
+            }
+        }
         return Ok(unit.readiness.is_current()
             || matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }));
     }
@@ -340,8 +473,16 @@ impl WorkService {
             .allocation_claim(&i.claim_id)?
             .ok_or_else(|| super::not_found("claim", &i.claim_id))?;
         visible_work(read.work(), ctx, &c.work_id)?;
+        let now = self
+            .clock
+            .as_ref()
+            .ok_or_else(|| super::refuse(DomainErrorCode::ViewUnavailable, "host_clock", None))?
+            .now_ms()
+            .get();
         Ok((
-            OperationResult::NextWorkInspectClaim { value: wire(&c, 0) },
+            OperationResult::NextWorkInspectClaim {
+                value: wire(&c, now),
+            },
             c.revision,
         ))
     }
@@ -351,6 +492,7 @@ impl WorkService {
         ctx: &InvocationContext,
         i: &ops::ClaimProjectQueueInput,
         identity: &crate::context::ReceiptIdentity,
+        schema: u32,
     ) -> R<DomainDecision> {
         self.allocate(
             tx,
@@ -363,6 +505,14 @@ impl WorkService {
                 .parse()
                 .map_err(|_| invalid("lease_ms", None))?,
             identity,
+            schema,
+            &Filters {
+                repository_id: i.repository_id.clone(),
+                task_type: i.task_type.clone(),
+                label: i.label.as_ref().map(|s| s.0.trim().to_owned()),
+                another: i.another.unwrap_or(false),
+                idempotency_key: i.idempotency_key.as_ref().map(|s| s.0.clone()),
+            },
         )
     }
     pub(crate) fn allocate_task(
@@ -371,6 +521,7 @@ impl WorkService {
         ctx: &InvocationContext,
         i: &ops::ClaimFeatureTaskInput,
         identity: &crate::context::ReceiptIdentity,
+        schema: u32,
     ) -> R<DomainDecision> {
         let f = visible_feature(tx.work(), ctx, &i.root_id.0)?;
         self.allocate(
@@ -384,8 +535,17 @@ impl WorkService {
                 .parse()
                 .map_err(|_| invalid("lease_ms", None))?,
             identity,
+            schema,
+            &Filters {
+                repository_id: i.repository_id.clone(),
+                task_type: i.task_type.clone(),
+                label: i.label.as_ref().map(|s| s.0.trim().to_owned()),
+                another: i.another.unwrap_or(false),
+                idempotency_key: i.idempotency_key.as_ref().map(|s| s.0.clone()),
+            },
         )
     }
+    #[allow(clippy::too_many_arguments)]
     fn allocate(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -395,8 +555,26 @@ impl WorkService {
         expected: i64,
         lease: i64,
         identity: &crate::context::ReceiptIdentity,
+        schema: u32,
+        filters: &Filters,
     ) -> R<DomainDecision> {
         open_project(tx, ctx, project)?;
+        if let Some(session) = ctx.session_id() {
+            let session = tx
+                .sessions()
+                .session(session)?
+                .ok_or_else(|| super::not_found("session", session))?;
+            if session.closed() {
+                return Err(super::refuse(
+                    DomainErrorCode::LeaseLost,
+                    "owner_session",
+                    Some(&session.id),
+                ));
+            }
+            if session.project_id.as_ref().is_some_and(|id| id != project) {
+                return Err(super::not_found("project", &project.0).into());
+            }
+        }
         if lease > MAX_LEASE_MS {
             return Err(invalid("lease_ms", None));
         }
@@ -404,6 +582,16 @@ impl WorkService {
             && ctx.session_id().is_none()
         {
             return Err(invalid("owner_session", None));
+        }
+        let replay_identity = replay_identity(ctx, project, feature, lease, filters)?;
+        if let Some(value) = replay(tx, ctx, replay_identity.as_ref())? {
+            return Ok(DomainDecision::NoChange {
+                result: if feature.is_some() {
+                    OperationResult::NextWorkClaimFeatureTask { value }
+                } else {
+                    OperationResult::NextWorkClaimProjectQueue { value }
+                },
+            });
         }
         let key = feature.map_or_else(|| PROJECT_QUEUE.into(), |f| feature_queue(&f.id));
         let current = tx.work().queue_revision(project, &key)?;
@@ -424,11 +612,11 @@ impl WorkService {
             }
         }
 
-        if let Some(existing) = all
-            .iter()
-            .find(|c| c.queue_key == key && owned(c, ctx) && held.contains(&c.id))
-        {
-            let value = wire(existing, tx.now_ms());
+        if let Some(existing) = all.iter().find(|c| {
+            !filters.another && c.queue_key == key && owned(c, ctx) && held.contains(&c.id)
+        }) {
+            let value = selection(tx, existing, &all, true, false)?;
+            remember(tx, project, replay_identity.as_ref(), &value)?;
             return Ok(DomainDecision::NoChange {
                 result: if feature.is_some() {
                     OperationResult::NextWorkClaimFeatureTask { value }
@@ -437,18 +625,32 @@ impl WorkService {
                 },
             });
         }
-        if feature.is_none()
-            && all
-                .iter()
-                .any(|c| c.queue_key == PROJECT_QUEUE && held.contains(&c.id))
-        {
-            return Err(conflict("project_queue_owned", &project.0));
-        }
         let (_, mut candidates) = super::queue::queue(tx.work(), project, feature.map(|f| &f.id))?;
         // Retained Next behavior: recover interrupted in-progress work before new Ready work.
         candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
         for c in candidates {
             let w = c.work;
+            let brief = super::model::WorkBrief::of(&w)?;
+            if let Some(repository) = &filters.repository_id
+                && !tx.work().work_repositories(&w.id)?.contains(repository)
+            {
+                continue;
+            }
+            if filters.task_type.as_ref().is_some_and(|kind| {
+                brief.task_type.as_ref().is_none_or(|stored| {
+                    std::mem::discriminant(stored) != std::mem::discriminant(kind)
+                })
+            }) {
+                continue;
+            }
+            if filters.label.as_ref().is_some_and(|label| {
+                !brief
+                    .labels
+                    .iter()
+                    .any(|l| l.0.to_lowercase() == label.to_lowercase())
+            }) {
+                continue;
+            }
             if !eligible(tx, &self.runs, &w, feature, false)? || has_execution(tx, &w)? {
                 continue;
             }
@@ -485,7 +687,7 @@ impl WorkService {
                     change(tx, old, state, ctx.principal())?;
                 }
             }
-            let fence = all
+            let fence = claims(tx.work(), project)?
                 .iter()
                 .filter(|c| c.work_id == w.id)
                 .map(|c| c.fence)
@@ -540,7 +742,14 @@ impl WorkService {
                 "WorkAllocated",
                 json!({"claimId":claim.id,"fence":claim.fence,"ownerId":claim.owner_id,"sessionId":claim.session_id,"queueRevision":current,"invocationId":claim.invocation_id}),
             )?;
-            let value = wire(&claim, tx.now_ms());
+            let value = selection(
+                tx,
+                &claim,
+                &all,
+                false,
+                c.semantic == super::workflow::IN_PROGRESS,
+            )?;
+            remember(tx, project, replay_identity.as_ref(), &value)?;
             return Ok(DomainDecision::Applied {
                 result: if feature.is_some() {
                     OperationResult::NextWorkClaimFeatureTask { value }
@@ -549,13 +758,35 @@ impl WorkService {
                 },
             });
         }
-        Err(Refusal::new(
-            DomainErrorCode::DependencyBlocked,
-            "no_eligible_work",
-            Some(project.0.clone()),
-        )
-        .retry(crate::protocol::RetryAdvice::AfterBlockerClears)
-        .into())
+        if schema < 3 {
+            return Err(Refusal::new(
+                DomainErrorCode::DependencyBlocked,
+                "no_eligible_work",
+                Some(project.0.clone()),
+            )
+            .retry(crate::protocol::RetryAdvice::AfterBlockerClears)
+            .into());
+        }
+        let value = AllocationSelection::Current(AllocationOutcome::NoEligible {
+            reused: false,
+            reason: crate::protocol::support::BoundedText("no_ready_work".into()),
+            evidence: Some(
+                Refusal::new(
+                    DomainErrorCode::DependencyBlocked,
+                    "no_eligible_work",
+                    Some(project.0.clone()),
+                )
+                .fault(self.correlation()),
+            ),
+        });
+        remember(tx, project, replay_identity.as_ref(), &value)?;
+        Ok(DomainDecision::NoChange {
+            result: if feature.is_some() {
+                OperationResult::NextWorkClaimFeatureTask { value }
+            } else {
+                OperationResult::NextWorkClaimProjectQueue { value }
+            },
+        })
     }
     pub(crate) fn release_allocation(
         &self,
@@ -582,7 +813,7 @@ impl WorkService {
                 },
             });
         }
-        if c.state != "Active" && !quiesced(tx, &c.root_id)? {
+        if c.state != "Active" && !work_quiesced(tx, &c)? {
             return Err(conflict("execution_not_quiescent", &c.id));
         }
         let released = change(tx, &c, "Released", ctx.principal())?;
@@ -593,6 +824,73 @@ impl WorkService {
             },
         })
     }
+}
+fn work_quiesced(
+    tx: &mut dyn WriteTransaction,
+    claim: &StoredAllocationClaim,
+) -> Result<bool, StorageError> {
+    if claim.work_id == claim.root_id.0 {
+        return quiesced(tx, &claim.root_id);
+    }
+    let work = RootId(claim.work_id.clone());
+    if tx.runs().live_activation(&work)?.is_some() {
+        return Ok(false);
+    }
+    let assignments = root_assignments(tx.runs(), &claim.root_id, false)?;
+    let ids: std::collections::HashSet<_> = assignments
+        .iter()
+        .filter(|a| a.work_id == work)
+        .map(|a| a.id.clone())
+        .collect();
+    if assignments
+        .iter()
+        .any(|a| a.work_id == work && a.state.is_live())
+    {
+        return Ok(false);
+    }
+    let mut after = None;
+    loop {
+        let page = tx
+            .resources()
+            .processes(&ProcessFilter::Unsettled, after.as_ref(), PAGE)?;
+        if page.iter().any(|p| {
+            p.root_id.as_ref() == Some(&work)
+                || p.assignment_id.as_ref().is_some_and(|a| ids.contains(a))
+        }) {
+            return Ok(false);
+        }
+        if page.len() < usize::from(PAGE) {
+            break;
+        }
+        after = page.last().map(|p| p.id.clone());
+    }
+    let mut after = None;
+    loop {
+        let page = tx
+            .runs()
+            .root_deliveries(&claim.root_id, after.as_ref(), PAGE)?;
+        for id in &page {
+            if let Some(entry) = tx.queue().entry(id)?
+                && entry.state == QueueState::Claimed
+            {
+                let ours = if let Some(operation) = entry.operation_id {
+                    tx.operations().operation(&operation)?.is_some_and(|op| {
+                        op.assignment_id.as_ref().is_some_and(|a| ids.contains(a))
+                    })
+                } else {
+                    entry.root_id.as_ref() == Some(&work)
+                };
+                if ours {
+                    return Ok(false);
+                }
+            }
+        }
+        if page.len() < usize::from(PAGE) {
+            break;
+        }
+        after = page.last().cloned();
+    }
+    Ok(true)
 }
 fn quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
     if tx.runs().live_activation(root)?.is_some()
@@ -663,6 +961,26 @@ pub fn check_start(
     }) {
         return Err(conflict("project_execution_owned", &w.project_id.0));
     }
+    if all
+        .iter()
+        .any(|c| c.work_id == w.id.0 && c.state == "Active")
+    {
+        let mut after = None;
+        loop {
+            let page = tx
+                .runs()
+                .project_roots(&w.project_id, after.as_ref(), PAGE)?;
+            for other in &page {
+                if *other != w.id && tx.runs().live_activation(other)?.is_some() {
+                    return Err(conflict("project_execution_owned", &w.project_id.0));
+                }
+            }
+            if page.len() < usize::from(PAGE) {
+                break;
+            }
+            after = page.last().cloned();
+        }
+    }
     for c in all.iter().filter(|c| c.work_id == w.id.0 && live(c)) {
         if c.state == "Active" {
             if !owned(c, ctx) || !reserved(tx, c)? {
@@ -672,8 +990,7 @@ pub fn check_start(
                     Some(&c.id),
                 ));
             }
-            if c.work_revision != work.revision
-                || c.parent_feature_id != work.parent_feature_id
+            if c.parent_feature_id != work.parent_feature_id
                 || c.root_control_revision != control_of(tx.runs(), &w.id)?.revision
             {
                 return Err(super::refuse(
@@ -688,6 +1005,12 @@ pub fn check_start(
                     "claim",
                     Some(&c.id),
                 ));
+            }
+            if c.work_revision != work.revision {
+                let mut refreshed = c.clone();
+                refreshed.work_revision = work.revision;
+                refreshed.revision += 1;
+                tx.work().update_allocation_claim(&refreshed, c.revision)?;
             }
         } else if c.state == "Yielding" {
             return Err(conflict("root_yielding", &c.id));
@@ -706,14 +1029,27 @@ pub fn transfer(
     let Some(w) = tx.work().work(work)? else {
         return Ok(());
     };
-    for c in claims(tx.work(), &w.project_id)?.into_iter().filter(|c| {
-        c.work_id == *work
-            && (c.state == "Active"
-                || (c.state == "Transferred"
-                    && session.is_some()
-                    && c.execution_id.as_ref() == Some(execution)))
-    }) {
+    for c in claims(tx.work(), &w.project_id)?
+        .into_iter()
+        .filter(|c| c.work_id == *work)
+    {
+        if c.state != "Active" {
+            if c.state != "Transferred" || session.is_none() {
+                continue;
+            }
+            if let Some(old) = &c.execution_id
+                && old != execution
+                && tx
+                    .runs()
+                    .activation(old)?
+                    .is_some_and(|a| a.phase != ActivationPhase::Stopped)
+            {
+                continue;
+            }
+        }
         let mut next = c.clone();
+        next.work_revision = w.revision;
+        next.parent_feature_id = w.parent_feature_id.clone();
         next.execution_id = Some(execution.clone());
         next.session_id = session.cloned().or(c.session_id.clone());
         if let Some(session) = session
@@ -769,7 +1105,7 @@ pub fn reconcile_project(
     project: &ProjectId,
 ) -> Result<usize, StorageError> {
     let actor = tx.store().host_actor.clone();
-    let mut changed = 0;
+    let mut changed = super::membership::reconcile_project(tx, service, project)?;
     for c in claims(tx.work(), project)? {
         if !live(&c) {
             continue;
@@ -778,7 +1114,7 @@ pub fn reconcile_project(
             continue;
         };
         if c.state == "Active" {
-            if c.work_revision != w.revision || c.parent_feature_id != w.parent_feature_id {
+            if c.parent_feature_id != w.parent_feature_id {
                 change(tx, &c, "Invalidated", &actor)?;
                 changed += 1;
                 continue;
@@ -788,6 +1124,7 @@ pub fn reconcile_project(
             {
                 let mut renewed = c.clone();
                 renewed.revision += 1;
+                renewed.work_revision = w.revision;
                 renewed.expires_at_ms = until;
                 tx.work().update_allocation_claim(&renewed, c.revision)?;
                 changed += 1;
@@ -801,6 +1138,11 @@ pub fn reconcile_project(
                 "Invalidated"
             };
             change(tx, &c, state, &actor)?;
+            changed += 1;
+            continue;
+        }
+        if c.state == "Transferred" && work_quiesced(tx, &c)? {
+            change(tx, &c, "Released", &actor)?;
             changed += 1;
             continue;
         }
@@ -873,4 +1215,174 @@ pub fn reconcile(
             id: p.id.clone(),
         });
     }
+}
+
+struct ReplayIdentity {
+    key: String,
+    intent_digest: String,
+}
+fn replay_identity(
+    ctx: &InvocationContext,
+    project: &ProjectId,
+    feature: Option<&StoredWork>,
+    lease: i64,
+    filters: &Filters,
+) -> R<Option<ReplayIdentity>> {
+    let Some(key) = &filters.idempotency_key else {
+        return Ok(None);
+    };
+    if key.chars().count() > 200 {
+        return Err(invalid("idempotency_key", None));
+    }
+    let scope = json!({"actor":ctx.principal(),"session":ctx.session_id(),"ingress":ctx.ingress_namespace(),"project":project,"key":key});
+    let intent = json!({"project":project,"feature":feature.map(|f|&f.id),"leaseMs":lease,"repository":filters.repository_id,"taskType":filters.task_type,"label":filters.label.as_ref().map(|l|l.to_lowercase()),"another":filters.another});
+    let digest = |value: &serde_json::Value| {
+        crate::jcs::canonicalize(value)
+            .map(|s| crate::fingerprint::sha256_hex(s.as_bytes()))
+            .map_err(|_| invalid("allocation_intent", None))
+    };
+    Ok(Some(ReplayIdentity {
+        key: digest(&scope)?,
+        intent_digest: digest(&intent)?,
+    }))
+}
+fn remember(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+    identity: Option<&ReplayIdentity>,
+    selection: &AllocationSelection,
+) -> R<()> {
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    let result = serde_json::to_value(selection).map_err(|_| invalid("allocation_result", None))?;
+    if serde_json::to_vec(&result)
+        .map_err(|_| invalid("allocation_result", None))?
+        .len()
+        > MAX_ALLOCATION_REPLAY_BYTES
+    {
+        return Err(invalid("allocation_replay_too_large", None));
+    }
+    let claim_id = match selection {
+        AllocationSelection::Current(
+            AllocationOutcome::Claimed { claim, .. } | AllocationOutcome::Recovered { claim, .. },
+        ) => Some(claim.id.clone()),
+        _ => None,
+    };
+    tx.work()
+        .insert_allocation_replay(&StoredAllocationReplay {
+            project_id: project.clone(),
+            key: identity.key.clone(),
+            intent_digest: identity.intent_digest.clone(),
+            result,
+            claim_id,
+        })?;
+    Ok(())
+}
+fn replay(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    identity: Option<&ReplayIdentity>,
+) -> R<Option<AllocationSelection>> {
+    let Some(identity) = identity else {
+        return Ok(None);
+    };
+    let Some(saved) = tx.work().allocation_replay(&identity.key)? else {
+        return Ok(None);
+    };
+    if saved.intent_digest != identity.intent_digest {
+        return Err(conflict("allocation_intent_changed", ctx.invocation_id()));
+    }
+    let mut value: AllocationSelection = serde_json::from_value(saved.result)
+        .map_err(|_| StorageError::InvalidRecord("stored allocation replay".into()))?;
+    if let Some(claim_id) = saved.claim_id {
+        let c = tx
+            .work()
+            .allocation_claim(&claim_id)?
+            .ok_or_else(|| super::not_found("claim", &claim_id))?;
+        let w = visible_work(tx.work(), ctx, &c.work_id)?;
+        let statuses = tx.work().statuses(&w.project_id)?;
+        let finished = w
+            .status_id
+            .as_ref()
+            .and_then(|id| super::workflow::semantic_of(&statuses, id))
+            .is_some_and(super::workflow::finished);
+        if !(owned(&c, ctx) && reserved(tx, &c)?) && !finished {
+            return Err(super::refuse(
+                DomainErrorCode::LeaseLost,
+                "claim",
+                Some(&claim_id),
+            ));
+        }
+        if let AllocationSelection::Current(
+            AllocationOutcome::Claimed {
+                claim,
+                work,
+                reused,
+            }
+            | AllocationOutcome::Recovered {
+                claim,
+                work,
+                reused,
+                ..
+            },
+        ) = &mut value
+        {
+            *claim = wire(&c, tx.now_ms());
+            *work = Some(super::items::tx_record(tx, &w)?);
+            *reused = true;
+        }
+    }
+    if let AllocationSelection::Current(AllocationOutcome::NoEligible { reused, .. }) = &mut value {
+        *reused = true;
+    }
+    Ok(Some(value))
+}
+
+/// A membership handoff retires only the old reservation once its fenced worker is quiescent.
+/// The same durable assignment/session becomes the new execution owner; no second worker is made.
+pub(crate) fn retire_handoff_claims(
+    tx: &mut dyn WriteTransaction,
+    work: &Id,
+    actor: &ActorId,
+) -> Result<(), StorageError> {
+    let Some(w) = tx.work().work(work)? else {
+        return Ok(());
+    };
+    for c in claims(tx.work(), &w.project_id)?
+        .into_iter()
+        .filter(|c| c.work_id == *work && live(c))
+    {
+        change(tx, &c, "Released", actor)?;
+    }
+    Ok(())
+}
+
+/// A moved worker creates a scheduling dependency on its new coordinator. Preserve the source
+/// root's identity/holds, but do not let an empty or blocked source monopolize the project slot.
+pub(crate) fn request_handoff_yield(
+    tx: &mut dyn WriteTransaction,
+    service: &ControlService,
+    source: &RootId,
+) -> Result<(), StorageError> {
+    let Some(feature) = tx.work().work(&source.0)? else {
+        return Ok(());
+    };
+    let (_, tasks) = super::queue::queue(tx.work(), &feature.project_id, Some(&feature.id))?;
+    for task in tasks {
+        if eligible(tx, service, &task.work, Some(&feature), true)? {
+            return Ok(());
+        }
+    }
+    let actor = tx.store().host_actor.clone();
+    for claim in claims(tx.work(), &feature.project_id)?
+        .into_iter()
+        .filter(|c| {
+            c.root_id == *source && c.queue_key == PROJECT_QUEUE && c.state == "Transferred"
+        })
+    {
+        service.request_allocation_yield(tx, source)?;
+        change(tx, &claim, "Yielding", &actor)?;
+    }
+    Ok(())
 }

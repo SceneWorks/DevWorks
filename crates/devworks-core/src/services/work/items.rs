@@ -1639,6 +1639,20 @@ impl WorkService {
         }
         super::allocation::invalidate_work(tx, ctx, &before.id)?;
         let mut after = before.clone();
+        let mut brief = WorkBrief::of(&before)?;
+        let archived_inheritance = before
+            .parent_feature_id
+            .as_ref()
+            .filter(|_| !brief.inherits.is_empty())
+            .map(|feature| crate::protocol::records::WorkInheritanceOrigin {
+                feature_id: feature.clone(),
+                requirement_ids: crate::protocol::support::BoundedList(brief.inherits.clone()),
+            });
+        if let Some(origin) = &archived_inheritance {
+            brief.previous_inheritance = Some(origin.clone());
+            brief.inherits.clear();
+            after.brief = brief.value();
+        }
         after.parent_feature_id = target.clone();
         let queue = after.queue();
         after.manual_order = tx.work().next_rank(&before.project_id, &queue)?;
@@ -1646,7 +1660,18 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
-        bump(tx, &before.project_id, &[before.queue(), queue])?;
+        let mut affected_queues = vec![before.queue(), queue];
+        if !affected_queues.iter().any(|key| key == PROJECT_QUEUE) {
+            affected_queues.push(PROJECT_QUEUE.into());
+        }
+        bump(tx, &before.project_id, &affected_queues)?;
+        if let Some(feature) = &before.parent_feature_id {
+            super::allocation::invalidate_work(tx, ctx, feature)?;
+        }
+        if let Some(feature) = &target {
+            super::allocation::invalidate_work(tx, ctx, feature)?;
+        }
+        super::membership::request(tx, ctx, &before, &after)?;
         // Clearing membership installs a durable human pause on the card: its work stops and
         // stays held until an explicit, authorized Continue (relinking never clears it). Linking
         // and direct transfers keep every existing hold and create none.
@@ -1708,6 +1733,7 @@ impl WorkService {
                 "keptHoldIds": kept,
                 "controlRevision": control.revision,
                 "deliveryAuthorizedWithoutPlanApproval": target.is_some(),
+                "archivedInheritance":archived_inheritance,
             }),
         )?;
         if let Some(f) = &before.parent_feature_id {

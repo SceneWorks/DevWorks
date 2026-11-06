@@ -96,6 +96,7 @@ use std::sync::Arc;
 pub mod allocation;
 pub mod deps;
 pub mod items;
+pub mod membership;
 pub mod model;
 pub mod plans;
 pub mod queue;
@@ -357,6 +358,7 @@ pub struct WorkService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
     staged: Option<Arc<dyn plans::StagedPlans>>,
+    clock: Option<Arc<dyn crate::ports::Clock>>,
 }
 
 impl WorkService {
@@ -366,11 +368,17 @@ impl WorkService {
             ids,
             runs,
             staged: None,
+            clock: None,
         }
     }
     /// Reads staged atomic plans (artifact content) through `staged`.
     pub fn with_staged_plans(mut self, staged: Arc<dyn plans::StagedPlans>) -> Self {
         self.staged = Some(staged);
+        self
+    }
+    /// Supplies the host clock for current lease inspection; no wire argument can supply time.
+    pub fn with_clock(mut self, clock: Arc<dyn crate::ports::Clock>) -> Self {
+        self.clock = Some(clock);
         self
     }
     pub(crate) fn correlation(&self) -> CorrelationId {
@@ -454,11 +462,15 @@ impl CommandHandler for WorkService {
                 )),
             },
             OperationInput::NextWork(i) => match i {
-                crate::operations::next_work::Input::ClaimProjectQueue(i) => {
-                    self.allocate_project(tx, ctx, i, command.identity())
-                }
+                crate::operations::next_work::Input::ClaimProjectQueue(i) => self.allocate_project(
+                    tx,
+                    ctx,
+                    i,
+                    command.identity(),
+                    command.schema_revision().0,
+                ),
                 crate::operations::next_work::Input::ClaimFeatureTask(i) => {
-                    self.allocate_task(tx, ctx, i, command.identity())
+                    self.allocate_task(tx, ctx, i, command.identity(), command.schema_revision().0)
                 }
                 crate::operations::next_work::Input::ReleaseClaim(i) => {
                     self.release_allocation(tx, ctx, i)

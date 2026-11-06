@@ -399,6 +399,13 @@ impl ControlService {
             bound.generation += 1;
             bound.revision += 1;
             tx.runs().update_assignment(&bound, asg.revision)?;
+            crate::services::work::allocation::transfer(
+                tx,
+                &bound.work_id.0,
+                &a.id,
+                Some(&bound.session_id),
+                &actor,
+            )?;
         }
         let mut running = a.clone();
         running.phase = ActivationPhase::Running;
