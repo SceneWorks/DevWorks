@@ -198,6 +198,8 @@ pub enum Slot {
     SettingsValidate,
     SettingsHealth,
     SettingsSave,
+    /// Transient native credential intake; no raw value is serialized with this slot.
+    SettingsSecret(String),
     SettingsExplain(String),
     SessionsList,
     SessionStart,
@@ -390,6 +392,12 @@ pub enum Reply {
 
 /// The output of a multi-step task.
 pub enum TaskOutput {
+    /// The credential is already in SecretStore. Value is an opaque reference or null.
+    SettingSecret {
+        frame: Vec<u8>,
+        key: String,
+        value: serde_json::Value,
+    },
     /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared { frame: Vec<u8> },
     /// A downloaded bundle stays owned until its artifact-save command is confirmed.
