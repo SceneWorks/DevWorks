@@ -379,25 +379,27 @@ fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit
         ),
         "{reply:?}"
     );
-    let exact = app.create(
-        "Explicit stale Help",
-        json!({"kind":"Manual"}),
-        app.definition(stale, false),
-        true,
-    );
-    value(app.command(
-        "jobs.run_now",
-        json!({"jobId":exact,"expectedRevision":"1"}),
-        2,
-    ));
-    app.tick(&rt, &scheduler);
-    let run = app.settle(&rt, &scheduler, &exact);
-    assert_eq!(run.status, "Failed");
-    assert!(
-        run.checkpoint.is_none(),
-        "authored args are not replaced by current metadata"
-    );
-    assert_eq!(native.frames.lock().unwrap().len(), 3);
+    for adapter in [false, true] {
+        let exact = app.create(
+            &format!("Explicit stale Help ({adapter})"),
+            json!({"kind":"Manual"}),
+            app.definition(stale.clone(), adapter),
+            true,
+        );
+        value(app.command(
+            "jobs.run_now",
+            json!({"jobId":exact,"expectedRevision":"1"}),
+            2,
+        ));
+        app.tick(&rt, &scheduler);
+        let run = app.settle(&rt, &scheduler, &exact);
+        assert_eq!(run.status, "Failed");
+        assert!(
+            run.checkpoint.is_none(),
+            "authored args are not replaced by current metadata under either schema"
+        );
+    }
+    assert_eq!(native.frames.lock().unwrap().len(), 4);
     rt.block_on(app.runtime.shutdown());
 }
 
