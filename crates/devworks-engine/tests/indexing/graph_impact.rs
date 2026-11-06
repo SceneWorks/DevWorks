@@ -528,6 +528,7 @@ struct ForeignCapture {
     source: String,
     repository_id: devworks_core::protocol::Id,
     target_kind: String,
+    target_name: String,
     target_qualified: String,
     edge: String,
 }
@@ -592,7 +593,21 @@ impl devworks_core::ports::indexing::StructuralParser for ScriptedSemanticCaptur
                 .any(|(source, capture)| e.source == *source && e.kind == capture.edge)
         });
         for (source, capture) in captures {
-            extracted.edges.push(ExtractedEdge {kind:capture.edge,source,target:EdgeTarget::RepositoryNode {repository_id:capture.repository_id,unit:"src/lib.rs".into(),kind:capture.target_kind,qualified_name:capture.target_qualified},resolution:Resolution::Resolved,confidence:1.0,properties:json!({"fixtureSource":"ScriptedSemanticCapture","resolutionBasis":"scripted-exact-capture"}).as_object().unwrap().clone()});
+            extracted.edges.push(ExtractedEdge {
+                kind: capture.edge,
+                source,
+                target: EdgeTarget::RepositoryNode {
+                    repository_id: capture.repository_id,
+                    unit: "src/lib.rs".into(),
+                    kind: capture.target_kind,
+                    target_name: Some(capture.target_name),
+                    qualified_name: capture.target_qualified,
+                },
+                resolution: Resolution::Resolved,
+                confidence: 1.0,
+                properties: json!({"fixtureSource":"ScriptedSemanticCapture","resolutionBasis":"scripted-exact-capture"})
+                    .as_object().unwrap().clone(),
+            });
         }
         Ok(extracted)
     }
@@ -671,6 +686,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
             source: source.into(),
             repository_id: id(&ids[repo]),
             target_kind: node.kind.clone(),
+            target_name: node.name.clone(),
             target_qualified: node.qualified_name.clone(),
             edge: edge.into(),
         }
