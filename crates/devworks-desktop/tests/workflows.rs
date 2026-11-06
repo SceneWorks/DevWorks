@@ -212,12 +212,14 @@ fn empty_queue_is_truthful_and_a_manual_claim_never_starts_execution() {
     let p = project(&*b, "Empty queue");
     let mut h = open(&engine, &root, &p);
     input(&mut h, "Claim lease (ms)", "0");
+    settle(&mut h);
     assert!(
         h.get_by_role_and_label(Role::Button, "Next work")
             .accesskit_node()
             .is_disabled()
     );
     input(&mut h, "Claim lease (ms)", "300000");
+    settle(&mut h);
     h.query_by_label("Selection options")
         .unwrap()
         .click_accesskit();
