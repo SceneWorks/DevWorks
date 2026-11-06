@@ -4,7 +4,9 @@ mod commands;
 mod generation;
 mod maintenance;
 mod metadata;
+mod prepared;
 mod queries;
+mod text;
 
 use crate::operations::help::GenerateCapabilityDocsInput;
 use crate::ports::storage::{ApplicationStore, ReadSnapshot, StorageError, WriteTransaction};

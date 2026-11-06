@@ -3161,7 +3161,19 @@ impl HelpRead for Unsupported {
     ) -> Result<Vec<StoredHelpTopic>, StorageError> {
         nope()
     }
-    fn help_passage(&self, _: &Id, _: &Id, _: i64, _: u32) -> Result<Option<String>, StorageError> {
+    fn help_content(&self, _: &str) -> Result<Option<StoredHelpContent>, StorageError> {
+        nope()
+    }
+    fn help_content_reference(&self, _: &str) -> Result<Option<serde_json::Value>, StorageError> {
+        nope()
+    }
+    fn help_passage_source(
+        &self,
+        _: &Id,
+        _: &Id,
+        _: i64,
+        _: u32,
+    ) -> Result<Option<StoredHelpPassage>, StorageError> {
         nope()
     }
 }

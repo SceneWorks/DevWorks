@@ -404,8 +404,49 @@ impl NativeArtifactFiles {
             .remove(&(digest.to_owned(), generation.to_owned()));
     }
 
-    /// Opens a generation and verifies its digest on that handle unless the same handle state
-    /// was verified before; returns the handle positioned at the start.
+    /// Hashes a generation in controlled chunks and rewinds that exact verified handle.
+    fn open_controlled_file(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<File, FileFault> {
+        let interrupted = || FileFault::Source("blob verification interrupted".into());
+        if stopped() {
+            return Err(interrupted());
+        }
+        let mut file = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
+        let mut hash = Sha256::new();
+        let mut bytes = 0u64;
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            if stopped() {
+                return Err(interrupted());
+            }
+            let count = file.read(&mut buffer).map_err(fault)?;
+            if count == 0 {
+                break;
+            }
+            bytes = bytes
+                .checked_add(count as u64)
+                .ok_or_else(|| corrupt(digest))?;
+            if bytes > byte_count {
+                return Err(corrupt(digest));
+            }
+            hash.update(&buffer[..count]);
+        }
+        if stopped() {
+            return Err(interrupted());
+        }
+        if bytes != byte_count || hex(hash) != digest {
+            self.forget(digest, generation);
+            return Err(corrupt(digest));
+        }
+        file.seek(SeekFrom::Start(0)).map_err(fault)?;
+        Ok(file)
+    }
+
     fn open_verified(
         &self,
         digest: &str,
@@ -640,39 +681,38 @@ impl ArtifactFiles for NativeArtifactFiles {
         byte_count: u64,
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
-        let interrupted = || FileFault::Source("blob verification interrupted".into());
-        if stopped() {
-            return Err(interrupted());
-        }
-        let mut file = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
-        let mut hash = Sha256::new();
-        let mut bytes = 0u64;
+        let file = self.open_controlled_file(digest, generation, byte_count, stopped)?;
+        Ok(Box::new(file.take(byte_count)))
+    }
+
+    fn read_range_controlled(
+        &self,
+        digest: &str,
+        generation: &str,
+        byte_count: u64,
+        offset: u64,
+        max: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, FileFault> {
+        let mut file = self.open_controlled_file(digest, generation, byte_count, stopped)?;
+        file.seek(SeekFrom::Start(offset)).map_err(fault)?;
+        let count = max.min(byte_count.saturating_sub(offset) as usize);
+        let mut bytes = Vec::with_capacity(count);
+        let mut left = count;
         let mut buffer = [0; 64 * 1024];
-        loop {
+        while left > 0 {
             if stopped() {
-                return Err(interrupted());
+                return Err(FileFault::Source("blob range interrupted".into()));
             }
-            let count = file.read(&mut buffer).map_err(fault)?;
-            if count == 0 {
+            let length = left.min(buffer.len());
+            let n = file.read(&mut buffer[..length]).map_err(fault)?;
+            if n == 0 {
                 break;
             }
-            bytes = bytes
-                .checked_add(count as u64)
-                .ok_or_else(|| corrupt(digest))?;
-            if bytes > byte_count {
-                return Err(corrupt(digest));
-            }
-            hash.update(&buffer[..count]);
+            bytes.extend_from_slice(&buffer[..n]);
+            left -= n;
         }
-        if stopped() {
-            return Err(interrupted());
-        }
-        if bytes != byte_count || hex(hash) != digest {
-            self.forget(digest, generation);
-            return Err(corrupt(digest));
-        }
-        file.seek(SeekFrom::Start(0)).map_err(fault)?;
-        Ok(Box::new(file.take(byte_count)))
+        Ok(bytes)
     }
 
     fn unlink(&self, digest: &str, generation: &str) -> Result<(), FileFault> {
@@ -1004,6 +1044,57 @@ mod tests {
             1
         );
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn controlled_help_reads_cancel_the_first_hash_and_verify_the_full_source_before_ranges() {
+        let data = root("controlled-help");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = vec![b'a'; 2 * 1024 * 1024];
+        let d = digest(&bytes);
+        let n = bytes.len() as u64;
+        files
+            .publish("op-1.part", &mut bytes.as_slice(), &d, n, None, "op-1")
+            .unwrap();
+        let mut calls = 0;
+        assert!(
+            files
+                .open_controlled(&d, "op-1", n, &mut || {
+                    calls += 1;
+                    calls == 3
+                })
+                .is_err()
+        );
+        assert_eq!(
+            calls, 3,
+            "stop during the first hash, not after a whole source pass"
+        );
+        let mut calls = 0;
+        assert!(
+            files
+                .read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || {
+                    calls += 1;
+                    calls == 3
+                })
+                .is_err()
+        );
+        assert_eq!(calls, 3);
+        assert_eq!(
+            files
+                .read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || false)
+                .unwrap(),
+            b"aaaa"
+        );
+        // A changed byte outside the requested tail still invalidates the whole source.
+        let path = files.blob_path(&d, "op-1").unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(b"b").unwrap();
+        drop(file);
+        assert!(matches!(
+            files.read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || false),
+            Err(FileFault::Corrupt(_))
+        ));
+        let _ = std::fs::remove_dir_all(data);
     }
 
     #[test]

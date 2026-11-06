@@ -31,6 +31,35 @@ pub struct HostArtifactPublication<'a> {
     pub owner: crate::protocol::ActorId,
 }
 
+/// Trusted host source; expected identity is independently verified while consuming the reader.
+pub(crate) struct HostStream<'a> {
+    pub reader: &'a mut dyn std::io::Read,
+    pub digest: &'a str,
+    pub byte_count: u64,
+    pub source: Value,
+}
+struct ControlledReader<'a> {
+    reader: &'a mut dyn std::io::Read,
+    stopped: &'a mut dyn FnMut() -> bool,
+}
+impl std::io::Read for ControlledReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if (self.stopped)() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "host source interrupted",
+            ));
+        }
+        self.reader.read(bytes)
+    }
+}
+
+/// A sealed Help-owned source captured from the current store, never from caller JSON.
+pub(crate) struct HelpFile {
+    version: StoredVersion,
+    _hold: super::lifecycle::ReaderGuard,
+}
+
 impl ArtifactService {
     /// Stages `bytes` as a new blob generation (or verifies and reuses the existing one) under
     /// a journaled staging operation. `Ok(Err(cause))` is a publication failure already
@@ -86,6 +115,228 @@ impl ArtifactService {
             source,
             fence: staging.fence,
         }))
+    }
+
+    /// Streams a bounded host source through the existing staging journal. Both source and
+    /// reused blob identity are checked under control before a real generation is returned.
+    pub(crate) fn stage_host_reader(
+        &self,
+        store: &dyn ApplicationStore,
+        input: HostStream<'_>,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Result<StagedFile, String>, StorageError> {
+        use sha2::{Digest as _, Sha256};
+        use std::io::Read as _;
+        let HostStream {
+            reader,
+            digest,
+            byte_count,
+            source,
+        } = input;
+        if stopped() {
+            return Err(StorageError::Cancelled);
+        }
+        let n = i64::try_from(byte_count)
+            .map_err(|_| StorageError::InvalidRecord("host source byte count overflow".into()))?;
+        let env = Preparation::new(store, None, None);
+        let candidate = env
+            .read(|s| s.artifacts().blob(digest))?
+            .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending));
+        let staging = self.journal_staging(
+            &env,
+            digest,
+            n,
+            json!({"digest":digest,"byteCount":byte_count,"source":source}),
+        )?;
+        let published = (|| {
+            if let Some(blob) = candidate {
+                match self
+                    .files
+                    .open_controlled(digest, &blob.generation, byte_count, stopped)
+                {
+                    Ok(verified) => {
+                        drop(verified);
+                        let mut source = ControlledReader { reader, stopped };
+                        let mut hash = Sha256::new();
+                        let mut count = 0u64;
+                        let mut buffer = [0; 64 * 1024];
+                        loop {
+                            let length = source
+                                .read(&mut buffer)
+                                .map_err(|e| FileFault::Source(e.to_string()))?;
+                            if length == 0 {
+                                break;
+                            }
+                            count = count
+                                .checked_add(length as u64)
+                                .ok_or(FileFault::Mismatch)?;
+                            if count > byte_count {
+                                return Err(FileFault::Mismatch);
+                            }
+                            hash.update(&buffer[..length]);
+                        }
+                        let actual = hash
+                            .finalize()
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>();
+                        if count != byte_count || actual != digest {
+                            return Err(FileFault::Mismatch);
+                        }
+                        return Ok(crate::ports::files::PublishedBlob {
+                            generation: blob.generation,
+                            relative_path: blob.relative_path,
+                            reused: true,
+                        });
+                    }
+                    Err(FileFault::NotFound) => {}
+                    Err(FileFault::Corrupt(_)) => {
+                        self.files.quarantine(digest, &blob.generation)?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let mut source = ControlledReader { reader, stopped };
+            self.files.publish(
+                &format!("{}.part", staging.operation_id.0.as_str()),
+                &mut source,
+                digest,
+                byte_count,
+                None,
+                staging.operation_id.0.as_str(),
+            )
+        })();
+        let published = match published {
+            Ok(value) => value,
+            Err(error) => {
+                self.abandon_or_defer(
+                    &env,
+                    &staging,
+                    json!({"abandoned":"the host stream was not published"}),
+                );
+                if stopped() {
+                    return Err(StorageError::Cancelled);
+                }
+                return Ok(Err(format!("host stream publication failed: {error:?}")));
+            }
+        };
+        Ok(Ok(StagedFile {
+            operation_id: staging.operation_id,
+            digest: digest.into(),
+            byte_count: n,
+            generation: published.generation,
+            reused: published.reused,
+            relative_path: published.relative_path,
+            origin: SourceOrigin::default(),
+            source,
+            fence: staging.fence,
+        }))
+    }
+
+    pub(crate) fn capture_help_file(
+        &self,
+        read: &dyn crate::ports::storage::ReadSnapshot,
+        info: &crate::ports::storage::StoreInfo,
+        reference: &crate::protocol::provider::ArtifactRef,
+    ) -> Result<HelpFile, StorageError> {
+        let hold = self.readers.acquire(reference.sha256.as_str());
+        if read.stamp().store_id != info.store_id
+            || read.stamp().restore_epoch != info.restore_epoch
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let a = read
+            .artifacts()
+            .artifact(&reference.artifact_id)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        let v = read
+            .artifacts()
+            .version(&reference.version_id)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        if a.state != ArtifactState::Live
+            || a.scope != ArtifactScope::Workspace
+            || a.owner.as_ref() != Some(&info.host_actor)
+            || a.provenance["producedBy"].as_str() != Some(info.host_actor.0.as_str())
+            || a.provenance["principalKind"] != "Host"
+            || a.provenance["derived"]["kind"] != "HelpTopic"
+            || !v.live()
+            || v.artifact_id != a.id
+            || v.blob_digest != reference.sha256.as_str()
+            || v.byte_count != reference.byte_length.get()
+            || v.media_type != reference.media_type
+            || v.source["producedBy"].as_str() != Some(info.host_actor.0.as_str())
+            || v.source["principalKind"] != "Host"
+            || v.source["source"]["kind"] != "HelpTopic"
+        {
+            return Err(StorageError::ViewUnavailable);
+        }
+        let content = read
+            .help()
+            .help_content(&v.blob_digest)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        let commitment = content
+            .commitment()
+            .map_err(|_| StorageError::ViewUnavailable)?;
+        if v.source["source"]["helpIndexDigest"].as_str() != Some(commitment.as_str()) {
+            return Err(StorageError::ViewUnavailable);
+        }
+        let blob = read
+            .artifacts()
+            .blob(&v.blob_digest)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        if !matches!(blob.state, BlobState::Present | BlobState::UnlinkPending)
+            || blob.generation != v.blob_generation
+            || blob.byte_count != v.byte_count
+        {
+            return Err(StorageError::ViewUnavailable);
+        }
+        Ok(HelpFile {
+            version: v,
+            _hold: hold,
+        })
+    }
+    pub(crate) fn open_help_file(
+        &self,
+        source: &HelpFile,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Box<dyn std::io::Read + Send>, StorageError> {
+        let v = &source.version;
+        let result = self.files.open_controlled(
+            &v.blob_digest,
+            &v.blob_generation,
+            v.byte_count as u64,
+            stopped,
+        );
+        if stopped() {
+            return Err(StorageError::Cancelled);
+        }
+        result.map_err(|_| StorageError::ViewUnavailable)
+    }
+    pub(crate) fn read_help_range(
+        &self,
+        source: &HelpFile,
+        offset: u64,
+        max: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, StorageError> {
+        if max > 2 * 1024 * 1024 {
+            return Err(StorageError::InvalidRecord(
+                "Help range buffer exceeds bound".into(),
+            ));
+        }
+        let v = &source.version;
+        let result = self.files.read_range_controlled(
+            &v.blob_digest,
+            &v.blob_generation,
+            v.byte_count as u64,
+            offset,
+            max,
+            stopped,
+        );
+        if stopped() {
+            return Err(StorageError::Cancelled);
+        }
+        result.map_err(|_| StorageError::ViewUnavailable)
     }
 
     /// Records the staged bytes as a workspace artifact owned by the host (blob, artifact,

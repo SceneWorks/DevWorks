@@ -1130,25 +1130,15 @@ impl ArtifactService {
         }))
     }
 
-    /// Journals a staging operation (`Dispatching` in its own small write) and publishes `source`
-    /// as that operation's new generation of `digest` (or verifies and reuses `reuse`). The
-    /// publication outcome is returned with the staging reference; on a failure the caller
-    /// resolves the operation.
-    fn journal_and_publish(
+    /// Journals a staging operation in its own small write before external publication.
+    /// The publisher settles this exact operation after recording or abandoning its blob.
+    fn journal_staging(
         &self,
         env: &Preparation<'_>,
-        source: &mut dyn std::io::Read,
         digest: &str,
         expected_bytes: i64,
-        reuse: Option<&str>,
         payload: Value,
-    ) -> Result<
-        (
-            StagingRef,
-            Result<crate::ports::files::PublishedBlob, FileFault>,
-        ),
-        StorageError,
-    > {
+    ) -> Result<StagingRef, StorageError> {
         let args = sha256_hex(payload.to_string().as_bytes());
         let (operation, fence) = env.write(move |tx| {
             let id = OperationId(tx.new_id(IdKind::Operation));
@@ -1173,12 +1163,31 @@ impl ArtifactService {
             )?;
             Ok((id, attempt.fence()))
         })?;
-        let staging = StagingRef {
+        Ok(StagingRef {
             operation_id: operation.clone(),
             fence,
             digest: digest.to_owned(),
             byte_count: expected_bytes,
-        };
+        })
+    }
+
+    fn journal_and_publish(
+        &self,
+        env: &Preparation<'_>,
+        source: &mut dyn std::io::Read,
+        digest: &str,
+        expected_bytes: i64,
+        reuse: Option<&str>,
+        payload: Value,
+    ) -> Result<
+        (
+            StagingRef,
+            Result<crate::ports::files::PublishedBlob, FileFault>,
+        ),
+        StorageError,
+    > {
+        let staging = self.journal_staging(env, digest, expected_bytes, payload)?;
+        let operation = &staging.operation_id;
         let published = self.files.publish(
             &format!("{}.part", operation.0.as_str()),
             source,
