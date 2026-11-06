@@ -25,8 +25,9 @@ pub struct ProcessSpec {
     pub clear_env: bool,
     /// Capture stdout and stderr as pipes ([`ProcessTree::take_output`]); otherwise discard.
     pub capture_output: bool,
-    /// Require an OS-enforced ban on child process creation. Unsupported/privileged contexts
-    /// fail before this program executes. This does not restrict files, network or in-place exec.
+    /// Require an OS-enforced ban on child process creation. If enforcement is unavailable
+    /// (including exempt Unix credentials), fail before this program executes. This does not
+    /// restrict files, network or in-place exec.
     pub no_child_processes: bool,
     /// Give the child a private control channel ([`ProcessTree::take_control`]) that no other
     /// process can reach: anonymous pipes, never a name or a port.
@@ -170,7 +171,8 @@ pub trait ProcessHost: Send + Sync {
     /// preflight resolves `~` and variable references against it plus the spec's own variables.
     fn environment(&self) -> Vec<(String, String)>;
     /// Starts `spec` as an owned tree. On Windows the child is assigned to its job before it
-    /// runs; on Unix it leads a new process group.
+    /// runs; on Unix it leads a new process group. A requested `no_child_processes` policy
+    /// must be enforced or refused with `EnforcementUnavailable`, never silently ignored.
     fn spawn(&self, spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError>;
     /// Inspects a recorded identity without changing anything.
     fn probe(&self, identity: &NativeIdentity) -> Probe;

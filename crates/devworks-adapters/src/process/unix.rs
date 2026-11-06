@@ -37,8 +37,9 @@ fn unprivileged_child_policy() -> std::io::Result<()> {
         if real == 0 || effective == 0 || saved == 0 {
             return Err(std::io::Error::from_raw_os_error(libc::EPERM));
         }
-        // Linux capability ABI v3 has two 32-bit words. Exempt capabilities must not be
-        // effective or regainable from the permitted set. The child repeats this check.
+        // Linux capability ABI v3 has two 32-bit words. Reject retained capabilities:
+        // SYS_ADMIN/RESOURCE directly bypass NPROC, while SETUID can regain exempt UID0.
+        // NO_NEW_PRIVS below additionally prevents gains from the executed file.
         #[repr(C)]
         struct Header {
             version: u32,
@@ -60,8 +61,10 @@ fn unprivileged_child_policy() -> std::io::Result<()> {
         if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        const EXEMPT: u32 = (1 << 21) | (1 << 24); // CAP_SYS_ADMIN / CAP_SYS_RESOURCE
-        if (data[0].effective | data[0].permitted) & EXEMPT != 0 {
+        if data
+            .iter()
+            .any(|d| d.effective | d.permitted | d.inheritable != 0)
+        {
             return Err(std::io::Error::from_raw_os_error(libc::EPERM));
         }
     }
