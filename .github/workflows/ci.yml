@@ -2,6 +2,7 @@ name: CI
 
 # Native workspace checks only. No inference, model execution, provider or network effects run in CI.
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -19,6 +20,7 @@ env:
 
 jobs:
   fmt:
+    if: github.event_name != 'workflow_dispatch'
     name: rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -30,6 +32,7 @@ jobs:
       - run: cargo fmt --all --check
 
   codegen:
+    if: github.event_name != 'workflow_dispatch'
     name: generated contracts are current
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -49,6 +52,7 @@ jobs:
           test -z "$(git status --porcelain)"
 
   clippy:
+    if: github.event_name != 'workflow_dispatch'
     name: clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -67,6 +71,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
+    if: github.event_name != 'workflow_dispatch'
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -91,3 +96,27 @@ jobs:
           cargo test -p devworks-engine --test browser --locked browser_evidence_resolves_its_invocation_worktree_and_preserves_old_sources -- --exact
           cargo test -p devworks-engine --test git --locked
       - run: cargo test --workspace --locked
+
+  windows-plan-editor-diagnostic:
+    if: github.event_name == 'workflow_dispatch'
+    name: Windows plan-editor diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install the repository toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: test
+      - name: Identify the failing interaction, then exercise the whole work suite
+        shell: pwsh
+        run: |
+          cargo test -p devworks-desktop --test work --locked the_plan_editor_keeps_what_it_does_not_show -- --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($diagnosticPass in 1..3) {
+            Write-Host "Work suite diagnostic pass $diagnosticPass of 3"
+            cargo test -p devworks-desktop --test work --locked -- --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
