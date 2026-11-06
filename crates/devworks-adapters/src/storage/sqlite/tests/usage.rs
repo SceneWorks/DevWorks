@@ -83,6 +83,15 @@ fn seeded(h: &Harness) -> SqliteStore {
     s
 }
 fn attempt(s: &SqliteStore, name: &str) -> StoredInferenceAttempt {
+    // A real durable journal+logical request fixture. Canonical accounting never invents these.
+    let mut raw = rusqlite::Connection::open(&s.path).unwrap();
+    raw.pragma_update(None, "foreign_keys", true).unwrap();
+    let tx = raw.transaction().unwrap();
+    tx.execute("INSERT INTO operations(id,root_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,'feature','inference.request',1,?2,'{}','Preflighted',2,?3)",rusqlite::params![format!("operation-{name}"),"a".repeat(64),T0]).unwrap();
+    tx.execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,1,?3,'Preflighted','[]')",rusqlite::params![name,format!("operation-{name}"),s.info().boot_id.as_ref().unwrap().as_str()]).unwrap();
+    tx.execute("INSERT INTO router_requests(request_id,operation_id,purpose,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation','project','sol','connection',?3)",rusqlite::params![format!("request-{name}"),format!("operation-{name}"),T0]).unwrap();
+    tx.commit().unwrap();
+
     StoredInferenceAttempt {
         attempt_id: id(name),
         request_id: id(&format!("request-{name}")),
@@ -204,11 +213,45 @@ fn usage28_migration_is_checksummed_old_writers_refused_and_new_records_reopen()
     let m = MIGRATIONS.iter().find(|m| m.version == 28).unwrap();
     assert_eq!(m.checksum(), MIGRATION_0028_SHA256);
     assert_eq!((m.minimum_reader, m.minimum_writer), (8, 28));
-    assert!(!m.rebuilds_tables);
+    assert!(m.rebuilds_tables);
     let h = Harness::new();
     let old = SqliteStore::open_with(h.config(), &through(27)).unwrap();
+    run_write(&old, WriteOptions::default(), |tx| {
+        tx.operations().record_intent(NewOperation {
+            id: OperationId(id("legacy-operation")),
+            root_id: None,
+            assignment_id: None,
+            capability: "inference.request".into(),
+            schema_version: 1,
+            args_digest: "a".repeat(64),
+            payload: json!({}),
+        })?;
+        tx.router().record_route_request(&StoredRouteRequest {
+            request_id: id("legacy-request"),
+            operation_id: OperationId(id("legacy-operation")),
+            purpose: "Conversation".into(),
+            session_id: None,
+            project_id: None,
+            model_id: id("sol"),
+            connection_id: id("legacy-connection"),
+            pin_id: None,
+            created_at_ms: T0,
+        })
+    })
+    .unwrap();
     drop(old);
     let s = seeded(&h);
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let route = r.router().route_request(&id("legacy-request"))?.unwrap();
+        assert_eq!(route.connection_id, id("legacy-connection"));
+        assert!(
+            r.usage()
+                .inference_attempts(&UsageAttemptFilter::default(), None, 500)?
+                .is_empty()
+        );
+        Ok(())
+    })
+    .unwrap();
     let a = attempt(&s, "a");
     let expected = a.clone();
     run_write(&s, WriteOptions::default(), move |tx| {
@@ -317,6 +360,20 @@ fn usage28_observations_are_immutable_idempotent_bounded_and_attempt_binding_can
         dispatched.state = "Dispatched".into();
         tx.usage().update_inference_attempt(&dispatched, 1)?;
         assert!(tx.usage().update_inference_attempt(&dispatched, 1).is_err());
+        let quote = dispatched.pricing_snapshot.clone();
+        dispatched.provider_model_id = Some("provider-alias".into());
+        dispatched.revision = 3;
+        tx.usage().update_inference_attempt(&dispatched, 2)?;
+        dispatched.provider_model_id = Some("provider-concrete-version".into());
+        dispatched.revision = 4;
+        tx.usage().update_inference_attempt(&dispatched, 3)?;
+        assert_eq!(
+            tx.usage()
+                .inference_attempt(&dispatched.attempt_id)?
+                .unwrap()
+                .pricing_snapshot,
+            quote
+        );
         Ok(())
     })
     .unwrap();
@@ -503,4 +560,508 @@ fn usage28_bootstrap_checkpoint_restart_and_origin_paging_preserve_unknown_ident
         Ok(())
     })
     .unwrap();
+}
+#[test]
+fn usage28_pending_partial_and_tail_coverage_are_distinct_and_integer_totals_refuse_overflow() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = attempt(&s, "pending");
+    let mut b = attempt(&s, "partial");
+    b.request_id = id("request-partial");
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)?;
+        tx.usage().insert_inference_attempt(&b)?;
+        let mut partial = balance("partial", Some(5), Some(10), "OfficialEstimate");
+        partial.monetary_complete = false;
+        partial.unknown_tail = true;
+        tx.usage().put_attempt_balance(&partial, None)
+    })
+    .unwrap();
+    let t = totals(&s);
+    assert_eq!(
+        (
+            t.attempts,
+            t.spent_micro_usd,
+            t.untracked_attempts,
+            t.monetary_incomplete_attempts,
+            t.unknown_tail_attempts,
+            t.incomplete_attempts
+        ),
+        (2, 5, 0, 2, 1, 1)
+    );
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.usage().put_attempt_balance(
+            &balance("pending", Some(i64::MAX), None, "ReportedCharge"),
+            None,
+        )
+    })
+    .unwrap();
+    let error = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.usage().feature_usage_totals(&id("feature"))
+    })
+    .unwrap_err();
+    assert!(matches!(error, StorageError::InvalidRecord(_)));
+}
+#[test]
+fn usage28_origin_binding_is_cross_project_guarded_and_exact_replay_preserves_prior_binding() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = attempt(&s, "a");
+    let b = attempt(&s, "b");
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)?;
+        let original = origin("legacy", "SessionUsage", Some(5));
+        tx.usage().insert_usage_origin(&original)?;
+        tx.usage()
+            .bind_usage_origin("SessionUsage", "legacy", &id("a"))?;
+        tx.usage().insert_usage_origin(&original)?;
+        assert_eq!(
+            tx.usage()
+                .usage_origin("SessionUsage", "legacy")?
+                .unwrap()
+                .attempt_id,
+            Some(id("a"))
+        );
+        let mut bad = original;
+        bad.payload = json!({"rewrite":true});
+        assert!(tx.usage().insert_usage_origin(&bad).is_err());
+        tx.usage().insert_inference_attempt(&b)?;
+        assert!(
+            tx.usage()
+                .bind_usage_origin("SessionUsage", "legacy", &id("b"))
+                .is_err()
+        );
+        let mut bad = origin("bad-scope", "SessionUsage", None);
+        bad.project_id = Some(ProjectId(id("wrong-project")));
+        assert!(tx.usage().insert_usage_origin(&bad).is_err());
+        Ok(())
+    })
+    .unwrap();
+    assert!(h.raw().execute("DELETE FROM usage_origins", []).is_err());
+}
+#[test]
+fn usage28_independent_provider_publications_ignore_unrelated_global_drift_and_stale_worker_keeps_last_good()
+ {
+    let h = Harness::new();
+    let s = seeded(&h);
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.usage().put_price_status(&pending(), None)?;
+        let mut other = pending();
+        other.provider = "Anthropic".into();
+        tx.usage().put_price_status(&other, None)?;
+        assert_eq!(tx.usage().price_revision()?, 3);
+        let published = tx.usage().publish_price_snapshot(&publication(), 1)?;
+        assert_eq!(published.current_snapshot_id, Some(id("snapshot")));
+        let mut refresh = published;
+        refresh.revision = 3;
+        refresh.refresh_pending = true;
+        tx.usage().put_price_status(&refresh, Some(2))?;
+        let mut replacement = refresh;
+        replacement.revision = 4;
+        tx.usage().put_price_status(&replacement, Some(3))?;
+        let mut stale = publication();
+        stale.id = id("stale-snapshot");
+        stale.revision = 2;
+        let generation = tx.usage().price_revision()?;
+        assert!(tx.usage().publish_price_snapshot(&stale, 3).is_err());
+        assert!(tx.usage().price_snapshot(&stale.id)?.is_none());
+        assert_eq!(tx.usage().price_revision()?, generation);
+        assert_eq!(
+            tx.usage().current_price_snapshot("OpenAI")?.unwrap().id,
+            id("snapshot")
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn usage28_concurrent_price_refresh_generation_has_one_winner() {
+    let h = Harness::new();
+    let s = Arc::new(seeded(&h));
+    let b = Arc::new(Barrier::new(3));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let s = s.clone();
+            let b = b.clone();
+            std::thread::spawn(move || {
+                b.wait();
+                run_write(s.as_ref(), WriteOptions::default(), |tx| {
+                    tx.usage().advance_price_revision(1)
+                })
+            })
+        })
+        .collect();
+    b.wait();
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r, Err(StorageError::RevisionConflict { .. })))
+    );
+}
+#[test]
+fn usage28_global_session_bootstrap_reads_project_and_workspace_facts_even_after_tombstone() {
+    use devworks_core::protocol::EventId;
+    let h = Harness::new();
+    let s = seeded(&h);
+    let actor = s.info().host_actor;
+    run_write(&s, WriteOptions::default(), move |tx| {
+        for (name, project) in [
+            ("project-session", Some(ProjectId(id("project")))),
+            ("workspace-session", None),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(name),
+                conversation_id: id(&format!("conversation-{name}")),
+                agent_id: actor.clone(),
+                project_id: project.clone(),
+                root_id: None,
+                title: name.into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor.clone(),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+            let event = id(&format!("event-{name}"));
+            let sequence = tx.history().append(NewEvent {
+                id: EventId(event.clone()),
+                actor: actor.clone(),
+                project_id: project.clone(),
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "session".into(),
+                aggregate_id: name.into(),
+                aggregate_revision: 1,
+                kind: "UsageRecorded".into(),
+                payload: json!({}),
+            })?;
+            let batch = id(&format!("batch-{name}"));
+            tx.sessions().insert_batch(&StoredBatch {
+                batch_id: batch.clone(),
+                session_id: id(name),
+                payload_digest: "a".repeat(64),
+                actor: actor.clone(),
+                context_epoch: 0,
+                first_sequence: 1,
+                last_sequence: 1,
+                event_id: event,
+                committed_sequence: sequence,
+                accepted_at_ms: T0,
+            })?;
+            tx.sessions().insert_usage(&StoredUsage {
+                session_id: id(name),
+                batch_id: batch,
+                ordinal: 1,
+                project_id: project,
+                root_id: None,
+                committed_sequence: sequence,
+                item: json!({"requestId":format!("request-{name}")}),
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    h.raw()
+        .execute(
+            "UPDATE projects SET lifecycle='Deleted' WHERE id='project'",
+            [],
+        )
+        .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let scoped = r
+            .sessions()
+            .usage_facts(&HistoryScope::Workspace, None, 500)?;
+        assert_eq!(scoped.len(), 1);
+        let first = r.sessions().all_usage_facts(None, 1)?;
+        assert_eq!(first.len(), 1);
+        let second = r.sessions().all_usage_facts(Some(first[0].key()), 1)?;
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0].key(), second[0].key());
+        let all = r.sessions().all_usage_facts(None, 500)?;
+        assert_eq!(all.len(), 2);
+        assert!(r.sessions().all_usage_facts(None, 0).is_err());
+        Ok(())
+    })
+    .unwrap();
+    let raw = h.raw();
+    for (table, index) in [
+        ("session_usage", "session_usage_global"),
+        ("tool_invocations", "tool_invocation_global"),
+    ] {
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE committed_seq>=?1 ORDER BY committed_seq LIMIT 1"
+        );
+        let detail: String = raw.query_row(&sql, [0], |r| r.get(3)).unwrap();
+        assert!(detail.contains(index), "{detail}");
+    }
+}
+#[test]
+fn usage28_canonical_identity_requires_actual_matching_journal_and_request_without_partial_rows() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = attempt(&s, "a");
+    let b = attempt(&s, "b");
+    for (n, mut invalid) in [
+        ("fabricated", a.clone()),
+        ("number", a.clone()),
+        ("operation", a.clone()),
+        ("request", a.clone()),
+        ("root", a.clone()),
+    ] {
+        match n {
+            "fabricated" => invalid.attempt_id = id("fabricated"),
+            "number" => invalid.attempt_number = 2,
+            "operation" => invalid.operation_id = b.operation_id.clone(),
+            "request" => invalid.request_id = b.request_id.clone(),
+            _ => {
+                invalid.feature_id = None;
+                invalid.work_id = Some(id("issue"));
+            }
+        }
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .usage()
+                .insert_inference_attempt(&invalid))
+            .is_err()
+        );
+    }
+    assert_eq!(totals(&s).attempts, 0);
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)
+    })
+    .unwrap();
+    assert!(
+        h.raw()
+            .execute("UPDATE usage_attempts SET role='rewritten'", [])
+            .is_err()
+    );
+    assert!(h.raw().execute("DELETE FROM usage_attempts", []).is_err());
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let one = r.router().route_requests(None, 1)?;
+        assert_eq!(one[0].request_id, id("request-a"));
+        let next = r.router().route_requests(Some(&one[0].request_id), 1)?;
+        assert_eq!(next[0].request_id, id("request-b"));
+        assert!(r.router().route_requests(None, 0).is_err());
+        assert!(r.usage().inference_attempt(&id("b"))?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn usage28_global_job_facts_page_by_run_and_sequence_without_current_scope_inference() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    run_write(&s, WriteOptions::default(), |tx| {
+        for (name, project) in [("job-a", Some(ProjectId(id("project")))), ("job-b", None)] {
+            let job = StoredJob {
+                id: id(name),
+                revision: 1,
+                project_id: project.clone(),
+                title: name.into(),
+                kind: "Inference".into(),
+                schedule: "{\"kind\":\"Manual\"}".into(),
+                timezone: "UTC".into(),
+                definition: "{}".into(),
+                enabled: false,
+                authorized: false,
+                authorized_by: None,
+                hold: None,
+                activated_epoch: 0,
+                project_epoch: 0,
+                anchor_at_ms: T0,
+                next_at_ms: None,
+                interrupted_run_id: None,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                deleted_at_ms: None,
+            };
+            tx.jobs().insert_job(&job)?;
+            let operation = OperationId(id(&format!("operation-{name}")));
+            tx.operations().record_intent(NewOperation {
+                id: operation.clone(),
+                root_id: None,
+                assignment_id: None,
+                capability: "jobs.run".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({}),
+            })?;
+            let run = StoredJobRun {
+                id: id(&format!("run-{name}")),
+                job_id: id(name),
+                seq: 1,
+                project_id: project,
+                job_revision: 1,
+                definition: "{}".into(),
+                project_epoch: 0,
+                restore_epoch: 0,
+                occurrence_key: name.into(),
+                occurrence_at_ms: T0,
+                trigger: "Manual".into(),
+                status: "Succeeded".into(),
+                revision: 1,
+                operation_id: Some(operation),
+                inner_operation_id: None,
+                boot_id: None,
+                started_at_ms: Some(T0),
+                finished_at_ms: Some(T0),
+                reason: None,
+                hold: None,
+                cancel_requested: false,
+                resumptions: 0,
+                session_id: None,
+                agent_actor: None,
+                skipped_for: None,
+                checkpoint: None,
+                created_at_ms: T0,
+            };
+            tx.jobs().insert_run(&run)?;
+            for n in 1..=2 {
+                tx.jobs().record_usage(&StoredJobUsage {
+                    run_id: run.id.clone(),
+                    seq: n,
+                    request_id: id(&format!("request-{name}-{n}")),
+                    purpose: "Conversation".into(),
+                    model_id: id("sol"),
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    amount_usd: None,
+                    price_kind: "Untracked".into(),
+                    price_origin: "Unknown".into(),
+                    price_revision: None,
+                    incomplete: true,
+                    recorded_at_ms: T0,
+                })?;
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let first = r.jobs().usage_history(None, 1)?;
+        assert_eq!((first[0].run_id.as_str(), first[0].seq), ("run-job-a", 1));
+        let second = r.jobs().usage_history(
+            Some(&UsageJobPosition {
+                run_id: first[0].run_id.clone(),
+                seq: first[0].seq,
+            }),
+            2,
+        )?;
+        assert_eq!((second[0].run_id.as_str(), second[0].seq), ("run-job-a", 2));
+        assert_eq!((second[1].run_id.as_str(), second[1].seq), ("run-job-b", 1));
+        assert!(r.jobs().usage_history(None, 501).is_err());
+        assert!(
+            r.jobs()
+                .usage_history(
+                    Some(&UsageJobPosition {
+                        run_id: id("run-job-a"),
+                        seq: -1
+                    }),
+                    1
+                )
+                .is_err()
+        );
+        Ok(())
+    })
+    .unwrap();
+    // A job which dispatches actual feature work is secondary provenance, not a second expense.
+    let mut owned = attempt(&s, "feature-job");
+    owned.job_run_id = Some(id("run-job-b"));
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&owned)?;
+        tx.usage().put_attempt_balance(
+            &balance("feature-job", Some(25), None, "ReportedCharge"),
+            None,
+        )
+    })
+    .unwrap();
+    let t = totals(&s);
+    assert_eq!((t.attempts, t.spent_micro_usd), (1, 25));
+    let mut mismatch = attempt(&s, "wrong-job-project");
+    mismatch.project_id = None;
+    mismatch.feature_id = None;
+    mismatch.work_id = None;
+    mismatch.job_run_id = Some(id("run-job-a"));
+    let raw = h.raw();
+    raw.execute(
+        "UPDATE operations SET root_id=NULL WHERE id='operation-wrong-job-project'",
+        [],
+    )
+    .unwrap();
+    raw.execute(
+        "UPDATE router_requests SET project_id=NULL WHERE request_id='request-wrong-job-project'",
+        [],
+    )
+    .unwrap();
+    assert!(
+        run_write(&s, WriteOptions::default(), move |tx| tx
+            .usage()
+            .insert_inference_attempt(&mismatch))
+        .is_err()
+    );
+}
+#[test]
+fn usage28_host_decision_purposes_are_closed_and_preserve_router_identity() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let a = attempt(&s, "decision");
+    let b = attempt(&s, "tier");
+    let raw = h.raw();
+    for (request, purpose) in [
+        (a.request_id.as_str(), "Decision"),
+        (b.request_id.as_str(), "TierClassification"),
+    ] {
+        raw.execute(
+            "UPDATE router_requests SET purpose=?1 WHERE request_id=?2",
+            rusqlite::params![purpose, request],
+        )
+        .unwrap();
+    }
+    assert!(
+        raw.execute("UPDATE router_requests SET purpose='ArbitraryTool'", [])
+            .is_err()
+    );
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let mut a = a;
+        a.purpose = "Decision".into();
+        let mut b = b;
+        b.purpose = "TierClassification".into();
+        tx.usage().insert_inference_attempt(&a)?;
+        tx.usage().insert_inference_attempt(&b)?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(totals(&s).attempts, 2);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let operation = OperationId(id("host-purpose-operation"));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "inference.request".into(),
+            schema_version: 1,
+            args_digest: "a".repeat(64),
+            payload: json!({}),
+        })?;
+        tx.router().record_route_request(&StoredRouteRequest {
+            request_id: id("host-purpose-request"),
+            operation_id: operation,
+            purpose: "Decision".into(),
+            session_id: None,
+            project_id: None,
+            model_id: id("sol"),
+            connection_id: id("connection"),
+            pin_id: None,
+            created_at_ms: T0,
+        })
+    })
+    .unwrap();
+    assert!(s.integrity_check().unwrap().problems.is_empty());
 }

@@ -371,7 +371,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 8,
         minimum_writer: 28,
         sql: include_str!("migrations/0028_usage.sql"),
-        rebuilds_tables: false,
+        rebuilds_tables: true,
     },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
@@ -693,4 +693,4 @@ pub const MIGRATION_0027_SHA256: &str =
 
 /// Recorded checksum of migration 28.
 pub const MIGRATION_0028_SHA256: &str =
-    "5de0fa7d27731bbf4e3c47d9f47af5c5effdafbecc2ffc9f67e77c352ca1de40";
+    "7df71b3b40a4363ddc32578b6aa4113283266d769e75f83c4c52a4cecc7b3772";

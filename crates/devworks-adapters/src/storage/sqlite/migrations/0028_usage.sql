@@ -1,9 +1,27 @@
+-- Preserve logical request history while admitting existing host-owned decision purposes.
+-- This runs before usage_attempts introduces the first incoming request foreign key.
+CREATE TABLE router_requests_v28 (
+ request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 128),
+ operation_id TEXT NOT NULL UNIQUE REFERENCES operations(id),
+ purpose TEXT NOT NULL CHECK(purpose IN ('Conversation','Compaction','Title','Enrichment','Embedding','Vision','Decision','TierClassification')),
+ session_id TEXT,
+ project_id TEXT,
+ model_id TEXT NOT NULL CHECK(length(model_id) BETWEEN 1 AND 128),
+ connection_id TEXT NOT NULL CHECK(length(connection_id) BETWEEN 1 AND 128),
+ pin_id TEXT,
+ created_at INTEGER NOT NULL CHECK(created_at>=0)
+) STRICT;
+INSERT INTO router_requests_v28 SELECT request_id,operation_id,purpose,session_id,project_id,model_id,connection_id,pin_id,created_at FROM router_requests;
+DROP TABLE router_requests;
+ALTER TABLE router_requests_v28 RENAME TO router_requests;
+CREATE INDEX router_requests_session ON router_requests(session_id) WHERE session_id IS NOT NULL;
+
 -- Canonical accounting is host-authored. Legacy facts are bootstrapped in bounded runtime
 -- batches, never repriced or assigned fabricated historical attempt identities by migration.
 CREATE TABLE usage_attempts (
- attempt_id TEXT PRIMARY KEY,
- request_id TEXT NOT NULL,
- operation_id TEXT NOT NULL,
+ attempt_id TEXT PRIMARY KEY REFERENCES operation_attempts,
+ request_id TEXT NOT NULL REFERENCES router_requests,
+ operation_id TEXT NOT NULL REFERENCES operations,
  attempt_number INTEGER NOT NULL CHECK(attempt_number>0),
  project_id TEXT REFERENCES projects,
  feature_id TEXT REFERENCES work_items,
@@ -25,6 +43,11 @@ CREATE TABLE usage_attempts (
  created_at INTEGER NOT NULL CHECK(created_at>=0),
  UNIQUE(request_id,attempt_number)
 ) STRICT;
+CREATE TRIGGER usage_attempts_immutable_binding BEFORE UPDATE ON usage_attempts
+ WHEN OLD.attempt_id IS NOT NEW.attempt_id OR OLD.request_id IS NOT NEW.request_id OR OLD.operation_id IS NOT NEW.operation_id OR OLD.attempt_number IS NOT NEW.attempt_number OR OLD.project_id IS NOT NEW.project_id OR OLD.feature_id IS NOT NEW.feature_id OR OLD.work_id IS NOT NEW.work_id OR OLD.assignment_id IS NOT NEW.assignment_id OR OLD.session_id IS NOT NEW.session_id OR OLD.job_run_id IS NOT NEW.job_run_id OR OLD.actor_id IS NOT NEW.actor_id OR OLD.role IS NOT NEW.role OR OLD.purpose IS NOT NEW.purpose OR OLD.catalog_model_id IS NOT NEW.catalog_model_id OR OLD.connection_id IS NOT NEW.connection_id OR OLD.endpoint_profile IS NOT NEW.endpoint_profile OR OLD.access_mode IS NOT NEW.access_mode OR OLD.pricing_snapshot_json IS NOT NEW.pricing_snapshot_json OR OLD.created_at IS NOT NEW.created_at
+ BEGIN SELECT RAISE(ABORT,'usage attempt admission binding is immutable'); END;
+CREATE TRIGGER usage_attempts_immutable_delete BEFORE DELETE ON usage_attempts
+ BEGIN SELECT RAISE(ABORT,'usage attempts are retained'); END;
 CREATE INDEX usage_attempts_project ON usage_attempts(project_id,attempt_id);
 CREATE INDEX usage_attempts_feature ON usage_attempts(feature_id,attempt_id);
 CREATE INDEX usage_attempts_work ON usage_attempts(work_id,attempt_id);

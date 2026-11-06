@@ -38,13 +38,15 @@ fn conflict(kind: &'static str, id: &Id, expected: i64, current: i64) -> Storage
 
 const EFFORTS: [&str; 6] = ["Minimal", "Low", "Medium", "High", "XHigh", "Max"];
 const TIERS: [&str; 4] = ["Max", "High", "Mid", "Low"];
-const PURPOSES: [&str; 6] = [
+const PURPOSES: [&str; 8] = [
     "Conversation",
     "Compaction",
     "Title",
     "Enrichment",
     "Embedding",
     "Vision",
+    "Decision",
+    "TierClassification",
 ];
 
 // ---------------------------------------------------------------------------------------------

@@ -716,6 +716,39 @@ fn missing(kind: &'static str, id: &Id) -> StorageError {
     }
 }
 fn validate_binding(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), StorageError> {
+    let journal = OperationRead::operation(unit, &r.operation_id)?
+        .ok_or_else(|| missing("operation", &r.operation_id.0))?;
+    if !journal
+        .attempts
+        .iter()
+        .any(|a| a.id.0 == r.attempt_id && a.attempt_no == r.attempt_number)
+    {
+        return Err(invalid(
+            "canonical usage identity must match its journal attempt",
+        ));
+    }
+    let route = RouterRead::route_request(unit, &r.request_id)?
+        .ok_or_else(|| missing("router request", &r.request_id))?;
+    if route.operation_id != r.operation_id
+        || route.project_id != r.project_id
+        || route.session_id != r.session_id
+        || route.purpose != r.purpose
+    {
+        return Err(invalid("canonical usage request ownership mismatch"));
+    }
+    if journal
+        .assignment_id
+        .as_ref()
+        .is_some_and(|id| Some(id) != r.assignment_id.as_ref())
+    {
+        return Err(invalid("canonical usage journal assignment mismatch"));
+    }
+    if journal.root_id.as_ref().is_some_and(|root| {
+        Some(&root.0) != r.work_id.as_ref() && Some(&root.0) != r.feature_id.as_ref()
+    }) {
+        return Err(invalid("canonical usage journal root mismatch"));
+    }
+
     for (id, feature) in [(r.feature_id.as_ref(), true), (r.work_id.as_ref(), false)] {
         if let Some(id) = id {
             let work = WorkRead::work(unit, id)?.ok_or_else(|| missing("work", id))?;
@@ -740,8 +773,8 @@ fn validate_binding(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), S
     }
     if let Some(id) = &r.job_run_id {
         let run = JobRead::job_run(unit, id)?.ok_or_else(|| missing("job run", id))?;
-        if run.project_id != r.project_id || r.feature_id.is_some() {
-            return Err(invalid("job usage cannot acquire feature budget ownership"));
+        if run.project_id.is_some() && run.project_id != r.project_id {
+            return Err(invalid("attempt job project scope mismatch"));
         }
     }
     if let Some(work) = &r.work_id {
@@ -791,6 +824,39 @@ fn validate_quote(unit: &Unit<'_>, r: &StoredInferenceAttempt) -> Result<(), Sto
             || q["price_revision"].as_i64() != Some(s.revision)
         {
             return Err(invalid("quote price snapshot is no longer current"));
+        }
+    }
+    Ok(())
+}
+fn validate_origin_scope(unit: &Unit<'_>, r: &StoredUsageOrigin) -> Result<(), StorageError> {
+    for (id, feature) in [(r.feature_id.as_ref(), true), (r.work_id.as_ref(), false)] {
+        if let Some(id) = id {
+            let work = WorkRead::work(unit, id)?.ok_or_else(|| missing("work", id))?;
+            if r.project_id.as_ref().is_some_and(|p| p != &work.project_id)
+                || (feature && work.kind != FEATURE)
+            {
+                return Err(invalid(
+                    "legacy usage source has conflicting known project/feature ownership",
+                ));
+            }
+        }
+    }
+    if let Some(id) = &r.session_id {
+        let session = SessionRead::session(unit, id)?.ok_or_else(|| missing("session", id))?;
+        if r.project_id
+            .as_ref()
+            .is_some_and(|p| Some(p) != session.project_id.as_ref())
+        {
+            return Err(invalid("legacy usage source session project mismatch"));
+        }
+    }
+    if let Some(id) = &r.job_run_id {
+        let run = JobRead::job_run(unit, id)?.ok_or_else(|| missing("job run", id))?;
+        if r.project_id
+            .as_ref()
+            .is_some_and(|p| Some(p) != run.project_id.as_ref())
+        {
+            return Err(invalid("legacy usage source job project mismatch"));
         }
     }
     Ok(())
@@ -913,9 +979,6 @@ impl UsageRepository for Unit<'_> {
         if permitted != *r {
             return Err(invalid("attempt admission binding is immutable"));
         }
-        if old.provider_model_id.is_some() && old.provider_model_id != r.provider_model_id {
-            return Err(invalid("resolved provider model is immutable"));
-        }
         if let Some(v) = &r.provider_model_id {
             bounded(v, 256)?;
         }
@@ -1010,15 +1073,21 @@ impl UsageRepository for Unit<'_> {
         classification(&r.classification)?;
         nonnegative(r.priced_micro_usd)?;
         nonnegative(Some(r.recorded_at_ms))?;
+        validate_origin_scope(self, r)?;
         if let Some(id) = &r.attempt_id {
             let a = attempt(self.conn, id)?.ok_or_else(|| missing("attempt", id))?;
             validate_origin_binding(r, &a)?;
         }
         if let Some(old) = origin(self.conn, &r.source_kind, &r.source_id)? {
-            return if old == *r {
-                Ok(())
-            } else {
-                Err(invalid("immutable usage source collision"))
+            let mut replay = r.clone();
+            replay.attempt_id = old.attempt_id.clone();
+            if old != replay {
+                return Err(invalid("immutable usage source collision"));
+            }
+            return match (&old.attempt_id, &r.attempt_id) {
+                (Some(a), Some(b)) if a != b => Err(invalid("usage origin already bound")),
+                (None, Some(a)) => self.bind_usage_origin(&r.source_kind, &r.source_id, a),
+                _ => Ok(()),
             };
         }
         write_origin(self.conn, r, false)
@@ -1072,8 +1141,19 @@ impl UsageRepository for Unit<'_> {
             "Complete" => Some(3),
             _ => None,
         };
+        if let Some(cursor) = &r.session_after {
+            nonnegative(Some(cursor.sequence))?;
+            if ![1, 3].contains(&cursor.source) {
+                return Err(invalid("invalid session usage source cursor"));
+            }
+            bounded(&cursor.id, 512)?;
+        }
+        if let Some(cursor) = &r.job_after {
+            positive(cursor.seq)?;
+        }
         let next = phase(&r.phase).ok_or_else(|| invalid("invalid bootstrap phase"))?;
-        if next < phase(&old.phase).expect("stored phase")
+        if next > phase(&old.phase).expect("stored phase") + 1
+            || next < phase(&old.phase).expect("stored phase")
             || r.processed < old.processed
             || r.source_sequence < old.source_sequence
             || (r.phase == "Complete") != r.completed_at_ms.is_some()
