@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "date": "2026-11-06",
+  "confidence": "High for the two bounded native feedback corrections and controlled HTTP/owner regressions.",
+  "baseCommit": "175863a98076e636954bf47a7062b1e9009d770c",
+  "reviews": [
+    {
+      "url": "https://github.com/SceneWorks/DevWorks/pull/40#discussion_r4490456382",
+      "problem": "Native HTTP discarded subscription counters/status/reset fields before the trusted response head and downstream cooldown parser.",
+      "change": "Retain only the 15 exact non-secret fields consumed by the existing subscription parser. Unknown prefixed fields stay excluded; decoded total header bytes and count remain bounded.",
+      "red": {
+        "adapter": "Real local HTTP x-codex-primary-used-percent was None instead of 100.",
+        "producer": "Actual NativeStreamingHttp producer retryAtMs was None instead of 1700000037000; no Retry-After or body reset existed.",
+        "producerSeconds": 0.57
+      }
+    },
+    {
+      "url": "https://github.com/SceneWorks/DevWorks/pull/40#discussion_r4490456390",
+      "problem": "A structured ModelUnavailable 403 still invalidated the entire current connection.",
+      "change": "The sink honors the already decoded entitlement_refused classification before current-owner authentication rejection. Native continuation ordering, decoder classification and owner fencing are unchanged.",
+      "red": {
+        "producer": "Codex usage_not_included decoded ModelUnavailable but current lifecycle became ReauthenticationRequired instead of Connected.",
+        "seconds": 0.58
+      }
+    }
+  ],
+  "nativeChecks": [
+    {
+      "name": "Real HTTP consumed subscription headers, secret exclusion and downstream parser",
+      "passed": true
+    },
+    {
+      "name": "Actual total header byte/count bounds",
+      "passed": true
+    },
+    {
+      "name": "Native HTTP -> trusted response head -> NativeSource -> sink -> router cooldown for Codex and Claude; fresh allocation refused",
+      "passed": true,
+      "retryAfter": false,
+      "bodyReset": false,
+      "scriptedHeadBypass": false
+    },
+    {
+      "name": "Both usage_not_included and unsupported_model 403 on Codex and Claude leave current credential/account/health unchanged and complete another actual upstream model on the same endpoint",
+      "passed": true,
+      "modelCases": 4,
+      "falseCooldown": false
+    },
+    {
+      "name": "Genuine API401/403 still require reauthentication and prevent another model send",
+      "passed": true,
+      "statusCases": 2
+    },
+    {
+      "name": "Actual HTTP OAuth401 refreshes current owner once; genuine403 requires reauthentication; failed inference is never replayed",
+      "passed": true,
+      "statusCases": 2
+    },
+    {
+      "name": "Final focused native provider module",
+      "passed": true,
+      "tests": 4,
+      "seconds": 6.53
+    },
+    {
+      "name": "Final focused native adapter tests",
+      "passed": true,
+      "tests": 2,
+      "seconds": 0.03
+    },
+    {
+      "name": "Strict affected adapter library and engine provider test target Clippy",
+      "passed": true
+    },
+    {
+      "name": "Strict adapter test targets Clippy with -D warnings",
+      "passed": true,
+      "seconds": 8.48
+    },
+    {
+      "name": "Formatting and diff checks",
+      "passed": true
+    }
+  ],
+  "execution": "Only loopback HTTP with static response bytes, actual SQLite/native producer/credential owner/router, and a controlled token-exchange port. No live provider API, model compute, inference replay, push or tracker write.",
+  "qualificationBoundary": "The broader PR40 review batch and platform CI remain parent-owned; these tests do not claim full project acceptance."
+}

@@ -586,7 +586,9 @@ impl ProviderSink {
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
         if let Some(access) = self.access.as_ref().filter(|a| {
-            matches!(self.http_status, 401..=403) && !(self.http_status == 401 && a.oauth)
+            !self.entitlement_refused
+                && matches!(self.http_status, 401..=403)
+                && !(self.http_status == 401 && a.oauth)
         }) {
             let store = self.store.clone();
             let current = attempt.clone();
