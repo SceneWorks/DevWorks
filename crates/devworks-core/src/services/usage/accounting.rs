@@ -830,9 +830,8 @@ pub fn observe(
         state.reported_cost = Some(reported.clone());
     }
     if let Some(model) = &observation.provider_model_id {
-        if model.is_empty() || model.len() > 512 || model.chars().any(char::is_control) {
-            return Err(invalid("invalid provider-resolved identity"));
-        }
+        let _: crate::protocol::support::Text = serde_json::from_value(json!(model))
+            .map_err(|_| invalid("invalid provider-resolved identity"))?;
         attempt.provider_model_id = Some(model.clone());
     }
     let mut priced = pricing::estimate(&bound.quote, &state.meter.quantities, &bound.pricing)
