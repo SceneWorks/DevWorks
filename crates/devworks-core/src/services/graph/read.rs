@@ -180,6 +180,29 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Composed views carry provenance; their selected generation manifests carry coverage.
+    pub fn indexes_complete(&self, scope: &GraphScope) -> Result<bool, Failure> {
+        for layer in self.selected.layers.iter().filter(|layer| {
+            scope
+                .views
+                .iter()
+                .any(|view| view.view_id == layer.view.view_id)
+        }) {
+            for id in &layer.layers {
+                let generation = self
+                    .read
+                    .indexing()
+                    .generation(id)?
+                    .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
+                let (state, _) =
+                    crate::services::indexing::status::manifest_coverage(&generation.manifest);
+                if !matches!(state, crate::protocol::data::CoverageState::Complete) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
     pub fn with_indexing(
         mut self,
         indexing: Option<&'a crate::services::indexing::IndexEnv>,
