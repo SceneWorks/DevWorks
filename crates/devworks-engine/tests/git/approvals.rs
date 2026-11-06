@@ -1,5 +1,219 @@
 use super::*;
 
+pub(super) fn assert_reviewed_commit(
+    h: &Harness,
+    store: Arc<dyn ApplicationStore>,
+    services: (Arc<GitService>, Arc<ArtifactService>),
+    gateway: &Gateway<'_>,
+    host: &devworks_core::context::InvocationContext,
+    tree: &StoredGitWorktree,
+    case: ReviewedCommitCase,
+) {
+    use devworks_core::protocol::{ActorId, ProjectId};
+    let (service, artifacts) = services;
+    let worker = ActorId(id("reviewed-commit-worker"));
+    let host = host.clone();
+    let tree_id = tree.id.clone();
+    let actor = worker.clone();
+    write(&*store, move |tx| {
+        tx.actors()
+            .register(&actor, PrincipalKind::Agent, "Reviewed commit worker")?;
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &host,
+            NewPrincipalBinding {
+                actor: actor.clone(),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: Some(ProjectId(id("project"))),
+                tool_families: None,
+                bound_by: host.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        let mut row = tx.git().git_worktree(&tree_id)?.unwrap();
+        let prior = row.revision;
+        row.owner = actor;
+        row.revision += 1;
+        row.ownership_revision += 1;
+        tx.git().update_git_worktree(&row, prior)
+    })
+    .unwrap();
+    let agent = principal(&*store, "reviewed-commit-worker", PrincipalKind::Agent).with_lineage(
+        Some(ProjectId(id("project"))),
+        Some(devworks_core::protocol::RootId(id("task"))),
+        None,
+    );
+    let path = Path::new(&tree.path);
+    std::fs::write(path.join("reviewed.txt"), "exact approved contents\n").unwrap();
+    let marker = path.join("review-hook-marker");
+    let hook = "#!/bin/sh\nif test -e review-hook-marker; then exit 0; fi\nprintf ran > review-hook-marker\nprintf injected > injected.txt\ngit add injected.txt\n";
+    let install = |event: &str| {
+        let destination = git(
+            path,
+            &["rev-parse", "--git-path", &format!("hooks/{event}")],
+        );
+        let destination = if Path::new(&destination).is_absolute() {
+            destination.into()
+        } else {
+            path.join(destination)
+        };
+        std::fs::write(&destination, hook).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    match case {
+        ReviewedCommitCase::PreCommit => install("pre-commit"),
+        ReviewedCommitCase::PostIndex => install("post-index-change"),
+        ReviewedCommitCase::ConfiguredPreCommit => {
+            git(path, &["config", "hook.malicious.event", "pre-commit"]);
+            git(
+                path,
+                &[
+                    "config",
+                    "hook.malicious.command",
+                    "printf ran > review-hook-marker; printf injected > injected.txt; git add injected.txt",
+                ],
+            );
+        }
+        ReviewedCommitCase::Signer => {
+            let signer = h.root.join("unreviewed-signer");
+            std::fs::write(
+                &signer,
+                "#!/bin/sh\nprintf ran > review-hook-marker\nexit 1\n",
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            git(path, &["config", "commit.gpgSign", "true"]);
+            git(path, &["config", "gpg.program", signer.to_str().unwrap()]);
+        }
+        _ => {}
+    }
+    let message = "\nExact reviewed message   \n\nBody   \n";
+    let reference = artifacts
+        .publish_evidence(
+            &*store,
+            devworks_core::services::artifacts::evidence::Evidence {
+                scope: ArtifactScope::Project(ProjectId(id("project"))),
+                producer: worker,
+                principal_kind: "Agent".into(),
+                agent_session: None,
+                root: agent.root_id().cloned(),
+                assignment: None,
+                title: "Reviewed message".into(),
+                media_type: "text/plain".into(),
+                tags: vec![],
+                source: serde_json::json!({"kind":"TestMessage"}),
+            },
+            message.as_bytes(),
+            |_, _| Ok(()),
+        )
+        .unwrap()
+        .0;
+    let frame = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"reviewed-commit",
+        "command":{"kind":"Commit","worktreeId":tree.id,"expectedHead":tree.head,"message":reference}});
+    let operation = approve_owned_force(h, store.clone(), service.clone(), gateway, &agent, &frame);
+    assert!(!marker.exists(), "preparation executed a helper: {case:?}");
+    if matches!(case, ReviewedCommitCase::ChangedHookNames) {
+        git(path, &["config", "hook.late.event", "pre-commit"]);
+        git(
+            path,
+            &[
+                "config",
+                "hook.late.command",
+                "printf ran > review-hook-marker",
+            ],
+        );
+    }
+    let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
+    let result = service.execute(&record);
+    assert!(
+        !marker.exists(),
+        "reviewed commit executed an unreviewed helper: {case:?}: {result:?}"
+    );
+    if matches!(
+        case,
+        ReviewedCommitCase::UnexpectedTree | ReviewedCommitCase::UnexpectedMessage
+    ) {
+        assert!(
+            matches!(
+                result,
+                devworks_core::services::git::EffectOutcome::Unknown(_)
+            ),
+            "{case:?}: {result:?}"
+        );
+        let head = git(path, &["rev-parse", "HEAD"]);
+        assert!(matches!(
+            service.observe(&record),
+            devworks_core::services::git::EffectOutcome::Unknown(_)
+        ));
+        assert_eq!(
+            git(path, &["rev-parse", "HEAD"]),
+            head,
+            "reconciliation cannot repeat a commit"
+        );
+        assert_eq!(
+            read(&*store, |s| s.git().git_worktree(&tree.id))
+                .unwrap()
+                .pending_operation_id,
+            Some(operation)
+        );
+    } else if matches!(case, ReviewedCommitCase::ChangedHookNames) {
+        assert!(
+            matches!(
+                result,
+                devworks_core::services::git::EffectOutcome::Failed(_)
+            ),
+            "{result:?}"
+        );
+        assert_eq!(git(path, &["rev-parse", "HEAD"]), tree.head.hex);
+    } else {
+        assert!(
+            matches!(
+                result,
+                devworks_core::services::git::EffectOutcome::Completed(_)
+            ),
+            "{case:?}: {result:?}"
+        );
+        assert_eq!(
+            git(
+                path,
+                &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+            ),
+            "reviewed.txt"
+        );
+        assert!(!path.join("injected.txt").exists());
+        assert_eq!(
+            git(
+                path,
+                &["rev-list", "--count", &format!("{}..HEAD", tree.head.hex)]
+            ),
+            "1"
+        );
+        let raw = Command::new("git")
+            .args(["cat-file", "commit", "HEAD"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(raw.stdout)
+                .unwrap()
+                .split_once("\n\n")
+                .unwrap()
+                .1,
+            message
+        );
+    }
+}
+
 #[test]
 fn saved_commit_manifest_honors_repository_filemode_for_new_files() {
     for honor_mode in [false, true] {
@@ -92,11 +306,25 @@ fn saved_commit_manifest_honors_repository_filemode_for_new_files() {
 
 #[test]
 fn saved_commit_manifest_binds_dirty_contents_and_matches_actual_staging() {
+    assert_saved_manifest_matches_staging(None);
+}
+
+#[test]
+fn saved_commit_manifest_is_independent_of_configured_diff_prefixes() {
+    for key in ["diff.mnemonicPrefix", "diff.noprefix"] {
+        assert_saved_manifest_matches_staging(Some(key));
+    }
+}
+
+fn assert_saved_manifest_matches_staging(prefix_setting: Option<&str>) {
     let h = Harness::new();
     let store = h.open();
     let dir = h.root.join("manifest");
     std::fs::create_dir(&dir).unwrap();
     git(&dir, &["init", "-b", "main"]);
+    if let Some(key) = prefix_setting {
+        git(&dir, &["config", key, "true"]);
+    }
     std::fs::write(dir.join("tracked"), "initial\n").unwrap();
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-m", "initial"]);
@@ -150,6 +378,14 @@ fn saved_commit_manifest_binds_dirty_contents_and_matches_actual_staging() {
         capture.staged_commit_manifest(&dir, &head).unwrap(),
         changed
     );
+    git(&dir, &["commit", "-m", "reviewed contents"]);
+    let committed = git(&dir, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        capture
+            .committed_commit_manifest(&dir, &head, &committed)
+            .unwrap(),
+        changed
+    );
 }
 
 pub(super) fn approve_owned_force(
@@ -168,6 +404,11 @@ pub(super) fn approve_owned_force(
             ApprovalCatalog, ApprovalService, ResumePreparation, owner_preview::NativeOwnerPreviews,
         },
         runs::ControlService,
+    };
+    let operation = if force["command"]["kind"] == "Commit" {
+        "git.commit"
+    } else {
+        "git.push"
     };
     let human = principal(&*store, "git-reviewer", PrincipalKind::Human);
     let outsider = principal(&*store, "unowned-force-worker", PrincipalKind::Agent);
@@ -193,21 +434,27 @@ pub(super) fn approve_owned_force(
         outsider.with_lineage(agent.project_id().cloned(), agent.root_id().cloned(), None);
     let mut unowned = force.clone();
     unowned["requestKey"] = serde_json::json!("unowned-force-no-grant");
-    let denied = gateway
-        .command(
-            &outsider,
-            "git.push",
-            &serde_json::to_vec(&unowned).unwrap(),
-            service.clone(),
+    let denied = if operation == "git.push" {
+        Some(
+            gateway
+                .command(
+                    &outsider,
+                    "git.push",
+                    &serde_json::to_vec(&unowned).unwrap(),
+                    service.clone(),
+                )
+                .unwrap(),
         )
-        .unwrap();
+    } else {
+        None
+    };
     assert!(
         matches!(
             denied,
-            CommandReply::Rejected {
+            None | Some(CommandReply::Rejected {
                 code: devworks_core::protocol::Rejection::PermissionDenied,
                 ..
-            }
+            })
         ),
         "unowned Full force must require separate operation consent: {denied:?}"
     );
@@ -230,11 +477,11 @@ pub(super) fn approve_owned_force(
     let cases = cases.with_approvals(approvals.clone());
     let input = serde_json::json!({"command":force["command"]});
     let request =
-        devworks_core::services::approvals::requests::decode("git.push", 1, &input, true).unwrap();
+        devworks_core::services::approvals::requests::decode(operation, 1, &input, true).unwrap();
     let tree_id: devworks_core::protocol::Id =
         serde_json::from_value(input["command"]["worktreeId"].clone()).unwrap();
     let tree = read(&*store, |s| s.git().git_worktree(&tree_id)).unwrap();
-    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"saved-owned-force-proposal","schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":"git.push","target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact force push","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
+    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"saved-owned-force-proposal","schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":operation,"target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact reviewed Git operation","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
     let reply = cases
         .command(gateway, agent, "approvals.propose", &propose)
         .unwrap();
@@ -284,12 +531,7 @@ pub(super) fn approve_owned_force(
     assert_eq!(command.context.principal(), agent.principal());
     assert_eq!(command.context.principal_kind(), PrincipalKind::Agent);
     let reply = gateway
-        .command(
-            &command.context,
-            "git.push",
-            &command.frame,
-            service.clone(),
-        )
+        .command(&command.context, operation, &command.frame, service.clone())
         .unwrap();
     let operation = match &reply {
         CommandReply::Recorded { receipt, .. } => match &receipt.decision {
@@ -310,7 +552,12 @@ pub(super) fn approve_owned_force(
     assert_eq!(grant.kind, GrantKind::NativeExecution);
     assert_eq!(grant.uses_remaining, Some(0));
     let replay = gateway
-        .command(&command.context, "git.push", &command.frame, service)
+        .command(
+            &command.context,
+            request.descriptor.name,
+            &command.frame,
+            service,
+        )
         .unwrap();
     assert!(
         matches!(replay, CommandReply::Recorded { replayed: true, .. }),
@@ -320,7 +567,7 @@ pub(super) fn approve_owned_force(
         read(&*store, |s| s.authority().authority_grant(&grant.id)).unwrap(),
         grant
     );
-    assert_eq!(row.principal, ActorId(id("force-worker")));
+    assert_eq!(&row.principal, agent.principal());
     operation
 }
 

@@ -260,7 +260,9 @@ impl Git<'_> {
         spec.env.extend(vec![
             ("GIT_CONFIG_COUNT".into(), "2".into()),
             ("GIT_CONFIG_KEY_0".into(), "core.fsmonitor".into()),
-            ("GIT_CONFIG_VALUE_0".into(), "false".into()),
+            // Empty disables fsmonitor on the supported Git 2.31 floor too; older Git
+            // interprets the nonempty string "false" as a monitor command pathname.
+            ("GIT_CONFIG_VALUE_0".into(), String::new()),
             // v0/v1 hide non-HEAD symbolic refs. Local and qualified GitHub transports must
             // request v2 so a task-name alias cannot conceal a protected destination.
             ("GIT_CONFIG_KEY_1".into(), "protocol.version".into()),
@@ -316,6 +318,97 @@ impl Git<'_> {
             operation,
             approved_hold,
         )?)
+    }
+
+    /// Names only: hook command bodies may contain secrets and never enter approval evidence.
+    pub fn reviewed_commit_policy(&self, dir: &Path) -> Result<serde_json::Value, GitFault> {
+        let output = match self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                "^hook\\..*\\.(event|command|parallel|enabled)$",
+            ],
+            64 * 1024,
+        ) {
+            Ok(bytes) => bytes,
+            Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        let mut names = std::collections::BTreeSet::new();
+        for key in output.split(|b| *b == 0).filter(|key| !key.is_empty()) {
+            let key = std::str::from_utf8(key).map_err(|_| GitFault::Unqualified)?;
+            let name = key
+                .strip_prefix("hook.")
+                .and_then(|key| key.rsplit_once('.'))
+                .map(|(name, _)| name)
+                .ok_or(GitFault::Unqualified)?;
+            if name.is_empty() || name.len() > 4096 || name.chars().any(char::is_control) {
+                return Err(GitFault::Unqualified);
+            }
+            names.insert(name.to_owned());
+            if names.len() > 256 {
+                return Err(GitFault::Unqualified);
+            }
+        }
+        Ok(serde_json::json!({"gitVersion":self.version(dir)?,"hookNames":names}))
+    }
+
+    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
+    /// The current hook-name/version witness is checked on either side of every index write.
+    pub(crate) fn reviewed_mutation(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        operation: &OperationId,
+        expected: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        if &policy != expected {
+            return Err(GitFault::SourceChanged);
+        }
+        let mut spec = self.spec(dir, args, stdin);
+        let mut overrides = vec![
+            ("core.hooksPath".to_owned(), "/dev/null".to_owned()),
+            ("commit.gpgSign".to_owned(), "false".to_owned()),
+        ];
+        for name in policy["hookNames"]
+            .as_array()
+            .ok_or(GitFault::Unqualified)?
+        {
+            let name = name.as_str().ok_or(GitFault::Unqualified)?;
+            overrides.push((format!("hook.{name}.event"), String::new()));
+            overrides.push((format!("hook.{name}.enabled"), "false".to_owned()));
+        }
+        let mut count = 2;
+        for (key, value) in overrides {
+            spec.env.push((format!("GIT_CONFIG_KEY_{count}"), key));
+            spec.env.push((format!("GIT_CONFIG_VALUE_{count}"), value));
+            count += 1;
+        }
+        spec.env
+            .iter_mut()
+            .find(|(key, _)| key == "GIT_CONFIG_COUNT")
+            .expect("fixed helper configuration")
+            .1 = count.to_string();
+        let result = self.runner.run_recorded(
+            self.ctx,
+            spec,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 1024 * 1024,
+            },
+            self.stop,
+            operation,
+            false,
+        )?;
+        if self.reviewed_commit_policy(dir)? != policy {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(result)
     }
 
     /// Resolve one literal ref, with no revision-expression interpretation.
@@ -505,12 +598,13 @@ impl Git<'_> {
         if !oid_ok(head) {
             return Err(GitFault::Malformed("invalid commit ID".into()));
         }
-        let bytes = self.run(
-            dir,
-            &["show", "--no-patch", "--format=%B", head],
-            64 * 1024 + 1024,
-        )?;
-        String::from_utf8(bytes).map_err(|_| GitFault::Malformed("commit message encoding".into()))
+        let bytes = self.run(dir, &["cat-file", "commit", head], 64 * 1024 + 1024)?;
+        let body = bytes
+            .windows(2)
+            .position(|w| w == b"\n\n")
+            .ok_or_else(|| GitFault::Malformed("commit headers".into()))?;
+        String::from_utf8(bytes[body + 2..].to_vec())
+            .map_err(|_| GitFault::Malformed("commit message encoding".into()))
     }
 
     /// Parents of an exact commit object (never a revision expression).
@@ -920,8 +1014,8 @@ impl Git<'_> {
     /// Patches are captured twice; a changing source is never presented as one stable review.
     /// No temporary index, staging, object write or source-file publication occurs here.
     pub fn commit_manifest(&self, dir: &Path, base: &str) -> Result<serde_json::Value, GitFault> {
-        let first = self.capture_commit_manifest(dir, base, false)?;
-        if self.capture_commit_manifest(dir, base, false)? != first {
+        let first = self.capture_commit_manifest(dir, base, false, None)?;
+        if self.capture_commit_manifest(dir, base, false, None)? != first {
             return Err(GitFault::SourceChanged);
         }
         Ok(first)
@@ -933,8 +1027,25 @@ impl Git<'_> {
         dir: &Path,
         base: &str,
     ) -> Result<serde_json::Value, GitFault> {
-        let first = self.capture_commit_manifest(dir, base, true)?;
-        if self.capture_commit_manifest(dir, base, true)? != first {
+        let first = self.capture_commit_manifest(dir, base, true, None)?;
+        if self.capture_commit_manifest(dir, base, true, None)? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    /// The actual committed tree changes, in the same representation as the reviewed source.
+    /// Reading fixed object IDs proves contents independently of the current worktree/index.
+    pub fn committed_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<serde_json::Value, GitFault> {
+        if !oid_ok(head) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        let first = self.capture_commit_manifest(dir, base, false, Some(head))?;
+        if self.capture_commit_manifest(dir, base, false, Some(head))? != first {
             return Err(GitFault::SourceChanged);
         }
         Ok(first)
@@ -944,12 +1055,24 @@ impl Git<'_> {
         dir: &Path,
         base: &str,
         staged: bool,
+        committed: Option<&str>,
     ) -> Result<serde_json::Value, GitFault> {
         if !oid_ok(base) {
             return Err(GitFault::Malformed("commit".into()));
         }
         const BOUND: usize = 16 * 1024 * 1024;
-        let before = self.revision_observation(dir)?;
+        let execution_policy = self.reviewed_commit_policy(dir)?;
+        let observe = || {
+            if committed.is_some() {
+                self.head_observation(dir)
+            } else {
+                self.revision_observation(dir)
+            }
+        };
+        let before = observe()?;
+        if committed.is_some_and(|head| head != before.head) {
+            return Err(GitFault::SourceChanged);
+        }
         let mut args = vec!["diff"];
         if staged {
             args.push("--cached");
@@ -962,8 +1085,9 @@ impl Git<'_> {
             "--name-only",
             "-z",
             base,
-            "--",
         ]);
+        args.extend(committed);
+        args.push("--");
         let changed = self.run(dir, &args, MAX_LISTING_BYTES)?;
         let mut paths = std::collections::BTreeMap::new();
         for raw in changed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
@@ -971,7 +1095,7 @@ impl Git<'_> {
                 path_of(raw).ok_or_else(|| GitFault::Malformed("tracked approval path".into()))?;
             paths.insert(path, false);
         }
-        if !staged {
+        if !staged && committed.is_none() {
             let untracked = self.run(
                 dir,
                 &["ls-files", "-z", "--others", "--exclude-standard"],
@@ -1011,6 +1135,8 @@ impl Git<'_> {
                             "--no-textconv",
                             "--binary",
                             "--no-renames",
+                            "--src-prefix=a/",
+                            "--dst-prefix=b/",
                             "--",
                             "/dev/null",
                             &path,
@@ -1034,10 +1160,12 @@ impl Git<'_> {
                     "--no-textconv",
                     "--binary",
                     "--no-renames",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
                     base,
-                    "--",
-                    &path,
                 ]);
+                args.extend(committed);
+                args.extend(["--", &path]);
                 self.run(dir, &args, BOUND)?
             };
             // No-index diff uses raw filesystem modes. Git add ignores a new regular file's
@@ -1060,11 +1188,21 @@ impl Git<'_> {
                 "sha256":crate::fingerprint::sha256_hex(&bytes),"byteLength":bytes.len()}),
             );
         }
-        let after = self.revision_observation(dir)?;
-        if before.head != after.head || before.branch != after.branch {
+        let after = observe()?;
+        if before.head != after.head
+            || before.branch != after.branch
+            || self.reviewed_commit_policy(dir)? != execution_policy
+        {
             return Err(GitFault::SourceChanged);
         }
-        Ok(serde_json::json!({"head":before.head,"branch":before.branch,"files":files}))
+        let base_head = if committed.is_some() {
+            base
+        } else {
+            &before.head
+        };
+        Ok(
+            serde_json::json!({"head":base_head,"branch":before.branch,"executionPolicy":execution_policy,"files":files}),
+        )
     }
 
     /// Staged and unstaged changes of a worktree against `base` (its `HEAD`, or the empty tree

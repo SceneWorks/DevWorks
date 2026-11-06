@@ -597,7 +597,7 @@ pub(super) fn compact_commit_manifest(manifest: &Value) -> Result<Value, Failure
         .as_array()
         .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "commit_manifest", None))?;
     Ok(
-        json!({"head":manifest["head"],"branch":manifest["branch"],"sha256":crate::fingerprint::sha256_hex(bytes.as_bytes()),
+        json!({"head":manifest["head"],"branch":manifest["branch"],"executionPolicy":manifest["executionPolicy"],"sha256":crate::fingerprint::sha256_hex(bytes.as_bytes()),
         "byteLength":bytes.len(),"fileCount":files.len()}),
     )
 }
