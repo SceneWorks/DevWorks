@@ -336,6 +336,13 @@ fn reviewed_commit_refuses_changed_hook_name_witness_before_dispatch() {
 }
 
 fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase>) {
+    native_task_lifecycle_with_create(with_pr, reviewed_case, None);
+}
+fn native_task_lifecycle_with_create(
+    with_pr: bool,
+    reviewed_case: Option<ReviewedCommitCase>,
+    reviewed_create: Option<worktree_hooks::CreateCase>,
+) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
     use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
@@ -500,6 +507,18 @@ fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase
         ids: &*h.ids,
     };
     let frame = serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"create-tree","body":{"kind":"git.worktree","repositoryId":"repo","workId":"task","expectedRevision":"1","action":"Create","base":{"format":"Sha1","hex":head},"registeredRootId":"owned-root"}});
+    if let Some(case) = reviewed_create {
+        worktree_hooks::assert_reviewed_create(
+            &h,
+            store.clone(),
+            service.clone(),
+            &gateway,
+            &ctx,
+            (&source, &frame),
+            case,
+        );
+        return;
+    }
     if !with_pr && reviewed_case.is_none() {
         let mut cancelled = frame.clone();
         cancelled["requestKey"] = serde_json::json!("cancel-create");
@@ -1354,3 +1373,6 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
 
 #[path = "git/approvals.rs"]
 mod approvals;
+
+#[path = "git/worktree_hooks.rs"]
+mod worktree_hooks;

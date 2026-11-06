@@ -200,11 +200,13 @@ impl GitService {
             }
             OperationInput::Git(ops::Input::Worktree(i)) => {
                 let root = self.approval_root_witness(&i.registered_root_id)?;
-                (
-                    json!({"registeredRootId":i.registered_root_id,"rootWitness":root,"base":i.base,"action":i.action}),
-                    None,
-                    Value::Null,
-                )
+                let mut native = json!({"registeredRootId":i.registered_root_id,"rootWitness":root,"base":i.base,"action":i.action});
+                if matches!(i.action, GitActionKind::Create) {
+                    native["executionPolicy"] = git
+                        .reviewed_commit_policy(target.path())
+                        .map_err(|e| read_failure(e, &repository.id))?;
+                }
+                (native, None, Value::Null)
             }
             _ => {
                 return Err(Refusal::new(

@@ -705,6 +705,14 @@ impl GitService {
         if observation.branch.as_deref() != Some(&job.tree.branch) {
             return EffectOutcome::Unknown("owned branch changed".into());
         }
+        if matches!(job.action, Action::Create)
+            && job.reviewed_binding.is_some()
+            && (observation.head != job.tree.head.hex || observation.dirty)
+        {
+            return EffectOutcome::Unknown(
+                "reviewed worktree checkout is not complete at its exact base".into(),
+            );
+        }
         let repository = match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot.projects().repository(&job.tree.repository_id)
         }) {
@@ -1019,24 +1027,91 @@ impl GitService {
                     Err(_) => return denied("repository worktrees cannot be verified"),
                     _ => {}
                 }
-                git.mutation(
-                    Path::new(&repository.location),
-                    &[
-                        "worktree",
-                        "add",
-                        "-b",
-                        job.tree
+                let args = [
+                    "worktree",
+                    "add",
+                    "-b",
+                    job.tree
+                        .branch
+                        .strip_prefix("refs/heads/")
+                        .expect("validated branch"),
+                    "--",
+                    &destination,
+                    &job.tree.head.hex,
+                ];
+                if let Some(binding) = &job.reviewed_binding {
+                    // worktree add -b internally launches branch/reset children. Execute
+                    // those exact builtins separately so every step keeps the child ban.
+                    (|| -> Result<Vec<u8>, GitFault> {
+                        let repository_path = Path::new(&repository.location);
+                        let branch = job
+                            .tree
                             .branch
                             .strip_prefix("refs/heads/")
-                            .expect("validated branch"),
-                        "--",
-                        &destination,
-                        &job.tree.head.hex,
-                    ],
-                    None,
-                    &operation.id,
-                    false,
-                )
+                            .expect("validated branch");
+                        let policy = &binding["native"]["executionPolicy"];
+                        git.reviewed_mutation(
+                            repository_path,
+                            &["branch", "--", branch, &job.tree.head.hex],
+                            None,
+                            &operation.id,
+                            policy,
+                        )?;
+                        git.reviewed_mutation(
+                            repository_path,
+                            &[
+                                "worktree",
+                                "add",
+                                "--no-checkout",
+                                "--",
+                                &destination,
+                                branch,
+                            ],
+                            None,
+                            &operation.id,
+                            policy,
+                        )?;
+                        let location = self.resolve_location(&git, &repository, &job.tree)?;
+                        if self
+                            .approval_root_witness(&job.tree.registered_root_id)
+                            .ok()
+                            .as_ref()
+                            != Some(&binding["native"]["rootWitness"])
+                            || git.head(path)?.as_deref() != Some(job.tree.head.hex.as_str())
+                            || git.branch(path)?.as_deref() != Some(job.tree.branch.as_str())
+                        {
+                            return Err(GitFault::SourceChanged);
+                        }
+                        // Conditional config can legitimately differ in the newly created
+                        // Git directory. Preserve the qualified binary identity and bind the
+                        // current target hook policy; no hook acquires execution authority.
+                        let target_policy = git.reviewed_commit_policy(path)?;
+                        if target_policy["gitProgram"] != policy["gitProgram"]
+                            || target_policy["gitVersion"] != policy["gitVersion"]
+                        {
+                            return Err(GitFault::SourceChanged);
+                        }
+                        let result = git.reviewed_mutation(
+                            path,
+                            &["checkout", "--no-recurse-submodules", branch],
+                            None,
+                            &operation.id,
+                            &target_policy,
+                        )?;
+                        if self.resolve_location(&git, &repository, &job.tree)? != location {
+                            return Err(GitFault::SourceChanged);
+                        }
+                        Ok(result)
+                    })()
+                } else {
+                    git.mutation(
+                        Path::new(&repository.location),
+                        &args,
+                        None,
+                        &operation.id,
+                        false,
+                    )
+                }
             }
             Action::Inspect => Ok(vec![]),
             Action::PullRequest { .. } => {
