@@ -16983,7 +16983,7 @@ pub enum DomainQuery {
         selection: Option<ConventionResourcesSelection>,
     },
     #[serde(rename = "conventions.read")]
-    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId"]}, {"required": ["kind", "slug"], "x-since": 3}, {"required": ["kind", "operationId"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId"]}, {"required": ["kind", "slug"], "x-since": 3}, {"required": ["kind", "operationId"], "x-since": 3}, {"required": ["kind", "path"], "x-since": 3}]))]
     ConventionsRead {
         #[serde(
             default,
@@ -17057,6 +17057,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "Counter", extend("x-since" = 3))]
         max_bytes: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<GraphText>", extend("x-since" = 3, "minItems" = 1, "maxItems" = 4, "items" = {"type": "string", "maxLength": 200}))]
+        path: Option<Items<GraphText>>,
     },
     #[serde(rename = "conventions.version")]
     ConventionsVersion {
@@ -18429,6 +18436,7 @@ impl Check for DomainQuery {
                 operation_id,
                 resource_id,
                 max_bytes,
+                path,
             } => {
                 convention_id.check()?;
                 revision.check()?;
@@ -18441,6 +18449,7 @@ impl Check for DomainQuery {
                 operation_id.check()?;
                 resource_id.check()?;
                 max_bytes.check()?;
+                path.check()?;
             }
             Self::ConventionsVersion {
                 convention_id,
@@ -19178,6 +19187,7 @@ impl Revisioned for DomainQuery {
                 operation_id,
                 resource_id,
                 max_bytes,
+                path,
                 ..
             } => {
                 if revision < 3 {
@@ -19206,6 +19216,9 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *max_bytes = None;
+                }
+                if revision < 3 {
+                    *path = None;
                 }
             }
             Self::ConventionsVersion { scope, .. } => {

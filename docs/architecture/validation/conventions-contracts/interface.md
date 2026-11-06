@@ -2,7 +2,7 @@
 
 Source baseline: `2a11778746c8cce09b4c7fe3821502bdb2ad2685`. Retained reference:
 CodeGraph `afe73560215bbe7593fc59451de5cc3237e3eeca`.
-This is a compiling interface foundation, not completed service acceptance. CONV-01 remains
+This records the assembled native interface, not completed integrated acceptance. CONV-01 remains
 Confirmed and CONV-02 remains Proposed. The root delivery owns tracker and publication.
 
 The existing 13 operation names are retained. Revision 3 uses dedicated convention DTOs;
@@ -13,16 +13,16 @@ never means approved; an unrepresentable legacy title or view is refused without
 | Operation | Current semantics/interface |
 |---|---|
 | list | Scoped, applicability/lifecycle-filtered catalog and exact scope revision |
-| read | ID or scoped exact/unique-fuzzy slug, exact historical revision, bounded Markdown/Raw/Manifest/SectionPath passage |
+| read | ID, scoped root-exact/unique-fuzzy slug, or separate exact literal hierarchical path; historical revision and bounded Markdown/Raw/Manifest/SectionPath or binary resource pages |
 | edit | Existing content reference and owner CAS, plus optional title/slug/parent/order/raw/resource changes |
 | version | Immutable owner snapshots with current and historical visibility |
 | applicability | Applicability labels and explicit Active/Retired transition; Deleted is not an activation choice |
-| retire | Owner or exact named resource retirement; authored bytes/references remain retained |
-| index | One exact owner/resource revision, or all documents of an explicitly named scope at its scope revision |
+| retire | Owner retirement or scoped cancellation of an actual owned import/index operation; authored bytes/references remain retained |
+| index | One exact owner body revision, or all document bodies of an explicitly named scope at its scope revision; attachment bodies are never extracted or embedded |
 | import | Explicit portable versioned manifest artifact and exact registered schema; creates a convention without foreign author authority |
-| delete | Owner or exact resource deletion, preserving truthful metadata/history and independent caller artifacts |
+| delete | Owner/subtree deletion, preserving truthful metadata/history and independent caller artifacts |
 | move | Source CAS plus independently authorized destination, parent/order and historical resource association |
-| resources | Exact owner/version or scoped resource listing, distinct identities/lifecycle/content references |
+| resources | Virtual document catalog, exact root-slug document view, or separate exact-owner/version attachment metadata listing |
 | delete_resource | Exact registered resource ID and owning convention CAS |
 | search | Actual matched source revision/chunk, excerpt, score and explicit lexical/hybrid availability/coverage |
 
@@ -31,15 +31,33 @@ existing invocation's project/general view. Workspace scope means general guidan
 implicit enumeration of other projects. SQL scope filters precede materialization/ranking.
 Moving a record must not grant access to its old project content or resources.
 
-`ConventionSectionPath` contains exactly one bounded inline text or a real immutable artifact
-reference. `read` with format `SectionPath` additionally requires its exact generation/chunk
-selector and owning convention; callers cannot submit arbitrary artifact references. This gives
-Conventions-only readers bounded access without broader artifact-tool permission or a fabricated
-Host invocation. History, lifecycle, scope, source and generation fences remain owning checks.
+`ReadInput.path` is optional in revision 3 and exclusive with ID, slug and operation
+selectors. It requires an explicit scope and 1–4 literal components of at most
+200 Unicode scalar values each. Empty, whitespace, NUL and slash-containing
+components remain literal. This preserves the HTTP hierarchy surface separately
+from the MCP tool's literal root-exact then unique-fuzzy slug/title lookup. Virtual
+resource document reads use only the exact root slug. No selector silently changes
+from an exact hierarchy into a fuzzy match.
+
+The existing shared Knowledge policy remains in force: an explicit Project read
+inherits Workspace and that Project's readable guidance. It does not enumerate
+other projects. Duplicate matching roots in those inherited scopes are ambiguous;
+parent IDs then bind each exact hierarchical step. This is the existing policy,
+not a new visibility bypass.
+
+`ConventionSectionPath` contains exactly one bounded inline text or source-backed
+descriptor: the actual immutable indexed body reference, captured owner revision,
+and at most three original UTF-8 heading spans. Small Content-valid headings may
+be cached once per section; source spans are always retained. Full breadcrumbs are
+never copied into per-result artifacts or per-chunk strings. `read` with format
+`SectionPath` requires the exact generation/chunk selector and owning convention.
+The same Conventions authority streams exact rendered passages without a broader
+artifact-tool permission or fabricated Host invocation. History, lifecycle, scope,
+source, generation, cursor bounds and controlled cancellation remain owning checks.
 
 Passages are bounded verbatim `GraphText`: source-legal NUL and UTF-8 are preserved. Both byte
 and requested Unicode-character ceilings apply, with exact continuation. Source documents are
-not limited to one response passage. Metadata retains the actual 500/200-character title/slug
+not limited to one response passage. Metadata retains the actual nonblank 500-character title and verbatim 0–200-character slug
 and signed 32-bit ordering constraints; these are data labels, not filesystem paths.
 
 The registered portable format is `docs/architecture/imports/convention-manifest.v1.schema.json`.
@@ -56,3 +74,16 @@ routed/accounted inference outside SQL snapshots/writers. Normal tests use recor
 local recorded-response transport, with no learned compute. No compatible configured route/space
 means explicit lexical fallback, not a claimed hybrid result. Scheduled empty requests capture
 current scope/targets before first admission and preserve the exact frame across lost ACK/replay.
+
+Search indexes only current Active convention body text. Retired/deleted entries
+remain available through authorized catalog/history operations, without an invented
+historical RAG filter. Actual attachment links remain ordinary indexed body text;
+attachment bytes are never dereferenced for indexing. Optional retrieval custody
+fields expose only the genuine protected embedding request/preparation operation.
+A confirmation retains the exact original query ID/frame; changed source or
+configuration refuses before new admission. No reason string is an authority token.
+
+Creation order in the portable format is optional; see [the source-bound order
+qualification](portable-order.md). Omission resolves inside atomic publication from
+the actual scoped sibling maximum (empty maximum -1), preserving first 0, explicit
+zero and signed 32-bit unchecked wrapping.

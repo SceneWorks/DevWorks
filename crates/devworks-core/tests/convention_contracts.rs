@@ -167,3 +167,35 @@ fn virtual_documents_and_attachments_have_distinct_closed_selectors() {
     body["selection"]["rootSlug"] = json!("not-an-attachment");
     assert!(!decode("conventions.resources", Mode::Query, 3, body));
 }
+
+#[test]
+fn exact_path_is_current_only_literal_scoped_and_exclusive() {
+    let body = json!({"kind":"conventions.read","scope":{"kind":"Workspace"},"path":["","a/b\0"," ","x".repeat(200)]});
+    assert!(decode("conventions.read", Mode::Query, 3, body.clone()));
+    for revision in [1, 2] {
+        assert!(!decode(
+            "conventions.read",
+            Mode::Query,
+            revision,
+            body.clone()
+        ));
+    }
+    for other in ["conventionId", "slug", "operationId"] {
+        let mut invalid = body.clone();
+        invalid[other] = json!("actual-id");
+        assert!(!decode("conventions.read", Mode::Query, 3, invalid));
+    }
+    for path in [
+        json!([]),
+        json!(["a", "b", "c", "d", "e"]),
+        json!(["x".repeat(201)]),
+        serde_json::Value::Null,
+    ] {
+        let mut invalid = body.clone();
+        invalid["path"] = path;
+        assert!(!decode("conventions.read", Mode::Query, 3, invalid));
+    }
+    let mut invalid = body;
+    invalid.as_object_mut().unwrap().remove("scope");
+    assert!(!decode("conventions.read", Mode::Query, 3, invalid));
+}

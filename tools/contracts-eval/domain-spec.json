@@ -7960,7 +7960,8 @@
         "section_path": "?ConventionIndexedPath",
         "operation_id": "?OperationId",
         "resource_id": "?Id",
-        "max_bytes": "?Counter"
+        "max_bytes": "?Counter",
+        "path": "?Items<GraphText>"
       },
       "result": "ConventionReadResult",
       "effect": "Local",
@@ -7975,13 +7976,25 @@
         "section_path": 3,
         "operation_id": 3,
         "resource_id": 3,
-        "max_bytes": 3
+        "max_bytes": 3,
+        "path": 3
       },
       "exactlyOne": [
         "convention_id",
         "slug",
-        "operation_id"
-      ]
+        "operation_id",
+        "path"
+      ],
+      "fieldSchema": {
+        "path": {
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
     },
     "conventions.version": {
       "operation": "conventions.version",

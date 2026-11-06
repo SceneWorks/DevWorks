@@ -305,6 +305,17 @@ impl ConventionService {
         if piece >= pieces.len() {
             return Err(StorageError::CursorExpired.into());
         }
+        let valid_offset = match &pieces[piece] {
+            Piece::Literal(value) => usize::try_from(offset).ok().is_some_and(|at| {
+                at <= value.len()
+                    && std::str::from_utf8(value).is_ok_and(|text| text.is_char_boundary(at))
+            }),
+            Piece::Source { length, .. } => offset <= *length,
+        };
+        if !valid_offset {
+            return Err(StorageError::CursorExpired.into());
+        }
+
         let mut stopped = || self.is_stopped() || env.stopped(self.clock.now_ms().get());
         let mut reader = PathReader {
             lease: Arc::new(lease),

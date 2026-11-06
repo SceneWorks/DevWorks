@@ -65,7 +65,7 @@ impl Revisioned for ListInput {
 /// `conventions.read` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["conventionId"]}, {"required": ["slug"], "x-since": 3}, {"required": ["operationId"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["conventionId"]}, {"required": ["slug"], "x-since": 3}, {"required": ["operationId"], "x-since": 3}, {"required": ["path"], "x-since": 3}]))]
 pub struct ReadInput {
     #[serde(
         default,
@@ -139,6 +139,13 @@ pub struct ReadInput {
     )]
     #[schemars(with = "Counter", extend("x-since" = 3))]
     pub max_bytes: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<GraphText>", extend("x-since" = 3, "minItems" = 1, "maxItems" = 4, "items" = {"type": "string", "maxLength": 200}))]
+    pub path: Option<Items<GraphText>>,
 }
 impl Check for ReadInput {
     fn check(&self) -> Result<(), String> {
@@ -153,6 +160,7 @@ impl Check for ReadInput {
         self.operation_id.check()?;
         self.resource_id.check()?;
         self.max_bytes.check()?;
+        self.path.check()?;
         Ok(())
     }
 }
@@ -184,6 +192,9 @@ impl Revisioned for ReadInput {
         }
         if revision < 3 {
             self.max_bytes = None;
+        }
+        if revision < 3 {
+            self.path = None;
         }
     }
 }

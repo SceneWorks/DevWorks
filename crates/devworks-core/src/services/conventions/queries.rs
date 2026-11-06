@@ -7,7 +7,7 @@ use crate::{
         Id, Revision,
         data::DataScope,
         records::*,
-        support::{BoundedList, BoundedText},
+        support::{BoundedList, BoundedText, GraphText},
     },
     services::{
         cursor::CursorBinding,
@@ -281,8 +281,57 @@ impl ConventionService {
             scope_revision: rev(revision),
         })
     }
-    /// Tool lookup preserves exact hierarchical paths, then unique source-compatible fuzzy
-    /// slug/title matching. Virtual resource lookup passes exact_root and never falls back.
+    /// HTTP-style hierarchy is a separate exact selector; every component is literal.
+    pub(super) fn resolve_path(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        scope: &DataScope,
+        path: &[GraphText],
+    ) -> Result<StoredConvention, Failure> {
+        let scoped = access::scope(read, ctx, Some(scope), false)?;
+        let mut parent = None;
+        let mut found = None;
+        for component in path {
+            let query = ConventionQuery {
+                scopes: scoped.readable.clone(),
+                lifecycles: vec!["Active".into()],
+                parent_id: Some(parent),
+                slug: Some(component.0.clone()),
+                ..Default::default()
+            };
+            let mut rows = read.conventions().conventions(&query, None, 2)?;
+            if rows.len() > 1 {
+                return Err(Refusal::new(
+                    crate::protocol::DomainErrorCode::InvalidArgument,
+                    "ambiguous_convention",
+                    None,
+                )
+                .into());
+            }
+            if rows.is_empty() {
+                return Err(Refusal::new(
+                    crate::protocol::DomainErrorCode::NotFound,
+                    "convention",
+                    None,
+                )
+                .into());
+            }
+            let row = rows.remove(0);
+            parent = Some(row.id.clone());
+            found = Some(row);
+        }
+        found.ok_or_else(|| {
+            Refusal::new(
+                crate::protocol::DomainErrorCode::InvalidArgument,
+                "convention_path",
+                None,
+            )
+            .into()
+        })
+    }
+    /// MCP tool lookup tries the literal root slug, then unique fuzzy slug/title matching.
+    /// Virtual resource lookup passes exact_root and never falls back or splits slug text.
     pub(super) fn resolve_slug(
         &self,
         read: &dyn ReadSnapshot,
@@ -310,33 +359,6 @@ impl ConventionService {
                 None,
             )
             .into());
-        }
-        let mut parent = None;
-        let mut found = None;
-        let segments: Vec<_> = if exact_root {
-            vec![slug]
-        } else {
-            slug.split('/').filter(|s| !s.is_empty()).collect()
-        };
-        for segment in &segments {
-            let q = ConventionQuery {
-                scopes: scoped.readable.clone(),
-                lifecycles: vec!["Active".into()],
-                parent_id: Some(parent.clone()),
-                slug: Some((*segment).to_owned()),
-                ..Default::default()
-            };
-            let rows = read.conventions().conventions(&q, None, 2)?;
-            if rows.len() != 1 {
-                found = None;
-                break;
-            }
-            let row = rows.into_iter().next().expect("one");
-            parent = Some(row.id.clone());
-            found = Some(row);
-        }
-        if let Some(row) = found {
-            return Ok(row);
         }
         if !exact_root {
             let q = ConventionQuery {

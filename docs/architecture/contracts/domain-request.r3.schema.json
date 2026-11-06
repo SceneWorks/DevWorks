@@ -8643,6 +8643,13 @@
                 "operationId"
               ],
               "x-since": 3
+            },
+            {
+              "required": [
+                "kind",
+                "path"
+              ],
+              "x-since": 3
             }
           ],
           "properties": {
@@ -8671,6 +8678,16 @@
             },
             "operationId": {
               "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
+            "path": {
+              "$ref": "#/$defs/List_GraphSourceTextFragment_0_128",
+              "items": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "maxItems": 4,
+              "minItems": 1,
               "x-since": 3
             },
             "resourceId": {
@@ -12223,6 +12240,14 @@
       },
       "maxItems": 20,
       "minItems": 1,
+      "type": "array"
+    },
+    "List_GraphSourceTextFragment_0_128": {
+      "items": {
+        "$ref": "#/$defs/GraphSourceTextFragment"
+      },
+      "maxItems": 128,
+      "minItems": 0,
       "type": "array"
     },
     "List_Id_0_128": {

@@ -384,17 +384,28 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
 fn convention_input(op: &str, v: &Value) -> Result<(), String> {
     if op == "conventions.read" {
         require(
-            ["conventionId", "slug", "operationId"]
+            ["conventionId", "slug", "operationId", "path"]
                 .iter()
                 .filter(|key| present(v, key))
                 .count()
                 == 1,
-            "read requires one convention, scoped slug or actual operation",
+            "read requires one convention, scoped slug, exact path or actual operation",
         )?;
         require(
-            !present(v, "slug") || present(v, "scope"),
-            "slug resolution requires its exact scope",
+            !(present(v, "slug") || present(v, "path")) || present(v, "scope"),
+            "slug or path resolution requires its exact scope",
         )?;
+        if present(v, "path") {
+            require(
+                v["path"].as_array().is_some_and(|parts| {
+                    (1..=4).contains(&parts.len())
+                        && parts
+                            .iter()
+                            .all(|part| part.as_str().is_some_and(|s| s.chars().count() <= 200))
+                }),
+                "exact convention path needs 1..4 literal components of at most 200 characters",
+            )?;
+        }
         require(
             (v["format"] == "SectionPath") == present(v, "sectionPath"),
             "section path read requires its exact generation and chunk",

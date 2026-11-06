@@ -45,9 +45,13 @@ impl ConventionService {
                         input.scope.as_ref(),
                     )?
                 } else {
-                    let slug = input.slug.as_ref().ok_or_else(unsupported)?;
                     let scope = input.scope.as_ref().ok_or_else(unsupported)?;
-                    let row = self.resolve_slug(read, ctx, scope, &slug.0, exact_root)?;
+                    let row = if let Some(path) = input.path.as_ref() {
+                        self.resolve_path(read, ctx, scope, &path.0)?
+                    } else {
+                        let slug = input.slug.as_ref().ok_or_else(unsupported)?;
+                        self.resolve_slug(read, ctx, scope, &slug.0, exact_root)?
+                    };
                     if let Some(revision) = input.revision.as_ref() {
                         access::owner(read, ctx, &row.id, Some(revision.get()), Some(scope))?
                     } else {
@@ -115,6 +119,7 @@ fn resource_document(input: &ops::ResourcesInput) -> Option<ops::ReadInput> {
         convention_id: None,
         revision: None,
         slug: Some(root_slug.clone()),
+        path: None,
         scope: Some(input.scope.clone()),
         format: Some(ConventionFormat::Markdown),
         cursor: cursor.clone(),
@@ -153,6 +158,20 @@ impl QueryHandler for ConventionService {
                 .map(|p| Some(Prepared::new(p))),
             _ => Ok(None),
         };
+        let local_read = matches!(
+            query.input(),
+            OperationInput::Conventions(ops::Input::Read(_) | ops::Input::Resources(_))
+        );
+        if local_read
+            && result.is_err()
+            && (self.is_stopped() || env.stopped(self.clock.now_ms().get()))
+        {
+            return Err(query_fault(
+                StorageError::Cancelled.into(),
+                "convention",
+                self.correlation(),
+            ));
+        }
         result.map_err(|e| query_fault(e, "convention", self.correlation()))
     }
     fn query(
