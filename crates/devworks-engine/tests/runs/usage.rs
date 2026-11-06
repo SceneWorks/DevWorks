@@ -1076,3 +1076,6 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
         host.stop(); host.drain().await;
     }));
 }
+
+#[path = "../providers/managed.rs"]
+mod native_provider_fences;

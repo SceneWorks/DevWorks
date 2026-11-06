@@ -52,6 +52,14 @@ impl Materials for Material {
         }
         Ok(b.clone())
     }
+    fn native(
+        &self,
+        reference: &ArtifactRef,
+        _binding: &NativeBinding,
+        max: u64,
+    ) -> Result<Vec<u8>, ProviderError> {
+        self.artifact(reference, max)
+    }
     fn schema(&self, _: &SchemaRef) -> Result<Value, ProviderError> {
         Ok(self.schema.clone())
     }

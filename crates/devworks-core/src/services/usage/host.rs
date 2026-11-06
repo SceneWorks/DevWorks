@@ -107,12 +107,23 @@ pub trait OwnedInferenceSource: Send {
 pub enum InferenceFrame {
     Usage(Observation),
     Output(crate::providers::decode::DecodedFrame),
+    ResponseHead(crate::providers::ProviderResponseHead),
+    UsageDimensions(super::dimensions::ObservedDimensions),
     Terminal(AttemptEnd),
 }
 /// Trusted native result owner. The transport emits data only; this separate host sink stages
 /// local artifacts and commits through the SAME fence as accounting. Provider callbacks never
 /// run inside a writer or while the sink holds a publication fence.
 pub trait OwnedInferenceSink: Send {
+    fn response_head(
+        &mut self,
+        _attempt: &StoredInferenceAttempt,
+        _head: crate::providers::ProviderResponseHead,
+        _fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
+
     fn accept(
         &mut self,
         attempt: &StoredInferenceAttempt,
@@ -282,11 +293,31 @@ impl AttemptHost {
                     break;
                 }
                 match source.next(&cancellation) {
+                    Ok(Some(InferenceFrame::UsageDimensions(dimensions))) => {
+                        let current = attempt.clone();
+                        let control = self.control.clone();
+                        if let Err(error) = self.write(move |tx| {
+                            super::dimensions::observe(tx, &control, &current, dimensions)
+                        }) {
+                            failure = Some(error);
+                            cancellation.cancel();
+                            break;
+                        }
+                    }
                     Ok(Some(InferenceFrame::Usage(observation))) => {
                         let control = self.control.clone();
                         let id = id.clone();
                         if let Err(error) = self
                             .write(move |tx| accounting::observe(tx, &control, &id, &observation))
+                        {
+                            failure = Some(error);
+                            cancellation.cancel();
+                            break;
+                        }
+                    }
+                    Ok(Some(InferenceFrame::ResponseHead(head))) => {
+                        if let Some(sink) = sink.as_mut()
+                            && let Err(error) = sink.response_head(&attempt, head, &self.fence)
                         {
                             failure = Some(error);
                             cancellation.cancel();
@@ -319,6 +350,14 @@ impl AttemptHost {
                 }
             }
         }
+        if cancellation.is_cancelled() {
+            let current = attempt.clone();
+            if let Err(error) =
+                self.write(move |tx| accounting::note_cancellation_requested(tx, &current))
+            {
+                failure = Some(error);
+            }
+        }
         // A failed close leaves the reservation and inference quiescence guard in place.
         // A host restart can reconcile it once this process's exclusive data-root owner exits.
         if let Err(error) = source.close() {
@@ -332,9 +371,6 @@ impl AttemptHost {
                 )
             });
             return Err(error);
-        }
-        if cancellation.is_cancelled() && outcome == AttemptEnd::UnknownTail {
-            outcome = AttemptEnd::Cancelled;
         }
         if let Some(sink) = sink.as_mut()
             && let Err(error) = sink.finish(&attempt, outcome, &self.fence)

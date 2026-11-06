@@ -5,7 +5,7 @@ use devworks_core::{
     fingerprint::sha256_hex,
     ports::{packages::Inspection, storage::*},
     protocol::{
-        Revision,
+        Id, Revision,
         provider::{QualifiedId, SchemaRef, ToolSchema},
     },
     providers::{PreparedTool, ProviderError, materialize::SchemaDocuments},
@@ -40,7 +40,9 @@ impl RegisteredSchemas {
         }
     }
     /// Generates the exact same schema reference consumed by resolve/tool. No arbitrary ID is
-    /// parsed into an operation, and no uncomposed operation enters this inventory.
+    /// parsed into an operation, and no uncomposed operation enters this inventory. This is
+    /// only a candidate alias: `SchemaDocuments::tool(context, alias)` separately qualifies
+    /// the current principal/profile/selected operation before any provider receives it.
     pub fn builtin(
         &self,
         operation: &str,
@@ -133,9 +135,12 @@ impl RegisteredSchemas {
             .packages
             .as_ref()
             .ok_or(ProviderError::MaterialUnavailable)?;
+        if !self.cases.has_query("addons.catalog") {
+            return Err(ProviderError::MaterialUnavailable);
+        }
         let (record, version, revision) =
             read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
-                current_context(s, ctx)?;
+                package_context(s, ctx)?;
                 let registry = service.registry(s.packages())?;
                 let (record, version) = registry.get(package).ok_or(StorageError::ScopeDenied)?;
                 let view = devworks_core::services::packages::view::package_record(
@@ -179,9 +184,25 @@ impl RegisteredSchemas {
                     ))?;
             let reference =
                 serde_json::from_value(source).map_err(|_| ProviderError::MaterialUnavailable)?;
+            let info = self.store.info();
+            let metadata_context = devworks_core::context::HostIngress::new(self.store.as_ref())
+                .context(
+                    info.host_actor,
+                    devworks_core::context::PrincipalKind::Host,
+                    ctx.invocation_id().clone(),
+                    Id::new("package-metadata-recovery").expect("static"),
+                    devworks_core::protocol::Counter::new(info.restore_epoch)
+                        .map_err(|_| ProviderError::MaterialUnavailable)?,
+                    Revision::new(1).expect("positive"),
+                );
             let bytes = self
                 .artifacts
-                .read_exact(self.store.as_ref(), ctx, &reference, 128 * 1024 * 1024)
+                .read_exact(
+                    self.store.as_ref(),
+                    &metadata_context,
+                    &reference,
+                    128 * 1024 * 1024,
+                )
                 .map_err(|_| {
                     ProviderError::Unsupported("legacy package source unavailable; reinstall")
                 })?
@@ -293,6 +314,28 @@ fn current_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), 
     }
     Ok(())
 }
+fn package_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), StorageError> {
+    current_context(s, ctx)?;
+    let d = registry::find("addons.catalog").ok_or(StorageError::ScopeDenied)?;
+    let selected = d.binding(Mode::Query).ok_or(StorageError::ScopeDenied)?;
+    let binding = s.authority().principal(ctx.principal())?;
+    let effective = policy::resolve_policy(s.configuration(), ctx.project_id())?;
+    if !matches!(
+        policy::registered_tool_visibility(
+            ctx,
+            binding.as_ref(),
+            &effective,
+            d,
+            selected,
+            devworks_core::registry::EffectClass::External
+        ),
+        Verdict::Allow
+    ) {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(())
+}
+
 impl SchemaDocuments for RegisteredSchemas {
     fn resolve(
         &self,
@@ -352,33 +395,6 @@ impl SchemaDocuments for RegisteredSchemas {
                 {
                     return Err(ProviderError::MaterialUnavailable);
                 }
-                // Package code is an unverified external operation. The same policy excludes
-                // it from reviewer scopes and unselected addons families before presentation.
-                let d =
-                    registry::find("addons.catalog").ok_or(ProviderError::MaterialUnavailable)?;
-                let selected = d
-                    .binding(Mode::Query)
-                    .ok_or(ProviderError::MaterialUnavailable)?;
-                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
-                    current_context(s, ctx)?;
-                    let binding = s.authority().principal(ctx.principal())?;
-                    let policy = policy::resolve_policy(s.configuration(), ctx.project_id())?;
-                    if !matches!(
-                        policy::registered_tool_visibility(
-                            ctx,
-                            binding.as_ref(),
-                            &policy,
-                            d,
-                            selected,
-                            devworks_core::registry::EffectClass::External
-                        ),
-                        Verdict::Allow
-                    ) {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    Ok(())
-                })
-                .map_err(|_| ProviderError::MaterialUnavailable)?;
                 let schema = self.package_document(ctx, &alias.input_schema)?;
                 let help = self.file(&inspection, &inspection.help_file, 1024 * 1024)?;
                 let description =

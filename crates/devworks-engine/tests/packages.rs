@@ -4471,3 +4471,6 @@ fn a_runtime_probe_launched_after_shutdown_is_stopped_immediately() {
 
 #[path = "packages/approvals.rs"]
 mod approvals;
+
+#[path = "providers/packages.rs"]
+mod provider_schema;

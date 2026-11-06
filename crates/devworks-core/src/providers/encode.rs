@@ -408,7 +408,9 @@ impl Encoder<'_> {
         if b != &self.identity.binding {
             return Err(ProviderError::ForeignNative);
         }
-        let v = self.json(a)?;
+        let v: Value =
+            serde_json::from_slice(&self.materials.native(a, b, self.limits.artifact_bytes)?)
+                .map_err(|_| ProviderError::InvalidInput("native_item"))?;
         if !v.is_object() {
             return Err(ProviderError::InvalidInput("native_item"));
         }

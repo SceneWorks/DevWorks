@@ -40,6 +40,15 @@ pub struct UsageDrain {
     pub pending_preparations: usize,
 }
 
+struct Production {
+    context: devworks_core::context::InvocationContext,
+    logical: devworks_core::services::router::RequestAdmission,
+    category: devworks_core::services::router::accounting::ReportCategory,
+    request: devworks_core::services::usage::accounting::AttemptRequest,
+    source: Box<dyn OwnedInferenceSource>,
+    sink: Option<Box<dyn OwnedInferenceSink>>,
+    preparation: Option<crate::providers::driver::NativePreparation>,
+}
 struct Recovery {
     after: Option<Id>,
     complete: bool,
@@ -149,29 +158,25 @@ impl UsageRuntime {
             }
         }
         let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
-            struct Remove {
-                runtime: Arc<UsageRuntime>,
-                id: Id,
+        struct Remove {
+            runtime: Arc<UsageRuntime>,
+            id: Id,
+        }
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                self.runtime.retired(&self.id);
             }
-            impl Drop for Remove {
-                fn drop(&mut self) {
-                    self.runtime.retired(&self.id);
-                }
-            }
-            let _remove = Remove {
-                runtime: runtime.clone(),
-                id: attempt_id.clone(),
-            };
+        }
+        let remove = Remove {
+            runtime: runtime.clone(),
+            id: attempt_id.clone(),
+        };
+        owned_thread(move || {
+            let _remove = remove;
             host.drive(attempt_id, source, cancellation)
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(StorageError::unavailable(
-                Unavailable::HandlerPanicked,
-                "owned inference source panicked; accounting remains unclosed",
-            ))
-        })
+        .unwrap_or_else(|e| Err(e.storage()))
     }
     /// Full native producer path. Caller cancellation cannot strand an acknowledged
     /// reservation between admission and source ownership: both run in one owned worker.
@@ -195,6 +200,54 @@ impl UsageRuntime {
         source: Box<dyn OwnedInferenceSource>,
         sink: Option<Box<dyn OwnedInferenceSink>>,
     ) -> Result<DriveOutcome, StorageError> {
+        self.produce_prepared(Production {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink,
+            preparation: None,
+        })
+        .await
+    }
+    pub(crate) async fn produce_native(
+        self: &Arc<Self>,
+        production: crate::providers::driver::NativeProduction,
+    ) -> Result<DriveOutcome, StorageError> {
+        let crate::providers::driver::NativeProduction {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink,
+            preparation,
+        } = production;
+        self.produce_prepared(Production {
+            context,
+            logical,
+            category,
+            request,
+            source,
+            sink: Some(sink),
+            preparation: Some(preparation),
+        })
+        .await
+    }
+    async fn produce_prepared(
+        self: &Arc<Self>,
+        production: Production,
+    ) -> Result<DriveOutcome, StorageError> {
+        let Production {
+            context,
+            logical,
+            category,
+            mut request,
+            source,
+            sink,
+            preparation,
+        } = production;
         let host = self.host.clone().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
@@ -209,15 +262,34 @@ impl UsageRuntime {
             self.preparing.fetch_add(1, Ordering::SeqCst);
         }
         let runtime = self.clone();
-        tokio::task::spawn_blocking(move || {
-            struct Preparing(Arc<UsageRuntime>);
-            impl Drop for Preparing {
-                fn drop(&mut self) {
-                    self.0.preparing.fetch_sub(1, Ordering::SeqCst);
-                    self.0.changed.notify_one();
+        struct Preparing(Arc<UsageRuntime>);
+        impl Drop for Preparing {
+            fn drop(&mut self) {
+                self.0.preparing.fetch_sub(1, Ordering::SeqCst);
+                self.0.changed.notify_one();
+            }
+        }
+        let preparing = Preparing(runtime.clone());
+        owned_thread(move || {
+            let _preparing = preparing;
+            if let Some(preparation)=preparation {
+                let refreshed=preparation.prepare(&context,&logical,&request)?;
+                if let Some(refreshed)=refreshed {
+                    if let Some(selection)=refreshed.recorded_selection { request.selection=selection; }
+                    if let Some(effort)=refreshed.native_effort {
+                        use devworks_core::services::router::accounting::AttemptSelection;
+                        let route=match request.selection {AttemptSelection::NativeGeneration{route,..}=>*route,other=>other};
+                        if matches!(route, AttemptSelection::Conversation{..}) {
+                            request.selection=AttemptSelection::NativeGeneration {route:Box::new(route),requested_effort:effort.requested.map(|x|x.as_str().into()),effective_effort:effort.effective.map(|x|x.as_str().into())};
+                        }else{return Err(StorageError::ScopeDenied);}
+                    }
+                    request.quote=refreshed.quote;
+                    request.price_generation=refreshed.price_generation;
+                    request.override_revision=refreshed.override_revision;
+                    if let devworks_core::services::router::accounting::AttemptSelection::Embedding {connection_revision,..}=&mut request.selection { *connection_revision=refreshed.connection_revision; }
                 }
             }
-            let _preparing = Preparing(runtime.clone());
+            if runtime.stopping.load(Ordering::SeqCst) { return Err(StorageError::Cancelled); }
             let admission = host.admit(context, logical, category, request)?;
             let attempt = match admission {
                 devworks_core::services::usage::accounting::Admission::Admitted {
@@ -256,12 +328,7 @@ impl UsageRuntime {
             host.drive_with_sink(attempt.attempt_id, source, sink, cancellation)
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(StorageError::unavailable(
-                Unavailable::HandlerPanicked,
-                "owned inference producer panicked; accounting remains recoverable",
-            ))
-        })
+        .unwrap_or_else(|e|Err(e.storage()))
     }
 
     fn retired(&self, id: &Id) {
@@ -499,6 +566,42 @@ impl UsageRuntime {
             } else {
                 let _ = first(self.wake.notified(), tokio::time::sleep(interval)).await;
             }
+        }
+    }
+}
+
+// Provider/network/keychain work is owned independently of Tokio's blocking pool. Dropping a
+// Tokio runtime cannot wait forever for an external operation that has no cancellation API.
+// Registry guards stay in this thread until actual close; publication fences reject late writes.
+async fn owned_thread<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, OwnedThreadFailure> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("devworks-inference".into())
+        .spawn(move || {
+            let result = work();
+            let _ = send.send(result);
+        })
+        .map_err(OwnedThreadFailure::Spawn)?;
+    receive.await.map_err(|_| OwnedThreadFailure::Lost)
+}
+
+enum OwnedThreadFailure {
+    Spawn(std::io::Error),
+    Lost,
+}
+impl OwnedThreadFailure {
+    fn storage(self) -> StorageError {
+        match self {
+            Self::Spawn(error) => StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                format!("native inference worker could not start: {error}"),
+            ),
+            Self::Lost => StorageError::unavailable(
+                Unavailable::HandlerPanicked,
+                "owned inference worker ended without acknowledgement; accounting remains recoverable",
+            ),
         }
     }
 }

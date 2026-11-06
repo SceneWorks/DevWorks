@@ -5,6 +5,7 @@ pub mod context;
 pub mod decode;
 pub mod effort;
 pub mod encode;
+pub mod limits;
 pub mod materialize;
 pub mod sse;
 use crate::protocol::provider::{EndpointProfile, NativeBinding, QualifiedId, SchemaRef};
@@ -42,6 +43,23 @@ pub struct PreparedTool {
     pub schema: Value,
     pub description: Option<String>,
 }
+/// Host-observed HTTP metadata, kept distinct from every provider-controlled native event.
+#[derive(Clone, Debug)]
+pub struct ProviderResponseHead {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub access: ProviderAccessBasis,
+}
+#[derive(Clone, Debug)]
+pub struct ProviderAccessBasis {
+    pub connection_id: Id,
+    pub profile: EndpointProfile,
+    pub endpoint_digest: String,
+    pub credential_revision: i64,
+    pub account_revision: i64,
+    pub oauth: bool,
+}
+
 /// Credential-free prepared bytes. The host obtains current Access and injects secrets at send.
 #[derive(Clone)]
 pub struct PreparedRequest {

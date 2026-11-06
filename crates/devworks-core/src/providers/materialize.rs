@@ -1,6 +1,6 @@
 //! Exact input resolution through existing artifact ownership; no I/O inside a write transaction.
 use super::{PreparedTool, ProviderError};
-use crate::protocol::provider::{ArtifactRef, SchemaRef, ToolSchema};
+use crate::protocol::provider::{ArtifactRef, NativeBinding, SchemaRef, ToolSchema};
 use crate::services::artifacts::ArtifactService;
 use crate::{context::InvocationContext, ports::storage::ApplicationStore};
 use serde_json::Value;
@@ -24,6 +24,15 @@ pub trait SchemaDocuments: Send + Sync {
 }
 pub trait Materials {
     fn artifact(&self, reference: &ArtifactRef, max_bytes: u64) -> Result<Vec<u8>, ProviderError>;
+    /// Native continuation bytes require their original immutable host/version binding.
+    fn native(
+        &self,
+        _reference: &ArtifactRef,
+        _binding: &NativeBinding,
+        _max_bytes: u64,
+    ) -> Result<Vec<u8>, ProviderError> {
+        Err(ProviderError::ForeignNative)
+    }
     fn schema(&self, reference: &SchemaRef) -> Result<Value, ProviderError>;
     fn tool(&self, _alias: &ToolSchema) -> Result<PreparedTool, ProviderError> {
         Err(ProviderError::MaterialUnavailable)
@@ -42,6 +51,46 @@ impl Materials for OwnedMaterials<'_> {
             .read_exact(self.store, self.context, reference, max_bytes)
             .map(|v| v.0)
             .map_err(|_| ProviderError::MaterialUnavailable)
+    }
+    fn native(
+        &self,
+        reference: &ArtifactRef,
+        binding: &NativeBinding,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, ProviderError> {
+        let (bytes, provenance) = self
+            .artifacts
+            .read_exact(self.store, self.context, reference, max_bytes)
+            .map_err(|_| ProviderError::MaterialUnavailable)?;
+        let host = self.store.info().host_actor.0.as_str().to_owned();
+        let original: NativeBinding =
+            serde_json::from_value(provenance["derived"]["nativeBinding"].clone())
+                .map_err(|_| ProviderError::ForeignNative)?;
+        if original != *binding
+            || provenance["principalKind"] != "Host"
+            || provenance["producedBy"].as_str() != Some(&host)
+            || provenance["derived"]["kind"] != "ProviderNativeContinuation"
+        {
+            return Err(ProviderError::ForeignNative);
+        }
+        let version = crate::ports::storage::read_snapshot(
+            self.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |s| s.artifacts().version(&reference.version_id),
+        )
+        .map_err(|_| ProviderError::MaterialUnavailable)?
+        .ok_or(ProviderError::MaterialUnavailable)?;
+        if !version.live()
+            || version.artifact_id != reference.artifact_id
+            || version.blob_digest != reference.sha256.as_str()
+            || version.byte_count != reference.byte_length.get()
+            || version.media_type != reference.media_type
+            || version.source["principalKind"] != "Host"
+            || version.source["producedBy"].as_str() != Some(&host)
+        {
+            return Err(ProviderError::ForeignNative);
+        }
+        Ok(bytes)
     }
     fn tool(&self, alias: &ToolSchema) -> Result<PreparedTool, ProviderError> {
         self.schemas.tool(self.context, alias)
@@ -97,10 +146,14 @@ pub(crate) struct TrackedMaterials<'a> {
     pub source: &'a dyn Materials,
     pub references: std::cell::RefCell<Vec<ArtifactRef>>,
 }
-impl Materials for TrackedMaterials<'_> {
-    fn artifact(&self, reference: &ArtifactRef, max: u64) -> Result<Vec<u8>, ProviderError> {
+impl TrackedMaterials<'_> {
+    fn remember(
+        &self,
+        reference: &ArtifactRef,
+        max: u64,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, ProviderError> {
         reference.validate().map_err(ProviderError::InvalidInput)?;
-        let bytes = self.source.artifact(reference, max)?;
         if bytes.len() as u64 > max {
             return Err(ProviderError::TooLarge);
         }
@@ -120,6 +173,21 @@ impl Materials for TrackedMaterials<'_> {
             refs.push(reference.clone());
         }
         Ok(bytes)
+    }
+}
+impl Materials for TrackedMaterials<'_> {
+    fn artifact(&self, reference: &ArtifactRef, max: u64) -> Result<Vec<u8>, ProviderError> {
+        reference.validate().map_err(ProviderError::InvalidInput)?;
+        self.remember(reference, max, self.source.artifact(reference, max)?)
+    }
+    fn native(
+        &self,
+        reference: &ArtifactRef,
+        binding: &NativeBinding,
+        max: u64,
+    ) -> Result<Vec<u8>, ProviderError> {
+        reference.validate().map_err(ProviderError::InvalidInput)?;
+        self.remember(reference, max, self.source.native(reference, binding, max)?)
     }
     fn schema(&self, reference: &SchemaRef) -> Result<Value, ProviderError> {
         self.source.schema(reference)
