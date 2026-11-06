@@ -1153,9 +1153,10 @@ for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
  definition=OPS[name]
  for mode in ([definition['mode']]if definition['mode']!='Hybrid'else['Query','Command']):
-  if not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
+  # Keep the pre-Usage generic forms alongside newer budget-specific coverage.
+  if name in ['features.edit','features.create','features.edit_plan','tasks.sync_plan','projects.create'] or not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
    frame=request(name,mode);frame['schemaRevision']=3;case('dw13-r3-admission-'+name+'-'+mode,'domain-request.r3',frame)
- if not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
+ if name=='features.get' or not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
   output=result(name,definition['result'])
   if TYPES.get(definition['result'],{}).get('kind')=='versioned':
    output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
@@ -1175,6 +1176,19 @@ for name in ['conventions.list','conventions.search','conventions.resources','co
   bad=copy.deepcopy(output);bad['value']['sourceScopeRevision']='0'
   case('dw33-reject-zero-source-revision-'+name,'operation-result.r4',bad,False,False)
   case('dw33-reject-source-revision-before4-'+name,'operation-result.r3',output,False,False)
+
+# DW89's additive history direction has its own recorded revision-3 admission.
+for scope in [{'rootId':'root-a'},{'projectId':'project-a'}]:
+ newest={'protocol':'1.0-draft.1','queryId':'newest-events','schemaRevision':3,'query':{'kind':'history.events','limit':200,'newestFirst':True,**scope}}
+ case('dw89-r3-newest-'+('root'if 'rootId'in scope else'project'),'query-request.r3',newest)
+forward=copy.deepcopy(newest);forward['query']['newestFirst']=False
+case('dw89-r3-forward-project','query-request.r3',forward)
+for revision in [1,2]:
+ old=copy.deepcopy(newest);old['schemaRevision']=revision
+ case('dw89-direction-before-r3-'+str(revision),'query-request'+('.r2'if revision==2 else''),old,False,False)
+for invalid in [None,'true']:
+ bad=copy.deepcopy(newest);bad['query']['newestFirst']=invalid
+ case('dw89-invalid-direction-'+('null'if invalid is None else'string'),'query-request.r3',bad,False,False)
 
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

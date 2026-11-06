@@ -432,6 +432,10 @@ pub enum Query {
         )]
         #[schemars(with = "ProjectId", extend("x-since" = 2))]
         project_id: Option<ProjectId>,
+        /// Revision 3: start at the newest decision and continue toward older events.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        newest_first: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(length(min = 1, max = 4096))]
         after: Option<String>,

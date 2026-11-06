@@ -1506,6 +1506,14 @@ impl SessionRead for Unsupported {
     ) -> Result<Vec<UsageFact>, StorageError> {
         nope()
     }
+    fn decisions_before(
+        &self,
+        _: &HistoryScope,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<EventRecord>, StorageError> {
+        nope()
+    }
 }
 impl SessionRepository for Unsupported {
     fn insert_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
