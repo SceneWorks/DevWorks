@@ -37,6 +37,49 @@ fn claim(s: &SqliteStore, name: &str, revision: i64, registry: i64) -> Operation
     .unwrap();
     op
 }
+fn projection(body: &str) -> StoredHelpContent {
+    let mut offsets = vec![HelpOffset {
+        byte_offset: 0,
+        character_offset: 0,
+    }];
+    let mut count = 0;
+    for (byte, c) in body.char_indices() {
+        count += 1;
+        let end = (byte + c.len_utf8()) as u64;
+        if end - offsets.last().unwrap().byte_offset >= HELP_CHECKPOINT_BYTES {
+            offsets.push(HelpOffset {
+                byte_offset: end,
+                character_offset: count,
+            });
+        }
+    }
+    if offsets.last().unwrap().byte_offset != body.len() as u64 {
+        offsets.push(HelpOffset {
+            byte_offset: body.len() as u64,
+            character_offset: count,
+        });
+    }
+    let mut end = body.len().min(MAX_HELP_INDEX_BYTES);
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut search_text = body[..end].to_lowercase();
+    let complete = end == body.len() && search_text.len() <= MAX_HELP_INDEX_BYTES;
+    let mut limit = search_text.len().min(MAX_HELP_INDEX_BYTES);
+    while !search_text.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    search_text.truncate(limit);
+    StoredHelpContent {
+        digest: sha256_hex(body.as_bytes()),
+        byte_count: body.len() as u64,
+        character_count: count,
+        indexed_bytes: end as u64,
+        index_complete: complete,
+        search_text,
+        offsets,
+    }
+}
 fn document(
     tx: &mut dyn WriteTransaction,
     generation: &str,
@@ -45,6 +88,7 @@ fn document(
 ) -> Result<StoredHelpDocument, StorageError> {
     let artifact = id(&format!("artifact-{generation}-{name}"));
     let version = id(&format!("version-{generation}-{name}"));
+    let content = projection(body);
     let digest = sha256_hex(body.as_bytes());
     let blob = match tx.artifacts().blob(&digest)? {
         Some(b) => b,
@@ -82,7 +126,7 @@ fn document(
         media_type: "text/markdown".into(),
         created_at_ms: T0,
         deleted_at_ms: None,
-        source: json!({}),
+        source: json!({"source":{"helpIndexDigest":content.commitment().unwrap()}}),
     })?;
     Ok(StoredHelpDocument {
         topic: StoredHelpTopic {
@@ -105,8 +149,7 @@ fn document(
             character_count: body.chars().count() as i64,
             topic_revision: 1,
         },
-        body: body.into(),
-        search_text: format!("{name}\n{body}").to_lowercase(),
+        content: Some(content),
     })
 }
 fn missing(generation: &str, name: &str) -> StoredHelpDocument {
@@ -129,8 +172,7 @@ fn missing(generation: &str, name: &str) -> StoredHelpDocument {
             character_count: 0,
             topic_revision: 1,
         },
-        body: String::new(),
-        search_text: name.into(),
+        content: None,
     }
 }
 fn publication(
@@ -198,7 +240,7 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
         let a=document(tx,"large-generation","a-guide",&body)?;assert_eq!(tx.help().stage_help_document(&a)?,a.topic);assert_eq!(tx.help().stage_help_document(&a)?,a.topic);
         let mut b=document(tx,"large-generation","b-guide","Other package guide")?;b.topic.source_kind="Package".into();b.topic.package_id=Some(id("package-a"));b.topic.manifest_digest=Some("f".repeat(64));b.topic.screen_ids=vec!["packages".into()];b.topic.provenance=json!({"kind":"Package","packageId":"package-a","packageVersion":"1.0.0","manifestDigest":"f".repeat(64),"contentDigest":b.topic.content_digest});tx.help().stage_help_document(&b)?;
         tx.help().stage_help_document(&missing("large-generation","c-missing"))?;
-        assert!(tx.help().help_topic(&id("large-generation"),&id("a-guide"))?.is_none());assert!(tx.help().help_topics(&id("large-generation"),&HelpFilter::default(),None,500)?.is_empty());assert!(tx.help().help_passage(&id("large-generation"),&id("a-guide"),0,2)?.is_none());Ok(())
+        assert!(tx.help().help_topic(&id("large-generation"),&id("a-guide"))?.is_none());assert!(tx.help().help_topics(&id("large-generation"),&HelpFilter::default(),None,500)?.is_empty());assert!(tx.help().help_passage_source(&id("large-generation"),&id("a-guide"),0,2)?.is_none());Ok(())
     }).unwrap();
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 1);
     assert_eq!(
@@ -231,21 +273,21 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
         );
         assert_eq!(
             r.help()
-                .help_passage(&id("large-generation"), &id("a-guide"), 1, 2)?
-                .as_deref(),
-            Some("🦀é")
+                .help_passage_source(&id("large-generation"), &id("a-guide"), 1, 2)?
+                .map(|source| source.content_digest),
+            Some(sha256_hex(expected.as_bytes()))
         );
-        assert_eq!(
-            r.help()
-                .help_passage(
-                    &id("large-generation"),
-                    &id("a-guide"),
-                    page[0].character_count - 3,
-                    10
-                )?
-                .as_deref(),
-            Some("xxx")
-        );
+        let tail = r
+            .help()
+            .help_passage_source(
+                &id("large-generation"),
+                &id("a-guide"),
+                page[0].character_count - 3,
+                10,
+            )?
+            .unwrap();
+        assert!(tail.checkpoint.character_offset <= page[0].character_count - 3);
+        assert!(tail.byte_count - tail.checkpoint.byte_offset <= HELP_CHECKPOINT_BYTES + 4);
         let literal = HelpFilter {
             query: Some("100%_literal".into()),
             ..Default::default()
@@ -284,7 +326,7 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
         assert!(absent.content_ref.is_none() && absent.provenance.is_null());
         assert!(
             r.help()
-                .help_passage(&id("large-generation"), &id("c-missing"), 0, 10)?
+                .help_passage_source(&id("large-generation"), &id("c-missing"), 0, 10)?
                 .is_none()
         );
         for limit in [0, 501] {
@@ -303,7 +345,7 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
         ] {
             assert!(
                 r.help()
-                    .help_passage(&id("large-generation"), &id("a-guide"), offset, chars)
+                    .help_passage_source(&id("large-generation"), &id("a-guide"), offset, chars)
                     .is_err()
             );
         }
@@ -313,14 +355,14 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
     let s = h.store();
     assert_eq!(read(&s, |r| r.help().help_head()), saved);
     assert_eq!(
-        read(&s, |r| r.help().help_passage(
+        read(&s, |r| r.help().help_passage_source(
             &id("large-generation"),
             &id("a-guide"),
             1,
             2
         ))
-        .as_deref(),
-        Some("🦀é")
+        .map(|source| source.content_digest),
+        Some(sha256_hex(expected.as_bytes()))
     );
 }
 
@@ -350,9 +392,9 @@ fn help_publication_and_artifact_metadata_roll_back_together_and_history_stays_r
         assert!(r.help().help_drafts(None, 500)?.is_empty());
         assert_eq!(
             r.help()
-                .help_passage(&id("initial-generation"), &id("intro"), 0, 100)?
-                .as_deref(),
-            Some("Original guide")
+                .help_passage_source(&id("initial-generation"), &id("intro"), 0, 100)?
+                .map(|source| source.content_digest),
+            Some(sha256_hex("Original guide".as_bytes()))
         );
         Ok(())
     });
@@ -365,14 +407,14 @@ fn help_publication_and_artifact_metadata_roll_back_together_and_history_stays_r
     })
     .unwrap();
     assert_eq!(
-        read(&s, |r| r.help().help_passage(
+        read(&s, |r| r.help().help_passage_source(
             &id("initial-generation"),
             &id("intro"),
             0,
             100
         ))
-        .as_deref(),
-        Some("Original guide")
+        .map(|source| source.content_digest),
+        Some(sha256_hex("Original guide".as_bytes()))
     );
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 3);
     for sql in [
@@ -567,14 +609,14 @@ fn help_noop_retains_content_revision_but_verifies_actual_staged_identity_and_cl
     .unwrap();
     assert!(read(&s, |r| r.help().help_drafts(None, 500)).is_empty());
     assert_eq!(
-        read(&s, |r| r.help().help_passage(
+        read(&s, |r| r.help().help_passage_source(
             &id("initial-generation"),
             &id("intro"),
             0,
             100
         ))
-        .as_deref(),
-        Some("Original guide")
+        .map(|source| source.content_digest),
+        Some(sha256_hex("Original guide".as_bytes()))
     );
 }
 
@@ -628,10 +670,10 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
     .unwrap();
     let mut invalid = Vec::new();
     let mut wrong = doc.clone();
-    wrong.body.push('!');
+    wrong.content.as_mut().unwrap().digest = "f".repeat(64);
     invalid.push(wrong);
     let mut wrong = doc.clone();
-    wrong.body.push('\0');
+    wrong.content.as_mut().unwrap().search_text.push('\0');
     invalid.push(wrong);
     let mut wrong = doc.clone();
     wrong.topic.character_count += 1;
@@ -662,12 +704,25 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
         tx.help().stage_help_document(&saved)
     })
     .unwrap();
-    let mut changed = doc;
-    changed.search_text.push_str(" changed");
+    let mut changed = doc.clone();
+    changed
+        .content
+        .as_mut()
+        .unwrap()
+        .search_text
+        .push_str(" changed");
     assert!(matches!(
         run_write(&s, WriteOptions::default(), move |tx| {
             tx.help().stage_help_document(&changed)
         }),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    let mut changed = doc;
+    changed.topic.title.push_str(" renamed");
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), move |tx| tx
+            .help()
+            .stage_help_document(&changed)),
         Err(StorageError::Duplicate { .. })
     ));
     assert!(
@@ -718,14 +773,14 @@ fn help_same_source_repairs_deleted_backing_instead_of_retaining_a_dead_referenc
         assert_eq!(fresh.content_digest, old.content_digest);
         assert_eq!(fresh.topic_revision, old.topic_revision);
         assert_eq!(
-            read(&s, |r| r.help().help_passage(
+            read(&s, |r| r.help().help_passage_source(
                 &id("repair-generation"),
                 &id("intro"),
                 0,
                 100
             ))
-            .as_deref(),
-            Some("Original guide")
+            .map(|source| source.content_digest),
+            Some(sha256_hex("Original guide".as_bytes()))
         );
         drop(s);
         let s = h.store();

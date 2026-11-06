@@ -5,7 +5,8 @@ use devworks_core::authority::destructive::{
     CheckedTarget, DestructiveExecutor, DestructiveKind, FileIdentity, RemovalOutcome, ResolveError,
 };
 use devworks_core::authority::reads::{
-    ReadRefusal, ReadRequest, VerifiedBytes, VerifiedFile, VerifiedReader,
+    ReadRefusal, ReadRequest, RewindRead, VerifiedBytes, VerifiedFile, VerifiedReader,
+    VerifiedRewindFile,
 };
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -94,10 +95,19 @@ fn refusal(e: &io::Error) -> ReadRefusal {
 struct HeldFile {
     _ancestors: Vec<File>,
     file: io::Take<File>,
+    limit: u64,
 }
 impl Read for HeldFile {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.file.read(buf)
+    }
+}
+
+impl RewindRead for HeldFile {
+    fn rewind(&mut self) -> io::Result<()> {
+        std::io::Seek::rewind(self.file.get_mut())?;
+        self.file.set_limit(self.limit);
+        Ok(())
     }
 }
 
@@ -117,6 +127,13 @@ impl VerifiedReader for NativeFilesystem {
         })
     }
 
+    fn open_rewindable(&self, req: &ReadRequest<'_>) -> Result<VerifiedRewindFile, ReadRefusal> {
+        let (held, identity) = self.open_verified(req)?;
+        Ok(VerifiedRewindFile {
+            reader: Box::new(held),
+            identity: Some(identity),
+        })
+    }
     fn open(&self, req: &ReadRequest<'_>) -> Result<VerifiedFile, ReadRefusal> {
         let (held, identity) = self.open_verified(req)?;
         Ok(VerifiedFile {
@@ -185,6 +202,7 @@ impl NativeFilesystem {
                 HeldFile {
                     _ancestors: held,
                     file,
+                    limit: req.max_bytes.saturating_add(1),
                 },
                 identity,
             ));
