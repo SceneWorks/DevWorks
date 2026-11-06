@@ -32,3 +32,21 @@ Each image occurrence now charges its expanded base64 size against the existing 
 Strict core all-target checks pass (21.57 s). Final assembled native/strict checks and new published-head CI/review remain separate merge gates. Confidence: high for the recorded local results.
 
 The same cumulative expansion budget also covers JSON tool arguments, exact raw-argument strings, native continuation values and embedding input artifacts. A cross-profile regression exposed direct raw-argument paths in Responses/Chat that bypass JSON materialization; those now preserve the exact original bytes while charging their serialized string size. Counting uses a bounded streaming writer, so it does not allocate a complete serialized value to measure it. Repeated native/tool references are refused within five reads across all six generation profiles; embedding batches are refused within four. All 55 provider unit cases pass (0.17 s), including the existing exact-argument and wire-shape fixtures; strict core all-target checks pass (19.13 s). These extend the same request-bound repair, with no change to artifact authority or inference execution policy.
+
+## HTTP payment refusal preserves access
+
+Review finding 4496430546 exposed three inclusive status ranges in the native source,
+owned sink and connection ledger. HTTP 402 now remains a provider/payment failure;
+only 401 and 403 enter credential rejection (with existing OAuth and model-entitlement
+exceptions). OpenRouter's [error documentation](https://openrouter.ai/docs/api_reference/errors-and-debugging)
+identifies insufficient credits separately from invalid credentials.
+
+The real local HTTP adapter regression first failed because OpenRouterChat became
+`ReauthenticationRequired` after a 402. After repair, OpenRouterChat, Responses and
+Messages retain their exact credential/account revisions and health, do not replay the
+failed request or invent cooldowns, and successfully execute a new explicitly submitted
+request. All five native subscription/access cases pass in 10.36 s, including genuine
+401/403 rejection and OAuth refresh. Core and engine all-target strict checks pass in
+31.81 s. Fixture setup initially used an invalid profile name; that failure was corrected
+before the causal regression. No learned inference, real account or OS credential store
+was accessed. CI cost is the added local HTTP case plus compilation; existing bounds remain.
