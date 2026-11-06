@@ -76,6 +76,42 @@ pub struct ApprovalText {
     error: Option<String>,
 }
 
+/// A small owner-derived package review carries its source bundle as an attachment. Large
+/// reviews instead carry mandatory JSON evidence; plans always require their exact text.
+fn package_source_attachment(p: &ApprovalViewRecord) -> bool {
+    let Some(artifact) = &p.artifact else {
+        return false;
+    };
+    if artifact.media_type != "application/vnd.devworks.package"
+        || !matches!(p.payload, Some(ApprovalContent::SavedOperation { .. }))
+        || !matches!(
+            p.operation_kind.0.as_str(),
+            "addons.install"
+                | "addons.update"
+                | "addons.enable"
+                | "addons.configure"
+                | "addons.rollback"
+        )
+    {
+        return false;
+    }
+    let Some(reviewed) = &p.reviewed_content else {
+        return false;
+    };
+    reviewed.0["operation"] == p.operation_kind.0
+        && reviewed.0["inspection"].is_object()
+        && reviewed.0.pointer("/source/bundle")
+            == Some(&serde_json::to_value(artifact).expect("typed package source"))
+}
+fn required_approval_text(
+    p: &ApprovalViewRecord,
+) -> Option<devworks_core::protocol::provider::ArtifactRef> {
+    match &p.reviewed_source {
+        Some(ApprovalReviewedContent::FeaturePlan { plan, .. }) => Some(plan.content.clone()),
+        _ if package_source_attachment(p) => None,
+        _ => p.artifact.clone(),
+    }
+}
 #[derive(Clone)]
 enum Action {
     Reload,
@@ -93,6 +129,7 @@ enum Action {
     NextText,
     PreviousText,
     OpenWork(String),
+    OpenArtifact(devworks_core::protocol::Id),
     ReloadConfig,
 }
 
@@ -367,12 +404,7 @@ impl Shell {
                 if self.decisions.inspecting.as_deref() != Some(id.as_str()) => {}
             (Slot::ApprovalInspect(_), Reply::Query(q)) => match dops::approval(q) {
                 Ok(p) => {
-                    let artifact = match &p.reviewed_source {
-                        Some(ApprovalReviewedContent::FeaturePlan { plan, .. }) => {
-                            Some(plan.content.clone())
-                        }
-                        _ => p.artifact.clone(),
-                    };
+                    let artifact = required_approval_text(&p);
                     self.decisions.text = artifact.map(|artifact| ApprovalText {
                         artifact,
                         pages: Vec::new(),
@@ -610,6 +642,11 @@ impl Shell {
                 Action::Approval(id) => {
                     self.navigate(Route::Approvals);
                     self.inspect_approval(id);
+                }
+                Action::OpenArtifact(id) => {
+                    self.routes.entry(Route::Artifacts).or_default().selection =
+                        Some(id.as_str().into());
+                    self.navigate(Route::Artifacts);
                 }
                 Action::OpenKnowledge(id) => {
                     self.navigate(Route::Knowledge);
@@ -1088,7 +1125,19 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
         json_view(ui, "Scope", scope);
     }
     if let Some(artifact) = &p.artifact {
-        json_view(ui, "Reviewed artifact identity", artifact);
+        if package_source_attachment(p) {
+            ui.label(format!(
+                "Package source attachment · {} bytes",
+                artifact.byte_length.as_str()
+            ));
+            json_view(ui, "Package source attachment identity", artifact);
+            if ui.button("Open package source artifact").clicked() {
+                actions.push(Action::OpenArtifact(artifact.artifact_id.clone()));
+            }
+            ui.label("The binary bundle is attached separately from the exact owner-derived review below.");
+        } else {
+            json_view(ui, "Reviewed artifact identity", artifact);
+        }
     }
     if let Some(digest) = &p.scope_digest {
         ui.label(format!("Scope digest: {}", digest.as_str()));
@@ -1102,9 +1151,9 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
         ui.colored_label(theme::AMBER,"A newer proposal revision is available. This draft remains bound to the inspected revision.");
     }
     let stale = p.stale == Some(true)
-        || d.current
-            .as_ref()
-            .is_some_and(|current| current.stale == Some(true));
+        || d.current.as_ref().is_some_and(|current| {
+            current.stale == Some(true) || matches!(current.state, ApprovalState::Superseded)
+        });
     if let Some(current) = &d.current
         && (changed || !matches!(current.state, ApprovalState::Pending))
     {
@@ -1277,6 +1326,9 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     });
     let can = enabled
         && matches!(p.state, ApprovalState::Pending)
+        && d.current
+            .as_ref()
+            .is_none_or(|current| matches!(current.state, ApprovalState::Pending))
         && !changed
         && !d.rationale.trim().is_empty();
     let approve = can
@@ -1342,4 +1394,47 @@ fn display_time(ms: i64) -> String {
                 .to_string()
         })
         .unwrap_or_else(|_| "Time unavailable".into())
+}
+
+#[cfg(test)]
+mod artifact_review_tests {
+    use super::*;
+    fn proposal(operation: &str) -> ApprovalViewRecord {
+        let artifact = json!({"artifactId":"source","versionId":"version","sha256":"a".repeat(64),"byteLength":"123","mediaType":"application/vnd.devworks.package"});
+        serde_json::from_value(json!({"id":"review","revision":"1","contentDigest":"b".repeat(64),"state":"Pending","operationKind":operation,"targetId":"pack","targetRevision":"1","summary":"Review exact package","artifact":artifact,"payload":{"kind":"SavedOperation","schemaRevision":"1","input":{}},"reviewedContent":{"operation":operation,"inspection":{},"source":{"bundle":artifact}}})).unwrap()
+    }
+    #[test]
+    fn only_exact_owner_package_sources_are_optional_binary_attachments() {
+        for operation in [
+            "addons.install",
+            "addons.update",
+            "addons.enable",
+            "addons.configure",
+            "addons.rollback",
+        ] {
+            let mut p = proposal(operation);
+            assert!(package_source_attachment(&p));
+            assert!(required_approval_text(&p).is_none());
+            p.artifact.as_mut().unwrap().media_type = "application/json".into();
+            assert!(!package_source_attachment(&p));
+            assert!(
+                required_approval_text(&p).is_some(),
+                "required JSON evidence is never exempted"
+            );
+            p = proposal(operation);
+            p.reviewed_content = None;
+            assert!(
+                required_approval_text(&p).is_some(),
+                "missing owner review cannot establish source-attachment role"
+            );
+            p = proposal(operation);
+            p.artifact.as_mut().unwrap().version_id =
+                devworks_core::protocol::Id::new("different").unwrap();
+            assert!(
+                required_approval_text(&p).is_some(),
+                "a different artifact cannot bypass required evidence loading"
+            );
+        }
+        assert!(required_approval_text(&proposal("git.commit")).is_some());
+    }
 }
