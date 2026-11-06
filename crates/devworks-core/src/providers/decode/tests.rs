@@ -846,3 +846,57 @@ fn responses_item_and_unknown_part_evidence_keeps_exact_native_lexemes() {
         }
     }
 }
+
+#[test]
+fn chat_nested_raw_evidence_follows_escaped_and_duplicate_structural_keys() {
+    let part = r#"{ "type":"future_content", "huge":1e9999, "escaped":"\u0061" }"#;
+    let tool = r#"{ "index":3, "type":"future_tool", "huge":1e9999 }"#;
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for streaming in [false, true] {
+            let key = if streaming {
+                r"del\u0074a"
+            } else {
+                r"mes\u0073age"
+            };
+            let first = format!(
+                r#"{{ "index":0, "{key}":{{"content":[],"con\u0074ent":[{part}],"tool_calls":[],"tool_\u0063alls":[{tool}]}}, "finish_reason":"stop" }}"#
+            );
+            let extra = r#"{ "index":7, "opaque":1.2300e+004 }"#;
+            let wire = format!(
+                r#"{{"choices":[],"cho\u0069ces":[{first},{extra}],"usage":{{"input_tokens":1,"input_\u0074okens":9007199254740993,"output_tokens":2}}}}"#
+            );
+            let mut decoder = Decoder::new(profile.clone());
+            let frames = if streaming {
+                let mut frames = decoder.consume_data_event(None, &wire);
+                frames.extend(decoder.consume_data_event(None, "[DONE]"));
+                frames.extend(decoder.finish());
+                frames
+            } else {
+                decoder.consume_aggregate(wire.as_bytes())
+            };
+            assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
+            for (kind, raw) in [
+                ("chat_content", part),
+                ("nonfunction_chat_tool", tool),
+                ("additional_chat_choice", extra),
+            ] {
+                let found: Vec<_> = frames
+                    .iter()
+                    .filter_map(|f| match f {
+                        DecodedFrame::Native { observation } if observation.kind == kind => {
+                            Some(observation)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(found.len(), 1);
+                assert_eq!(found[0].raw_json, raw);
+            }
+            assert!(frames.iter().any(|f|matches!(f,DecodedFrame::Usage{observation}if observation.input_tokens==Some(9007199254740993))));
+            assert!(calls(&frames).is_empty());
+        }
+    }
+}
