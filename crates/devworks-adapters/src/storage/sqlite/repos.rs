@@ -1056,6 +1056,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn browser(&self) -> &dyn BrowserRead {
         self
     }
+    fn usage(&self) -> &dyn UsageRead {
+        self
+    }
     fn decisions(&self) -> &dyn DecisionRead {
         self
     }
@@ -1294,6 +1297,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
+        self
+    }
+    fn usage(&mut self) -> &mut dyn UsageRepository {
         self
     }
     fn decisions(&mut self) -> &mut dyn DecisionRepository {

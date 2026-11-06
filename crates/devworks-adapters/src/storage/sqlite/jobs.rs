@@ -468,9 +468,20 @@ fn usage_rows(
     after: i64,
     limit: i64,
 ) -> Result<Vec<StoredJobUsage>, StorageError> {
-    let mut st = db(conn.prepare_cached(&format!(
-        "SELECT {USAGE_COLUMNS} FROM job_run_usage WHERE run_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3"
-    )))?;
+    usage_query(
+        conn,
+        &format!(
+            "SELECT {USAGE_COLUMNS} FROM job_run_usage WHERE run_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3"
+        ),
+        &[&run.as_str(), &after, &limit],
+    )
+}
+fn usage_query(
+    conn: &Connection,
+    sql: &str,
+    parameters: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<StoredJobUsage>, StorageError> {
+    let mut st = db(conn.prepare_cached(sql))?;
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
         String,
@@ -489,7 +500,7 @@ fn usage_rows(
         bool,
         i64,
     )> = db(st
-        .query_map(params![run.as_str(), after, limit], |r| {
+        .query_map(parameters, |r| {
             Ok((
                 r.get(0)?,
                 r.get(1)?,
@@ -580,6 +591,13 @@ fn usage_totals(conn: &Connection, run: &Id) -> Result<JobUsageTotals, StorageEr
 macro_rules! job_reads {
     ($t:ty) => {
         impl JobRead for $t {
+            fn usage_history(&self,after:Option<&UsageJobPosition>,limit:u16)->Result<Vec<StoredJobUsage>,StorageError>{
+                let limit=limit_ok(limit)?;
+                let run=after.map_or("",|p|p.run_id.as_str());let sequence=after.map_or(0,|p|p.seq);
+                if sequence<0{return Err(invalid("negative job usage cursor"));}
+                usage_query(self.conn,&format!("SELECT {USAGE_COLUMNS} FROM job_run_usage WHERE (run_id,seq)>(?1,?2) ORDER BY run_id,seq LIMIT ?3"),&[&run,&sequence,&limit])
+            }
+
             fn job(&self, id: &Id) -> Result<Option<StoredJob>, StorageError> {
                 job(self.conn, id)
             }

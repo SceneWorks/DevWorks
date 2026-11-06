@@ -217,6 +217,12 @@ pub struct JobUsageTotals {
 }
 
 pub trait JobRead {
+    /// Global immutable usage facts in exclusive (run_id,seq) order, bounded to MAX_PAGE.
+    fn usage_history(
+        &self,
+        after: Option<&super::UsageJobPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredJobUsage>, StorageError>;
     fn job(&self, id: &Id) -> Result<Option<StoredJob>, StorageError>;
     /// Live (not deleted) jobs of `scope` in case-insensitive title order, then ID, strictly
     /// after `after` (title, ID), optionally only `enabled` ones, at most `limit` (1..=500).

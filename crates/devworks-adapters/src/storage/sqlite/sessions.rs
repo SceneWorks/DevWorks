@@ -798,7 +798,7 @@ pub(crate) fn invocations_sql(column: &str) -> String {
 
 fn usage_facts(
     conn: &Connection,
-    scope: &HistoryScope,
+    scope: Option<&HistoryScope>,
     after: Option<&SequenceKey>,
     limit: u16,
 ) -> Result<Vec<UsageFact>, StorageError> {
@@ -808,7 +808,7 @@ fn usage_facts(
         source: 0,
         id: String::new(),
     });
-    let (column, value) = scope_column(scope);
+    let (column, value) = scope.map_or(("NULL", None), scope_column);
     let keyed = params![value, key.sequence, key.source as i64, key.id, n];
     // Each source pages itself in key order; the merged page keeps the first `limit` keys.
     let mut out = Vec::new();
@@ -1142,13 +1142,14 @@ macro_rules! session_reads {
             ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError> {
                 usage(self.conn, root, after, limit)
             }
+            fn all_usage_facts(&self,after:Option<&SequenceKey>,limit:u16)->Result<Vec<UsageFact>,StorageError>{usage_facts(self.conn,None,after,limit)}
             fn usage_facts(
                 &self,
                 scope: &HistoryScope,
                 after: Option<&SequenceKey>,
                 limit: u16,
             ) -> Result<Vec<UsageFact>, StorageError> {
-                usage_facts(self.conn, scope, after, limit)
+                usage_facts(self.conn, Some(scope), after, limit)
             }
             fn link(&self, id: &Id) -> Result<Option<StoredLink>, StorageError> {
                 link(self.conn, id)

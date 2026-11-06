@@ -384,6 +384,12 @@ macro_rules! router_reads {
             fn cooldowns(&self) -> Result<Vec<StoredCooldown>, StorageError> {
                 cooldowns(self.conn)
             }
+            fn route_requests(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredRouteRequest>,StorageError>{
+                if limit==0||limit>MAX_PAGE{return Err(invalid("route request page limit must be 1..=MAX_PAGE"));}
+                let mut st=db(self.conn.prepare_cached("SELECT request_id FROM router_requests WHERE request_id>?1 ORDER BY request_id LIMIT ?2"))?;
+                let ids=db(db(st.query_map(params![after.map_or("",Id::as_str),limit],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
+                ids.into_iter().map(|s|request(self.conn,&id_of(s)?)?.ok_or_else(||corrupt("route request vanished inside snapshot"))).collect()
+            }
             fn route_request(&self, id: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
                 request(self.conn, id)
             }

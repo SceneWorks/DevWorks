@@ -146,6 +146,7 @@ pub struct StoredUsageBootstrap {
     pub phase: String,
     pub session_after: Option<SequenceKey>,
     pub job_after: Option<UsageJobPosition>,
+    pub router_after: Option<Id>,
     pub source_sequence: i64,
     pub processed: i64,
     pub completed_at_ms: Option<i64>,

@@ -22,6 +22,7 @@ package_ureq = { package = "ureq", version = "=2.12.1", default-features = false
 jsonschema = { version = "=0.28.3", default-features = false }
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
 semver.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlite-vec = "=0.1.7"

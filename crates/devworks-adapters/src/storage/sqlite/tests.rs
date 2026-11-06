@@ -125,6 +125,7 @@ mod router;
 mod runs;
 mod sessions;
 mod settings;
+mod usage;
 mod web;
 mod work;
 
