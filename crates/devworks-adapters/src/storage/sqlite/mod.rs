@@ -32,6 +32,7 @@ mod connections;
 mod decisions;
 mod diagnostics;
 mod evals;
+mod embedding;
 mod git;
 mod graph;
 mod handoff;
