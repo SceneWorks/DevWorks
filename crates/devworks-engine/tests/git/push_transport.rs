@@ -66,7 +66,9 @@ impl State {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        let credential_command = shell_word(&credentials);
+        // Git prefixes named helpers with `git credential-`; use its explicit shell
+        // form so a shell-quoted absolute fixture path remains an executable path.
+        let credential_command = format!("!{}", shell_word(&credentials));
         let ssh_command = shell_word(&helper);
         std::fs::write(home.join(".gitconfig"),format!("[core]\n sshCommand = {}\n[ssh]\n variant = ssh\n[http]\n sslVerify = false\n extraHeader = \"\"\n extraHeader = X-Fixture-Secret: fixture-auth-secret\n[credential]\n helper = \"\"\n helper = {}\n[commit]\n gpgSign = false\n[tag]\n gpgSign = false\n[push]\n gpgSign = false\n",config_value(&ssh_command),config_value(&credential_command))).unwrap();
         let https = https.then(|| TlsServer::start(root, &home));
@@ -656,6 +658,12 @@ impl TlsServer {
         use std::io::BufRead;
         let certificate = home.join("fixture.crt");
         let key = home.join("fixture.key");
+        let certificate_config = home.join("fixture-openssl.cnf");
+        std::fs::write(
+            &certificate_config,
+            "[req]\ndistinguished_name=fixture_dn\n[fixture_dn]\nCN=localhost\n",
+        )
+        .unwrap();
         let output = fixture_command("openssl", home)
             .env("OPENSSL_CONF", null_config())
             .args([
@@ -671,11 +679,17 @@ impl TlsServer {
                 "-keyout",
             ])
             .arg(&key)
+            .arg("-config")
+            .arg(&certificate_config)
             .arg("-out")
             .arg(&certificate)
             .output()
             .unwrap();
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "fixture certificate creation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let script = home.join("https_server.py");
         std::fs::write(&script, include_str!("https_server.py")).unwrap();
         let log = home.join("https-server.log");
