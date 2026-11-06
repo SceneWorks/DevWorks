@@ -2033,6 +2033,7 @@ impl ConnectionService {
                 open_router: None,
                 credential_ref: None,
                 credential_revision: self.first_credential_revision(&id),
+                account_revision: 1,
                 credential_epoch: None,
                 lifecycle: without_credential(p).into(),
                 state_reason: None,

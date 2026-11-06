@@ -181,6 +181,9 @@ pub struct StoredConnection {
     pub lifecycle: String,
     /// A safe, secret-free reason for the lifecycle or the last failure.
     pub state_reason: Option<String>,
+    /// Positive native account identity generation, independent of credential refreshes.
+    /// The owning service preserves it or advances it by one with the connection CAS.
+    pub account_revision: i64,
     /// Digest of the provider account the credential acts for.
     pub account_digest: Option<String>,
     pub access_expires_at_ms: Option<i64>,
