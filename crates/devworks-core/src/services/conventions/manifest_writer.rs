@@ -20,7 +20,7 @@ pub struct EditorConvention<'a> {
     pub slug: &'a str,
     pub title: &'a str,
     pub parent_path: &'a [String],
-    pub sort_order: i32,
+    pub sort_order: Option<i32>,
     pub lifecycle: &'a str,
     pub applicability: &'a [String],
     pub markdown: EditorText<'a>,
@@ -127,11 +127,10 @@ pub fn write_editor_manifest<'a>(
     json(writer, &document.title)?;
     writer.write_all(b",\"parentPath\":")?;
     json(writer, &document.parent_path)?;
-    write!(
-        writer,
-        ",\"sortOrder\":{},\"lifecycle\":",
-        document.sort_order
-    )?;
+    if let Some(order) = document.sort_order {
+        write!(writer, ",\"sortOrder\":{order}")?;
+    }
+    writer.write_all(b",\"lifecycle\":")?;
     json(writer, &document.lifecycle)?;
     writer.write_all(b",\"applicability\":")?;
     json(writer, &document.applicability)?;
@@ -226,7 +225,7 @@ mod tests {
             slug: "slug\0suffix",
             title: "Title\0suffix",
             parent_path: &[],
-            sort_order: -2,
+            sort_order: Some(-2),
             lifecycle: "Retired",
             applicability: &[],
             markdown: EditorText {
@@ -301,7 +300,7 @@ mod tests {
                 slug: "large",
                 title: "Large",
                 parent_path: &[],
-                sort_order: 0,
+                sort_order: Some(0),
                 lifecycle: "Active",
                 applicability: &[],
                 markdown: EditorText {
@@ -316,5 +315,47 @@ mod tests {
         .unwrap();
         assert!(out.0 > count * 6);
         assert!(out.0 < count * 6 + 1024);
+    }
+}
+
+#[cfg(test)]
+mod optional_order_tests {
+    use super::*;
+    #[test]
+    fn omitted_order_and_explicit_zero_are_distinct_and_empty_slug_is_literal() {
+        let body = "# Actual";
+        let digest = crate::fingerprint::sha256_hex(body.as_bytes());
+        for order in [None, Some(0)] {
+            let mut source = std::io::Cursor::new(body.as_bytes());
+            let mut bytes = Vec::new();
+            write_editor_manifest(
+                &mut bytes,
+                EditorConvention {
+                    slug: "",
+                    title: "Actual",
+                    parent_path: &[String::new()],
+                    sort_order: order,
+                    lifecycle: "Active",
+                    applicability: &[],
+                    markdown: EditorText {
+                        sha256: &digest,
+                        byte_length: body.len() as u64,
+                        reader: &mut source,
+                    },
+                    raw_content: None,
+                },
+                std::iter::empty(),
+            )
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value.get("sortOrder").is_some(), order.is_some());
+            assert_eq!(value["slug"], "");
+            assert_eq!(value["parentPath"][0], "");
+            if order.is_some() {
+                assert_eq!(value["sortOrder"], 0);
+            } else {
+                assert!(value.get("sortOrder").is_none());
+            }
+        }
     }
 }

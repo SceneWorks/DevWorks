@@ -303,6 +303,21 @@ impl ImportService {
             let content_ref = document_ref("Markdown")?;
             let raw_content_ref = document_ref("Raw")?;
             let now = tx.now_ms();
+            let sort_order = match metadata.sort_order {
+                Some(order) => order,
+                None => {
+                    let maximum = tx
+                        .conventions()
+                        .convention_max_sort_order(&d.scope, parent.as_ref().map(|p| &p.id))?
+                        .unwrap_or(-1);
+                    let maximum = i32::try_from(maximum).map_err(|_| {
+                        invalid("stored sibling sort order exceeds retained i32 range")
+                    })?;
+                    // Frozen WikiService increments an int in the default unchecked context;
+                    // MySqlWikiStore uses -1 for no siblings. Retain MAX -> MIN explicitly.
+                    maximum.wrapping_add(1)
+                }
+            };
             let proto = StoredConvention {
                 id: d.convention_id.clone(),
                 scope: d.scope.clone(),
@@ -310,7 +325,7 @@ impl ImportService {
                 slug: metadata.slug.ok_or_else(|| invalid("missing slug"))?,
                 title: metadata.title.ok_or_else(|| invalid("missing title"))?,
                 parent_id: parent.as_ref().map(|p| p.id.clone()),
-                sort_order: i64::from(metadata.sort_order.ok_or_else(|| invalid("missing sort"))?),
+                sort_order: i64::from(sort_order),
                 lifecycle: metadata
                     .lifecycle
                     .ok_or_else(|| invalid("missing lifecycle"))?,

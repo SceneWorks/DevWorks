@@ -1052,3 +1052,5 @@ fn current_parent_hold_blocks_work_owned_import_after_membership_move() {
         .is_none()
     );
 }
+#[path = "conventions_import/service.rs"]
+mod service;

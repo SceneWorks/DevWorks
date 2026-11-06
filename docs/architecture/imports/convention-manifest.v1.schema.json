@@ -35,7 +35,8 @@
     "sortOrder": {
       "type": "integer",
       "minimum": -2147483648,
-      "maximum": 2147483647
+      "maximum": 2147483647,
+      "description": "When omitted on import, use the actual sibling maximum plus one (empty maximum -1); preserve signed 32-bit unchecked wrapping. Explicit zero is retained."
     },
     "lifecycle": {
       "enum": [
@@ -163,7 +164,6 @@
     "slug",
     "title",
     "parentPath",
-    "sortOrder",
     "lifecycle",
     "applicability",
     "markdown",

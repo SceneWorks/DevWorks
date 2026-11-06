@@ -331,7 +331,8 @@ impl<'a> Parser<'a> {
                 if self.peek()?.is_some() {
                     return Err(Error::Invalid("trailing manifest content"));
                 }
-                let required = (1 << 10) - 1;
+                // Portable sortOrder is optional; omission appends under publication CAS.
+                let required = ((1 << 10) - 1) & !(1 << 5);
                 if state.seen & required != required {
                     return Err(Error::Invalid("missing required manifest field"));
                 }
