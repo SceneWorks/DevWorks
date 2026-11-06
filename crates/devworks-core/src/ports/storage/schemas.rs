@@ -82,6 +82,10 @@ pub trait SchemaRepository: SchemaRead {
         row: &StoredSchemaSource,
         expected: i64,
     ) -> Result<(), StorageError>;
+    /// Delete at most limit abandoned unsealed rows, then empty staging headers.
+    /// Returns true when no unsealed view remains for this source. Sealed views are retained.
+    fn discard_schema_staging(&mut self, connection: &Id, limit: u16)
+    -> Result<bool, StorageError>;
     fn create_schema_view(&mut self, row: &StoredSchemaView) -> Result<(), StorageError>;
     /// Bounded staging batches are not visible through any read method before sealing.
     fn append_schema_rows(

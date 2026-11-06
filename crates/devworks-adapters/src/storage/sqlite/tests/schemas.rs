@@ -578,3 +578,421 @@ fn native_password_intake_binds_human_and_purpose_and_reconciles_only_unused_han
     );
     assert!(secrets.get(&router_key).unwrap().is_some());
 }
+
+struct CountingMetadata(std::sync::atomic::AtomicUsize);
+impl devworks_core::ports::database::MetadataReader for CountingMetadata {
+    fn read(
+        &self,
+        request: devworks_core::ports::database::MetadataRequest,
+    ) -> devworks_core::ports::database::MetadataFuture {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        devworks_core::ports::database::MetadataReader::read(
+            &crate::database::NativeMetadataReader,
+            request,
+        )
+    }
+}
+fn metadata_owner(
+    h: &Harness,
+    s: std::sync::Arc<super::SqliteStore>,
+    reader: std::sync::Arc<dyn devworks_core::ports::database::MetadataReader>,
+) -> std::sync::Arc<devworks_core::services::schemas::SchemaService> {
+    let artifacts = std::sync::Arc::new(devworks_core::services::artifacts::ArtifactService::new(
+        std::sync::Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
+            h.root.0.clone(),
+            h.root.0.join("cache"),
+        )),
+        std::sync::Arc::new(crate::fs::sources::HostArtifactSources::new(
+            h.clock.clone(),
+            h.ids.clone(),
+        )),
+        std::sync::Arc::new(crate::fs::NativeFilesystem::new()),
+        h.clock.clone(),
+        h.ids.clone(),
+    ));
+    std::sync::Arc::new(
+        devworks_core::services::schemas::SchemaService::new(h.ids.clone(), h.clock.clone())
+            .with_runtime(s, reader, artifacts),
+    )
+}
+fn owner_command(
+    h: &Harness,
+    s: &super::SqliteStore,
+    service: std::sync::Arc<devworks_core::services::schemas::SchemaService>,
+    key: &str,
+    operation: &str,
+    mut body: serde_json::Value,
+) -> devworks_core::protocol::results::DomainDecision {
+    let authority = devworks_core::authority::HostAuthority {
+        store: s,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: s,
+        ids: &*h.ids,
+    };
+    body["kind"] = json!(operation);
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":key,"body":body});
+    match gateway
+        .command(
+            &schema_context(s, "schema-owner"),
+            operation,
+            frame.to_string().as_bytes(),
+            service,
+        )
+        .unwrap()
+    {
+        devworks_core::protocol::CommandReply::Recorded { receipt, .. } => receipt.decision,
+        other => panic!("{other:?}"),
+    }
+}
+fn dispatch_metadata(
+    s: &super::SqliteStore,
+    operation: OperationId,
+    unknown: bool,
+) -> OperationRecord {
+    run_write(s, WriteOptions::default(), move |tx| {
+        let original = tx.operations().operation(&operation)?.unwrap();
+        let a = tx.operations().begin_attempt(
+            &operation,
+            original.revision,
+            AttemptBinding::default(),
+        )?;
+        let dispatched = tx.operations().transition(
+            &operation,
+            original.revision + 1,
+            Some(&a.fence()),
+            devworks_core::protocol::OperationState::Dispatching,
+            None,
+        )?;
+        if unknown {
+            tx.operations().transition(
+                &operation,
+                dispatched.revision,
+                Some(&a.fence()),
+                devworks_core::protocol::OperationState::OutcomeUnknown,
+                None,
+            )
+        } else {
+            Ok(dispatched)
+        }
+    })
+    .unwrap()
+}
+#[test]
+fn native_metadata_worker_recovers_staging_publishes_no_rows_and_observes_after_revocation() {
+    use devworks_core::{
+        protocol::results::{DomainDecision, OperationResult},
+        services::schemas::indexing::SchemaOutcome,
+    };
+    let h = Harness::new();
+    let s = std::sync::Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let path = h.root.0.join("source-fixture.sqlite");
+    rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY, label TEXT DEFAULT 'catalog_default'); CREATE TABLE child(id INT, parent_id INT REFERENCES parent(id)); CREATE INDEX child_parent ON child(parent_id); INSERT INTO parent VALUES(1,'SOURCE_ROW_SENTINEL_NEVER_INDEX');").unwrap();
+    let reader = std::sync::Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
+    let owner = metadata_owner(&h, s.clone(), reader.clone());
+    let mut config =
+        serde_json::to_value(source("native-metadata", true).connection.config.unwrap()).unwrap();
+    config["endpoint"] = json!(path.to_str().unwrap());
+    let made = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "worker-source",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    );
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: source },
+    } = made
+    else {
+        panic!("{made:?}")
+    };
+    let accepted = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "worker-index",
+        "schemas.index",
+        json!({"connectionId":source.id,"expectedRevision":source.revision}),
+    );
+    let DomainDecision::Accepted { operation_id } = accepted else {
+        panic!("{accepted:?}")
+    };
+    let operation = dispatch_metadata(&s, operation_id.clone(), true);
+    let old = operation_id.clone();
+    let connection = source.id.clone();
+    run_write(&*s, WriteOptions::default(), move |tx| {
+        tx.schemas().create_schema_view(&StoredSchemaView {
+            id: id("abandoned-stage"),
+            connection_id: connection,
+            source_revision: 2,
+            operation_id: old,
+            digest: sha256_hex(b"abandoned-stage"),
+            sealed: false,
+            created_at_ms: T0,
+        })
+    })
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let completed = runtime
+        .block_on(owner.run_metadata(&operation, &Cancellation::new()))
+        .unwrap();
+    let SchemaOutcome::Completed(result) = completed else {
+        panic!("{completed:?}")
+    };
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(current.connection.active_operation_id.is_none());
+    assert_eq!(current.connection.revision.get(), 3);
+    let view = current.connection.current_view_id.clone().unwrap();
+    let objects = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas()
+            .schema_objects(&view, &SchemaObjectFilter::default(), None, 500)
+    })
+    .unwrap();
+    assert!(
+        objects
+            .iter()
+            .any(|o| matches!(o.kind, MetadataObjectKind::Table))
+    );
+    assert!(
+        objects
+            .iter()
+            .any(|o| matches!(o.kind, MetadataObjectKind::Column))
+    );
+    assert!(
+        !serde_json::to_string(&objects)
+            .unwrap()
+            .contains("SOURCE_ROW_SENTINEL_NEVER_INDEX")
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT count(*) FROM schema_views WHERE sealed=0",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    let tested = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "worker-test",
+        "schemas.refresh",
+        json!({"connectionId":source.id,"expectedRevision":current.connection.revision,"testOnly":true}),
+    );
+    let DomainDecision::Accepted {
+        operation_id: test_id,
+    } = tested
+    else {
+        panic!("{tested:?}")
+    };
+    let test_operation = dispatch_metadata(&s, test_id, false);
+    let tested = runtime
+        .block_on(owner.run_metadata(&test_operation, &Cancellation::new()))
+        .unwrap();
+    assert!(matches!(tested,SchemaOutcome::Completed(value) if value["outputViews"]==json!([])));
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(current.connection.current_view_id.as_ref(), Some(&view));
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    // A source edit/removal cannot erase the immutable completion witness.
+    let removed = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "worker-remove",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"connectionId":source.id,"expectedRevision":current.connection.revision,"action":"Remove","config":config}),
+    );
+    assert!(matches!(removed, DomainDecision::Applied { .. }));
+    let observed = runtime
+        .block_on(owner.run_metadata(&operation, &Cancellation::new()))
+        .unwrap();
+    assert!(matches!(observed,SchemaOutcome::Completed(value) if value==result));
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    owner.stop();
+}
+
+#[test]
+fn native_metadata_source_revocation_cancels_queued_work_and_can_be_reenabled() {
+    use devworks_core::protocol::results::{DomainDecision, OperationResult};
+    let h = Harness::new();
+    let s = std::sync::Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let reader = std::sync::Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
+    let owner = metadata_owner(&h, s.clone(), reader.clone());
+    let config =
+        serde_json::to_value(source("queued-metadata", true).connection.config.unwrap()).unwrap();
+    let made = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "queued-source",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    );
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: source },
+    } = made
+    else {
+        panic!("{made:?}")
+    };
+    let accepted = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "queued-index",
+        "schemas.index",
+        json!({"connectionId":source.id,"expectedRevision":"1"}),
+    );
+    let DomainDecision::Accepted { operation_id } = accepted else {
+        panic!("{accepted:?}")
+    };
+    let operation = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.operations().operation(&operation_id)
+    })
+    .unwrap()
+    .unwrap();
+    let delivery: Id = serde_json::from_value(operation.payload["deliveryId"].clone()).unwrap();
+    let mut disabled = config.clone();
+    disabled["enabled"] = json!(false);
+    disabled["projectAccess"] = json!([]);
+    let changed = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "queued-disable",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"connectionId":source.id,"expectedRevision":"2","config":disabled}),
+    );
+    assert!(
+        matches!(changed,DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.active_operation_id.is_none() && value.revision.get()==3)
+    );
+    let cancelled = read_snapshot(&*s, &ReadOptions::default(), |r| r.queue().entry(&delivery))
+        .unwrap()
+        .unwrap();
+    assert!(cancelled.cancel_requested || matches!(cancelled.state, QueueState::Cancelled));
+    assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let restored = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "queued-reenable",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"connectionId":source.id,"expectedRevision":"3","config":config}),
+    );
+    assert!(
+        matches!(restored,DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.active_operation_id.is_none() && value.revision.get()==4)
+    );
+}
+
+#[test]
+fn native_metadata_missing_target_is_failed_not_empty_and_releases_source_for_retry() {
+    use devworks_core::{
+        protocol::results::{DomainDecision, OperationResult},
+        services::schemas::indexing::SchemaOutcome,
+    };
+    let h = Harness::new();
+    let s = std::sync::Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let reader = std::sync::Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
+    let owner = metadata_owner(&h, s.clone(), reader.clone());
+    let path = h.root.0.join("later-created.sqlite");
+    let mut config =
+        serde_json::to_value(source("missing-metadata", true).connection.config.unwrap()).unwrap();
+    config["endpoint"] = json!(path.to_str().unwrap());
+    let made = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "missing-source",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    );
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: source },
+    } = made
+    else {
+        panic!("{made:?}")
+    };
+    let accepted = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "missing-index",
+        "schemas.index",
+        json!({"connectionId":source.id,"expectedRevision":"1"}),
+    );
+    let DomainDecision::Accepted { operation_id } = accepted else {
+        panic!("{accepted:?}")
+    };
+    let operation = dispatch_metadata(&s, operation_id, false);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let failed = runtime
+        .block_on(owner.run_metadata(&operation, &Cancellation::new()))
+        .unwrap();
+    assert!(matches!(failed, SchemaOutcome::Failed(_)));
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(current.connection.current_view_id.is_none() && current.connection.coverage.is_none());
+    assert!(
+        current.connection.active_operation_id.is_none() && current.connection.last_error.is_some()
+    );
+    assert!(
+        !path.exists(),
+        "read-only missing-target request cannot create a database"
+    );
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE now_present(id INTEGER PRIMARY KEY)")
+        .unwrap();
+    let accepted = owner_command(
+        &h,
+        &s,
+        owner.clone(),
+        "missing-retry",
+        "schemas.refresh",
+        json!({"connectionId":source.id,"expectedRevision":current.connection.revision}),
+    );
+    let DomainDecision::Accepted { operation_id } = accepted else {
+        panic!("{accepted:?}")
+    };
+    let operation = dispatch_metadata(&s, operation_id, false);
+    assert!(matches!(
+        runtime
+            .block_on(owner.run_metadata(&operation, &Cancellation::new()))
+            .unwrap(),
+        SchemaOutcome::Completed(_)
+    ));
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&source.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        current.connection.current_view_id.is_some() && current.connection.last_error.is_none()
+    );
+}

@@ -260,7 +260,7 @@ async fn compose(
         clock.clone(),
         store.clone(),
         http.clone(),
-        secrets,
+        secrets.clone(),
         Arc::new(devworks_adapters::OsEntropy),
     ));
     let directory: Arc<dyn ConnectionDirectory> = config
@@ -345,6 +345,10 @@ async fn compose(
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
+        reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
+        secrets,
+    });
     runtime_config.providers = Some(match config.providers.clone() {
         Some(providers) => providers,
         None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(

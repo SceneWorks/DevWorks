@@ -3,6 +3,7 @@
 mod access;
 mod commands;
 mod credentials;
+pub mod indexing;
 mod queries;
 
 use crate::ports::{Clock, IdSource};
@@ -12,6 +13,7 @@ pub struct SchemaService {
     pub(crate) ids: Arc<dyn IdSource>,
     pub(crate) clock: Arc<dyn Clock>,
     credentials: Option<credentials::Credentials>,
+    runtime: Option<Arc<indexing::Runtime>>,
 }
 impl SchemaService {
     pub fn new(ids: Arc<dyn IdSource>, clock: Arc<dyn Clock>) -> Self {
@@ -19,6 +21,7 @@ impl SchemaService {
             ids,
             clock,
             credentials: None,
+            runtime: None,
         }
     }
 }

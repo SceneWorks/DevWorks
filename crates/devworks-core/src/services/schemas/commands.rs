@@ -107,11 +107,8 @@ impl SchemaService {
                 "schema_source_remove",
             ));
         }
-        if old
-            .as_ref()
-            .is_some_and(|old| old.connection.active_operation_id.is_some())
-        {
-            return Err(refuse(DomainErrorCode::Conflict, "schema_source_busy"));
+        if let Some(old) = old.as_ref() {
+            super::indexing::cancel_active(tx, old)?;
         }
         if !removing {
             // Explicit target configuration has no inline passwords or URL authority credentials.
@@ -216,6 +213,7 @@ impl SchemaService {
                 })?;
         }
         row.updated_at_ms = now;
+        row.connection.active_operation_id = None;
         if removing {
             row.deleted = true;
             row.connection.state = ItemState::Disabled;
@@ -268,9 +266,8 @@ impl SchemaService {
         input: &ops::RemoveIndexInput,
     ) -> Result<DomainDecision, Failure> {
         let mut row = owner(tx, ctx, &input.connection_id, &input.expected_revision)?;
-        if row.connection.active_operation_id.is_some() {
-            return Err(refuse(DomainErrorCode::Conflict, "schema_source_busy"));
-        }
+        super::indexing::cancel_active(tx, &row)?;
+        row.connection.active_operation_id = None;
         let changed = row.connection.current_view_id.is_some();
         tx.schemas().remove_schema_views(&input.connection_id)?;
         row.connection.current_view_id = None;
@@ -320,11 +317,31 @@ impl CommandHandler for SchemaService {
             OperationInput::Schemas(ops::Input::RemoveIndex(input)) => {
                 self.remove_index(tx, ctx, input)
             }
+            OperationInput::Schemas(ops::Input::Index(input)) => self.decide_index(
+                tx,
+                ctx,
+                command,
+                &input.connection_id,
+                &input.expected_revision,
+                input.test_only.unwrap_or(false),
+            ),
+            OperationInput::Schemas(ops::Input::Refresh(input)) => self.decide_index(
+                tx,
+                ctx,
+                command,
+                &input.connection_id,
+                &input.expected_revision,
+                input.test_only.unwrap_or(false),
+            ),
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
                 "schema_command",
             )),
         };
-        decided(tx, result)
+        let mut result = decided(tx, result)?;
+        if let DomainDecision::Accepted { operation_id } = &result.decision {
+            result.operation_id = Some(operation_id.clone());
+        }
+        Ok(result)
     }
 }

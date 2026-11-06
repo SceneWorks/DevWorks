@@ -65,3 +65,24 @@ pass0.24s across MariaDB/MySQL/PostgreSQL and functional-emulated SQL Server;
 core/adapters all-target strict checks pass29.44s. PostgreSQL fixtures still read no
 source rows. The retained edge and SQL Server SQL files are isolated fixture setup,
 not application migrations or commands against a user database.
+
+## Durable metadata worker checkpoint (2026-11-06)
+
+The shared owner now admits schema index/refresh operations into the native operation journal
+and durable queue. Each worker rechecks source revision, actor/scope/policy/control and attempt
+fences before local writes. Target metadata I/O stays outside the writer; hidden batches contain
+at most500 rows. Final sealing, source pointer and immutable publication witness commit together.
+Source edits revoke/cancel pending work; bounded cleanup removes abandoned staging and preserves
+sealed views. Test-only refresh keeps the existing published view. Failed target access never
+manufactures healthy-empty coverage and releases the source for an explicit retry.
+
+Three actual native SQLite worker cases pass2.08s: interrupted-operation/staging recovery,
+no indexed row sentinel, test-only refresh, completion observation after source removal, queued
+revocation/re-enable, and missing-target failure followed by successful explicit retry. The first
+native gateway test caught and corrected a missing Accepted receipt/operation identity binding.
+Core/adapters/engine/desktop runtime composition passes strict workspace/all-target checks41.89s.
+Tests use SessionSecrets or no credentials; they never access a fixture OS keychain.
+
+DW36 is still incomplete: native Databases manager/navigation, retained schema pin semantics,
+scheduled/sync-all ownership, and remaining adapter/auth/TLS qualification must be implemented
+and verified before item acceptance. SQLServer emulation is functional evidence only.

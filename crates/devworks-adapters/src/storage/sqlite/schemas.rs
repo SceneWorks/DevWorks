@@ -234,6 +234,17 @@ impl SchemaRepository for Unit<'_> {
         }
         Ok(())
     }
+    fn discard_schema_staging(&mut self, connection: &Id, n: u16) -> Result<bool, StorageError> {
+        let n = limit(n)?;
+        let removed=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN (SELECT r.rowid FROM schema_relations r JOIN schema_views v ON v.id=r.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n]))?;
+        db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN (SELECT o.rowid FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.connection_id=?1 AND v.sealed=0 LIMIT ?2)",params![connection.as_str(),n-removed as i64]))?;
+        db(self.conn.execute("DELETE FROM schema_views WHERE id IN (SELECT v.id FROM schema_views v WHERE v.connection_id=?1 AND v.sealed=0 AND NOT EXISTS(SELECT 1 FROM schema_objects o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM schema_relations r WHERE r.view_id=v.id) LIMIT ?2)",params![connection.as_str(),n]))?;
+        db(self.conn.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM schema_views WHERE connection_id=?1 AND sealed=0)",
+            [connection.as_str()],
+            |r| r.get(0),
+        ))
+    }
     fn create_schema_view(&mut self, row: &StoredSchemaView) -> Result<(), StorageError> {
         if row.sealed {
             return Err(invalid("new schema view must be staged"));

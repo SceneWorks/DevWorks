@@ -3856,6 +3856,9 @@ impl SchemaRepository for Unsupported {
     fn revise_schema_source(&mut self, _: &StoredSchemaSource, _: i64) -> Result<(), StorageError> {
         nope()
     }
+    fn discard_schema_staging(&mut self, _: &Id, _: u16) -> Result<bool, StorageError> {
+        nope()
+    }
     fn create_schema_view(&mut self, _: &StoredSchemaView) -> Result<(), StorageError> {
         nope()
     }

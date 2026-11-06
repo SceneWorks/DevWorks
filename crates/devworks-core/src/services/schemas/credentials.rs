@@ -31,6 +31,9 @@ pub(super) struct Credentials {
     intake: Mutex<Intake>,
 }
 impl Credentials {
+    pub(super) fn password(&self, handle: &Id) -> Result<Option<Secret>, SecretError> {
+        self.secrets.get(&self.key(handle))
+    }
     fn key(&self, handle: &Id) -> SecretKey {
         SecretKey::new(
             format!("{}:schema-sources", self.store.info().store_id.0.as_str()),
@@ -91,6 +94,26 @@ impl SchemaService {
         }
         let mut intake = owner.intake.lock().unwrap_or_else(|p| p.into_inner());
         intake.started = true;
+        // A committed handle is owned by its durable source, not an everlasting intake slot.
+        // Keep uncertain reserved handles until startup reconciliation can prove them unused.
+        let committed = read_snapshot(owner.store.as_ref(), &ReadOptions::default(), |read| {
+            intake
+                .staged
+                .keys()
+                .filter_map(|key| Id::new(key.clone()).ok())
+                .map(|id| {
+                    read.schemas()
+                        .schema_credential_in_use(&id)
+                        .map(|used| (id, used))
+                })
+                .collect::<Result<Vec<_>, StorageError>>()
+        })
+        .map_err(|_| SecretError::Failed("schema credential reference check unavailable".into()))?;
+        for (id, used) in committed {
+            if used {
+                intake.staged.remove(id.as_str());
+            }
+        }
         if intake.staged.len() >= 128 {
             return Err(SecretError::Failed(
                 "schema credential intake is full".into(),
