@@ -3,6 +3,7 @@ mod analysis;
 mod budget;
 mod cursor;
 mod dataset;
+mod impact;
 mod languages;
 mod lease;
 mod linking;

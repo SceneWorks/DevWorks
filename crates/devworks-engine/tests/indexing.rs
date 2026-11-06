@@ -6,6 +6,8 @@
 mod common;
 #[path = "indexing/graph_source.rs"]
 mod graph_source;
+#[path = "indexing/graph_impact.rs"]
+mod graph_impact;
 
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;
