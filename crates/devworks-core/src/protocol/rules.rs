@@ -85,8 +85,8 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
         )?;
     }
     if name == "UsageReportRange" {
-        let start = v["startMs"].as_str().and_then(|n| n.parse::<u128>().ok());
-        let end = v["endMs"].as_str().and_then(|n| n.parse::<u128>().ok());
+        let start = v["startMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+        let end = v["endMs"].as_str().and_then(|n| n.parse::<i128>().ok());
         require(
             matches!((start, end), (Some(a), Some(b)) if a < b),
             "usage range requires start before exclusive end",

@@ -4200,7 +4200,11 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "coverage": "Coverage",
-        "models": "Rows<ModelPriceView>"
+        "models": "Rows<ModelPriceView>",
+        "override_history": "?Rows<PriceOverrideOutcome>"
+      },
+      "since": {
+        "override_history": 3
       }
     },
     "PriceCatalogResult": {
@@ -4226,11 +4230,25 @@
         "Set": {
           "model_id": "Id",
           "revision": "Revision",
-          "tariffs": "NonEmpty<PriceTariff>"
+          "tariffs": "NonEmpty<PriceTariff>",
+          "updated_by": "?ActorId",
+          "updated_at_ms": "?Counter"
         },
         "Cleared": {
           "model_id": "Id",
-          "revision": "Revision"
+          "revision": "Revision",
+          "updated_by": "?ActorId",
+          "updated_at_ms": "?Counter"
+        }
+      },
+      "variantSince": {
+        "Set": {
+          "updated_by": 3,
+          "updated_at_ms": 3
+        },
+        "Cleared": {
+          "updated_by": 3,
+          "updated_at_ms": 3
         }
       }
     },
@@ -4256,7 +4274,7 @@
     "UsageReportRange": {
       "kind": "record",
       "fields": {
-        "start_ms": "Counter",
+        "start_ms": "SignedCounter",
         "end_ms": "Counter"
       }
     },
@@ -4400,8 +4418,8 @@
         },
         "Breakdown": {
           "dimension": "Label",
-          "key": "Text",
-          "label": "Text",
+          "key": "Content",
+          "label": "Content",
           "value": "Counter"
         }
       }
@@ -4420,7 +4438,7 @@
       "kind": "record",
       "fields": {
         "dimension": "Label",
-        "value": "Text"
+        "value": "Content"
       }
     },
     "UsageFilterOptions": {

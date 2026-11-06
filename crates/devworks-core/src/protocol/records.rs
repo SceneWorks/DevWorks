@@ -11194,6 +11194,13 @@ pub struct PriceCatalogView {
     pub has_more: bool,
     pub coverage: Coverage,
     pub models: Rows<ModelPriceView>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<PriceOverrideOutcome>", extend("x-since" = 3))]
+    pub override_history: Option<Rows<PriceOverrideOutcome>>,
 }
 impl Check for PriceCatalogView {
     fn check(&self) -> Result<(), String> {
@@ -11205,11 +11212,22 @@ impl Check for PriceCatalogView {
         self.has_more.check()?;
         self.coverage.check()?;
         self.models.check()?;
+        self.override_history.check()?;
         crate::protocol::rules::record(
             "PriceCatalogView",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PriceCatalogView {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.override_history = None;
+        } else {
+            self.override_history.retain_revision(revision);
+        }
     }
 }
 
@@ -11231,7 +11249,11 @@ impl Check for PriceCatalogResult {
     }
 }
 impl Revisioned for PriceCatalogResult {
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Legacy(_) if revision >= 3 => {
@@ -11270,10 +11292,38 @@ pub enum PriceOverrideOutcome {
         model_id: Id,
         revision: Revision,
         tariffs: NonEmpty<PriceTariff>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ActorId", extend("x-since" = 3))]
+        updated_by: Option<ActorId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        updated_at_ms: Option<Counter>,
     },
     Cleared {
         model_id: Id,
         revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ActorId", extend("x-since" = 3))]
+        updated_by: Option<ActorId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        updated_at_ms: Option<Counter>,
     },
 }
 impl Check for PriceOverrideOutcome {
@@ -11283,17 +11333,59 @@ impl Check for PriceOverrideOutcome {
                 model_id,
                 revision,
                 tariffs,
+                updated_by,
+                updated_at_ms,
             } => {
                 model_id.check()?;
                 revision.check()?;
                 tariffs.check()?;
+                updated_by.check()?;
+                updated_at_ms.check()?;
             }
-            Self::Cleared { model_id, revision } => {
+            Self::Cleared {
+                model_id,
+                revision,
+                updated_by,
+                updated_at_ms,
+            } => {
                 model_id.check()?;
                 revision.check()?;
+                updated_by.check()?;
+                updated_at_ms.check()?;
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for PriceOverrideOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Set {
+                updated_by,
+                updated_at_ms,
+                ..
+            } => {
+                if revision < 3 {
+                    *updated_by = None;
+                }
+                if revision < 3 {
+                    *updated_at_ms = None;
+                }
+            }
+            Self::Cleared {
+                updated_by,
+                updated_at_ms,
+                ..
+            } => {
+                if revision < 3 {
+                    *updated_by = None;
+                }
+                if revision < 3 {
+                    *updated_at_ms = None;
+                }
+            }
+        }
     }
 }
 
@@ -11315,7 +11407,11 @@ impl Check for PriceOverrideResult {
     }
 }
 impl Revisioned for PriceOverrideResult {
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Legacy(_) if revision >= 3 => {
@@ -11348,7 +11444,7 @@ impl Check for UsageReportKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageReportRange {
-    pub start_ms: Counter,
+    pub start_ms: SignedCounter,
     pub end_ms: Counter,
 }
 impl Check for UsageReportRange {
@@ -11704,8 +11800,8 @@ pub enum UsageReportRow {
     },
     Breakdown {
         dimension: Label,
-        key: Text,
-        label: Text,
+        key: Content,
+        label: Content,
         value: Counter,
     },
 }
@@ -11773,7 +11869,7 @@ impl Check for UsageAggregatePage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageFilterOption {
     pub dimension: Label,
-    pub value: Text,
+    pub value: Content,
 }
 impl Check for UsageFilterOption {
     fn check(&self) -> Result<(), String> {
