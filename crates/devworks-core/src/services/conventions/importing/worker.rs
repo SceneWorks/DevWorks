@@ -53,19 +53,18 @@ impl ImportService {
                 let reason = error.to_string();
                 let saved = reason.clone();
                 let _ = self.write(move |tx| {
-                    if let Some(d) = tx.conventions().convention_import(&op)? {
-                        if d.phase != "Published"
-                            && !matches!(d.phase.as_str(), "Failed" | "Cancelled")
-                        {
-                            tx.conventions().set_convention_import_phase(
-                                &op,
-                                d.revision,
-                                "Failed",
-                                None,
-                                Some(&saved),
-                                None,
-                            )?;
-                        }
+                    if let Some(d) = tx.conventions().convention_import(&op)?
+                        && d.phase != "Published"
+                        && !matches!(d.phase.as_str(), "Failed" | "Cancelled")
+                    {
+                        tx.conventions().set_convention_import_phase(
+                            &op,
+                            d.revision,
+                            "Failed",
+                            None,
+                            Some(&saved),
+                            None,
+                        )?;
                     }
                     Ok(())
                 });
@@ -168,7 +167,7 @@ impl ImportService {
                 "portable manifest exceeds current artifact file limit",
             ));
         }
-        let mut reader = lease.reader(stopped.clone());
+        let mut reader = lease.import_reader(stopped.clone());
         let mut checkpoint: parser::Checkpoint = serde_json::from_value(draft.checkpoint.clone())
             .map_err(|_| invalid("import checkpoint"))?;
         loop {
@@ -420,6 +419,37 @@ impl ImportService {
             }
             after = rows.last().map(|r| r.operation_id.clone());
             for row in rows {
+                let id = row.operation_id.clone();
+                let row = self.write(move |tx| {
+                    let d = tx
+                        .conventions()
+                        .convention_import(&id)?
+                        .ok_or_else(|| invalid("private import missing"))?;
+                    if matches!(d.phase.as_str(), "Queued" | "Parsing" | "Ready") {
+                        let op = tx
+                            .operations()
+                            .operation(&id)?
+                            .ok_or_else(|| invalid("owning import missing"))?;
+                        let phase = match op.state {
+                            crate::protocol::OperationState::CancelledBeforeDispatch => {
+                                Some("Cancelled")
+                            }
+                            crate::protocol::OperationState::Failed => Some("Failed"),
+                            _ => None,
+                        };
+                        if let Some(phase) = phase {
+                            return tx.conventions().set_convention_import_phase(
+                                &id,
+                                d.revision,
+                                phase,
+                                None,
+                                Some("Owning import operation ended before publication"),
+                                None,
+                            );
+                        }
+                    }
+                    Ok(d)
+                })?;
                 if matches!(row.phase.as_str(), "Cancelled" | "Failed") {
                     loop {
                         if self.is_stopped() {

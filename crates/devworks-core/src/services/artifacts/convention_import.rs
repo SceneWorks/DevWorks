@@ -1,14 +1,14 @@
 //! Private import source leases and prospective artifact rows. No caller can publish an
 //! arbitrary artifact through this seam, and no file open/hash occurs in the publishing UoW.
-use super::lifecycle::ReaderGuard;
-use super::{ArtifactService, StagedFile, Viewer, complete_operation, visible};
+use super::convention_source::ConventionSourceLease;
+use super::{ArtifactService, StagedFile, complete_operation};
 use crate::{
     context::InvocationContext,
-    ports::{IdKind, files::ArtifactFiles, storage::*},
-    protocol::{DomainErrorCode, provider::ArtifactRef},
+    ports::{IdKind, storage::*},
+    protocol::provider::ArtifactRef,
     services::{
         conventions::importing::parser::{Entry, ReadSeek},
-        sessions::{Failure, Refusal},
+        sessions::Failure,
     },
 };
 use serde_json::json;
@@ -17,11 +17,7 @@ use std::{
     sync::Arc,
 };
 
-pub(crate) struct ImportSourceLease {
-    pub version: StoredVersion,
-    files: Arc<dyn ArtifactFiles>,
-    _hold: ReaderGuard,
-}
+pub(crate) type ImportSourceLease = ConventionSourceLease;
 struct SourceReader {
     lease: ImportSourceLease,
     position: u64,
@@ -37,15 +33,9 @@ impl Read for SourceReader {
         }
         let bytes = self
             .lease
-            .files
-            .read_range_controlled(
-                &self.lease.version.blob_digest,
-                &self.lease.version.blob_generation,
-                self.lease.version.byte_count as u64,
-                self.position,
-                output.len().min(64 * 1024),
-                &mut || (self.stop)(),
-            )
+            .read_range_controlled(self.position, output.len().min(64 * 1024), &mut || {
+                (self.stop)()
+            })
             .map_err(|_| io::Error::other("immutable import source unavailable"))?;
         if bytes.is_empty() {
             return Err(io::Error::new(
@@ -75,22 +65,17 @@ impl Seek for SourceReader {
         Ok(self.position)
     }
 }
-impl ImportSourceLease {
-    pub fn reader(self, stop: Arc<dyn Fn() -> bool + Send + Sync>) -> Box<dyn ReadSeek> {
+impl ConventionSourceLease {
+    pub(crate) fn import_reader(
+        self,
+        stop: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Box<dyn ReadSeek> {
         Box::new(SourceReader {
             lease: self,
             position: 0,
             stop,
         })
     }
-}
-fn missing(reference: &ArtifactRef) -> Failure {
-    Refusal::new(
-        DomainErrorCode::NotFound,
-        "convention_import_source",
-        Some(reference.version_id.clone()),
-    )
-    .into()
 }
 fn matches_reference(version: &StoredVersion, reference: &ArtifactRef) -> bool {
     version.id == reference.version_id
@@ -142,41 +127,7 @@ impl ArtifactService {
         ctx: &InvocationContext,
         reference: &ArtifactRef,
     ) -> Result<ImportSourceLease, Failure> {
-        let viewer = Viewer::resolve(read.authority(), ctx)?;
-        let artifact = read
-            .artifacts()
-            .artifact(&reference.artifact_id)?
-            .filter(|artifact| artifact.state == ArtifactState::Live)
-            .ok_or_else(|| missing(reference))?;
-        if !visible(read.artifacts(), &viewer, &artifact)? {
-            return Err(missing(reference));
-        }
-        let version = read
-            .artifacts()
-            .version(&reference.version_id)?
-            .filter(|version| {
-                version.live()
-                    && version.artifact_id == artifact.id
-                    && matches_reference(version, reference)
-            })
-            .ok_or_else(|| missing(reference))?;
-        let hold = self.readers.acquire(&version.blob_digest);
-        if !read
-            .artifacts()
-            .blob(&version.blob_digest)?
-            .is_some_and(|blob| {
-                blob.state == BlobState::Present
-                    && blob.generation == version.blob_generation
-                    && blob.byte_count == version.byte_count
-            })
-        {
-            return Err(missing(reference));
-        }
-        Ok(ImportSourceLease {
-            version,
-            files: self.files.clone(),
-            _hold: hold,
-        })
+        self.resolve_convention_upload(read, ctx, reference)
     }
     pub(crate) fn validate_import_source(
         &self,
@@ -185,23 +136,10 @@ impl ArtifactService {
         reference: &ArtifactRef,
         expected: &StoredVersion,
     ) -> Result<(), Failure> {
-        let viewer = Viewer::resolve(tx.authority(), ctx)?;
-        let artifact = tx
-            .artifacts()
-            .artifact(&reference.artifact_id)?
-            .filter(|artifact| artifact.state == ArtifactState::Live)
-            .ok_or_else(|| missing(reference))?;
-        if !visible(tx.artifacts(), &viewer, &artifact)? {
-            return Err(missing(reference));
+        if !expected.live() || !matches_reference(expected, reference) {
+            return Err(StorageError::ScopeDenied.into());
         }
-        if tx.artifacts().version(&reference.version_id)?.as_ref() != Some(expected)
-            || !expected.live()
-            || !matches_reference(expected, reference)
-            || expected.artifact_id != artifact.id
-        {
-            return Err(missing(reference));
-        }
-        Ok(())
+        self.revalidate_convention_upload(tx, ctx, expected)
     }
     /// The enclosing worker must propagate any failure so the complete capture UoW rolls back.
     pub(crate) fn bind_import_capture(

@@ -44,10 +44,7 @@ impl CommandHandler for Handler {
         self.0
             .prepare_import(c, input(a), e)
             .map(|p| Some(Prepared::new(p)))
-            .map_err(|e| match e {
-                Failure::Storage(e) => e,
-                _ => StorageError::ScopeDenied,
-            })
+            .map_err(|error| panic!("native import preparation unexpectedly failed: {error:?}"))
     }
     fn decide(
         &self,
@@ -57,7 +54,9 @@ impl CommandHandler for Handler {
     ) -> Result<Decided, HandlerFailure> {
         match self.0.decide_import(c, a, t, input(a)) {
             Ok(d) => Ok(d),
-            Err(Failure::Storage(e)) => Err(e.into()),
+            Err(Failure::Storage(e)) => {
+                panic!("native import admission unexpectedly failed: {e:?}")
+            }
             Err(Failure::Refused(e)) => Ok(Decided {
                 decision: DomainDecision::Refused {
                     fault: e.fault(CorrelationId(t.new_id(IdKind::Correlation))),
@@ -77,13 +76,17 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let h = Harness::new();
+        let files = Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("import-cache"),
+        ));
+        Self::with_files(h, files)
+    }
+    fn with_files(h: Harness, files: Arc<dyn devworks_core::ports::files::ArtifactFiles>) -> Self {
         let store = h.open();
         let ctx = principal(store.as_ref(), "actual-human", PrincipalKind::Human);
         let artifacts = Arc::new(ArtifactService::new(
-            Arc::new(NativeArtifactFiles::new(
-                h.root.clone(),
-                h.root.with_extension("import-cache"),
-            )),
+            files,
             Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
             Arc::new(NativeFilesystem::new()),
             h.clock(),
@@ -117,10 +120,14 @@ impl Fx {
             )
             .unwrap()
             .unwrap();
-        let (a, s, actor) = (
+        let (a, s, actor, scope) = (
             self.artifacts.clone(),
             staged.clone(),
             self.ctx.principal().clone(),
+            self.ctx
+                .project_id()
+                .cloned()
+                .map_or(ArtifactScope::Workspace, ArtifactScope::Project),
         );
         let version = write(self.store.as_ref(), move |tx| {
             a.commit_host_bytes_in_scope(
@@ -129,7 +136,7 @@ impl Fx {
                 HostArtifactPublication {
                     title: "Uploaded portable source",
                     media_type: "application/json",
-                    scope: ArtifactScope::Workspace,
+                    scope,
                     owner: actor,
                     provenance: json!({"kind":"NativeImportFixtureUpload"}),
                 },
@@ -151,7 +158,11 @@ impl Fx {
             authority: &authority,
             ids: &*self.h.ids,
         };
-        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Command","requestKey":key,"body":{"kind":"conventions.import","scope":{"kind":"Workspace"},"source":reference,"schema":model::manifest_schema()}});
+        let scope = self.ctx.project_id().map_or(
+            json!({"kind":"Workspace"}),
+            |project| json!({"kind":"Project","projectId":project}),
+        );
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Command","requestKey":key,"body":{"kind":"conventions.import","scope":scope,"source":reference,"schema":model::manifest_schema()}});
         match gateway
             .command(
                 &self.ctx,
@@ -608,4 +619,317 @@ fn current_scope_and_quota_are_rechecked_after_admission_without_publishing_a_pr
             0
         );
     }
+}
+
+struct GateFiles {
+    native: NativeArtifactFiles,
+    calls: std::sync::atomic::AtomicUsize,
+    started: std::sync::mpsc::SyncSender<()>,
+    release: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+struct ReleaseGate(Arc<GateFiles>);
+impl Drop for ReleaseGate {
+    fn drop(&mut self) {
+        *self.0.release.lock().unwrap() = true;
+        self.0.changed.notify_all();
+    }
+}
+macro_rules! native_files {($(fn $name:ident(&self $(,$arg:ident:$ty:ty)*) -> $out:ty;)*)=>{$(fn $name(&self,$($arg:$ty),*)->$out {self.native.$name($($arg),*)})*};}
+impl devworks_core::ports::files::ArtifactFiles for GateFiles {
+    native_files! {
+     fn publish(&self,staging_name:&str,source:&mut dyn std::io::Read,digest:&str,bytes:u64,reuse:Option<&str>,generation:&str)->Result<devworks_core::ports::files::PublishedBlob,devworks_core::ports::files::FileFault>;
+     fn managed_path(&self,digest:&str,generation:&str)->Result<String,devworks_core::ports::files::FileFault>;
+     fn present(&self,digest:&str,generation:&str,bytes:u64)->Result<bool,devworks_core::ports::files::FileFault>;
+     fn inspect(&self,digest:&str,generation:&str)->Result<Option<u64>,devworks_core::ports::files::FileFault>;
+     fn read_range(&self,digest:&str,generation:&str,bytes:u64,offset:u64,max:usize)->Result<Vec<u8>,devworks_core::ports::files::FileFault>;
+     fn open(&self,digest:&str,generation:&str,bytes:u64)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
+     fn open_controlled(&self,digest:&str,generation:&str,bytes:u64,stopped:&mut dyn FnMut()->bool)->Result<Box<dyn std::io::Read+Send>,devworks_core::ports::files::FileFault>;
+     fn unlink(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
+     fn quarantine(&self,digest:&str,generation:&str)->Result<(),devworks_core::ports::files::FileFault>;
+     fn staged(&self)->Result<Vec<String>,devworks_core::ports::files::FileFault>;
+     fn remove_staged(&self,name:&str)->Result<(),devworks_core::ports::files::FileFault>;
+     fn stored_files(&self)->Result<Vec<(String,String)>,devworks_core::ports::files::FileFault>;
+     fn write_derived(&self,key:&str,bytes:&[u8])->Result<(),devworks_core::ports::files::FileFault>;
+     fn read_derived(&self,key:&str,max:usize)->Result<Option<Vec<u8>>,devworks_core::ports::files::FileFault>;
+     fn collect_derived(&self)->Result<u64,devworks_core::ports::files::FileFault>;
+     fn export(&self,digest:&str,generation:&str,bytes:u64,destination:&std::path::Path,overwrite:bool)->Result<(),devworks_core::ports::files::FileFault>;
+    }
+    fn read_range_controlled(
+        &self,
+        digest: &str,
+        generation: &str,
+        bytes: u64,
+        offset: u64,
+        max: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, devworks_core::ports::files::FileFault> {
+        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+            self.started.send(()).unwrap();
+            let mut release = self.release.lock().unwrap();
+            while !*release {
+                release = self.changed.wait(release).unwrap();
+            }
+        }
+        self.native
+            .read_range_controlled(digest, generation, bytes, offset, max, stopped)
+    }
+}
+#[test]
+fn cancellation_during_a_real_source_read_preserves_private_prefix_and_blocks_publication() {
+    let h = Harness::new();
+    let (started, waiting) = std::sync::mpsc::sync_channel(1);
+    let files = Arc::new(GateFiles {
+        native: NativeArtifactFiles::new(h.root.clone(), h.root.with_extension("import-cache")),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        started,
+        release: std::sync::Mutex::new(false),
+        changed: std::sync::Condvar::new(),
+    });
+    let _release = ReleaseGate(files.clone());
+    let f = Fx::with_files(h, files.clone());
+    let source = f.source(&serde_json::to_vec(&manifest(3)).unwrap());
+    let op = f.admit(&source, "cancel-reading");
+    let dispatcher = dispatcher_with(
+        &f.h,
+        f.store.clone(),
+        vec![actual_consumer::consumer(f.service.clone())],
+        |_| {},
+    );
+    let job = std::thread::spawn(move || {
+        runtime().block_on(async {
+            dispatcher.recover().await.unwrap();
+            dispatcher.run_until_idle().await.unwrap();
+        })
+    });
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("worker did not reach source read after private capture");
+    let draft = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
+    assert_eq!(draft.phase, "Parsing");
+    assert!(draft.checkpoint["offset"].as_u64().unwrap() > 0);
+    assert_eq!(
+        read(f.store.as_ref(), |r| r.artifacts().list_workspace(
+            None,
+            &[],
+            None,
+            50
+        ))
+        .len(),
+        1
+    );
+    let saved = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
+    let (service, ctx, id) = (f.service.clone(), f.ctx.clone(), op.clone());
+    write(f.store.as_ref(), move |tx| {
+        service
+            .cancel(
+                tx,
+                &ctx,
+                &id,
+                &devworks_core::protocol::Revision::new(saved.revision).unwrap(),
+                None,
+            )
+            .map_err(|_| StorageError::ScopeDenied)
+    })
+    .unwrap();
+    *files.release.lock().unwrap() = true;
+    files.changed.notify_all();
+    job.join().unwrap();
+    let op_record = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
+    assert_eq!(
+        op_record.state,
+        OperationState::CancelledBeforeDispatch,
+        "{op_record:?}"
+    );
+    assert!(
+        read(f.store.as_ref(), |r| r.conventions().convention(
+            &draft.convention_id,
+            None,
+            &[KnowledgeScope::Workspace]
+        ))
+        .is_none()
+    );
+    f.service.recover_pending().unwrap();
+    assert!(
+        read(f.store.as_ref(), |r| r
+            .conventions()
+            .convention_import_artifacts(&op, None, 32))
+        .is_empty()
+    );
+    assert!(
+        f.artifacts
+            .read_exact(f.store.as_ref(), &f.ctx, &source, 65536)
+            .is_ok()
+    );
+}
+
+fn convention_only_agent(f: &Fx, name: &str) -> InvocationContext {
+    let ctx = principal(f.store.as_ref(), name, PrincipalKind::Agent);
+    let (actor, user) = (ctx.principal().clone(), f.ctx.clone());
+    write(f.store.as_ref(), move |tx| {
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &user,
+            NewPrincipalBinding {
+                actor,
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::WorkspaceCoordinator),
+                project_id: None,
+                tool_families: Some(vec!["conventions".into()]),
+                bound_by: user.principal().clone(),
+            },
+            None,
+        )
+        .map(|_| ())
+        .map_err(|_| StorageError::ScopeDenied)
+    })
+    .unwrap();
+    ctx
+}
+#[test]
+fn convention_only_owner_status_needs_no_history_and_revoke_blocks_the_actual_worker() {
+    let mut f = Fx::new();
+    let human = f.ctx.clone();
+    let agent = convention_only_agent(&f, "owner-agent");
+    let other = convention_only_agent(&f, "different-agent");
+    f.ctx = agent;
+    let source = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
+    let op = f.admit(&source, "agent-owned-import");
+    let status = read(f.store.as_ref(), |r| {
+        Ok(f.service.status(r, &f.ctx, &op, None))
+    })
+    .unwrap();
+    assert_eq!(status.operation.operation_id, op);
+    assert!(status.can_cancel);
+    let foreign = read(f.store.as_ref(), |r| {
+        Ok(f.service.status(r, &other, &op, None))
+    });
+    assert!(matches!(foreign, Err(Failure::Refused(_))));
+    let (service, foreign, id, revision) = (
+        f.service.clone(),
+        other.clone(),
+        op.clone(),
+        status.revision,
+    );
+    assert!(
+        write(f.store.as_ref(), move |tx| service
+            .cancel(tx, &foreign, &id, &revision, None)
+            .map_err(|_| StorageError::ScopeDenied))
+        .is_err()
+    );
+    assert!(
+        !read(f.store.as_ref(), |r| Ok(f
+            .service
+            .status(r, &f.ctx, &op, None)))
+        .unwrap()
+        .cancel_requested
+    );
+    let actor = f.ctx.principal().clone();
+    write(f.store.as_ref(), move |tx| {
+        tx.authority().revoke_principal(&actor, 1).map(|_| ())
+    })
+    .unwrap();
+    let record = f.dispatch(&op);
+    assert_eq!(record.state, OperationState::Failed, "{record:?}");
+    assert_eq!(
+        read(f.store.as_ref(), |r| r.artifacts().list_workspace(
+            None,
+            &[],
+            None,
+            50
+        ))
+        .len(),
+        1
+    );
+    assert!(
+        f.artifacts
+            .read_exact(f.store.as_ref(), &human, &source, 65536)
+            .is_ok()
+    );
+}
+
+#[test]
+fn captured_root_stop_epoch_prevents_an_admitted_import_from_publishing() {
+    let mut f = Fx::new();
+    let project = devworks_core::protocol::ProjectId(id("import-project"));
+    let root = devworks_core::protocol::RootId(id("import-root"));
+    let (p, r) = (project.clone(), root.clone());
+    write(f.store.as_ref(), move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p.clone(),
+            name: "Import project".into(),
+            description: String::new(),
+            lifecycle: ACTIVE.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })?;
+        tx.work().insert_work(&StoredWork {
+            id: r.0.clone(),
+            project_id: p,
+            kind: TASK.into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Owned import root".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            created_by: None,
+            updated_by: None,
+            search_key: "owned import root".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        })?;
+        tx.runs()
+            .insert_root_control(&StoredRootControl::initial(r))
+    })
+    .unwrap();
+    f.ctx = f
+        .ctx
+        .clone()
+        .with_lineage(Some(project.clone()), Some(root.clone()), None);
+    let source = f.source(&serde_json::to_vec(&manifest(0)).unwrap());
+    let op = f.admit(&source, "stop-after-admission");
+    let captured = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
+    assert_eq!(captured.payload["controls"][0][1], json!(0));
+    write(f.store.as_ref(), move |tx| {
+        let mut control = tx.runs().root_control(&root)?.unwrap();
+        let expected = control.revision;
+        control.revision += 1;
+        control.stop_epoch += 1;
+        control.desired = DesiredExecution::Paused;
+        control.updated_at_ms = tx.now_ms();
+        tx.runs().update_root_control(&control, expected)
+    })
+    .unwrap();
+    let record = f.dispatch(&op);
+    assert_eq!(record.state, OperationState::Failed, "{record:?}");
+    let d = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
+    assert!(
+        read(f.store.as_ref(), |r| r.conventions().convention(
+            &d.convention_id,
+            None,
+            &[KnowledgeScope::Project(project.clone())]
+        ))
+        .is_none()
+    );
+    assert_eq!(
+        read(f.store.as_ref(), |r| r.artifacts().list(
+            &project,
+            &[],
+            None,
+            50
+        ))
+        .len(),
+        1
+    );
 }

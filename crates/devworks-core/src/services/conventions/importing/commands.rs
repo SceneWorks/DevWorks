@@ -70,7 +70,6 @@ impl ImportService {
                 })
             })())
         })?
-        .map_err(Into::into)
     }
     pub fn decide_import(
         &self,
@@ -107,18 +106,18 @@ impl ImportService {
                     .unwrap_or_else(|| StoredRootControl::initial(root.clone()))
                     .stop_epoch,
             ));
-            if let Some(work) = tx.work().work(&root.0)? {
-                if let Some(parent) = work.parent_feature_id {
-                    let parent = RootId(parent);
-                    if parent != *root {
-                        controls.push((
-                            parent.clone(),
-                            tx.runs()
-                                .root_control(&parent)?
-                                .unwrap_or_else(|| StoredRootControl::initial(parent.clone()))
-                                .stop_epoch,
-                        ));
-                    }
+            if let Some(work) = tx.work().work(&root.0)?
+                && let Some(parent) = work.parent_feature_id
+            {
+                let parent = RootId(parent);
+                if parent != *root {
+                    controls.push((
+                        parent.clone(),
+                        tx.runs()
+                            .root_control(&parent)?
+                            .unwrap_or_else(|| StoredRootControl::initial(parent.clone()))
+                            .stop_epoch,
+                    ));
                 }
             }
         }

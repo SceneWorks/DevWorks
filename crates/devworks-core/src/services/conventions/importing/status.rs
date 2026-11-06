@@ -46,6 +46,7 @@ fn status(
         (_, "Ready") => ConventionOperationPhase::Publishing,
         _ => ConventionOperationPhase::Queued,
     };
+    let terminal = crate::ports::storage::is_terminal(op.state);
     ConventionOperationStatus {
         operation: OperationRef {
             operation_id: op.id,
@@ -58,7 +59,9 @@ fn status(
         processed_items: counter(d.processed_resources),
         total_items: d.total_resources.map(counter),
         convention_id: Some(d.convention_id),
-        can_cancel: !matches!(d.phase.as_str(), "Published" | "Failed" | "Cancelled") && !cancel,
+        can_cancel: !terminal
+            && !matches!(d.phase.as_str(), "Published" | "Failed" | "Cancelled")
+            && !cancel,
         cancel_requested: cancel,
         reason: d.error.map(crate::protocol::support::BoundedText),
     }
