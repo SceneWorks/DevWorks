@@ -1,7 +1,60 @@
 //! Versioned authored conventions: one scoped owner for native UI, agents and scheduled
 //! indexing. Convention data never grants authority or replaces explicit user instructions.
+pub(crate) mod access;
 pub mod indexing;
 pub mod model;
+
+use crate::ports::storage::ApplicationStore;
+use crate::ports::{Clock, IdSource};
+use crate::services::artifacts::ArtifactService;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+/// One actual catalog owner. Native composition registers handlers only once the complete
+/// service is composed; the index owner is shared by reads, commands and durable workers.
+pub struct ConventionService {
+    pub(crate) store: Arc<dyn ApplicationStore>,
+    pub(crate) artifacts: Arc<ArtifactService>,
+    pub(crate) ids: Arc<dyn IdSource>,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) index: Arc<indexing::IndexService>,
+    pub(crate) stopping: AtomicBool,
+}
+impl ConventionService {
+    pub fn new(
+        store: Arc<dyn ApplicationStore>,
+        artifacts: Arc<ArtifactService>,
+        ids: Arc<dyn IdSource>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        let index = Arc::new(indexing::IndexService::new(
+            store.clone(),
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+        ));
+        Self {
+            store,
+            artifacts,
+            ids,
+            clock,
+            index,
+            stopping: AtomicBool::new(false),
+        }
+    }
+    pub fn indexing(&self) -> Arc<indexing::IndexService> {
+        self.index.clone()
+    }
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.index.stop();
+    }
+    pub fn is_stopped(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+}
 
 pub const OPERATIONS: [&str; 13] = [
     "conventions.list",
