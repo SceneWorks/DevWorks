@@ -333,7 +333,8 @@ pub trait ConventionIndexRead {
         query: &ConventionQuery,
         terms: &[String],
     ) -> Result<ConventionLexicalStatistics, StorageError>;
-    /// Frozen BM25 (k1=1.2,b=.75); positive dense top 4*K; union with ALL lexical matches.
+    /// Frozen BM25 (k1=1.2,b=.75); dense top 4*K discovers candidates alongside ALL
+    /// lexical matches. Every admitted match uses its actual compatible cosine similarity.
     /// Final score=.35*lexical/full_corpus_max+.65*dense, including lexical-only fallback.
     /// Scope/current-version filters precede statistics/ranking. Limit is 1..=50; ties use
     /// current title (binary Unicode), then stable convention/generation/chunk identity.

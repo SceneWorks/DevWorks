@@ -193,6 +193,92 @@ fn scoped_current_generation_ranking_uses_full_corpus_and_exact_vectors() {
     );
 }
 #[test]
+fn lexical_candidates_keep_their_exact_dense_score_outside_dense_top_four_k() {
+    let h = Harness::new();
+    let store = h.store();
+    let generation = run_write(&store, WriteOptions::default(), |tx| {
+        tx.conventions().put_convention_embedding_space(&space())?;
+        let row = record(
+            "fusion",
+            KnowledgeScope::Workspace,
+            Some(artifact(
+                tx,
+                "fusion-body",
+                &KnowledgeScope::Workspace,
+                "dense dense dense dense alpha",
+            )?),
+        );
+        tx.conventions().create_convention(&row)?;
+        let generation = index(tx, &row, "fusion-index", Some("recorded-space"))?;
+        tx.conventions().stage_convention_index(&generation)?;
+        let mut chunks = (0..4)
+            .map(|i| chunk(&generation, i, "dense", 1, Some(vec![1.0, 0.0])))
+            .collect::<Vec<_>>();
+        // Recorded unit vector: cosine .9, below four dense-only matches but the true
+        // hybrid winner (.35 + .65*.9 > .65). No provider/model executes in this test.
+        chunks.push(chunk(
+            &generation,
+            4,
+            "alpha",
+            1,
+            Some(vec![0.9, (1.0_f32 - 0.9_f32.powi(2)).sqrt()]),
+        ));
+        stage_chunks(tx, &generation.generation_id, &chunks)?;
+        tx.conventions()
+            .publish_convention_index(&generation.generation_id, 1, None, 5)?;
+        Ok(generation)
+    })
+    .unwrap();
+    drop(store);
+    let store = SqliteStore::open(h.config()).unwrap();
+    let q = query(vec![KnowledgeScope::Workspace]);
+    let stats = read(&store, |r| {
+        r.conventions()
+            .convention_lexical_statistics(&q, &["alpha".into()])
+    });
+    assert_eq!((stats.documents, stats.total_tokens), (5, 5));
+    assert_eq!(stats.document_frequencies[0].frequency, 1);
+    let weighted = [ConventionWeightedTerm {
+        term: "alpha".into(),
+        idf: (1.0_f64 + 4.5 / 1.5).ln(),
+    }];
+    let rank = |limit| {
+        read(&store, |r| {
+            r.conventions().convention_ranked_chunks(
+                &q,
+                &weighted,
+                1.0,
+                Some("recorded-space"),
+                Some(&[1.0, 0.0]),
+                limit,
+            )
+        })
+    };
+    let one = rank(1);
+    let two = rank(2);
+    let all = rank(50);
+    assert_eq!(one[0].chunk.generation_id, generation.generation_id);
+    assert_eq!(two[0].chunk.index, 4);
+    assert_eq!(
+        one[0].chunk.index, 4,
+        "lexical winner must retain cosine outside dense top4K"
+    );
+    assert!((one[0].dense_score - 0.9).abs() < 1e-6);
+    assert!((one[0].score - 0.935).abs() < 1e-6);
+    assert_eq!(
+        one[0], two[0],
+        "topK cannot change a candidate's score or first result"
+    );
+    assert_eq!(two, all[..2]);
+    assert_eq!(all.len(), 5);
+    for result in &all[1..] {
+        assert_eq!(result.lexical_score, 0.0);
+        assert!((result.dense_score - 1.0).abs() < 1e-6);
+        assert!((result.score - 0.65).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn source_revision_and_operation_cancellation_fence_publication_and_cleanup_is_bounded() {
     let h = Harness::new();
     let store = h.store();
