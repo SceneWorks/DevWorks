@@ -534,6 +534,7 @@ fn rid(s: &str) -> RootId {
 
 #[test]
 fn racing_starts_converge_on_one_activation_and_a_reused_key_replays() {
+    let _native_case = native_runtime_case();
     let fx = Arc::new(Fx::new());
     const N: usize = 6;
     let barrier = Arc::new(Barrier::new(N));
@@ -596,6 +597,7 @@ fn racing_starts_converge_on_one_activation_and_a_reused_key_replays() {
 
 #[test]
 fn one_live_coordinator_per_root_and_assignment_identity_is_enforced() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     let coord = fx.assign("root-f", "root-f", None, None);
@@ -642,6 +644,7 @@ fn one_live_coordinator_per_root_and_assignment_identity_is_enforced() {
 
 #[test]
 fn start_leaves_paused_work_paused_and_pause_stages_are_distinct() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let running = fx.launch("supervisor-1");
@@ -707,6 +710,7 @@ fn start_leaves_paused_work_paused_and_pause_stages_are_distinct() {
 
 #[test]
 fn pause_and_dispatch_admission_are_ordered_on_the_write_owner() {
+    let _native_case = native_runtime_case();
     // Both orders explicitly, then a barrier race asserting the invariant.
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
@@ -770,6 +774,7 @@ fn pause_and_dispatch_admission_are_ordered_on_the_write_owner() {
 
 #[test]
 fn continue_clears_only_covered_holds_and_a_reused_command_cannot_clear_a_later_pause() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.pause(&fx.user, "root-i"));
     let h1 = fx.holds("root-i").pop().unwrap();
@@ -850,6 +855,7 @@ fn continue_clears_only_covered_holds_and_a_reused_command_cannot_clear_a_later_
 
 #[test]
 fn agents_and_schedules_continue_a_human_pause_only_with_a_resume_grant() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.pause(&fx.user, "root-i"));
     let hold = fx.holds("root-i").pop().unwrap();
@@ -982,6 +988,7 @@ fn decision_or_rejected(r: &DomainCommandReply) -> Option<&DomainDecision> {
 
 #[test]
 fn continue_resumes_eligible_descendants_and_children_keep_their_blockers() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     let coord = fx.assign("root-f", "root-f", None, None);
@@ -1043,6 +1050,7 @@ fn continue_resumes_eligible_descendants_and_children_keep_their_blockers() {
 
 #[test]
 fn a_held_tool_call_blocks_only_itself_and_its_dependents() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let coord = fx.assign("root-i", "root-i", None, None);
@@ -1108,6 +1116,7 @@ fn a_held_tool_call_blocks_only_itself_and_its_dependents() {
 
 #[test]
 fn a_session_has_one_continuation_in_flight() {
+    let _native_case = native_runtime_case();
     let fx = Arc::new(Fx::new());
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let coord = fx.assign("root-i", "root-i", None, None);
@@ -1145,6 +1154,7 @@ fn a_session_has_one_continuation_in_flight() {
 
 #[test]
 fn redirect_is_received_acknowledged_and_incorporated_and_fences_only_incompatible_work() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     let coord = fx.assign("root-f", "root-f", None, None);
@@ -1273,6 +1283,7 @@ fn redirect_is_received_acknowledged_and_incorporated_and_fences_only_incompatib
 
 #[test]
 fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     fx.scope.approve(&rid("root-f"), 1, &[("x", "dx")]);
     applied(&fx.start(&fx.user, "root-f", 1, 1));
@@ -1353,6 +1364,7 @@ fn a_result_from_an_earlier_activation_or_older_plan_is_not_current() {
 
 #[test]
 fn eligibility_uses_the_active_plan_and_adoption_fences_only_incompatible_work() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let f = rid("root-f");
     fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
@@ -1443,6 +1455,7 @@ fn eligibility_uses_the_active_plan_and_adoption_fences_only_incompatible_work()
 
 #[test]
 fn implementation_dispatch_requires_current_readiness_independently_of_approval() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let f = rid("root-f");
     fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
@@ -1545,6 +1558,7 @@ fn implementation_dispatch_requires_current_readiness_independently_of_approval(
 
 #[test]
 fn the_production_scope_fails_closed_without_recorded_readiness() {
+    let _native_case = native_runtime_case();
     let h = Harness::new();
     let store = h.open();
     seed(&h);
@@ -1714,6 +1728,7 @@ fn spawn_owned(fx: &Fx, processes: &ProcessSupervisor, root: Option<&str>, proje
 
 #[test]
 fn stop_cancels_root_work_stops_owned_trees_and_answers_a_finished_stop_unchanged() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     seed_delivery(&fx, "root-i");
     applied(&fx.start(&fx.user, "root-i", 1, 1));
@@ -1778,6 +1793,7 @@ fn stop_cancels_root_work_stops_owned_trees_and_answers_a_finished_stop_unchange
 
 #[test]
 fn a_tree_that_cannot_be_verified_stopped_holds_the_root_for_reconciliation() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let host = Arc::new(FakeHost::default());
@@ -1836,6 +1852,7 @@ fn archive_frame(fx: &Fx, project: &str, revision: &str) -> Value {
 
 #[test]
 fn a_committed_archive_kills_the_projects_trees_at_once_through_the_runtime() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     applied(&fx.start(&fx.user, "root-b", 1, 1));
@@ -1928,6 +1945,7 @@ fn a_committed_archive_kills_the_projects_trees_at_once_through_the_runtime() {
 /// archived, and after a restore too (its archival epoch is over).
 #[test]
 fn a_launch_overlapping_an_archival_is_killed_when_it_registers() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (_sup, processes) = supervisor(&fx, host.clone(), None);
@@ -2035,6 +2053,7 @@ fn a_launch_overlapping_an_archival_is_killed_when_it_registers() {
 /// next boot.
 #[test]
 fn a_pending_archive_stop_starts_no_kill_once_shutdown_began() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     host.stubborn.store(true, Ordering::SeqCst);
@@ -2085,6 +2104,7 @@ fn a_pending_archive_stop_starts_no_kill_once_shutdown_began() {
 /// kill of an archival stop is bound to the trees of earlier epochs.
 #[test]
 fn a_stale_archive_stop_never_kills_work_of_a_later_epoch() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host, None);
@@ -2149,6 +2169,7 @@ fn a_stale_archive_stop_never_kills_work_of_a_later_epoch() {
 /// under an earlier epoch.
 #[test]
 fn an_epoch_bound_kill_reaches_only_earlier_epochs() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (_sup, processes) = supervisor(&fx, host, None);
@@ -2179,6 +2200,7 @@ fn an_epoch_bound_kill_reaches_only_earlier_epochs() {
 
 #[test]
 fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let running = fx.launch("supervisor-1");
@@ -2235,6 +2257,7 @@ fn an_archive_whose_kill_never_ran_stays_fenced_after_a_restart() {
 
 #[test]
 fn archival_stops_every_root_of_the_project_immediately() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     applied(&fx.start(&fx.user, "root-i", 1, 1));
@@ -2279,6 +2302,7 @@ fn archival_stops_every_root_of_the_project_immediately() {
 
 #[test]
 fn transient_failures_retry_with_bounded_backoff_then_escalate_once() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let max = fx.service.config().max_attempts;
@@ -2350,6 +2374,7 @@ fn transient_failures_retry_with_bounded_backoff_then_escalate_once() {
 
 #[test]
 fn rate_limits_wait_visibly_and_clear_automatically() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let a = fx.launch("supervisor-1");
@@ -2388,6 +2413,7 @@ fn rate_limits_wait_visibly_and_clear_automatically() {
 
 #[test]
 fn wake_reasserts_running_leases_and_expiry_retries_without_manual_holds() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     applied(&fx.start(&fx.user, "root-b", 1, 1));
@@ -2423,6 +2449,7 @@ fn wake_reasserts_running_leases_and_expiry_retries_without_manual_holds() {
 
 #[test]
 fn root_scoped_deliveries_of_a_paused_root_wait_until_continue() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let handler = Recorder::ok();
     let mut c = consumer("root-work", handler.clone());
@@ -2539,6 +2566,7 @@ impl ActivationLauncher for Scripted {
 
 #[test]
 fn the_supervisor_launches_signals_a_requested_stop_and_records_each_stage() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Scripted::default());
     let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -2661,6 +2689,7 @@ fn composition_with(
 
 #[test]
 fn restart_holds_active_and_accepted_unlaunched_work_until_a_selective_continue() {
+    let _native_case = native_runtime_case();
     let h = Harness::new();
     let store = h.open();
     seed(&h);
@@ -2718,6 +2747,7 @@ fn restart_holds_active_and_accepted_unlaunched_work_until_a_selective_continue(
 
 #[test]
 fn closing_the_app_pauses_persists_and_requires_continue_on_reopen() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Scripted::default());
     let power = Arc::new(FakePower::default());
@@ -2786,6 +2816,7 @@ fn closing_the_app_pauses_persists_and_requires_continue_on_reopen() {
 
 #[test]
 fn a_relaunch_after_lease_expiry_keeps_its_own_launch_entry() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -2843,6 +2874,7 @@ fn a_relaunch_after_lease_expiry_keeps_its_own_launch_entry() {
 
 #[test]
 fn a_stop_stays_pending_until_the_launched_activation_quiesces() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     // A coordinator still finishing admitted work: it ends only when the test releases it.
     let launcher = Arc::new(Gated::default());
@@ -2889,6 +2921,7 @@ fn a_stop_stays_pending_until_the_launched_activation_quiesces() {
 
 #[test]
 fn a_refused_disposition_supersedes_nothing() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-f", 1, 1));
     let coord = fx.assign("root-f", "root-f", None, None);
@@ -2940,6 +2973,7 @@ fn a_refused_disposition_supersedes_nothing() {
 
 #[test]
 fn results_of_an_interrupted_or_expired_owner_are_not_current() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let coord = fx.assign("root-i", "root-i", None, None);
@@ -3001,6 +3035,7 @@ fn results_of_an_interrupted_or_expired_owner_are_not_current() {
 
 #[test]
 fn dropping_the_runtime_aborts_launches_and_releases_the_supervisor() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Scripted::default());
     let rt = runtime();
@@ -3032,6 +3067,7 @@ fn dropping_the_runtime_aborts_launches_and_releases_the_supervisor() {
 
 #[test]
 fn a_lost_acknowledgment_of_a_granted_continue_replays_for_agents_and_schedules() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     for (who, ctx) in [("agent-a", fx.agent.clone()), ("sched-a", fx.sched.clone())] {
         applied(&fx.pause(&fx.user, "root-i"));
@@ -3093,6 +3129,7 @@ fn a_lost_acknowledgment_of_a_granted_continue_replays_for_agents_and_schedules(
 
 #[test]
 fn a_stop_after_continue_reapplies_the_stop_and_cancels_the_reactivation() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -3139,6 +3176,7 @@ fn a_stop_after_continue_reapplies_the_stop_and_cancels_the_reactivation() {
 
 #[test]
 fn a_stop_verified_later_clears_only_its_own_reconciliation_hold() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let host = Arc::new(FakeHost::default());
@@ -3185,6 +3223,7 @@ fn a_stop_verified_later_clears_only_its_own_reconciliation_hold() {
 
 #[test]
 fn a_coordinator_registered_after_a_redirect_must_bind_it_first() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     // The redirect arrives before any coordinator exists.
@@ -3249,6 +3288,7 @@ fn a_coordinator_registered_after_a_redirect_must_bind_it_first() {
 
 #[test]
 fn the_feature_wide_scope_has_no_key_and_named_keys_are_validated() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let f = rid("root-f");
     fx.scope.approve(&f, 1, &[("x", "dx")]);
@@ -3330,6 +3370,7 @@ fn the_feature_wide_scope_has_no_key_and_named_keys_are_validated() {
 
 #[test]
 fn a_pending_stop_never_stops_the_generation_a_continue_created() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -3384,6 +3425,7 @@ fn a_pending_stop_never_stops_the_generation_a_continue_created() {
 
 #[test]
 fn a_result_after_a_plan_change_is_checked_against_the_active_plan() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let f = rid("root-f");
     fx.scope.approve(&f, 1, &[("x", "dx"), ("y", "dy")]);
@@ -3458,6 +3500,7 @@ impl devworks_core::ports::AuthorityPort for HeldAuthority {
 
 #[test]
 fn shutdown_drains_admitted_commands_before_the_quiescence_snapshot() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (entered_tx, entered) = std::sync::mpsc::channel();
     let (release, release_rx) = std::sync::mpsc::channel();
@@ -3528,6 +3571,7 @@ fn shutdown_drains_admitted_commands_before_the_quiescence_snapshot() {
 
 #[test]
 fn archiving_a_project_without_roots_still_stops_its_processes() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
     c.busy_timeout(Duration::from_secs(5)).unwrap();
@@ -3553,6 +3597,7 @@ fn archiving_a_project_without_roots_still_stops_its_processes() {
 
 #[test]
 fn continue_is_refused_while_the_project_is_archived() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.pause(&fx.user, "root-i"));
     let c = rusqlite::Connection::open(fx.h.root.join("workspace.sqlite")).unwrap();
@@ -3601,6 +3646,7 @@ impl ActivationLauncher for StopsOnLaunch {
 
 #[test]
 fn no_further_activation_is_claimed_once_shutdown_begins_mid_tick() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(StopsOnLaunch::default());
     let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -3625,6 +3671,7 @@ fn no_further_activation_is_claimed_once_shutdown_begins_mid_tick() {
 
 #[test]
 fn trees_a_stop_could_not_verify_stay_held_after_a_continue() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -3730,6 +3777,7 @@ fn trees_a_stop_could_not_verify_stay_held_after_a_continue() {
 
 #[test]
 fn archival_reuses_an_unfinished_stop_instead_of_orphaning_it() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     applied(&fx.start(&fx.user, "root-i", 1, 1));
     let host = Arc::new(FakeHost::default());
@@ -3783,6 +3831,7 @@ fn archival_reuses_an_unfinished_stop_instead_of_orphaning_it() {
 
 #[test]
 fn pending_stops_beyond_one_batch_are_executed_in_rotation() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (sup, _) = supervisor(&fx, Arc::new(FakeHost::default()), None);
     let mut sup = Arc::try_unwrap(sup).ok().expect("the only handle");
@@ -3840,6 +3889,7 @@ fn hold_with(
 
 #[test]
 fn supervision_commits_that_unblock_a_root_wake_the_dispatcher() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let handler = Recorder::ok();
     let mut c = consumer("root-work", handler.clone());
@@ -3920,6 +3970,7 @@ fn supervision_commits_that_unblock_a_root_wake_the_dispatcher() {
 /// `shutdown_abandons_a_blocked_monitor_pass_at_its_bound`.)
 #[test]
 fn shutdown_respects_its_bound_while_root_stops_are_pending() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     host.stubborn.store(true, Ordering::SeqCst);
@@ -4108,6 +4159,7 @@ fn held_for_continue(fx: &Fx, root: &str) -> bool {
 /// write-owner probe (a write) never runs after the admission fence closed.
 #[test]
 fn a_blocked_monitor_pass_never_delays_holding_live_work_for_continue() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (rt, app, probe, diagnostics) = blocked_monitor(&fx, Duration::from_secs(3600));
     let _release = Release(probe.clone());
@@ -4145,6 +4197,7 @@ fn a_blocked_monitor_pass_never_delays_holding_live_work_for_continue() {
 /// abandoned at the deadline (still blocked when shutdown returns), and the live work was held.
 #[test]
 fn shutdown_abandons_a_blocked_monitor_pass_at_its_bound() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (rt, app, probe, _) = blocked_monitor(&fx, Duration::from_millis(200));
     let _release = Release(probe.clone());
@@ -4293,6 +4346,7 @@ impl devworks_engine::dispatch::AsyncDeliveryHandler for Stuck {
 /// abandoned at the deadline, still blocked when shutdown returns, and the live work was held.
 #[test]
 fn shutdown_abandons_a_blocked_delivery_and_collection_pass_at_its_bound() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (collection, delivery) = (Arc::new(Gate::default()), Arc::new(Gate::default()));
     let mut composition = composition_with(
@@ -4346,6 +4400,7 @@ fn shutdown_abandons_a_blocked_delivery_and_collection_pass_at_its_bound() {
 
 #[test]
 fn extending_a_large_reconciliation_hold_bounds_its_reason_and_keeps_every_identity() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     host.stubborn.store(true, Ordering::SeqCst);
@@ -4392,6 +4447,7 @@ fn extending_a_large_reconciliation_hold_bounds_its_reason_and_keeps_every_ident
 
 #[test]
 fn one_roots_failure_does_not_block_other_roots_stops_or_claims() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (sup, processes) = supervisor(&fx, Arc::new(FakeHost::default()), None);
     // root-b's stop operation record is unreadable; root-i's is fine.
@@ -4450,6 +4506,7 @@ fn one_roots_failure_does_not_block_other_roots_stops_or_claims() {
 
 #[test]
 fn no_root_stop_is_admitted_once_shutdown_is_requested() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let (sup, processes) = supervisor(&fx, Arc::new(FakeHost::default()), None);
     for (r, p) in [("root-b", "project-b"), ("root-i", "project-a")] {
@@ -4491,6 +4548,7 @@ fn linked_running_issue(fx: &Fx, processes: &ProcessSupervisor) -> StoredActivat
 
 #[test]
 fn a_feature_stop_covers_a_linked_process_with_implicit_controls() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host.clone(), None);
@@ -4526,6 +4584,7 @@ fn a_feature_stop_covers_a_linked_process_with_implicit_controls() {
 
 #[test]
 fn a_feature_pause_and_stop_reach_a_linked_cards_running_activation_and_its_trees() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host.clone(), None);
@@ -4568,6 +4627,7 @@ fn a_feature_pause_and_stop_reach_a_linked_cards_running_activation_and_its_tree
 
 #[test]
 fn a_linked_cards_retained_activation_is_not_renewed_once_its_feature_holds_it() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (_sup, processes) = supervisor(&fx, host, None);
@@ -4606,6 +4666,7 @@ fn a_linked_cards_retained_activation_is_not_renewed_once_its_feature_holds_it()
 
 #[test]
 fn a_pending_feature_stop_never_stops_a_linked_cards_work_after_it_is_unlinked_and_continued() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -4743,6 +4804,7 @@ fn a_pending_feature_stop_never_stops_a_linked_cards_work_after_it_is_unlinked_a
 
 #[test]
 fn a_pending_feature_stop_never_settles_a_newer_generation_of_an_unlinked_card() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -4835,6 +4897,7 @@ fn pending_feature_stop_with_a_running_issue(
 
 #[test]
 fn a_completed_feature_stop_is_not_reused_when_newly_linked_work_is_running() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host.clone(), None);
@@ -4864,6 +4927,7 @@ fn a_completed_feature_stop_is_not_reused_when_newly_linked_work_is_running() {
 
 #[test]
 fn a_process_only_card_linked_during_a_pending_feature_stop_is_covered() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let host = Arc::new(FakeHost::default());
     let (sup, processes) = supervisor(&fx, host.clone(), None);
@@ -4899,6 +4963,7 @@ fn a_process_only_card_linked_during_a_pending_feature_stop_is_covered() {
 
 #[test]
 fn a_card_linked_while_its_features_stop_is_pending_is_stopped_and_waited_for() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -4962,6 +5027,7 @@ fn a_card_linked_while_its_features_stop_is_pending_is_stopped_and_waited_for() 
 
 #[test]
 fn a_card_linked_while_its_features_stop_is_pending_is_covered_across_a_restart() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -5019,6 +5085,7 @@ fn a_card_linked_while_its_features_stop_is_pending_is_covered_across_a_restart(
 
 #[test]
 fn a_card_covered_by_extension_is_not_stopped_after_it_is_unlinked_and_continued() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -5083,6 +5150,7 @@ fn a_card_covered_by_extension_is_not_stopped_after_it_is_unlinked_and_continued
 
 #[test]
 fn a_reapplied_feature_stop_covers_a_card_linked_after_the_feature_continued() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let host = Arc::new(FakeHost::default());
@@ -5154,6 +5222,7 @@ fn end_issue_launch(
 
 #[test]
 fn continuing_a_linked_card_while_it_stops_arms_no_reactivation() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
@@ -5174,6 +5243,7 @@ fn continuing_a_linked_card_while_it_stops_arms_no_reactivation() {
 
 #[test]
 fn a_reactivation_armed_before_a_card_is_linked_is_withdrawn_when_its_activation_stops() {
+    let _native_case = native_runtime_case();
     let fx = Fx::new();
     let launcher = Arc::new(Gated::default());
     let (sup, _processes) = supervisor(&fx, Arc::new(FakeHost::default()), Some(launcher.clone()));
