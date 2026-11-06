@@ -1555,7 +1555,7 @@ pub(super) static CATALOG: [OperationDescriptor; 360] = [
         result_type: "HistoryPage<Event>",
         result_schema: schema_of::<HistoryPage<Event>>,
         completion: false,
-        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2), SchemaRevision(3)],
     },
     OperationDescriptor {
         name: "history.work_lineage",

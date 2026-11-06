@@ -446,6 +446,14 @@ pub trait SessionRead {
         after: i64,
         limit: u16,
     ) -> Result<Vec<EventRecord>, StorageError>;
+    /// Newest-first decided commands, strictly before the optional sequence boundary.
+    /// None starts at the newest committed decision; scope filtering precedes the limit.
+    fn decisions_before(
+        &self,
+        scope: &HistoryScope,
+        before: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<EventRecord>, StorageError>;
 }
 
 pub trait SessionRepository: SessionRead {

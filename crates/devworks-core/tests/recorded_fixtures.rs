@@ -348,7 +348,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1846), 1846);
+    assert_eq!(run("domain-fixtures.json", 1859), 1859);
 }
 
 #[test]
@@ -431,8 +431,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // Help adds four revision-3 queries; all twenty graph operations add revision 3.
     // These add24 to546. Conventions and embedding spaces add fourteen revision-3 bindings;
     // fixture admission independently verifies all584 bindings.
-    // DW36 adds seven schema-source and one shared connection-result revision5 admissions.
-    assert_eq!(admitted.len(), 596);
+    // Accepted DW89 adds one admission; DW36 adds eight revision5 admissions.
+    assert_eq!(admitted.len(), 597);
 }
 
 #[test]
@@ -582,6 +582,7 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "index-command-request/ref",
             "index-command-request/scope",
             "index-command-request/unitKey",
+            "query-request/newestFirst",
             "query-request/projectId"
         ]
     );

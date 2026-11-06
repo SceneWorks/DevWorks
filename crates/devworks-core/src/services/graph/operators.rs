@@ -323,20 +323,28 @@ fn graph_steps(
     let mut nodes = BTreeMap::<Key, CodeNode>::new();
     let mut edges = Vec::new();
     let mut seen = BTreeSet::new();
-    for (index, step) in steps.iter().enumerate().skip(reader.position.offset) {
+    for (index, step) in steps.iter().enumerate() {
+        // Prefix identity is part of the logical traversal, including rows before this page.
+        // Borrow stable step strings; page boundaries never reset edge deduplication.
+        if !seen.insert((
+            step.edge.raw.repository_id.as_str(),
+            step.edge.raw.edge.unit_key.as_str(),
+            step.edge.raw.edge.edge_id.as_str(),
+        )) {
+            continue;
+        }
+        if !reader.budget.retain(96) {
+            break;
+        }
+        if index < reader.position.offset {
+            continue;
+        }
         if edges.len() >= reader.limit.min(250) {
             reader.next = Some(Position {
                 offset: index,
                 ..Default::default()
             });
             break;
-        }
-        if !seen.insert((
-            step.edge.raw.repository_id.as_str().to_owned(),
-            step.edge.raw.edge.unit_key.clone(),
-            step.edge.raw.edge.edge_id.clone(),
-        )) {
-            continue;
         }
         let (edge, edge_next) = model::edge_page(
             &step.edge,

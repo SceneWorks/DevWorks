@@ -111,7 +111,9 @@ pub fn prepare(
                 *requires_images,
                 *requires_parallel_tools,
             )?;
-            let tools = materialize::tools(materials, tools)?;
+            let tools = materialize::tools(materials, tools, |tool| {
+                encoder.charge_json(&(&tool.schema, &tool.description, &tool.wire_name))
+            })?;
             let body = encoder.generation(
                 &context,
                 request,
