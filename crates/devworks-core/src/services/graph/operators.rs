@@ -141,11 +141,11 @@ pub(super) fn by_file(
             let end = n.node.payload["span"]["endLine"].as_u64().unwrap_or(start);
             (
                 end.saturating_sub(start),
-                std::cmp::Reverse(match n.node.kind.as_str() {
+                match n.node.kind.as_str() {
                     "Method" => 0,
                     "Class" => 1,
                     _ => 2,
-                }),
+                },
                 n.node.node_id.clone(),
             )
         };

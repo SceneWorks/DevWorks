@@ -20,3 +20,15 @@ retention suite passes 6/6 in 2.25 seconds; all 26 existing decode tests pass.
 The bounded tests extend the existing normal non-inference test binary, with no
 new workflow, download, timeout or inference workload. Assembled-head strict checks,
 hosted CI, automated re-review and merge remain required.
+
+## Older Messages and request-expansion findings
+
+The full thread audit recovered three earlier unaddressed findings. A scalar Messages content block followed by a delta reproduced a JSON-indexing panic. Non-object blocks are now rejected before storage; every later delta fails normally. The native decoder regression covers null, string, number, array and boolean blocks with text, thinking, signature and citation deltas on both Messages profiles.
+
+Messages text/thinking/signature deltas now append to their existing strings. A new allocation regression reproduces the old quadratic cost at only 256 fragments (18,419,398 allocated bytes for 53,871 wire bytes). The repaired decoder preserves complete signed native reasoning and exact text/signature contents at 256 and 2,048 fragments on both profiles, within the existing linear allocation bounds. All seven retention regressions pass (1.98 s); all 53 provider unit cases pass. The initial regression discarded terminal frames and used an unsigned thinking fixture; those fixture mistakes were corrected without relaxing completion or allocation assertions.
+
+Each image occurrence now charges its expanded base64 size against the existing total request budget before reading or retaining it, including repeated references to one authorized blob. A fixture with 512 references read all 513 materials (including context) before the old encoder refused an oversized 48 KiB request. The repaired encoder refuses within four reads across the supported generation profiles. A bounded JSON writer also stops serialization before producing an oversized request buffer. Artifact ownership, source-byte validation and profile-specific wire shapes remain intact. No inference, transport, network or OS secret-store access runs in these checks.
+
+Strict core all-target checks pass (21.57 s). Final assembled native/strict checks and new published-head CI/review remain separate merge gates. Confidence: high for the recorded local results.
+
+The same cumulative expansion budget also covers JSON tool arguments, exact raw-argument strings, native continuation values and embedding input artifacts. A cross-profile regression exposed direct raw-argument paths in Responses/Chat that bypass JSON materialization; those now preserve the exact original bytes while charging their serialized string size. Counting uses a bounded streaming writer, so it does not allocate a complete serialized value to measure it. Repeated native/tool references are refused within five reads across all six generation profiles; embedding batches are refused within four. All 55 provider unit cases pass (0.17 s), including the existing exact-argument and wire-shape fixtures; strict core all-target checks pass (19.13 s). These extend the same request-bound repair, with no change to artifact authority or inference execution policy.

@@ -172,7 +172,7 @@ pub(super) fn overview(
         value["internalModules"] = json!(module_analysis::query(reader, &scope)?);
         value["graphTotals"] =
             json!({"nodeCount":counts.nodes.to_string(),"edgeCount":counts.edges.to_string()});
-        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() || reader.selected.layers.iter().any(|v|v.view.coverage["state"]!="Complete") { "Partial" } else { "Complete" },"gaps":[],"moreGaps":false});
+        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() || !reader.indexes_complete(&scope)? { "Partial" } else { "Complete" },"gaps":[],"moreGaps":false});
         value
             .as_object_mut()
             .expect("object")
