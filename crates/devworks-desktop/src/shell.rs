@@ -3050,6 +3050,14 @@ impl Shell {
         match action {
             A::Reload => self.load_connections(),
             A::EmbeddingSetup => self.open_embedding_setup(),
+            A::EmbeddingPrice(model) => {
+                self.usage.price_models = model;
+                self.usage.price_providers.clear();
+                self.usage.price_snapshots.clear();
+                self.usage.history = false;
+                self.routes.entry(Route::Usage).or_default().tab = 2;
+                self.navigate(Route::Usage);
+            }
             A::EmbeddingSpaces { cursor } => self.load_embedding_spaces(cursor),
             A::UseSessionOnly => {
                 if let Some(b) = self.backend() {

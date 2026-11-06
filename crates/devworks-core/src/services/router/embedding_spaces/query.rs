@@ -144,9 +144,14 @@ impl EmbeddingSpaceService {
             && operation.as_ref().is_none_or(|o| is_terminal(o.state))
             && !matches!(status, EmbeddingSpaceStatus::Qualified);
         let evidence = q.evidence.as_ref();
+        let pricing_model_id = read
+            .router()
+            .embedding_price_subject_for_candidate(&c.id)?
+            .map(|subject| subject.model_id);
         Ok(EmbeddingSpaceRecord {
             id: c.id,
             space_id: c.space_id,
+            pricing_model_id,
             revision: rev(q.revision),
             name: BoundedText(c.name),
             connection_id: c.connection_id,

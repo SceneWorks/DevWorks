@@ -43,6 +43,7 @@ pub enum ConnectionAction {
         cursor: Option<String>,
     },
     EmbeddingSetup,
+    EmbeddingPrice(String),
     /// A `router.configure` action; `key` (an API key the user typed) is staged in the OS secret
     /// store first and its handle set as the action's `credentialRef`; `code` (a pasted
     /// `code#state`) is attached to the open sign-in `flow` first.

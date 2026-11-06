@@ -214,6 +214,21 @@ impl Shell {
         else {
             return;
         };
+        // Current price subjects include non-conversational embedding identities. Older
+        // servers may omit this metadata, so retain the existing conversational fallback.
+        let identity = record
+            .upstream_model_id
+            .as_ref()
+            .zip(record.endpoint_profile.as_ref())
+            .map(|(u, p)| (u.0.as_str(), p))
+            .or_else(|| {
+                self.chat
+                    .routing
+                    .catalog
+                    .iter()
+                    .find(|r| r.id.as_str() == model)
+                    .map(|r| (r.upstream_model_id.0.as_str(), &r.endpoint_profile))
+            });
         let configured = prices
             .items
             .0
@@ -238,31 +253,17 @@ impl Shell {
             // rather than to a local catalog model ID. Resolve that exact identity before
             // seeding an override; history can contain other snapshots and upstream models.
             let upstream = if record.snapshot_id.is_some() {
-                let Some(selected) = self
-                    .chat
-                    .routing
-                    .catalog
-                    .iter()
-                    .find(|r| r.id.as_str() == model)
-                else {
+                let Some((wire, profile)) = identity else {
                     self.usage.price_error = Some(
-                        "Reload the model catalog before editing this official tariff.".into(),
+                        "Reload the price subject before editing this official tariff.".into(),
                     );
                     return;
                 };
-                Some(
-                    if matches!(selected.endpoint_profile, EndpointKind::OpenRouterChat) {
-                        selected
-                            .upstream_model_id
-                            .0
-                            .split_once('/')
-                            .map_or(selected.upstream_model_id.0.as_str(), |(_, upstream)| {
-                                upstream
-                            })
-                    } else {
-                        selected.upstream_model_id.0.as_str()
-                    },
-                )
+                Some(if matches!(profile, EndpointKind::OpenRouterChat) {
+                    wire.split_once('/').map_or(wire, |(_, upstream)| upstream)
+                } else {
+                    wire
+                })
             } else {
                 None
             };
@@ -287,14 +288,11 @@ impl Shell {
         };
         if tariffs.is_empty() {
             let mut form = TariffForm::default();
-            if let Some(record) = self
-                .chat
-                .routing
-                .catalog
-                .iter()
-                .find(|r| r.id.as_str() == model)
-            {
-                form.upstream = record.upstream_model_id.0.clone();
+            if let Some((wire, profile)) = identity {
+                form.upstream = wire.into();
+                if matches!(profile, EndpointKind::Embedding) {
+                    form.profile = "Embedding".into();
+                }
             }
             tariffs.push(form);
         }

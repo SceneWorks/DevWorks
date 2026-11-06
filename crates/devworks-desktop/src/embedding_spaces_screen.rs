@@ -141,6 +141,7 @@ impl EmbeddingSpacesPanel {
                 ui.monospace(format!("Space: {}",record.space_id.as_str()));
                 if let Some(reason)=&record.reason {ui.label(&reason.0);}
                 if let Some(operation)=&record.qualification_operation {ui.label(format!("Qualification operation: {} ({})",operation.operation_id.0.as_str(),wire(&operation.state)));}
+                if let Some(model)=&record.pricing_model_id && ui.add_enabled(idle&&!self.loading,egui::Button::new(format!("Configure price for {}",record.name.0))).clicked() {actions.push(ConnectionAction::EmbeddingPrice(model.as_str().into()));}
                 let state=wire(&record.status);
                 if record.can_qualify && ui.add_enabled(idle&&!self.loading,egui::Button::new(format!("Queue qualification for {} (may incur usage)",record.name.0))).clicked() {
                     configure(actions,format!("Queue qualification for {}",record.name.0),json!({"kind":"QualifyEmbeddingSpace","candidateId":record.id,"expectedRevision":record.revision}));
