@@ -228,6 +228,7 @@ impl UsageRuntime {
             source,
             sink,
             preparation,
+            cancellation,
         } = production;
         self.produce_prepared(Production {
             context,
@@ -255,6 +256,7 @@ impl UsageRuntime {
             source,
             sink,
             preparation,
+            cancellation,
         } = production;
         let host = self.host.clone().ok_or_else(|| {
             StorageError::unavailable(
@@ -280,6 +282,7 @@ impl UsageRuntime {
         let preparing = Preparing(runtime.clone());
         owned_thread(move || {
             let _preparing = preparing;
+            if cancellation.as_ref().is_some_and(Cancellation::is_cancelled) { return Err(StorageError::Cancelled); }
             if let Some(preparation)=preparation {
                 let refreshed=preparation.prepare(&context,&logical,&request)?;
                 if let Some(refreshed)=refreshed {
@@ -305,7 +308,7 @@ impl UsageRuntime {
                 } => attempt,
                 refusal => return Ok(DriveOutcome::Refused(refusal)),
             };
-            let cancellation = Cancellation::new();
+            let cancellation = cancellation.unwrap_or_else(Cancellation::new);
             {
                 let mut active = runtime.active.lock().unwrap_or_else(|p| p.into_inner());
                 match active.entry(attempt.attempt_id.clone()) {

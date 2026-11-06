@@ -562,6 +562,26 @@ impl Fx {
         processing_region: Option<String>,
         embedding_session: bool,
     ) -> Result<devworks_engine::providers::driver::ProviderInvocation, StorageError> {
+        self.produce_dimensions_cancellable(
+            request,
+            pricing,
+            modalities,
+            service_tier,
+            processing_region,
+            (embedding_session, None),
+        )
+        .await
+    }
+    async fn produce_dimensions_cancellable(
+        &self,
+        request: InferenceRequest,
+        pricing: PricingContext,
+        modalities: Vec<String>,
+        service_tier: Option<String>,
+        processing_region: Option<String>,
+        auxiliary: (bool, Option<Cancellation>),
+    ) -> Result<devworks_engine::providers::driver::ProviderInvocation, StorageError> {
+        let (embedding_session, cancellation) = auxiliary;
         let embedding = matches!(request.input, InferenceInput::Embedding { .. });
         let (selection, query) = if embedding {
             self.driver.embedding_selection(&id("space")).unwrap()

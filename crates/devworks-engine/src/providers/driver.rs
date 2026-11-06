@@ -105,6 +105,7 @@ pub(crate) struct NativeProduction {
     pub source: Box<dyn OwnedInferenceSource>,
     pub sink: Box<dyn OwnedInferenceSink>,
     pub preparation: NativePreparation,
+    pub cancellation: Option<Cancellation>,
 }
 pub(crate) struct NativePreparation {
     owner: Arc<NativeProviders>,
