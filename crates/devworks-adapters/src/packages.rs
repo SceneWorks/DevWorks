@@ -605,6 +605,9 @@ impl NativePackageFiles {
                 devworks_core::authority::reads::ReadRefusal::NotFound => {
                     PackageFileError::Missing(file.path.clone())
                 }
+                devworks_core::authority::reads::ReadRefusal::Io(reason) => {
+                    PackageFileError::Io(reason)
+                }
                 _ => {
                     PackageFileError::Mismatch(format!("{:?} is unavailable or changed", file.path))
                 }
