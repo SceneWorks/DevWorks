@@ -119,6 +119,7 @@
 //! `StorageUnavailable`.
 pub mod evidence;
 pub mod host;
+mod index_source;
 pub mod lifecycle;
 pub mod observed;
 pub mod preview;

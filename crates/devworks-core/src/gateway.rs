@@ -315,7 +315,15 @@ impl Gateway<'_> {
                 return Ok(reply);
             }
         }
-        let answered = read_snapshot(self.store, &options, |snapshot| {
+        let mut read_options = options.clone();
+        if let Some(deadline) = handler.read_deadline_ms(&admitted) {
+            read_options.deadline_ms = Some(
+                read_options
+                    .deadline_ms
+                    .map_or(deadline, |host| host.min(deadline)),
+            );
+        }
+        let answered = read_snapshot(self.store, &read_options, |snapshot| {
             let stamp = snapshot.stamp().clone();
             if &stamp.store_id != ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
             {

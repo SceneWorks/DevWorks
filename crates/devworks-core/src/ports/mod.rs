@@ -238,10 +238,17 @@ pub struct QueryAnswer {
 /// Read use cases run against one read snapshot. Queries never mint grants, clear blockers,
 /// claim work or consume budget.
 pub trait QueryHandler: Send + Sync {
+    /// An optional absolute store-clock deadline established by bounded preparation. The
+    /// gateway can only tighten the host's read deadline with this hint; it never replaces
+    /// cancellation or allows a handler to extend a host bound.
+    fn read_deadline_ms(&self, _query: &AdmittedQuery) -> Option<i64> {
+        None
+    }
     /// Bounded external preparation of an admitted, currently authorized query, outside any read
     /// snapshot and write transaction: for example a host-native external read (the web tools)
     /// and the evidence it records. It never mints a receipt, grant or blocker change; what it
-    /// writes (journaled staging, evidence artifacts, host diagnostics) must be complete and
+    /// writes (journaled staging, evidence artifacts, host diagnostics, internal retention
+    /// leases) must be complete and
     /// recoverable on its own, because the query's publication can still be denied. `env`
     /// carries the caller's cancellation and deadline. An `Err` is the query's typed fault. The
     /// default prepares nothing.

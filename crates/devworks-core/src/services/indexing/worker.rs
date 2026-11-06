@@ -119,7 +119,7 @@ pub(crate) struct PlanUnit {
     pub mode: &'static str,
     pub language: Option<&'static str>,
     pub size: u64,
-    /// The blob to read (structural units only).
+    /// The blob to read for extraction or private source capture (within the source limit).
     pub oid: Option<String>,
     pub previous: Option<String>,
     /// Directory units: child keys and whether each is a directory.
@@ -191,7 +191,11 @@ pub(crate) fn plan(
             mode,
             language: lang,
             size: e.size,
-            oid: (mode == MODE_STRUCTURAL).then(|| e.oid.clone()),
+            oid: (matches!(
+                mode,
+                MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK | MODE_NOT_SELECTED
+            ) && e.size <= cfg.max_bytes_for(&e.path) as u64)
+                .then(|| e.oid.clone()),
             previous: renamed_from.get(&e.path).cloned(),
             children: Vec::new(),
         });
@@ -529,7 +533,7 @@ pub(crate) fn group_changed(
     let before: BTreeSet<(&str, &str)> = parent
         .iter()
         .filter(|(k, _)| env.parser.group_of(k) == Some(group))
-        .map(|(k, (d, _, _))| (k.as_str(), d.as_str()))
+        .map(|(k, (d, _, _, _))| (k.as_str(), d.as_str()))
         .collect();
     now != before
 }
@@ -1726,9 +1730,14 @@ impl Exec<'_> {
             if staged.contains(&u.key) {
                 continue;
             }
-            let same = parent_units.get(&u.key).is_some_and(|(d, mode, lang)| {
-                d == &u.digest && mode == u.mode && lang.as_deref() == u.language
-            });
+            let same = parent_units
+                .get(&u.key)
+                .is_some_and(|(d, mode, lang, captured)| {
+                    d == &u.digest
+                        && mode == u.mode
+                        && lang.as_deref() == u.language
+                        && (env.artifacts.is_none() || u.oid.is_none() || *captured)
+                });
             if same && u.previous.is_none() && !regroup.contains(u.key.as_str()) {
                 inherit.push(u.key.clone());
             } else {
@@ -1865,10 +1874,12 @@ impl Exec<'_> {
                 content.insert(o.as_str(), b.as_slice());
             }
             let mut rows = Vec::with_capacity(batch.len());
+            let mut sources =
+                super::source::Sources::new(env.clone(), self.run.repository_id.clone());
             for u in &batch {
                 let c = u.oid.as_deref().and_then(|o| content.get(o).copied());
                 let share = self.shares.get(&u.key).cloned();
-                rows.push(build_unit(
+                let mut row = build_unit(
                     &env,
                     &self.run.repository_id,
                     name,
@@ -1878,16 +1889,27 @@ impl Exec<'_> {
                     share.as_ref(),
                     stop,
                     &mut self.warnings,
-                )?);
+                )?;
+                let capture = matches!(
+                    u.mode,
+                    MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK | MODE_NOT_SELECTED
+                );
+                sources.stage(&mut row.0, c.filter(|_| capture))?;
+                rows.push(row);
             }
             let n = rows.len() as i64;
+            let staged = sources.records();
+            let capture_env = env.clone();
+            let repository = self.run.repository_id.clone();
             self.fenced(WritePriority::Bulk, move |tx, r| {
                 for (unit, nodes, edges) in &rows {
+                    super::source::Sources::commit(&capture_env, &repository, &staged, tx, unit)?;
                     tx.indexing().put_unit(unit, nodes, edges)?;
                 }
                 r.completed_units += n;
                 Ok(())
             })?;
+            sources.committed();
             *done += n;
             self.log(
                 "extracting",
@@ -1942,6 +1964,7 @@ impl Exec<'_> {
                 branch_id: None,
                 worktree_id: None,
                 coverage: json!({"state": coverage_name, "gaps": gaps, "commit": head,
+                    "sourceRevision": pointer + 1,
                     "configDigest": stored.manifest.get("configDigest")}),
             };
             tx.indexing().insert_view(&view)?;
@@ -2059,7 +2082,7 @@ pub(crate) fn staged_keys(
 }
 
 /// A unit's content digest, mode and language.
-pub(crate) type UnitFacts = (String, String, Option<String>);
+pub(crate) type UnitFacts = (String, String, Option<String>, bool);
 
 /// The digest, mode and language of every unit of a sealed generation.
 pub(crate) fn unit_index(
@@ -2086,6 +2109,7 @@ pub(crate) fn unit_index(
                         .get("language")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
+                    u.payload.get("sourceCapture").is_some(),
                 ),
             );
         }
