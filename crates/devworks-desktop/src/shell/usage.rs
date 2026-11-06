@@ -197,9 +197,15 @@ impl Shell {
         );
     }
     fn edit_price(&mut self, model: String) {
+        if self.usage.price_busy || self.usage.prices_loading || self.usage.price_update_available {
+            return;
+        }
         let Some(prices) = &self.usage.prices else {
             return;
         };
+        if prices.has_more {
+            return;
+        }
         let Some(record) = prices
             .models
             .0
@@ -218,8 +224,12 @@ impl Shell {
                     .as_ref()
                     .is_some_and(|id| id.as_str() == model)
                     && matches!(entry.origin, PriceOrigin::UserConfigured)
-                    && entry.override_revision.as_ref().map(|r| r.as_str())
-                        == record.override_revision.as_ref().map(|r| r.as_str())
+                    && record.override_revision.as_ref().is_some_and(|current| {
+                        entry
+                            .override_revision
+                            .as_ref()
+                            .is_some_and(|revision| revision.as_str() == current.as_str())
+                    })
             })
             .map(|e| TariffForm::from_tariff(&e.tariff))
             .collect::<Vec<_>>();
@@ -233,8 +243,12 @@ impl Shell {
                         .model_id
                         .as_ref()
                         .is_some_and(|id| id.as_str() == model)
-                        && entry.snapshot_id.as_ref().map(|id| id.as_str())
-                            == record.snapshot_id.as_ref().map(|id| id.as_str())
+                        && record.snapshot_id.as_ref().is_some_and(|current| {
+                            entry
+                                .snapshot_id
+                                .as_ref()
+                                .is_some_and(|id| id.as_str() == current.as_str())
+                        })
                 })
                 .map(|e| TariffForm::from_tariff(&e.tariff))
                 .collect::<Vec<_>>()
@@ -401,6 +415,13 @@ impl Shell {
                                 return None;
                             }
                             previous.items.0.append(&mut result.items.0);
+                            if let Some(mut history) = result.override_history.take() {
+                                if let Some(previous_history) = &mut previous.override_history {
+                                    previous_history.0.append(&mut history.0);
+                                } else {
+                                    previous.override_history = Some(history);
+                                }
+                            }
                             previous.models.0.append(&mut result.models.0);
                             previous
                                 .models

@@ -47,6 +47,13 @@ pub enum ConnectionAction {
         key: Option<Secret>,
         code: Option<(Id, Secret)>,
     },
+    /// A save from the open editor. Its captured draft is settled only by this command.
+    ConfigureEdit {
+        label: String,
+        action: Value,
+        key: Option<Secret>,
+        code: Option<(Id, Secret)>,
+    },
     /// The user's explicit choice to keep credentials for this session only.
     UseSessionOnly,
 }
@@ -946,7 +953,7 @@ impl ConnectionsPanel {
                 }
             }
             let key = submitted_key(p, &mut e.key);
-            actions.push(ConnectionAction::Configure {
+            actions.push(ConnectionAction::ConfigureEdit {
                 label: "Saving the connection".into(),
                 action,
                 key,

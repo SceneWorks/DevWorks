@@ -377,7 +377,7 @@ impl UsageScreen {
             ui.horizontal_wrapped(|ui|{field(ui,"Start UTC",&mut self.draft.start,"2026-11-01T00:00:00Z");field(ui,"End UTC (exclusive)",&mut self.draft.end,"2026-12-01T00:00:00Z");});
             ui.label("Blank dates use the service's last-30-days range. Start is inclusive; end is exclusive.");
             egui::ComboBox::from_label("Usage interval").selected_text(if self.draft.interval.is_empty(){"Auto"}else{&self.draft.interval}).show_ui(ui,|ui|{for(value,label)in[("","Auto"),("day","Day"),("week","Week (Monday)"),("month","Month")]{ui.selectable_value(&mut self.draft.interval,value.into(),label);}});
-            for(dimension,value)in[("user",&mut self.draft.user),("provider",&mut self.draft.provider),("model",&mut self.draft.model),("tool",&mut self.draft.tool)]{ui.push_id(dimension,|ui|{field(ui,&format!("Usage {dimension}"),value,"All");let choices=self.options.iter().filter(|o|o.dimension.0==dimension).map(|o|o.value.0.as_str()).collect::<Vec<_>>();if !choices.is_empty(){egui::ComboBox::from_id_salt("discovered-options").selected_text("Available values").show_ui(ui,|ui|{for choice in choices{ui.selectable_value(value,choice.into(),choice);}});}});}
+            for(dimension,value)in[("user",&mut self.draft.user),("provider",&mut self.draft.provider),("model",&mut self.draft.model),("tool",&mut self.draft.tool)]{ui.push_id(dimension,|ui|{field(ui,&format!("Usage {dimension}"),value,"All");let choices=self.options.iter().filter(|o|o.dimension.0==dimension).map(|o|o.value.0.as_str()).collect::<Vec<_>>();if !choices.is_empty(){egui::ComboBox::from_label(format!("Available {dimension} values")).selected_text("Choose a recorded value").show_ui(ui,|ui|{for choice in choices{ui.selectable_value(value,choice.into(),choice);}});}});}
             field(ui,"Usage purpose",&mut self.draft.purpose,"All purposes");
             ui.collapsing("Work and session filters",|ui|{field(ui,"Work root ID",&mut self.draft.root,"");field(ui,"Session ID",&mut self.draft.session,"");field(ui,"Job run ID",&mut self.draft.job_run,"");});
             if let Err(e)=self.draft.body(self.kind(),None){ui.colored_label(theme::RED,e);}
@@ -395,8 +395,22 @@ impl UsageScreen {
             ui,
             format!(
                 "Applied {} to {} UTC · {} buckets · read revision {}",
-                time(context.range.start_ms.get()),
-                time(context.range.end_ms.get()),
+                time(
+                    context
+                        .range
+                        .start_ms
+                        .0
+                        .parse::<i64>()
+                        .expect("validated range timestamp")
+                ),
+                time(
+                    context
+                        .range
+                        .end_ms
+                        .0
+                        .parse::<i64>()
+                        .expect("validated range timestamp")
+                ),
                 context.interval.0,
                 context.read_revision.as_str()
             ),
@@ -461,17 +475,18 @@ impl UsageScreen {
                         "Returned report metrics",
                     );
                 }
-                let mut series: BTreeMap<&str, Vec<(i64, &str)>> = BTreeMap::new();
+                let mut series: BTreeMap<(&str, &str), Vec<(i64, &str)>> = BTreeMap::new();
                 let mut breakdowns: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
                 for row in &report.items.0 {
                     match row {
                         UsageReportRow::SeriesPoint {
+                            key,
                             label,
                             bucket_start_ms,
                             value,
                             ..
                         } => {
-                            series.entry(&label.0).or_default().push((
+                            series.entry((&key.0, &label.0)).or_default().push((
                                 bucket_start_ms
                                     .0
                                     .parse::<i64>()
@@ -493,9 +508,17 @@ impl UsageScreen {
                         _ => {}
                     }
                 }
-                for (label, points) in series {
-                    ui.push_id(("series", label), |ui| {
-                        ui.collapsing(format!("{} over time", human(label)), |ui| {
+                for ((key, label), points) in series {
+                    ui.push_id(("series", key), |ui| {
+                        let title = if let Some((dimension, _)) = key
+                            .strip_prefix("breakdown:")
+                            .and_then(|key| key.split_once(':'))
+                        {
+                            format!("{} · {label} over time", human(dimension))
+                        } else {
+                            format!("{label} over time")
+                        };
+                        ui.collapsing(title, |ui| {
                             egui::Grid::new("series-values")
                                 .striped(true)
                                 .show(ui, |ui| {
@@ -679,6 +702,16 @@ impl UsageScreen {
             }
         });
         ui.heading("Models and tariffs");
+        let can_edit = !prices.has_more
+            && !self.prices_loading
+            && !self.price_update_available
+            && !self.price_busy;
+        if prices.has_more {
+            widgets::caption(
+                ui,
+                "Load the remaining price rows before editing so every current rate is retained. Filter to one model to narrow this view.",
+            );
+        }
         for model in &prices.models.0 {
             ui.push_id(model.model_id.as_str(), |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -688,11 +721,11 @@ impl UsageScreen {
                         model.price_kind,
                         model.revision.as_str()
                     ));
-                    let edit = ui.button("Edit tariff override");
+                    let edit = ui.add_enabled(can_edit, egui::Button::new("Edit tariff override"));
                     edit.widget_info(|| {
                         egui::WidgetInfo::labeled(
                             egui::Role::Button,
-                            true,
+                            can_edit,
                             format!("Edit tariff override for {}", model.model_id.as_str()),
                         )
                     });
@@ -702,6 +735,63 @@ impl UsageScreen {
                 });
                 if let Some(reason) = &model.untracked_reason {
                     ui.label(&reason.0);
+                }
+            });
+        }
+        if let Some(history) = &prices.override_history {
+            ui.collapsing("Configured price history", |ui| {
+                for (index, change) in history.0.iter().enumerate() {
+                    ui.push_id(("configured-price-history", index), |ui| {
+                        let (model, revision, author, updated) = match change {
+                            PriceOverrideOutcome::Set {
+                                model_id,
+                                revision,
+                                updated_by,
+                                updated_at_ms,
+                                ..
+                            }
+                            | PriceOverrideOutcome::Cleared {
+                                model_id,
+                                revision,
+                                updated_by,
+                                updated_at_ms,
+                            } => (model_id, revision, updated_by, updated_at_ms),
+                        };
+                        ui.group(|ui| {
+                            ui.strong(format!(
+                                "{} · revision {} · {}",
+                                model.as_str(),
+                                revision.as_str(),
+                                if matches!(change, PriceOverrideOutcome::Set { .. }) {
+                                    "Override set"
+                                } else {
+                                    "Override cleared"
+                                }
+                            ));
+                            ui.label(format!(
+                                "Recorded by {} · {}",
+                                author
+                                    .as_ref()
+                                    .map_or("Not recorded", |actor| actor.0.as_str()),
+                                updated.as_ref().map_or_else(
+                                    || "Time not recorded".into(),
+                                    |at| time(at.get())
+                                )
+                            ));
+                            if let PriceOverrideOutcome::Set { tariffs, .. } = change {
+                                for (rate, tariff) in tariffs.0.iter().enumerate() {
+                                    ui.push_id(rate, |ui| {
+                                        ui.collapsing(
+                                            format!("Historical configured rate {}", rate + 1),
+                                            |ui| tariff_ui(ui, tariff),
+                                        );
+                                    });
+                                }
+                            } else {
+                                ui.label("This change removed the configured override.");
+                            }
+                        });
+                    });
                 }
             });
         }
@@ -744,6 +834,7 @@ impl UsageScreen {
                 ui.colored_label(theme::AMBER,if current.is_some(){"This model's price revision changed. Your tariff draft is preserved."}else{"The current model revision is not in these loaded rows. Load its catalog entry before submitting; your draft is preserved."});
                 if current.is_some()
                     && !self.price_update_available
+                    && !prices.has_more
                     && ui.button("Review and use current price revision").clicked()
                 {
                     actions.push(Action::RebasePrice);

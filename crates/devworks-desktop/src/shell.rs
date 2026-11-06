@@ -2600,18 +2600,38 @@ impl Shell {
                 self.invalidate_routing();
             }
             (Slot::Configure(n), Reply::Task(t)) => {
+                // A task failure before preparation has no router effects. A failed command
+                // worker, however, leaves its exact frame unresolved in the client.
+                let unconfirmed = self
+                    .client
+                    .as_ref()
+                    .is_some_and(|c| c.unconfirmed().iter().any(|u| u.slot == Slot::Configure(n)));
                 let p = &mut self.settings.connections;
-                p.edit_finished(n, false, false);
+                p.edit_finished(n, false, unconfirmed);
                 let label = p
                     .busy
                     .iter()
-                    .position(|(k, _)| *k == n)
-                    .map(|i| p.busy.remove(i).1)
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
                     .unwrap_or_default();
+                if !unconfirmed {
+                    p.busy.retain(|(k, _)| *k != n);
+                }
                 p.message = Some((
-                    Tone::Bad,
+                    if unconfirmed {
+                        Tone::Attention
+                    } else {
+                        Tone::Bad
+                    },
                     match t {
-                        Err(e) => format!("{label}: {e}"),
+                        Err(e) => format!(
+                            "{label}: {e}{}",
+                            if unconfirmed {
+                                ". The original change is awaiting confirmation."
+                            } else {
+                                ""
+                            }
+                        ),
                         Ok(_) => format!("{label}: unexpected reply."),
                     },
                 ));
@@ -2977,6 +2997,7 @@ impl Shell {
 
     fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
         use crate::connections_screen::ConnectionAction as A;
+        let saving_editor = matches!(&action, A::ConfigureEdit { .. });
         match action {
             A::Reload => self.load_connections(),
             A::UseSessionOnly => {
@@ -3000,6 +3021,12 @@ impl Shell {
                 action,
                 key,
                 code,
+            }
+            | A::ConfigureEdit {
+                label,
+                action,
+                key,
+                code,
             } => {
                 if self.online().is_err() {
                     self.settings.connections.message =
@@ -3009,7 +3036,9 @@ impl Shell {
                 let p = &mut self.settings.connections;
                 p.sequence += 1;
                 let n = p.sequence;
-                p.preparing_edit(n, &action);
+                if saving_editor {
+                    p.preparing_edit(n, &action);
+                }
                 let submitted = self.client.as_mut().is_some_and(|c| {
                     c.task(Slot::Configure(n), &label, move |b| {
                         let mut action = action;
