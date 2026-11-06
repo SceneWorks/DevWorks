@@ -88,6 +88,7 @@ fn router(f: &Fx) -> Arc<InferenceRouter> {
                 credential_ref: None,
                 credential_revision: 0,
                 account_revision: 1,
+                refresh_operation_id: None,
                 credential_epoch: None,
                 lifecycle: "Connected".into(),
                 state_reason: None,

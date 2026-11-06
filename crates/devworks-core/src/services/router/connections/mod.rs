@@ -2049,6 +2049,7 @@ impl ConnectionService {
                 account_revision: next_account_revision(
                     tx.router().connection_account_revision(&id)?.unwrap_or(0),
                 )?,
+                refresh_operation_id: None,
                 credential_epoch: None,
                 lifecycle: without_credential(p).into(),
                 state_reason: None,
