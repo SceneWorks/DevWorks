@@ -577,3 +577,122 @@ fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_par
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }
+
+fn with_native_call_pair(work: impl FnOnce(&Runtime, &InvocationContext, &str, &str)) {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    struct SourceCleanup(std::path::PathBuf);
+    impl Drop for SourceCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _source = SourceCleanup(src.clone());
+    let repo = src.join("traversal-pair");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/pair.rs"),
+        "pub fn leaf() {}\npub fn caller() { leaf(); }\n",
+    )
+    .unwrap();
+    commit(&repo);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let run = index(&app, &ctx, &repository, "traversal-pair-index");
+    wait(&executor, &store, &run);
+    let selected = scope(&*store, &repository);
+    let edges = read(&*store, |r| {
+        r.graph().graph_edges(
+            &selected,
+            &GraphEdgeFilter {
+                kinds: vec!["CALLS".into()],
+                ..Default::default()
+            },
+            None,
+            10,
+        )
+    });
+    assert_eq!(edges.items.len(), 1);
+    let caller = &edges.items[0].edge.source_node_id;
+    work(&app, &ctx, &repository, caller);
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}
+
+#[test]
+fn native_traversal_continuations_deduplicate_the_complete_edge_sequence() {
+    let _case = native_runtime_case();
+    with_native_call_pair(|app, ctx, repository, caller| {
+        for limit in [1, 16] {
+            let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"unique-traversal","scope":{"kind":"Workspace"},"view":{"kind":"Published","repositoryIds":[repository]},"query":{"kind":"Traverse","startIds":[caller],"direction":"Both","edgeKinds":["CALLS"],"maxDepth":3},"limits":{"maxResults":limit,"maxVisited":100000,"deadlineMs":30000}});
+            let mut edge_ids = Vec::new();
+            let mut pages = 0;
+            loop {
+                let DomainQueryReply::Result { result, .. } = app
+                    .query(ctx, "code.traverse", frame.to_string().as_bytes())
+                    .unwrap()
+                else {
+                    panic!("native traversal refused")
+                };
+                let page: GraphPage =
+                    serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                        .unwrap();
+                let GraphResult::CodeGraph { value } = page.result else {
+                    panic!("qualified graph expected")
+                };
+                edge_ids.extend(value.edges.0.iter().map(|e| e.edge_id.clone()));
+                pages += 1;
+                assert!(pages <= 4, "traversal never reached its unique tail");
+                let Some(cursor) = page.next_cursor else {
+                    break;
+                };
+                frame["view"] = json!({"kind":"Pinned","pinId":page.view.unwrap().pin_id});
+                frame["cursor"] = json!(cursor);
+            }
+            assert_eq!(
+                edge_ids.len(),
+                1,
+                "page limit {limit} repeated a logical edge: {edge_ids:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn native_revision_one_traversal_and_dependency_project_representable_graphs() {
+    let _case = native_runtime_case();
+    with_native_call_pair(|app, ctx, repository, caller| {
+        for operation in ["code.traverse", "code.dependency"] {
+            for start in ["missing-node", caller] {
+                let frame = json!({"protocol":"1.0-draft.1","schemaRevision":1,"queryId":"legacy-traversal","scope":{"kind":"Workspace"},"view":{"kind":"Published","repositoryIds":[repository]},"query":{"kind":"Traverse","startIds":[start],"direction":"Both","edgeKinds":["CALLS"],"maxDepth":3},"limits":{"maxResults":16,"maxVisited":100000,"deadlineMs":30000}});
+                let reply = app
+                    .query(ctx, operation, frame.to_string().as_bytes())
+                    .unwrap();
+                if start == caller {
+                    // Legacy unit keys are opaque IDs. Actual src/pair.rs nodes cannot be
+                    // flattened into that type; preserve their explicit refusal.
+                    assert!(matches!(reply, DomainQueryReply::Rejected { fault, .. }
+                        if fault.code == devworks_core::protocol::DomainErrorCode::ViewUnavailable));
+                    continue;
+                }
+                let DomainQueryReply::Result { result, .. } = reply else {
+                    panic!("representable empty legacy {operation}: {reply:?}")
+                };
+                let page: GraphPage =
+                    serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                        .unwrap();
+                let GraphResult::Graph { nodes, edges } = page.result else {
+                    panic!("legacy graph expected")
+                };
+                assert!(edges.is_empty() && nodes.is_empty());
+                assert!(page.view.is_some());
+                assert!(page.scope_coverage.is_none());
+            }
+        }
+    });
+}

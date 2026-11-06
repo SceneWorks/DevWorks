@@ -944,6 +944,9 @@ fn legacy(result: GraphResult) -> Result<GraphResult, Failure> {
             }
             Ok(GraphResult::Nodes { nodes })
         }
+        GraphResult::CodeGraph { value } => {
+            crate::protocol::data::legacy_graph(&value).ok_or_else(|| scope::unavailable(None))
+        }
         GraphResult::SourceText { value } => Ok(GraphResult::Source {
             citation: value
                 .source

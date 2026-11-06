@@ -86,3 +86,14 @@ bound). The fixed case qualifies50,000 distinct details on both Chat profiles. A
 null, conflicting and completed type/ID fields, ID fallback, index precedence and composite
 JSON identities. All58 core provider cases pass (1.65s); core all-target strict checks pass
 (20.06s). No smaller input limits, larger timeouts, OS credentials or learned inference.
+
+Tool materialization now charges each resolved schema, registered description and
+wire name against the encoder's shared preparation budget before canonical schema
+verification or retaining the next tool. Registration identity and exact schema-digest
+checks remain, and final profile-specific JSON still uses the bounded writer.
+The causal regression resolved all256 tools before rejecting48KiB on the old path.
+After the correction, all six generation profiles stop within four resolutions for
+large schemas and separately large descriptions; valid two-tool controls still encode.
+All59 core provider cases pass1.67s and core all-target strict checks pass19.50s.
+The budget is shared with existing artifact expansion. These are structural/resolver
+work bounds, without a claimed allocator peak or any learned inference execution.

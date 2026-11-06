@@ -74,3 +74,20 @@ and affected core/engine all-target strict checks pass (27.48s). The original 16
 memory budget, scan limits, request deadlines, page sizes and assertions remain unchanged.
 These checks establish behavior and the page-only hydration structure; no exact allocator
 peak measurement is claimed. Fresh exact-head CI/review remains required.
+
+Latest traversal corrections deduplicate the raw traversal prefix before applying
+its page offset, using borrowed edge identities charged to the memory budget.
+Same-step edge-property continuations keep their original offset semantics. A real
+Git/parser/SQLite one-edge graph with Both/depth3 previously returned that edge on
+three page-size-one pages; both page sizes1 and16 now return one logical edge.
+
+Qualified CodeGraph results share the existing protocol legacy projection with the
+service's revision1 path. The corrected native regression demonstrates the old
+service refusing a representable empty traversal (1.54s RED), then verifies empty
+code.traverse and code.dependency over a real indexed view succeed. Legacy unit keys
+are opaque IDs, so actual src/pair.rs nonempty graphs remain explicitly refused;
+no path or citation is flattened to fabricate compatibility. The initial nonempty
+legacy fixture was itself unrepresentable and was corrected before acceptance.
+All29 native indexing cases pass76.95s; core/engine all-target strict checks pass26.88s.
+No schema, query budget, timeout or assertion was relaxed. Fresh exact-head review,
+all-platform CI, merge and acceptance remain gates.
