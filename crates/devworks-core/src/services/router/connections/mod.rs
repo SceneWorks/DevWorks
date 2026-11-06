@@ -2923,8 +2923,9 @@ fn apply_check(
     Ok(true)
 }
 
-/// Stable identity for one exact upstream model served by one connection. Snapshot suffixes
-/// are identity, never stripped. The digest input is structured to avoid delimiter collisions.
+/// Canonical discovery ID for one exact upstream model served by one connection. Snapshot
+/// suffixes are identity, never stripped. The digest input avoids delimiter collisions.
+/// Discovery uses a stable free suffix if user configuration has repurposed this ID.
 pub fn discovered_model_id(profile: &str, connection: &Id, upstream: &str) -> Id {
     let identity =
         serde_json::to_vec(&(profile, connection.as_str(), upstream)).expect("strings serialize");
@@ -2966,6 +2967,23 @@ fn apply_discovery(
             {
                 continue;
             }
+            // A discovery row remains editable. Its original generated ID may now belong to
+            // another upstream or connection; retain it and reserve the next free stable ID.
+            // A disabled edited row keeps the replacement disabled, never bypassing that choice.
+            let canonical_id = discovered_model_id(&c.profile, &c.id, &found.id);
+            let mut id = canonical_id.clone();
+            let mut enabled = true;
+            let mut suffix = 0_u64;
+            loop {
+                if let Some(occupied) = models.iter().find(|m| m.id == id) {
+                    enabled &= occupied.enabled;
+                } else if tx.router().decision_model(&id)?.is_none() {
+                    break;
+                }
+                suffix += 1;
+                id = Id::new(format!("{}_{}", canonical_id.as_str(), suffix))
+                    .expect("bounded digest and numeric suffix");
+            }
             let reported = d
                 .reported
                 .iter()
@@ -2973,11 +2991,11 @@ fn apply_discovery(
                 .map(|(_, r)| r);
             position = position.saturating_add(1);
             let model = StoredRouteModel {
-                id: discovered_model_id(&c.profile, &c.id, &found.id),
-                display_name: found.id.clone(),
+                id,
+                display_name: label(&found.id, "model").0,
                 endpoint_profile: c.profile.clone(),
                 upstream_model_id: found.id.clone(),
-                enabled: true,
+                enabled,
                 efforts: reported.map(|r| r.efforts.clone()).unwrap_or_default(),
                 image_input: reported.and_then(|r| r.vision).unwrap_or(false),
                 tools: reported.and_then(|r| r.tools).unwrap_or(false),
