@@ -47,6 +47,28 @@ fn project(
             .transpose()?,
     })
 }
+fn matches_source(
+    read: &dyn ConventionRead,
+    owner: &StoredConvention,
+    index: &StoredConventionIndex,
+) -> Result<bool, StorageError> {
+    let captured = read.convention(
+        &owner.id,
+        Some(index.convention_revision),
+        std::slice::from_ref(&owner.scope),
+    )?;
+    Ok(owner.content_ref.as_ref() == Some(&index.source_ref)
+        && captured
+            .as_ref()
+            .is_some_and(|source| source.title == owner.title && source.scope == owner.scope))
+}
+fn historical_unindexed() -> ConventionIndexStatus {
+    let mut status = model::unindexed();
+    status.reason = Some(crate::protocol::support::BoundedText(
+        "HistoricalSnapshotNotCurrentIndex".into(),
+    ));
+    status
+}
 impl IndexService {
     pub fn status(
         &self,
@@ -56,6 +78,16 @@ impl IndexService {
         let Some(index) = read.conventions().convention_index_status(&owner.id)? else {
             return Ok(model::unindexed());
         };
+        if !matches_source(read.conventions(), owner, &index)? {
+            let current = read.conventions().convention(
+                &owner.id,
+                None,
+                std::slice::from_ref(&owner.scope),
+            )?;
+            if index.status != "Stale" || current.as_ref() != Some(owner) {
+                return Ok(historical_unindexed());
+            }
+        }
         let count = read
             .conventions()
             .convention_chunk_count(&index.generation_id)?;
@@ -73,6 +105,14 @@ impl IndexService {
         let Some(index) = tx.conventions().convention_index_status(&owner.id)? else {
             return Ok(model::unindexed());
         };
+        if !matches_source(tx.conventions(), owner, &index)? {
+            let current =
+                tx.conventions()
+                    .convention(&owner.id, None, std::slice::from_ref(&owner.scope))?;
+            if index.status != "Stale" || current.as_ref() != Some(owner) {
+                return Ok(historical_unindexed());
+            }
+        }
         let count = tx
             .conventions()
             .convention_chunk_count(&index.generation_id)?;

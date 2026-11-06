@@ -698,3 +698,65 @@ fn captured_all_applied_facts_survive_lost_ack_and_changed_catalogue() {
         "recovery must not silentlyexpand the captured targetset"
     );
 }
+#[test]
+fn historical_body_never_borrows_new_body_index_but_unchanged_body_revisions_share_it() {
+    let f = Fixture::new();
+    let (old, op) = f.source("history", "old body");
+    f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    let staged = f
+        .artifacts
+        .stage_host_bytes(
+            &*f.store,
+            b"new authored body",
+            json!({"fixture":"new body"}),
+        )
+        .unwrap()
+        .unwrap();
+    let (service, pending, index, ctx, mut next) = (
+        f.artifacts.clone(),
+        staged.clone(),
+        f.index.clone(),
+        f.ctx.clone(),
+        old.clone(),
+    );
+    let (next, operation) = write(&*f.store, move |tx| {
+        let version = service.commit_host_bytes(
+            tx,
+            &pending,
+            "new authored body",
+            "text/markdown",
+            json!({"fixture":"new body"}),
+        )?;
+        next.revision = 2;
+        next.content_ref = Some(json!(version_ref(&version)));
+        tx.conventions().revise_convention(&next, 1)?;
+        let operation = index.record_changed(tx, &ctx, &next)?;
+        Ok((next, operation))
+    })
+    .unwrap();
+    f.artifacts.settle_host_bytes(&*f.store, &staged, true);
+    let before = read(&*f.store, |r| f.index.status(r, &old));
+    assert_eq!(json!(before.status), "NotIndexed");
+    assert_eq!(
+        before.reason.unwrap().0,
+        "HistoricalSnapshotNotCurrentIndex"
+    );
+    assert!(before.indexed_chunks.is_none());
+    let op = dispatch(&*f.store, &operation);
+    f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    let historical = read(&*f.store, |r| f.index.status(r, &old));
+    assert_eq!(json!(historical.status), "NotIndexed");
+    assert!(historical.generation_id.is_none());
+    let mut metadata = next;
+    metadata.revision = 3;
+    metadata.applicability = vec!["same-body".into()];
+    let row = metadata.clone();
+    write(&*f.store, move |tx| {
+        tx.conventions().revise_convention(&row, 2)
+    })
+    .unwrap();
+    let current = read(&*f.store, |r| f.index.status(r, &metadata));
+    assert_eq!(json!(current.status), "LexicalOnly");
+    assert_eq!(current.source_revision.unwrap().get(), 2);
+    assert!(current.indexed_chunks.unwrap().get() > 0);
+}
