@@ -1352,6 +1352,13 @@ A current/own-view request without an actual host worktree mapping reports unava
 and frozen-source evidence is in [exact graph qualification](validation/graph-contracts/README.md);
 it does not establish native GraphService or UI acceptance.
 
+Current mixed-index broad reads retain available authorized pins and disclose missing
+repositories with explicit Partial scope coverage; explicit/targeted reads do not fall
+back to another view. Internal-module reads preserve actual recorded analysis and its
+source provenance separately from observed index counts and drill-down references.
+A missing analysis producer yields NotAnalyzed/Unavailable, not a synthesized summary
+or fake semantic total. Repository-node revision3 callers supply the selected scope.
+
 The source tree distinguishes two documentation flows: `RegenerateMcpDocsJob` generates tool documentation, while `AnalysisSynthesisCompletedConsumer` writes repository CODEGRAPH.md files. Preserve capability Help generation locally and repository-document generation through the normal owned-worktree/review/delivery boundary. Project analysis, repository synthesis and document generation are separate recoverable stages. A failed synthesis retains prior/project evidence and explicit partial state; publishing a source-style completion notification cannot fabricate successful analysis.
 
 Native scope changes are deliberate: one desktop user replaces web-login/admin/PAT mechanisms; one tagged Knowledge service replaces separate memory/lesson/wiki storage; conventions retain versioned content/resources without a mandatory wiki UI; enforced canonical resources replace advisory project holds. Existing CodeGraph work/history import replaces the old Shortcut/Kanban live-source import adapters. Pruning utilities remain controlled maintenance operations with explicit eligible target selection, not copied destructive default schedules. Preserve required history/artifact/reference rules.
