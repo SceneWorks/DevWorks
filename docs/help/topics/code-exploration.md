@@ -1,6 +1,6 @@
 # Explore repository code
 
-Open **Repositories**, choose a registered repository, then open its code view. **Overview** shows the repository facts and any captured README. **Browse nodes** groups indexed entries by kind and container; expand containers, filter by node kind or internal module, and use the page controls to continue. **Search graph** offers ranked nodes, a node list, or repositories and nodes. Search the selected repository or the captured scope.
+Open **Repositories**, choose a registered repository, then open its code view. **Overview** shows the repository facts and any captured README. **Captured scope overview** shows the repositories covered by the selected scope and capture. **Browse nodes** groups indexed entries by kind and container; expand containers, filter by node kind or internal module, and use the page controls to continue. **Search graph** offers ranked nodes, a node list, or repositories and nodes. Search the selected repository or the captured scope.
 
 Choose a node to inspect its description, confidence, properties, incoming and outgoing relationships, and retained source location. Read its source window, code snippet, or whole file. **Explore a source file** reads an explicit repository-relative file or line window, finds its indexed nodes, and shows file impact. Source pages preserve Unicode and can continue partway through a long line. A directory or source-less node does not supply a source citation.
 

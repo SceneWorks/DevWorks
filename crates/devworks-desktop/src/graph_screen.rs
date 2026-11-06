@@ -410,6 +410,11 @@ impl GraphScreen {
         ui.horizontal_wrapped(|ui| {
             for (label, op, query) in [
                 (
+                    "Captured scope overview",
+                    "code.overview",
+                    json!({"kind":"Overview"}),
+                ),
+                (
                     "Repository architecture",
                     "code.architecture",
                     json!({"kind":"Overview","repositoryId":self.repository}),
@@ -892,7 +897,7 @@ fn modules(
             .show(ui,|ui|{
                 widgets::caption(ui,format!("Analysis: {:?}",item.state));
                 optional(ui,"Reason",item.reason.as_ref().map(|v|v.0.as_str()));
-                if ui.button("Browse this module").clicked(){actions.push(Action::Filter{
+                if ui.button(format!("Browse {} module",item.module.module_name.0)).clicked(){actions.push(Action::Filter{
                     repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:None});}
                 if let Some(node)=&item.module.indexed_node
                     && ui.button(format!("Inspect {} module",item.module.module_name.0)).clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}
@@ -989,6 +994,16 @@ fn render(
                             "Description",
                             repository.description.as_ref().map(|v| v.0.as_str()),
                         );
+                        if let Some(foundational) = repository.foundational {
+                            widgets::caption(
+                                ui,
+                                if foundational {
+                                    "Foundational: Yes"
+                                } else {
+                                    "Foundational: No"
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -1133,7 +1148,17 @@ fn render(
                     format!("SHA-256: {}", value.source.source_digest.as_str()),
                 )
             });
-            for (i, line) in value.text.0.split('\n').enumerate() {
+            if value.text.0.is_empty() {
+                widgets::caption(
+                    ui,
+                    if value.total_bytes.get() == 0 {
+                        "This captured file is empty."
+                    } else {
+                        "No text was returned for this source range."
+                    },
+                );
+            }
+            for (i, line) in value.text.0.split_terminator('\n').enumerate() {
                 ui.horizontal_top(|ui| {
                     ui.label(
                         RichText::new((value.first_line.get() + i as i64).to_string())
@@ -1185,6 +1210,16 @@ fn render(
                     repo.source_group.as_ref().map(|v| v.0.as_str()),
                 );
                 optional(ui, "Language", repo.language.as_ref().map(|v| v.0.as_str()));
+                if let Some(foundational) = repo.foundational {
+                    widgets::caption(
+                        ui,
+                        if foundational {
+                            "Foundational: Yes"
+                        } else {
+                            "Foundational: No"
+                        },
+                    );
+                }
                 optional(
                     ui,
                     "Framework",

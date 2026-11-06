@@ -72,6 +72,7 @@ impl Fx {
             format!("{}\nsecond line\n", "世界".repeat(40000)),
         )
         .unwrap();
+        std::fs::write(repo.join("empty.txt"), "").unwrap();
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "original"]);
@@ -216,6 +217,10 @@ fn native_indexed_graph_exposes_all_operations_and_recovers_exact_trust_request(
     let mut h = f.ui(lost.clone());
     let captured = pin(&h);
     assert!(has_text(&h, "Read captured README"));
+    assert!(
+        !has_text(&h, "Foundational: No"),
+        "unknown repository metadata must not become a negative fact"
+    );
     click(&mut h, Role::Button, "Help for current screen");
     step_until(
         &mut h,
@@ -255,6 +260,20 @@ fn native_indexed_graph_exposes_all_operations_and_recovers_exact_trust_request(
         "repositories.nodes",
         &captured,
     );
+    h.state_mut().graph.search_mode = 1;
+    h.state_mut().graph.filter = "target".into();
+    read(&mut h, "Search graph", "code.search", &captured);
+    h.state_mut().graph.search_mode = 2;
+    h.state_mut().graph.filter = "svc".into();
+    read(&mut h, "Search graph", "code.search", &captured);
+    assert!(
+        !has_text(&h, "Foundational: No"),
+        "Unified search preserves unknown foundational roles"
+    );
+    assert!(
+        matches!(&h.state().graph.read.as_ref().unwrap().page.as_ref().unwrap().result,GraphResult::CodeSearch{value} if value.items.0.iter().any(|hit|matches!(hit,devworks_core::protocol::records::CodeSearchHit::Repository{..})))
+    );
+    h.state_mut().graph.search_mode = 0;
     h.state_mut().graph.filter = "target".into();
     read(&mut h, "Search graph", "code.search", &captured);
     read(&mut h, "target", "code.node_detail", &captured);
@@ -396,6 +415,9 @@ fn native_readme_long_lines_and_refresh_keep_one_capture_until_explicit_refresh(
         String::from_utf8(bytes).unwrap(),
         format!("{}\nsecond line\n", "世界".repeat(40000))
     );
+    h.state_mut().graph.file = "empty.txt".into();
+    read(&mut h, "Read whole source file", "code.source", &captured);
+    assert!(has_text(&h, "This captured file is empty"));
     graph_tab(&mut h, "Overview");
     click(&mut h, Role::Button, "Refresh selected graph view");
     let refreshed = pin(&h);
@@ -488,6 +510,30 @@ fn native_project_selection_fences_graph_and_current_scope_reports_missing_index
             .any(|gap| gap.repository_id == missing_record.id)
     );
     assert!(has_text(&h, "NotIndexed"));
+    let workspace_pin = pin(&h);
+    read(
+        &mut h,
+        "Captured scope overview",
+        "code.overview",
+        &workspace_pin,
+    );
+    assert!(
+        h.state()
+            .graph
+            .read
+            .as_ref()
+            .unwrap()
+            .page
+            .as_ref()
+            .unwrap()
+            .scope_coverage
+            .as_ref()
+            .unwrap()
+            .unavailable_repositories
+            .0
+            .iter()
+            .any(|gap| gap.repository_id == missing_record.id)
+    );
     h.state_mut().select_project(Some(a.id.0.as_str().into()));
     assert!(!h.state().graph.opened);
     h.state_mut()
@@ -553,7 +599,10 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
         tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"Other.csproj".into(),content_digest:"opaque-other-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[
             StoredNode{unit_key:"Other.csproj".into(),node_id:"module-other".into(),kind:"DotnetProject".into(),name:"Other".into(),payload:json!({"properties":{"dotnet_project":"Other"}})}
         ],&[])?;
-        tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:2,manifest:json!({})})?;
+        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"/".into(),content_digest:"opaque-root-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[
+            StoredNode{unit_key:"/".into(),node_id:"recorded-root".into(),kind:"Repository".into(),name:"Recorded".into(),payload:json!({"properties":{"foundational":true}})}
+        ],&[])?;
+        tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:3,manifest:json!({})})?;
         tx.indexing().insert_view(&StoredView{view_id:view.clone(),repository_id:repository.clone(),view_digest:devworks_core::fingerprint::sha256_hex(b"recorded-view"),baseline_id:generation,branch_id:None,worktree_id:None,coverage:json!({"state":"Complete","commit":"a".repeat(40),"sourceRevision":1})})?;
         tx.indexing().publish(&repository,&view,0)?;
         tx.projects().publish_index_view(&StoredIndexView{view_id:view,repository_id:repository,source_revision:"a".repeat(40),coverage:"Complete".into(),published_at_ms:1})?;
@@ -565,6 +614,7 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
         .open_repository_graph("recorded-repository", "Recorded");
     settle(&mut h);
     let captured = pin(&h);
+    assert!(has_text(&h, "Foundational: Yes"));
     read(
         &mut h,
         "Repository architecture",
@@ -642,5 +692,39 @@ fn native_recorded_module_pages_are_retained_without_inventing_source_or_program
             .content_identity
             .0,
         "opaque-recorded-content"
+    );
+    click(&mut h, Role::Button, "Back to previous graph view");
+    read(
+        &mut h,
+        "Browse Recorded module",
+        "repositories.nodes",
+        &captured,
+    );
+    let kind = match &h
+        .state()
+        .graph
+        .read
+        .as_ref()
+        .unwrap()
+        .page
+        .as_ref()
+        .unwrap()
+        .result
+    {
+        GraphResult::CodeNodes { value } => {
+            assert!(!value.nodes.0.is_empty());
+            assert!(value.nodes.0.iter().all(|node| {
+                node.internal_module
+                    .as_ref()
+                    .is_some_and(|m| m.0 == "Recorded")
+            }));
+            value.nodes.0[0].node_kind.0.clone()
+        }
+        other => panic!("actual filtered node page: {other:?}"),
+    };
+    h.state_mut().graph.node_kind = kind.clone();
+    read(&mut h, "Browse nodes", "repositories.nodes", &captured);
+    assert!(
+        matches!(&h.state().graph.read.as_ref().unwrap().page.as_ref().unwrap().result,GraphResult::CodeNodes{value}if value.nodes.0.iter().all(|node|node.node_kind.0==kind))
     );
 }

@@ -82,3 +82,42 @@ fn native_unavailable_graph_keeps_workspace_draft_and_never_invents_an_index() {
 
 #[path = "graph/native.rs"]
 mod native;
+
+#[test]
+fn native_narrow_graph_keeps_source_controls_and_return_action_reachable() {
+    let root = Root::new("graph-native-narrow");
+    let mut h = harness(
+        shell_with(Err("Offline".into()), &root, Script::default(), None),
+        760.0,
+        520.0,
+    );
+    settle(&mut h);
+    h.state_mut()
+        .open_repository_graph("unavailable", "Repository");
+    settle(&mut h);
+    click(
+        &mut h,
+        Role::DisclosureTriangle,
+        "Explore calls, impact and data flow",
+    );
+    click(&mut h, Role::DisclosureTriangle, "Explore a source file");
+    let file = h.get_by_role_and_label(Role::TextInput, "Source file");
+    file.scroll_to_me();
+    settle(&mut h);
+    let rect = h
+        .get_by_role_and_label(Role::TextInput, "Source file")
+        .rect();
+    assert!(
+        rect.left() >= 0.0 && rect.right() <= 760.0,
+        "source input stays inside the narrow window: {rect:?}"
+    );
+    let back = h
+        .get_by_role_and_label(Role::Button, "Back to repositories")
+        .rect();
+    assert!(
+        back.left() >= 0.0 && back.right() <= 760.0,
+        "return action stays inside the narrow window: {back:?}"
+    );
+    click(&mut h, Role::Button, "Back to repositories");
+    assert!(!h.state().graph.opened);
+}
