@@ -728,6 +728,7 @@ fn write_batch(
     for mut invocation in invocations {
         invocation.committed_sequence = committed;
         tx.sessions().insert_invocation(&invocation)?;
+        crate::services::usage::ingest::tool_invocation(tx, &invocation)?;
     }
     if let Some(checkpoint) = &batch.checkpoint {
         tx.sessions().insert_checkpoint(&StoredCheckpoint {
@@ -762,7 +763,7 @@ fn write_batch(
         })?;
     }
     for (i, u) in batch.usage.iter().enumerate() {
-        tx.sessions().insert_usage(&StoredUsage {
+        let usage = StoredUsage {
             session_id: session.id.clone(),
             batch_id: b.batch_id.clone(),
             ordinal: i as i64 + 1,
@@ -771,7 +772,9 @@ fn write_batch(
             committed_sequence: committed,
             item: serde_json::to_value(u)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
-        })?;
+        };
+        tx.sessions().insert_usage(&usage)?;
+        crate::services::usage::ingest::session_usage(tx, &usage)?;
     }
     if let Some(checkpoint) = &batch.checkpoint {
         pending_links.push((

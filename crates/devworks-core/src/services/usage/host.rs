@@ -46,6 +46,43 @@ impl AttemptHost {
             router,
         }
     }
+    /// Creates the actual logical request and its canonical attempt in one write. Tariff
+    /// resolution happens before this call; admission rechecks its publication fences.
+    pub fn admit(
+        &self,
+        context: crate::context::InvocationContext,
+        logical: crate::services::router::RequestAdmission,
+        category: crate::services::router::accounting::ReportCategory,
+        request: accounting::AttemptRequest,
+    ) -> Result<Admission, StorageError> {
+        if logical.request_id != request.request_id {
+            return Err(StorageError::ScopeDenied);
+        }
+        let router = self.router.clone();
+        let control = self.control.clone();
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            if let Some(prior) = tx.router().route_request(&logical.request_id)? {
+                let op = tx
+                    .operations()
+                    .operation(&prior.operation_id)?
+                    .ok_or_else(|| StorageError::InvalidRecord("logical journal missing".into()))?;
+                if prior.project_id != logical.project_id
+                    || prior.session_id != logical.session_id
+                    || prior.purpose != logical.purpose.as_str()
+                    || op.payload.get("actorId").and_then(|a| a.as_str())
+                        != Some(context.principal().0.as_str())
+                    || op.payload.get("reportCategory").and_then(|a| a.as_str())
+                        != Some(category.as_str())
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+            } else {
+                router.admit_owned_request(tx, &context, &logical, category)?;
+            }
+            router.admit_attempt(tx, &control, &context, &request)
+        })
+    }
+
     /// Blocking host worker entry point. The caller retains the cancellation handle for
     /// stop/shutdown while the owned source waits; no database lock spans source work.
     pub fn drive(
@@ -142,8 +179,57 @@ impl AttemptHost {
         }
         Ok(DriveOutcome::Settled(balance))
     }
+    /// Advisory cancellation for the runtime's independently polled owned transport registry.
+    pub fn cancellation_required(&self, id: &Id) -> Result<bool, StorageError> {
+        let attempt = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
+            s.usage().inference_attempt(id)
+        })?
+        .ok_or_else(|| StorageError::InvalidRecord("owned inference attempt disappeared".into()))?;
+        self.interrupted(&attempt)
+    }
     fn interrupted(&self, attempt: &StoredInferenceAttempt) -> Result<bool, StorageError> {
         read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
+            if let Some(feature) = &attempt.feature_id {
+                let root = crate::protocol::RootId(feature.clone());
+                if crate::services::runs::active_blockers(
+                    s.runs(),
+                    &BlockerFilter::RootLevel(root),
+                )?
+                .iter()
+                .any(|b| b.cause.manual_resume())
+                {
+                    return Ok(true);
+                }
+            }
+            let bound = accounting::snapshot(attempt)?;
+            if let Some(proof) = &bound.dispatch {
+                let owner = match &proof.assignment_id {
+                    Some(id) => s.runs().assignment(id)?,
+                    None => crate::services::runs::coordinator(s.runs(), &proof.root_id)?,
+                };
+                if !owner.is_some_and(|a| {
+                    a.generation == proof.assignment_generation
+                        && a.root_id == proof.root_id
+                        && a.execution_id.as_ref() == Some(&proof.execution_id)
+                        && matches!(
+                            a.state,
+                            AssignmentState::Active
+                                | AssignmentState::Waiting
+                                | AssignmentState::Ready
+                        )
+                }) {
+                    return Ok(true);
+                }
+                if let Some(session) = &attempt.session_id
+                    && !s.runs().session_turn(session)?.is_some_and(|t| {
+                        t.turn_id == proof.turn_id
+                            && t.execution_id == proof.execution_id
+                            && t.owner_epoch == proof.owner_epoch
+                    })
+                {
+                    return Ok(true);
+                }
+            }
             if let Some(root) = &attempt.execution_root_id {
                 if s.runs()
                     .root_control(root)?

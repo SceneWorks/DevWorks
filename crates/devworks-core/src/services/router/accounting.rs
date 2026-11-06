@@ -4,6 +4,29 @@ use super::*;
 use crate::services::runs::ControlService;
 use crate::services::usage::accounting::{Admission, AttemptRequest};
 
+/// Actual native entry point captured by its trusted host owner, independent of purpose/role.
+#[derive(Clone, Copy, Debug, Serialize, serde::Deserialize)]
+pub enum ReportCategory {
+    Assistant,
+    CodeReview,
+    RepositoryAnalysis,
+    Mcp,
+    Other,
+    Unknown,
+}
+impl ReportCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Assistant => "Assistant",
+            Self::CodeReview => "CodeReview",
+            Self::RepositoryAnalysis => "RepositoryAnalysis",
+            Self::Mcp => "Mcp",
+            Self::Other => "Other",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct PinFence {
     pub id: Id,

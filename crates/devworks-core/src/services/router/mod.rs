@@ -1365,6 +1365,34 @@ impl InferenceRouter {
         tx: &mut dyn WriteTransaction,
         a: &RequestAdmission,
     ) -> Result<OperationId, StorageError> {
+        self.admit_request_inner(tx, a, None, accounting::ReportCategory::Unknown)
+    }
+
+    /// New host producers preserve the authenticated caller even when no transport attempt
+    /// follows. The compatibility entry point above leaves unavailable historical metadata absent.
+    pub fn admit_owned_request(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        a: &RequestAdmission,
+        report_category: accounting::ReportCategory,
+    ) -> Result<OperationId, StorageError> {
+        if tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || &tx.store().store_id != ctx.store_id()
+            || tx.store().restore_epoch != ctx.restore_epoch().get()
+            || !crate::services::sessions::project_visible(ctx, a.project_id.as_ref())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        self.admit_request_inner(tx, a, Some(ctx.principal()), report_category)
+    }
+    fn admit_request_inner(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        a: &RequestAdmission,
+        actor: Option<&crate::protocol::ActorId>,
+        report_category: accounting::ReportCategory,
+    ) -> Result<OperationId, StorageError> {
         let operation_id = OperationId(tx.new_id(IdKind::Operation));
         tx.operations().record_intent(NewOperation {
             id: operation_id.clone(),
@@ -1375,6 +1403,8 @@ impl InferenceRouter {
             args_digest: a.args_digest.clone(),
             payload: json!({
                 "requestId": a.request_id.as_str(),
+                "actorId": actor,
+                "reportCategory": report_category.as_str(),
                 "purpose": a.purpose.as_str(),
                 "modelId": a.model_id.as_str(),
                 "connectionId": a.connection_id.as_str(),
@@ -1383,7 +1413,7 @@ impl InferenceRouter {
             }),
         })?;
         let created_at_ms = tx.now_ms();
-        tx.router().record_route_request(&StoredRouteRequest {
+        let route = StoredRouteRequest {
             request_id: a.request_id.clone(),
             operation_id: operation_id.clone(),
             purpose: a.purpose.as_str().into(),
@@ -1393,7 +1423,9 @@ impl InferenceRouter {
             connection_id: a.connection_id.clone(),
             pin_id: a.pin_id.clone(),
             created_at_ms,
-        })?;
+        };
+        tx.router().record_route_request(&route)?;
+        crate::services::usage::ingest::router_request(tx, &route)?;
         Ok(operation_id)
     }
 
