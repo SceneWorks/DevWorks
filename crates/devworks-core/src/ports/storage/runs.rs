@@ -531,6 +531,11 @@ pub trait RunRead {
         limit: u16,
     ) -> Result<Vec<StoredBlocker>, StorageError>;
     fn assignment(&self, id: &AssignmentId) -> Result<Option<StoredAssignment>, StorageError>;
+    /// Global work identity lookup; membership may have changed since its worker was assigned.
+    fn live_assignment_for_work(
+        &self,
+        work: &RootId,
+    ) -> Result<Option<StoredAssignment>, StorageError>;
     /// The root's assignments in ID order after `after` (only live ones when `live_only`).
     fn assignments(
         &self,
@@ -618,6 +623,15 @@ pub trait RunRepository: RunRead {
         &mut self,
         assignment: &StoredAssignment,
         expected: i64,
+    ) -> Result<(), StorageError>;
+    /// Moves one superseded, quiescent task worker to its current membership, preserving its
+    /// identity/session and checkpoint. Also advances the session's context epoch/revision and
+    /// relocates assignment-local holds. Ordinary updates cannot change these roots.
+    fn reparent_assignment(
+        &mut self,
+        assignment: &StoredAssignment,
+        expected_assignment: i64,
+        expected_session_revision: i64,
     ) -> Result<(), StorageError>;
     fn insert_instruction(&mut self, instruction: &StoredInstruction) -> Result<(), StorageError>;
     fn update_instruction(

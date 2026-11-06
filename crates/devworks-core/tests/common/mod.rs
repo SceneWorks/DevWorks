@@ -2241,6 +2241,12 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn live_assignment_for_work(
+        &self,
+        _: &RootId,
+    ) -> Result<Option<StoredAssignment>, StorageError> {
+        nope()
+    }
     fn root_control(&self, _: &RootId) -> Result<Option<StoredRootControl>, StorageError> {
         nope()
     }
@@ -2341,6 +2347,14 @@ impl RunRead for Unsupported {
     }
 }
 impl RunRepository for Unsupported {
+    fn reparent_assignment(
+        &mut self,
+        _: &StoredAssignment,
+        _: i64,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_root_control(&mut self, _: &StoredRootControl) -> Result<(), StorageError> {
         nope()
     }

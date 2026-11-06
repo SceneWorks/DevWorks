@@ -705,6 +705,9 @@ macro_rules! run_reads {
                     params![subject, after, n],
                 )
             }
+            fn live_assignment_for_work(&self,work:&RootId)->Result<Option<StoredAssignment>,StorageError>{
+                Ok(assignments(self.conn,&format!("work_id=?1 AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
+            }
             fn assignment(
                 &self,
                 id: &AssignmentId,
@@ -1212,6 +1215,14 @@ impl RunRepository for Unit<'_> {
             ],
         ))
         .map(|_| ())
+    }
+    fn reparent_assignment(
+        &mut self,
+        a: &StoredAssignment,
+        expected_assignment: i64,
+        expected_session_revision: i64,
+    ) -> Result<(), StorageError> {
+        super::handoff::reparent(self, a, expected_assignment, expected_session_revision)
     }
     fn insert_instruction(&mut self, i: &StoredInstruction) -> Result<(), StorageError> {
         bounded("instruction", &i.message, 65_536)?;

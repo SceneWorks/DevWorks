@@ -32,6 +32,7 @@ mod connections;
 mod diagnostics;
 mod evals;
 mod git;
+mod handoff;
 mod indexing;
 mod jobs;
 mod knowledge;
