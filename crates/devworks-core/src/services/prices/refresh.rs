@@ -47,18 +47,7 @@ pub fn official(id: &str) -> Option<OfficialPriceProvider> {
         _ => None,
     }
 }
-pub(crate) fn profile_source(profile: &str, upstream: &str) -> Option<&'static str> {
-    match profile {
-        "OpenAiResponses" | "CodexSubscriptionResponses" => Some("openai"),
-        "AnthropicMessages" | "ClaudeSubscriptionMessages" => Some("anthropic"),
-        "OpenRouterChat" => match upstream.split_once('/') {
-            Some(("openai", _)) => Some("openai"),
-            Some(("anthropic", _)) => Some("anthropic"),
-            _ => None,
-        },
-        _ => None,
-    }
-}
+
 pub(crate) fn model(
     read: &dyn RouterRead,
     id: &Id,
@@ -152,8 +141,8 @@ pub fn configured(read: &dyn RouterRead) -> Result<BTreeMap<String, String>, Sto
                 continue;
             }
             let mut sources = BTreeSet::new();
-            if let Some(p) = profile_source(&connection.profile, "") {
-                sources.insert(p);
+            if let Some((p, _)) = super::official_price_source(&connection, "") {
+                sources.insert(p.id());
             }
             if connection.profile == "OpenRouterChat" {
                 models(read, |m| {
@@ -162,9 +151,10 @@ pub fn configured(read: &dyn RouterRead) -> Result<BTreeMap<String, String>, Sto
                             .as_ref()
                             .is_none_or(|id| id == &connection.id)
                         && m.endpoint_profile == connection.profile
-                        && let Some(p) = profile_source(&connection.profile, &m.upstream_model_id)
+                        && let Some((p, _)) =
+                            super::official_price_source(&connection, &m.upstream_model_id)
                     {
-                        sources.insert(p);
+                        sources.insert(p.id());
                     }
                     Ok(true)
                 })?;
@@ -234,14 +224,10 @@ pub(crate) fn request(
             )
             .into());
         }
-        let Some(binding) = configured.get(&provider) else {
-            return Err(Refusal::new(
-                DomainErrorCode::NotFound,
-                "configured_price_provider",
-                Id::new(provider).ok(),
-            )
-            .into());
-        };
+        let binding = configured
+            .get(&provider)
+            .cloned()
+            .unwrap_or_else(|| sha256_hex(&[]));
         let status = tx.usage().price_status(&provider)?;
         if status.as_ref().is_some_and(|s| s.refresh_pending) {
             return Err(Refusal::new(
@@ -254,7 +240,7 @@ pub(crate) fn request(
         requested.push(ProviderRequest {
             provider,
             status_revision: status.map_or(1, |s| s.revision + 1),
-            binding: binding.clone(),
+            binding,
         });
     }
     if requested.is_empty() {
@@ -398,17 +384,45 @@ impl PriceService {
         {
             return RefreshOutcome::Failed("invalid price provider refresh set".into());
         }
+        let Some(attempt) = operation.latest_attempt() else {
+            return RefreshOutcome::Failed("price refresh has no journaled dispatch".into());
+        };
+        let attempt_no = attempt.attempt_no;
         let mut failures = Vec::new();
         for p in request.providers {
             if stop() {
                 return RefreshOutcome::Unknown("price refresh stopped before publication".into());
             }
-            let current = match read_snapshot(store, &ReadOptions::default(), |s| {
-                s.usage().price_status(&p.provider)
+            let (current, proof) = match read_snapshot(store, &ReadOptions::default(), |s| {
+                let journal = s.operations().operation(&operation.id)?.ok_or_else(|| {
+                    StorageError::InvalidRecord("price journal disappeared".into())
+                })?;
+                let proof = journal
+                    .attempts
+                    .iter()
+                    .flat_map(|a| a.observations.iter())
+                    .find(|v| {
+                        v["kind"] == "PriceProviderPublication" && v["provider"] == p.provider
+                    })
+                    .cloned();
+                Ok((s.usage().price_status(&p.provider)?, proof))
             }) {
-                Ok(Some(v)) => v,
-                Ok(None) => return RefreshOutcome::Failed("price refresh status missing".into()),
+                Ok(value) => value,
                 Err(e) => return RefreshOutcome::Unknown(format!("{e:?}")),
+            };
+            if let Some(proof) = proof {
+                if proof["outcome"] == "Failed" {
+                    failures.push(
+                        proof["reason"]
+                            .as_str()
+                            .unwrap_or("price publication failed")
+                            .to_owned(),
+                    );
+                }
+                continue;
+            }
+            let Some(current) = current else {
+                return RefreshOutcome::Failed("price refresh status missing".into());
             };
             if current.refresh_operation_id.as_ref() != Some(&operation.id) {
                 return RefreshOutcome::Failed("price refresh superseded".into());
@@ -465,14 +479,17 @@ impl PriceService {
                 {
                     return Err(StorageError::Busy);
                 }
-                let binding = configured(tx.router())?.remove(&requested.provider);
-                let fetched = if binding.as_ref() != Some(&requested.binding) {
+                let binding = configured(tx.router())?
+                    .remove(&requested.provider)
+                    .unwrap_or_else(|| sha256_hex(&[]));
+                let fetched = if binding != requested.binding {
                     Err(PriceFetchError::SourceChanged(
                         "configured provider binding changed".into(),
                     ))
                 } else {
                     fetched
                 };
+                let provider_key = requested.provider.clone();
                 match fetched {
                     Ok(fetched) => {
                         let revision = tx
@@ -501,6 +518,7 @@ impl PriceService {
                             status.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
                             tx.usage().put_price_status(&status, Some(before))?;
                         }
+                        tx.operations().observe(&operation_id,attempt_no,json!({"kind":"PriceProviderPublication","provider":provider_key,"outcome":"Completed","snapshotId":row.id,"snapshotRevision":row.revision.to_string()}))?;
                         Ok(None)
                     }
                     Err(error) => {
@@ -513,6 +531,7 @@ impl PriceService {
                         row.last_attempt_ms = Some(now);
                         row.next_refresh_ms = Some(now.saturating_add(WEEK_MS));
                         tx.usage().put_price_status(&row, Some(old.revision))?;
+                        tx.operations().observe(&operation_id,attempt_no,json!({"kind":"PriceProviderPublication","provider":provider_key,"outcome":"Failed","reason":reason}))?;
                         Ok(Some(reason))
                     }
                 }

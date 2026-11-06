@@ -134,7 +134,12 @@ fn seed(store: &dyn ApplicationStore, h: &Harness) {
                     id: id(name),
                     name: name.into(),
                     profile: profile.into(),
-                    endpoint: "https://api.example.test".into(),
+                    endpoint: if profile == "OpenAiResponses" {
+                        "https://api.openai.com/v1"
+                    } else {
+                        "https://api.anthropic.com"
+                    }
+                    .into(),
                     enabled: true,
                     local_free: false,
                     open_router: None,
@@ -602,8 +607,8 @@ fn weekly_cadence_schedules_one_overdue_operation_and_keeps_overrides_and_histor
 #[test]
 fn source_filters_and_legacy_results_are_exact_or_truthfully_unrepresentable() {
     runtime().block_on(async{
-    let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;
-    let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_eq!(legacy["kind"],"Result","{legacy}");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["inputUsdPerMillion"],"1.25");
+    let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;fx.refresh(&["openai"]);deliver(&dispatcher).await;
+    let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_eq!(legacy["kind"],"Result","{legacy}");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["inputUsdPerMillion"],"1.25");assert_eq!(legacy["result"]["value"]["items"][0]["price"]["revision"],"1","publication revisions never become override CAS tokens");
     let filtered=fx.query(json!({"modelIds":["priced-model","unpriced-model"],"providerIds":["anthropic"],"includeHistory":true,"page":{"limit":50}}));let view=&filtered["result"]["value"];assert_eq!(view["models"].as_array().unwrap().len(),1);assert_eq!(view["models"][0]["modelId"],"unpriced-model");assert!(view["items"].as_array().unwrap().is_empty());assert!(view["providers"].as_array().unwrap().iter().all(|p|p["providerId"]=="anthropic"));
     let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":"1","change":{"kind":"Set","tariffs":[{"upstreamModelId":"priced-model","serviceTier":"Priority","modality":"Audio","chargeKind":"Input","unit":"Second","units":"1","amountUsd":"0.0125"}]}}));applied(fx.command(&fx.user,"router.price_override",&raw,WriteOptions::default()));let legacy=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_ne!(legacy["kind"],"Result","exact dimensions cannot become legacy zero shadows: {legacy}");assert!(legacy.to_string().contains("UnsupportedCapability"),"{legacy}");worker.drain().await;dispatcher.stop();
 });
@@ -866,5 +871,205 @@ fn periodic_runtime_pass_repairs_a_lost_wakeup_without_replaying_missed_weeks() 
         .await;
         assert_eq!(source.calls.load(Ordering::SeqCst), 4);
         app.shutdown().await;
+    });
+}
+
+struct GateOpenAi {
+    gate: Arc<Gate>,
+}
+impl PriceSource for GateOpenAi {
+    fn fetch(
+        &self,
+        p: OfficialPriceProvider,
+        now: i64,
+    ) -> Result<FetchedPriceCatalog, PriceFetchError> {
+        if p == OfficialPriceProvider::OpenAi {
+            self.gate.started.notify_one();
+            let mut open = self.gate.open.lock().unwrap();
+            while !*open {
+                open = self.gate.release.wait(open).unwrap();
+            }
+        }
+        Ok(catalog(p, now, "1.25"))
+    }
+}
+#[test]
+fn newer_refresh_of_one_published_provider_does_not_erase_an_interrupted_multi_provider_operation()
+{
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let gate = Gate::new();
+        let (worker, dispatcher) = fx.dispatcher(Arc::new(GateOpenAi { gate: gate.clone() }));
+        let (_, old) = fx.refresh(&["anthropic", "openai"]);
+        dispatcher.recover().await.unwrap();
+        dispatcher.tick().await.unwrap();
+        within(
+            "second provider waits after first publication",
+            gate.started.notified(),
+        )
+        .await;
+        let first = read(&*fx.store, |s| {
+            s.usage().current_price_snapshot("anthropic")
+        })
+        .unwrap();
+        let (_, newer) = fx.refresh(&["anthropic"]);
+        assert_ne!(old, newer);
+        worker.stop();
+        dispatcher.stop();
+        let draining = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.drain().await }
+        });
+        gate.release();
+        draining.await.unwrap();
+        within(
+            "old multi-provider operation settles unknown",
+            dispatcher.idle(),
+        )
+        .await;
+        assert_eq!(
+            read(&*fx.store, |s| s.operations().operation(&old))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::OutcomeUnknown
+        );
+        drop(dispatcher);
+        drop(worker);
+        let Fx {
+            h,
+            store,
+            service,
+            cases,
+            user: _,
+            agent: _,
+        } = fx;
+        drop(service);
+        drop(cases);
+        drop(store);
+        let store = h.open();
+        let service = Arc::new(PriceService::new(h.ids.clone(), h.clock(), true));
+        let source = Source::new(vec![]);
+        let worker = PriceSupervisor::new(store.clone(), service, source.clone());
+        let dispatcher = Dispatcher::new(
+            store.clone(),
+            h.clock(),
+            vec![worker.consumer()],
+            DispatcherConfig::new(id("multi-price-restart")),
+        )
+        .unwrap();
+        dispatcher.recover().await.unwrap();
+        worker.tick().await.unwrap();
+        for _ in 0..4 {
+            dispatcher.tick().await.unwrap();
+            within("multi-provider catchup", dispatcher.idle()).await;
+            if read(&*store, |s| s.operations().operation(&newer))
+                .is_some_and(|v| is_terminal(v.state))
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            read(&*store, |s| s.operations().operation(&old))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::ObservedComplete
+        );
+        assert_eq!(
+            read(&*store, |s| s.operations().operation(&newer))
+                .unwrap()
+                .state,
+            devworks_core::protocol::OperationState::ObservedComplete
+        );
+        assert_eq!(
+            read(&*store, |s| s.usage().current_price_snapshot("anthropic"))
+                .unwrap()
+                .revision,
+            2
+        );
+        assert_eq!(
+            read(&*store, |s| s.usage().current_price_snapshot("openai"))
+                .unwrap()
+                .revision,
+            1
+        );
+        assert_eq!(
+            read(&*store, |s| s.usage().price_snapshot(&first.id)).unwrap(),
+            first
+        );
+        assert_eq!(
+            source.calls.load(Ordering::SeqCst),
+            2,
+            "recover only unfinished OpenAI plus the actual newer Anthropic refresh"
+        );
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}
+
+#[test]
+fn actual_official_origin_and_explicit_local_policy_qualify_sources_independently_of_protocol_labels()
+ {
+    runtime().block_on(async{
+    let fx=Fx::new();let(worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;
+    write(&*fx.store,|tx|{let mut c=tx.router().connection(&id("openai-connection"))?.unwrap();let rev=c.revision;c.revision+=1;c.endpoint="https://proxy.custom.example/v1".into();tx.router().put_connection(&c,Some(rev))}).unwrap();let configured=read(&*fx.store,|s|refresh::configured(s.router()));assert!(!configured.contains_key("openai"));let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["priceKind"],"Untracked");assert!(view["result"]["value"]["items"].as_array().unwrap().is_empty());
+    write(&*fx.store,|tx|{let mut c=tx.router().connection(&id("openai-connection"))?.unwrap();let rev=c.revision;c.revision+=1;c.profile="Embedding".into();c.endpoint="https://api.openai.com/v1".into();tx.router().put_connection(&c,Some(rev))?;let mut m=tx.router().route_model(&id("priced-model"))?.unwrap();let rev=m.revision;m.revision+=1;m.endpoint_profile="Embedding".into();tx.router().put_route_model(&m,Some(rev))}).unwrap();let configured=read(&*fx.store,|s|refresh::configured(s.router()));assert!(configured.contains_key("openai"));let view=fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));assert_eq!(view["result"]["value"]["models"][0]["priceKind"],"Estimated");assert_eq!(view["result"]["value"]["items"].as_array().unwrap().len(),2);
+    write(&*fx.store,|tx|{let mut c=tx.router().connection(&id("openai-connection"))?.unwrap();let rev=c.revision;c.revision+=1;c.local_free=true;c.endpoint="https://custom.example".into();tx.router().put_connection(&c,Some(rev))}).unwrap();let view=fx.query_schema(json!({"modelIds":["priced-model"],"page":{"limit":50}}),1);assert_eq!(view["result"]["value"]["items"][0]["priceKind"],"Free");assert!(view["result"]["value"]["items"][0].get("price").is_none());assert_eq!(view["result"]["value"]["items"][0]["stale"],false);let history=fx.query(json!({"modelIds":[],"providerIds":["openai"],"includeHistory":true,"page":{"limit":50}}));assert_eq!(history["result"]["value"]["snapshots"].as_array().unwrap().len(),1,"retired official source history remains inspectable");worker.drain().await;dispatcher.stop();
+});
+}
+
+#[test]
+fn unconfigured_official_publisher_can_be_refreshed_manually_without_enabling_automatic_work_or_credentials()
+ {
+    runtime().block_on(async {
+        let fx = Fx::new();
+        write(&*fx.store, |tx| {
+            for name in ["openai-connection", "anthropic-connection"] {
+                let mut c = tx.router().connection(&id(name))?.unwrap();
+                let rev = c.revision;
+                c.revision += 1;
+                c.enabled = false;
+                tx.router().put_connection(&c, Some(rev))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let source = Source::new(vec![]);
+        let (worker, dispatcher) = fx.dispatcher(source.clone());
+        assert_eq!(worker.tick().await.unwrap(), 0);
+        assert!(read(&*fx.store, |s| s.usage().price_status("openai")).is_none());
+        let (_, op) = fx.refresh(&["openai"]);
+        let pending = fx.query(json!({"modelIds":[],"providerIds":["openai"],"page":{"limit":50}}));
+        assert!(
+            pending["result"]["value"]["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["providerId"] == "openai" && p["refreshOperationId"] == op.0.as_str())
+        );
+        deliver(&dispatcher).await;
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        assert!(read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).is_some());
+        assert_eq!(worker.tick().await.unwrap(), 0);
+        fx.h.advance(refresh::WEEK_MS * 3);
+        assert_eq!(
+            worker.tick().await.unwrap(),
+            0,
+            "only currently configured providers join automatic cadence"
+        );
+        for name in ["openai-connection", "anthropic-connection"] {
+            let c = read(&*fx.store, |s| s.router().connection(&id(name))).unwrap();
+            assert!(!c.enabled);
+            assert!(c.credential_ref.is_none());
+        }
+        let view = fx.query(json!({"modelIds":[],"page":{"limit":50}}));
+        assert!(
+            view["result"]["value"]["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["providerId"] == "openai")
+        );
+        worker.drain().await;
+        dispatcher.stop();
     });
 }

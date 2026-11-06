@@ -159,22 +159,19 @@ fn source(m: &StoredRouteModel, c: Option<&StoredConnection>) -> String {
     if c.is_some_and(|c| c.local_free) {
         return c.expect("present").id.as_str().into();
     }
-    refresh::profile_source(
-        c.map_or(m.endpoint_profile.as_str(), |c| c.profile.as_str()),
-        &m.upstream_model_id,
-    )
-    .map(str::to_owned)
-    .unwrap_or_else(|| {
-        c.map_or_else(
-            || {
-                m.connection_id
-                    .as_ref()
-                    .map_or("unconfigured", Id::as_str)
-                    .into()
-            },
-            |c| c.id.as_str().into(),
-        )
-    })
+    c.and_then(|c| super::official_price_source(c, &m.upstream_model_id))
+        .map(|(provider, _)| provider.id().to_owned())
+        .unwrap_or_else(|| {
+            c.map_or_else(
+                || {
+                    m.connection_id
+                        .as_ref()
+                        .map_or("unconfigured", Id::as_str)
+                        .into()
+                },
+                |c| c.id.as_str().into(),
+            )
+        })
 }
 fn upstream(m: &StoredRouteModel) -> &str {
     if m.endpoint_profile == "OpenRouterChat" {
@@ -345,6 +342,18 @@ pub(crate) fn query(
         gaps_truncated: false,
     };
     let mut relevant = BTreeSet::new();
+    if model_filter.is_empty() {
+        for provider in ["openai", "anthropic"] {
+            if s.usage().price_status(provider)?.is_some() {
+                relevant.insert(provider.to_owned());
+            }
+        }
+    }
+    for provider in &provider_filter {
+        if refresh::official(provider).is_some() {
+            relevant.insert(provider.clone());
+        }
+    }
     for id in &snapshot_filter {
         if let Some(row) = s
             .usage()
@@ -387,10 +396,7 @@ pub(crate) fn query(
                 match legacy_price(
                     &m,
                     &f.tariffs,
-                    f.override_.as_ref().map_or_else(
-                        || f.snapshot.as_ref().map_or(1, |v| v.revision),
-                        |v| v.revision,
-                    ),
+                    s.usage().price_override_revision(&m.id)?,
                     if f.override_.is_some() {
                         "UserConfigured"
                     } else {
@@ -490,8 +496,7 @@ pub(crate) fn query(
             let n = rows.len();
             for connection in rows {
                 after = Some(connection.id.as_str().to_owned());
-                if !connection.local_free
-                    && refresh::profile_source(&connection.profile, "").is_some()
+                if !connection.local_free && super::official_price_source(&connection, "").is_some()
                 {
                     continue;
                 }
