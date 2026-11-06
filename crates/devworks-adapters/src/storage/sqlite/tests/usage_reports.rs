@@ -378,11 +378,17 @@ fn utc_half_open_range_missing_measurements_and_empty_buckets_are_distinct() {
     request(&h, "known", "CodeReview", T0);
     attempt(&h, &s, "known-attempt", "known", 1, (Some(10), None, 100));
     let mut i = input("CodeReviewUsage");
-    i.end_ms = Some(Counter::new(T0).unwrap());
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (T0).to_string(),
+    ));
     let empty = query(&s, &i);
     assert_eq!(metric(&empty, "totalTokens"), Some(0), "end is exclusive");
-    i.start_ms = Some(Counter::new(T0).unwrap());
-    i.end_ms = Some(Counter::new(T0 + 2 * 86_400_000).unwrap());
+    i.start_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (T0).to_string(),
+    ));
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (T0 + 2 * 86_400_000).to_string(),
+    ));
     let v = query(&s, &i);
     assert_eq!(metric(&v, "totalTokens"), None);
     assert_eq!(metric(&v, "inputTokens"), Some(10));
@@ -542,8 +548,12 @@ fn monday_buckets_can_precede_epoch_and_auto_intervals_preserve_the_retained_thr
     let h = Harness::new();
     let s = seed(&h);
     let mut i = input("AssistantActivity");
-    i.start_ms = Some(Counter::new(0).unwrap());
-    i.end_ms = Some(Counter::new(86_400_000).unwrap());
+    i.start_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (0).to_string(),
+    ));
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (86_400_000).to_string(),
+    ));
     i.interval = Some(devworks_core::protocol::support::BoundedText(
         " WEEK ".into(),
     ));
@@ -556,8 +566,10 @@ fn monday_buckets_can_precede_epoch_and_auto_intervals_preserve_the_retained_thr
             .iter()
             .any(|r| r["kind"] == "SeriesPoint" && r["bucketStartMs"] == "-259200000")
     );
-    for (days, expected) in [(45, "day"), (46, "week"), (180, "week"), (181, "month")] {
-        i.end_ms = Some(Counter::new(days * 86_400_000).unwrap());
+    for (days, expected) in [(45_i64, "day"), (46, "week"), (180, "week"), (181, "month")] {
+        i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+            (days * 86_400_000).to_string(),
+        ));
         i.interval = None;
         assert_eq!(query(&s, &i)["report"]["context"]["interval"], expected);
     }
@@ -617,8 +629,12 @@ fn later_retries_do_not_move_a_logical_activity_out_of_its_original_start_cohort
         "usage occurred inside range but its logical activity began before it"
     );
     let mut i = input("AssistantActivity");
-    i.start_ms = Some(Counter::new(T0 - 3).unwrap());
-    i.end_ms = Some(Counter::new(T0 - 1).unwrap());
+    i.start_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (T0 - 3).to_string(),
+    ));
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (T0 - 1).to_string(),
+    ));
     assert_eq!(
         metric(&query(&s, &i), "runCount"),
         Some(1),
@@ -717,12 +733,16 @@ fn a_legal_early_end_preserves_the_exact_negative_thirty_day_default_start() {
     let s = seed(&h);
     let mut i = input("AssistantActivity");
     i.start_ms = None;
-    i.end_ms = Some(Counter::new(0).unwrap());
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (0).to_string(),
+    ));
     let v = query(&s, &i);
     assert_eq!(v["report"]["context"]["range"]["startMs"], "-2592000000");
     assert_eq!(v["report"]["context"]["range"]["endMs"], "0");
     assert_eq!(metric(&v, "runCount"), Some(0));
-    i.end_ms = Some(Counter::new(86_400_000).unwrap());
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        (86_400_000).to_string(),
+    ));
     let v = query(&s, &i);
     assert_eq!(v["report"]["context"]["range"]["startMs"], "-2505600000");
     assert_eq!(metric(&v, "runCount"), Some(0));
@@ -786,4 +806,130 @@ fn feature_reports_do_not_fill_missing_historical_ownership_from_a_current_paren
     assert!(v["page"]["items"].as_array().unwrap().is_empty());
     assert_eq!(v["page"]["totals"]["legacyObservationMicroUsd"], "0");
     assert!(gap(&v, "historical-feature-ownership-unrecorded"));
+}
+#[test]
+fn retained_signed_endpoints_accept_real_pre_epoch_dates_and_negative_end_defaults() {
+    let h = Harness::new();
+    let s = seed(&h);
+    let mut i = input("AssistantActivity");
+    i.start_ms = Some(devworks_core::protocol::support::SignedCounter(
+        "-315619200000".into(),
+    )); // 1960-01-01 UTC
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        "-283996800000".into(),
+    )); // 1961-01-01 UTC
+    let v = query(&s, &i);
+    assert_eq!(v["report"]["context"]["range"]["startMs"], "-315619200000");
+    assert_eq!(v["report"]["context"]["range"]["endMs"], "-283996800000");
+    assert_eq!(v["report"]["context"]["interval"], "month");
+    assert_eq!(metric(&v, "runCount"), Some(0));
+    i.start_ms = None;
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        "-315619200000".into(),
+    ));
+    let v = query(&s, &i);
+    assert_eq!(v["report"]["context"]["range"]["startMs"], "-318211200000");
+    assert_eq!(v["report"]["context"]["range"]["endMs"], "-315619200000");
+    i.start_ms = Some(devworks_core::protocol::support::SignedCounter(
+        "-283996800000".into(),
+    ));
+    assert!(
+        read(&s, |r| Ok(reports::query(r, &ctx(&s), &i, T0).is_err())),
+        "reversed ranges retain the source error"
+    );
+    i.start_ms = None;
+    i.end_ms = Some(devworks_core::protocol::support::SignedCounter(
+        "-62135596800000".into(),
+    ));
+    assert!(
+        read(&s, |r| Ok(reports::query(r, &ctx(&s), &i, T0).is_err())),
+        "DateTime year1 cannot subtract thirty days, just like frozen AddDays"
+    );
+}
+#[test]
+fn an_unobserved_actual_model_cannot_establish_zero_usage_for_a_served_model_filter() {
+    let h = Harness::new();
+    let s = seed(&h);
+    request(&h, "unobserved", "Assistant", T0);
+    attempt(
+        &h,
+        &s,
+        "unobserved-attempt",
+        "unobserved",
+        1,
+        (Some(4), Some(2), 3),
+    );
+    // Read-only fixture: the actual observed identity is absent; intended upstream remains
+    // separately captured in pricing_snapshot and cannot be promoted to observed identity.
+    h.raw().execute("UPDATE usage_attempts SET provider_model_id=NULL WHERE attempt_id='unobserved-attempt'",[]).unwrap();
+    let mut i = input("AssistantUsage");
+    i.model = Some(devworks_core::protocol::support::BoundedText(
+        "gpt-6.1-sol".into(),
+    ));
+    let v = query(&s, &i);
+    assert_eq!(metric(&v, "totalTokens"), None);
+    assert!(gap(&v, "filter-identity-unrecorded"));
+    i.model = Some(devworks_core::protocol::support::BoundedText("sol".into()));
+    let v = query(&s, &i);
+    assert_eq!(metric(&v, "totalTokens"), Some(6));
+    assert!(gap(&v, "actual-served-model-unrecorded"));
+    let v = query(&s, &input("Attempts"));
+    assert!(v["page"]["items"][0].get("resolvedModelId").is_none());
+}
+#[test]
+fn full_dimensional_unknown_cost_reasons_are_current_and_never_truncated_to_a_quote_reason() {
+    let h = Harness::new();
+    let s = seed(&h);
+    request(&h, "unit-cost", "Assistant", T0);
+    attempt(
+        &h,
+        &s,
+        "unit-cost-attempt",
+        "unit-cost",
+        1,
+        (Some(4), Some(2), 3),
+    );
+    let expected = run_write(&s, WriteOptions::default(), |tx| {
+        let a = tx
+            .usage()
+            .inference_attempt(&id("unit-cost-attempt"))?
+            .unwrap();
+        let admitted = devworks_core::services::usage::accounting::snapshot(&a)?;
+        let mut b = tx.usage().attempt_balance(&a.attempt_id)?.unwrap();
+        let mut current: BalanceSummary = serde_json::from_value(b.summary).unwrap();
+        current.meter.quantities.additional = (0..128)
+            .map(
+                |n| devworks_core::services::usage::meter::MeasuredQuantity {
+                    modality: "m".repeat(128),
+                    charge_kind: "c".repeat(128),
+                    unit: format!("{n:03}{}", "u".repeat(125)),
+                    cache_write_ttl_ms: None,
+                    quantity: 1,
+                },
+            )
+            .collect();
+        let estimate = devworks_core::services::usage::pricing::estimate(
+            &admitted.quote,
+            &current.meter.quantities,
+            &admitted.pricing,
+        )
+        .unwrap();
+        current.unknown_components = estimate.unknown_components;
+        let reason = current.unknown_components.join(", ");
+        assert!(reason.chars().count() > 4096 && reason.chars().count() <= 65536);
+        b.revision += 1;
+        b.priced_micro_usd = estimate.tracked_micro_usd;
+        b.monetary_complete = false;
+        b.incomplete = true;
+        b.summary = serde_json::to_value(current).unwrap();
+        tx.usage().put_attempt_balance(&b, Some(1))?;
+        Ok(reason)
+    })
+    .unwrap();
+    let v = query(&s, &input("Attempts"));
+    let row = &v["page"]["items"][0];
+    assert_eq!(row["cost"]["untrackedReason"], expected);
+    assert_eq!(row["unitQuantities"].as_array().unwrap().len(), 128);
+    assert_eq!(row["cost"]["monetaryComplete"], false);
+    assert!(gap(&v, "monetary-coverage-incomplete"));
 }
