@@ -18,6 +18,7 @@ pub struct Read {
     pub query: Value,
     pub cursors: Vec<Option<String>>,
     pub page: Option<GraphPage>,
+    pub module_pages: Vec<(Option<String>, GraphPage)>,
 }
 #[derive(Clone)]
 pub struct Breadcrumb {
@@ -35,6 +36,7 @@ impl Read {
             query,
             cursors: vec![None],
             page: None,
+            module_pages: Vec::new(),
         }
     }
 }
@@ -75,6 +77,7 @@ pub struct GraphScreen {
     pub direction: usize,
     pub edge_kind: String,
     pub tab: usize,
+    pub expand_containers: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -239,15 +242,30 @@ impl GraphScreen {
                     });
                     if let Some(page) = &read.page {
                         coverage(ui, page);
+                        if matches!(page.result, GraphResult::CodeNodes { .. }) {
+                            ui.horizontal(|ui| {
+                                if ui.button("Expand containers on this page").clicked() {
+                                    state.expand_containers = Some(true);
+                                }
+                                if ui.button("Collapse containers on this page").clicked() {
+                                    state.expand_containers = Some(false);
+                                }
+                            });
+                        }
+                        let presentation = Presentation {
+                            enabled: online && !state.loading,
+                            trust_busy: state.trust_busy,
+                            expand: state.expand_containers.take(),
+                        };
                         egui::ScrollArea::vertical()
                             .id_salt(("repository-graph", read.operation, &read.title))
                             .show(ui, |ui| {
                                 render(
                                     ui,
                                     page,
+                                    &read.module_pages,
                                     &state.repository,
-                                    online && !state.loading,
-                                    state.trust_busy,
+                                    &presentation,
                                     actions,
                                 );
                             });
@@ -573,8 +591,15 @@ fn node_link(ui: &mut Ui, node: &CodeNode, actions: &mut Vec<Action>) {
             node.node_id.as_str(),
         )),
         |ui| {
+            let name = if !node.name.0.is_empty() {
+                node.name.0.clone()
+            } else if !node.qualified_name.0.is_empty() {
+                node.qualified_name.0.clone()
+            } else {
+                format!("Unnamed {} · {}", node.node_kind.0, node.node_id.as_str())
+            };
             if ui
-                .button(&node.name.0)
+                .button(name)
                 .on_hover_text(&node.qualified_name.0)
                 .clicked()
             {
@@ -604,43 +629,91 @@ fn node_link(ui: &mut Ui, node: &CodeNode, actions: &mut Vec<Action>) {
         },
     );
 }
-fn nodes(ui: &mut Ui, nodes: &[CodeNode], actions: &mut Vec<Action>) {
+fn nodes(ui: &mut Ui, nodes: &[CodeNode], expand: Option<bool>, actions: &mut Vec<Action>) {
     let mut kinds: BTreeMap<&str, Vec<&CodeNode>> = BTreeMap::new();
     for node in nodes {
+        if node.parent_id.as_ref().is_some_and(|parent| {
+            nodes
+                .iter()
+                .any(|n| n.node_id == *parent && n.repository_id == node.repository_id)
+        }) {
+            continue;
+        }
         kinds.entry(&node.node_kind.0).or_default().push(node);
     }
+    let mut reached = BTreeSet::new();
     for (kind, group) in kinds {
-        egui::CollapsingHeader::new(format!("{kind} · {} shown", group.len()))
-            .default_open(true)
-            .show(ui, |ui| {
-                for node in &group {
-                    if node
-                        .parent_id
-                        .as_ref()
-                        .is_some_and(|parent| nodes.iter().any(|n| n.node_id == *parent))
-                    {
-                        continue;
-                    }
-                    let members: Vec<_> = nodes
-                        .iter()
-                        .filter(|member| member.parent_id.as_ref() == Some(&node.node_id))
-                        .collect();
-                    if members.is_empty() {
-                        node_link(ui, node, actions);
-                    } else {
-                        egui::CollapsingHeader::new(&node.name.0)
-                            .id_salt(node.node_id.as_str())
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                node_link(ui, node, actions);
-                                for member in members {
-                                    node_link(ui, member, actions);
-                                }
-                            });
-                    }
-                }
-            });
+        for node in &group {
+            mark_tree(node, nodes, 0, &mut reached);
+        }
+        egui::CollapsingHeader::new(format!(
+            "{kind} · {} top-level entries on this page",
+            group.len()
+        ))
+        .open(expand)
+        .default_open(true)
+        .show(ui, |ui| {
+            for node in &group {
+                node_tree(ui, node, nodes, 0, expand, actions);
+            }
+        });
     }
+    let rest = nodes
+        .iter()
+        .filter(|node| !reached.contains(node.node_id.as_str()))
+        .collect::<Vec<_>>();
+    if !rest.is_empty() {
+        ui.heading("Other entries on this page");
+        for node in rest {
+            node_link(ui, node, actions);
+        }
+    }
+}
+fn mark_tree(node: &CodeNode, nodes: &[CodeNode], depth: usize, reached: &mut BTreeSet<String>) {
+    if !reached.insert(node.node_id.as_str().into()) || depth >= 32 {
+        return;
+    }
+    for child in nodes.iter().filter(|n| {
+        n.parent_id.as_ref() == Some(&node.node_id) && n.repository_id == node.repository_id
+    }) {
+        mark_tree(child, nodes, depth + 1, reached);
+    }
+}
+fn node_tree(
+    ui: &mut Ui,
+    node: &CodeNode,
+    nodes: &[CodeNode],
+    depth: usize,
+    expand: Option<bool>,
+    actions: &mut Vec<Action>,
+) {
+    let children = nodes
+        .iter()
+        .filter(|n| {
+            n.parent_id.as_ref() == Some(&node.node_id) && n.repository_id == node.repository_id
+        })
+        .collect::<Vec<_>>();
+    if children.is_empty() || depth >= 32 {
+        node_link(ui, node, actions);
+        if !children.is_empty() {
+            widgets::caption(ui, "Further nested entries are listed below.");
+        }
+        return;
+    }
+    egui::CollapsingHeader::new(format!(
+        "{} · {} members on this page",
+        node.name.0,
+        children.len()
+    ))
+    .id_salt(node.node_id.as_str())
+    .open(expand)
+    .default_open(false)
+    .show(ui, |ui| {
+        node_link(ui, node, actions);
+        for child in children {
+            node_tree(ui, child, nodes, depth + 1, expand, actions);
+        }
+    });
 }
 fn properties(ui: &mut Ui, items: &[CodeProperty], complete: bool) {
     egui::CollapsingHeader::new("Properties").show(ui,|ui|{
@@ -747,12 +820,62 @@ fn entries(ui: &mut Ui, items: &[CodeTraversalEntry], actions: &mut Vec<Action>)
     }
 }
 
-fn modules(ui: &mut Ui, items: &[CodeModuleAnalysis], actions: &mut Vec<Action>) {
+struct ModuleParts<'a> {
+    item: &'a CodeModuleAnalysis,
+    recorded: Vec<&'a CodeRecordedModuleAnalysis>,
+}
+pub fn module_items(page: &GraphPage) -> &[CodeModuleAnalysis] {
+    match &page.result {
+        GraphResult::Architecture { value } => &value.internal_modules.0,
+        GraphResult::RepositoryOverview { value } => &value.internal_modules.0,
+        _ => &[],
+    }
+}
+pub fn module_scalar(item: &CodeModuleAnalysis) -> Value {
+    let mut recorded = serde_json::to_value(&item.recorded).expect("typed module analysis");
+    if let Some(fields) = recorded.as_object_mut() {
+        for field in [
+            "endpoints",
+            "services",
+            "databaseTables",
+            "externalDependencies",
+        ] {
+            fields.remove(field);
+        }
+    }
+    json!({"module":item.module,"state":item.state,"recorded":recorded})
+}
+fn modules(
+    ui: &mut Ui,
+    items: &[CodeModuleAnalysis],
+    pages: &[(Option<String>, GraphPage)],
+    actions: &mut Vec<Action>,
+) {
+    let mut groups: BTreeMap<String, ModuleParts<'_>> = BTreeMap::new();
+    let all = if pages.is_empty() {
+        items.iter().collect::<Vec<_>>()
+    } else {
+        pages
+            .iter()
+            .flat_map(|(_, page)| module_items(page))
+            .collect()
+    };
+    for item in all {
+        let key = serde_json::to_string(&item.module).expect("typed module identity");
+        let entry = groups.entry(key).or_insert_with(|| ModuleParts {
+            item,
+            recorded: Vec::new(),
+        });
+        if let Some(recorded) = &item.recorded {
+            entry.recorded.push(recorded);
+        }
+    }
     ui.heading("Internal code modules");
-    if items.is_empty() {
+    if groups.is_empty() {
         ui.label("No internal module analysis is reported in this page.");
     }
-    for item in items {
+    for parts in groups.values() {
+        let item = parts.item;
         egui::CollapsingHeader::new(&item.module.module_name.0)
             .id_salt((item.module.repository_id.as_str(),&item.module.module_name.0)).default_open(true)
             .show(ui,|ui|{
@@ -771,10 +894,10 @@ fn modules(ui: &mut Ui, items: &[CodeModuleAnalysis], actions: &mut Vec<Action>)
                     optional(ui,"Source view",recorded.source_view_id.as_ref().map(|id|id.as_str()));
                     if let Some(totals)=&recorded.program_totals {widgets::caption(ui,format!("Recorded program totals: {} endpoints · {} services · {} tables",totals.endpoint_count.as_str(),totals.service_count.as_str(),totals.table_count.as_str()));}
                     else {widgets::caption(ui,"Program totals have not been recorded.");}
-                    for endpoint in &recorded.endpoints.0 {selectable(ui,format!("{} {} — {}",endpoint.http_method.0,endpoint.route.0,endpoint.description.0));optional(ui,"Request model",endpoint.request_model.as_ref().map(|v|v.0.as_str()));optional(ui,"Response model",endpoint.response_model.as_ref().map(|v|v.0.as_str()));}
-                    for service in &recorded.services.0 {selectable(ui,format!("{} · {} · {}",service.name.0,service.lifetime.0,service.description.0));optional(ui,"Interface",service.interface_name.as_ref().map(|v|v.0.as_str()));}
-                    for table in &recorded.database_tables.0 {selectable(ui,format!("Recorded table: {}",table.0));}
-                    for dependency in &recorded.external_dependencies.0 {selectable(ui,format!("Recorded dependency: {}",dependency.0));}
+                    for endpoint in parts.recorded.iter().flat_map(|part|&part.endpoints.0) {selectable(ui,format!("{} {} — {}",endpoint.http_method.0,endpoint.route.0,endpoint.description.0));optional(ui,"Request model",endpoint.request_model.as_ref().map(|v|v.0.as_str()));optional(ui,"Response model",endpoint.response_model.as_ref().map(|v|v.0.as_str()));}
+                    for service in parts.recorded.iter().flat_map(|part|&part.services.0) {selectable(ui,format!("{} · {} · {}",service.name.0,service.lifetime.0,service.description.0));optional(ui,"Interface",service.interface_name.as_ref().map(|v|v.0.as_str()));}
+                    for table in parts.recorded.iter().flat_map(|part|&part.database_tables.0) {selectable(ui,format!("Recorded table: {}",table.0));}
+                    for dependency in parts.recorded.iter().flat_map(|part|&part.external_dependencies.0) {selectable(ui,format!("Recorded dependency: {}",dependency.0));}
                 } else {ui.label("No semantic analysis has been recorded for this module. Indexed observations below are not program totals.");}
                 widgets::caption(ui,format!("Observed index coverage: {:?}",item.observed_coverage.state));
                 for count in &item.observed_node_counts.0 {if ui.button(format!("Indexed {} · {}",count.name.0,count.count.as_str())).clicked(){actions.push(Action::Filter{repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:Some(count.name.0.clone())});}}
@@ -787,12 +910,17 @@ fn modules(ui: &mut Ui, items: &[CodeModuleAnalysis], actions: &mut Vec<Action>)
     }
 }
 
+struct Presentation {
+    enabled: bool,
+    trust_busy: bool,
+    expand: Option<bool>,
+}
 fn render(
     ui: &mut Ui,
     page: &GraphPage,
+    module_pages: &[(Option<String>, GraphPage)],
     repository: &str,
-    enabled: bool,
-    trust_busy: bool,
+    presentation: &Presentation,
     actions: &mut Vec<Action>,
 ) {
     let confidence = match &page.result {
@@ -863,7 +991,7 @@ fn render(
                     value.low_confidence_count.as_str()
                 ),
             );
-            nodes(ui, &value.nodes.0, actions);
+            nodes(ui, &value.nodes.0, presentation.expand, actions);
         }
         GraphResult::NodeDetail { value } => {
             let node = &value.node;
@@ -931,7 +1059,7 @@ fn render(
             }
             if ui
                 .add_enabled(
-                    enabled && !trust_busy,
+                    presentation.enabled && !presentation.trust_busy,
                     egui::Button::new(if node.do_not_trust {
                         "Restore trust"
                     } else {
@@ -1043,7 +1171,7 @@ fn render(
                 );
             }
             links(ui, &value.dependencies.0, actions);
-            modules(ui, &value.internal_modules.0, actions);
+            modules(ui, &value.internal_modules.0, module_pages, actions);
         }
         GraphResult::Architecture { value } => {
             if let Some(summary) = &value.summary {
@@ -1069,7 +1197,7 @@ fn render(
                     });
                 }
             }
-            modules(ui, &value.internal_modules.0, actions);
+            modules(ui, &value.internal_modules.0, module_pages, actions);
             ui.heading("Hotspots");
             for item in &value.hotspots.0 {
                 selectable(
@@ -1114,7 +1242,7 @@ fn render(
             }
         }
         GraphResult::CodeGraph { value } => {
-            nodes(ui, &value.nodes.0, actions);
+            nodes(ui, &value.nodes.0, None, actions);
             edges(ui, "Relationships", &value.edges.0, &value.nodes.0, actions);
         }
         GraphResult::CallTrace { value } => {

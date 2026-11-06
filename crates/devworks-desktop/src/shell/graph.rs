@@ -50,6 +50,7 @@ impl Shell {
             // Back navigation re-reads its cursor under the retained pin; do not retain every
             // potentially large source or property page in the breadcrumb stack.
             old.page = None;
+            old.module_pages.clear();
             self.graph.history.push(graph_screen::Breadcrumb {
                 read: old,
                 repository: self.graph.repository.clone(),
@@ -154,6 +155,40 @@ impl Shell {
                             }
                         }
                         if let Some(read) = &mut self.graph.read {
+                            if matches!(
+                                page.result,
+                                GraphResult::Architecture { .. }
+                                    | GraphResult::RepositoryOverview { .. }
+                            ) {
+                                if read.module_pages.iter().any(|(_, old)| {
+                                    old.view.as_ref().map(|view| &view.pin_id)
+                                        != page.view.as_ref().map(|view| &view.pin_id)
+                                }) {
+                                    self.graph.error=Some("The captured module view changed while paging. Refresh before reading more entries.".into());
+                                    return None;
+                                }
+                                for item in graph_screen::module_items(&page) {
+                                    if read.module_pages.iter().any(|(_, old)| {
+                                        graph_screen::module_items(old).iter().any(|previous| {
+                                            serde_json::to_value(&previous.module).ok()
+                                                == serde_json::to_value(&item.module).ok()
+                                                && graph_screen::module_scalar(previous)
+                                                    != graph_screen::module_scalar(item)
+                                        })
+                                    }) {
+                                        self.graph.error=Some("Module analysis changed while paging. Refresh the selected graph view before combining more entries.".into());
+                                        return None;
+                                    }
+                                }
+                                let cursor = read.cursors.last().cloned().flatten();
+                                if let Some((_, stored)) =
+                                    read.module_pages.iter_mut().find(|(key, _)| *key == cursor)
+                                {
+                                    *stored = page.clone();
+                                } else {
+                                    read.module_pages.push((cursor, page.clone()));
+                                }
+                            }
                             read.page = Some(page);
                         }
                     }
