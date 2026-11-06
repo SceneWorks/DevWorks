@@ -822,3 +822,151 @@ fn scheduled_route_editor_offers_all_latest_aliases_and_keeps_saved_legacy_input
     assert_eq!(h.state().jobs.form.as_ref().unwrap().effort, 4);
     assert!(has_text(&h, "The saved effort is retained"));
 }
+
+#[test]
+fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
+    for project_scope in [false, true] {
+        let root = Root::new(if project_scope {
+            "jobs-project-prompt-pages"
+        } else {
+            "jobs-workspace-prompt-pages"
+        });
+        let engine = start(&root);
+        let backend = engine.backend();
+        let project = if project_scope {
+            Some(
+                ops::project_changed(backend.command(
+                    "projects.create",
+                    &ops::project_create(&*backend, "Paged prompts", "", &[]),
+                ))
+                .unwrap()
+                .id,
+            )
+        } else {
+            None
+        };
+        let scope = project.clone();
+        run_write(
+            &**engine.host().runtime().store(),
+            WriteOptions::default(),
+            move |tx| {
+                let digest = "c".repeat(64);
+                tx.artifacts()
+                    .put_blob(&digest, 12, "paged-generation", "blobs/cc/prompt")?;
+                for index in 0..210 {
+                    let artifact = id(&format!("paged-prompt-{index:03}"));
+                    let version = id(&format!("paged-version-{index:03}"));
+                    tx.artifacts().insert_artifact(&StoredArtifact {
+                        id: artifact.clone(),
+                        origin_project_id: scope.clone(),
+                        origin_work_id: None,
+                        title: if index == 0 {
+                            "Beyond the first prompt page".into()
+                        } else {
+                            format!("Other prompt {index:03}")
+                        },
+                        revision: 1,
+                        scope: scope
+                            .clone()
+                            .map_or(ArtifactScope::Workspace, ArtifactScope::Project),
+                        owner: scope
+                            .is_none()
+                            .then(|| ActorId(id(devworks_desktop::host::USER_ACTOR))),
+                        retention: ArtifactRetention::Explicit,
+                        scope_revision: 1,
+                        reference_revision: 1,
+                        current_version_id: None,
+                        state: ArtifactState::Live,
+                        created_at_ms: index + 1,
+                        provenance: json!({}),
+                    })?;
+                    tx.artifacts().insert_version(&StoredVersion {
+                        id: version.clone(),
+                        artifact_id: artifact.clone(),
+                        version_no: 1,
+                        blob_digest: digest.clone(),
+                        byte_count: 12,
+                        blob_generation: "paged-generation".into(),
+                        media_type: "text/markdown".into(),
+                        created_at_ms: index + 1,
+                        deleted_at_ms: None,
+                        source: json!({}),
+                    })?;
+                    let mut record = tx.artifacts().artifact(&artifact)?.unwrap();
+                    record.current_version_id = Some(version);
+                    tx.artifacts().update_artifact(&record)?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        let first = ops::artifacts(backend.query(
+            "artifacts.list",
+            &ops::prompt_artifacts(&*backend, project.as_ref().map(|p| p.0.as_str()), None),
+        ))
+        .unwrap();
+        assert_eq!(first.0.len(), 200);
+        assert!(first.1);
+        assert!(
+            !first
+                .0
+                .iter()
+                .any(|a| a.artifact.artifact_id.as_str() == "paged-prompt-000")
+        );
+        let mut harness = harness(shell(&engine, &root, Script::default()), 1440.0, 6000.0);
+        settle(&mut harness);
+        click_nav(&mut harness, "Scheduled jobs");
+        if project_scope {
+            choose(&mut harness, "Scope", "Paged prompts");
+        }
+        click(&mut harness, Role::Button, "New job");
+        settle(&mut harness);
+        let label = if project_scope {
+            "Load more project prompts"
+        } else {
+            "Load more workspace prompts"
+        };
+        click(&mut harness, Role::Button, label);
+        settle(&mut harness);
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, label)
+                .is_none(),
+            "all 210 prompts loaded"
+        );
+        choose(&mut harness, "Saved prompt", "Beyond the first prompt page");
+        assert_eq!(
+            harness
+                .state()
+                .jobs
+                .form
+                .as_ref()
+                .unwrap()
+                .prompt
+                .as_deref(),
+            Some("paged-prompt-000")
+        );
+        {
+            let form = harness.state_mut().jobs.form.as_mut().unwrap();
+            form.title = "Selected after continuation".into();
+            form.schedule_kind = 0;
+            form.enabled = false;
+        }
+        click(&mut harness, Role::Button, "Save");
+        settle(&mut harness);
+        let records = ops::jobs(backend.query(
+            "jobs.list",
+            &ops::jobs_list(&*backend, project.as_ref().map(|p| p.0.as_str())),
+        ))
+        .unwrap()
+        .0;
+        let selected = records
+            .iter()
+            .find(|job| job.title.0 == "Selected after continuation")
+            .unwrap();
+        let definition = serde_json::to_value(&selected.definition).unwrap();
+        assert_eq!(definition["prompt"]["artifactId"], "paged-prompt-000");
+        assert_eq!(definition["prompt"]["versionId"], "paged-version-000");
+        assert!(!selected.enabled);
+    }
+}
