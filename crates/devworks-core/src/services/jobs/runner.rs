@@ -815,7 +815,7 @@ impl JobService {
         let definition: JobDefinition = parse(&run.definition)?;
         let resume = run.resumptions > 0;
         let now = tx.now_ms();
-        let started = tx.jobs().update_run(
+        let mut started = tx.jobs().update_run(
             &StoredJobRun {
                 status: if reattach { "Holding" } else { "Running" }.into(),
                 started_at_ms: run.started_at_ms.or(Some(now)),
@@ -847,6 +847,48 @@ impl JobService {
                     )?;
                     return Ok(None);
                 };
+                if operation == super::native_help::OPERATION
+                    && super::native_help::is_empty(&arguments.value.0)
+                {
+                    let revision = arguments.schema.revision.get();
+                    let schema = super::native_help::argument_schema(
+                        operation,
+                        crate::registry::SchemaRevision(u32::try_from(revision).map_err(|_| {
+                            StorageError::InvalidRecord("invalid Help job schema revision".into())
+                        })?),
+                    )
+                    .ok_or_else(|| {
+                        StorageError::InvalidRecord("invalid Help job argument schema".into())
+                    })?;
+                    if schema.schema_id != arguments.schema.schema_id
+                        || schema.sha256 != arguments.schema.sha256
+                    {
+                        fail_before(
+                            tx,
+                            &started,
+                            "Help job arguments do not match the current-generation adapter; nothing ran",
+                        )?;
+                        return Ok(None);
+                    }
+                    let (invocation, frame) =
+                        super::native_help::invocation(tx, &mut started, revision)?;
+                    let ctx = host_ctx(
+                        tx,
+                        native_namespace(&run.job_id),
+                        invocation,
+                        run.project_id.as_ref(),
+                    );
+                    return Ok(Some(Begun {
+                        run: started,
+                        operation: op_id,
+                        fence,
+                        step: Step::Native {
+                            ctx,
+                            operation,
+                            frame,
+                        },
+                    }));
+                }
                 let mut body = arguments.value.0.clone();
                 if let Some(map) = body.as_object_mut() {
                     map.insert("kind".into(), json!(operation));
