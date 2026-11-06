@@ -41,7 +41,15 @@ fn resolve(
     owner: &StoredConvention,
     path: &ConventionIndexedPath,
 ) -> Result<Path, Failure> {
-    if access::owner(read, ctx, &owner.id, Some(owner.revision), None)? != *owner {
+    let owner_scope = super::model::scope(&owner.scope);
+    if access::owner(
+        read,
+        ctx,
+        &owner.id,
+        Some(owner.revision),
+        Some(&owner_scope),
+    )? != *owner
+    {
         return Err(changed());
     }
     let header = read
@@ -56,7 +64,13 @@ fn resolve(
             c.convention_id == owner.id && c.convention_revision == header.convention_revision
         })
         .ok_or_else(changed)?;
-    let captured = access::owner(read, ctx, &owner.id, Some(header.convention_revision), None)?;
+    let captured = access::owner(
+        read,
+        ctx,
+        &owner.id,
+        Some(header.convention_revision),
+        Some(&owner_scope),
+    )?;
     if captured.content_ref.as_ref() != Some(&header.source_ref)
         || owner.content_ref != captured.content_ref
         || owner.title != captured.title

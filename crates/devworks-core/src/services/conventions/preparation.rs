@@ -50,6 +50,9 @@ impl ConventionService {
         if text.is_some() && reference.byte_length.get() as u64 > model::MAX_MARKDOWN_BYTES {
             return Err(invalid("convention_source_size"));
         }
+        // The owner was already resolved under the request scope; desktop Humans have no
+        // project lineage from which a subsequent implicit scope could be recovered.
+        let owner_scope = model::scope(&owner.scope);
         let (lease, upload) = env.read(|read| {
             Ok((|| {
                 let selection = if same(owner.content_ref.as_ref(), reference) {
@@ -61,8 +64,13 @@ impl ConventionService {
                 };
                 if let Some(selection) = selection {
                     Ok::<_, Failure>((
-                        self.artifacts
-                            .resolve_convention_source(read, ctx, None, owner, selection)?,
+                        self.artifacts.resolve_convention_source(
+                            read,
+                            ctx,
+                            Some(&owner_scope),
+                            owner,
+                            selection,
+                        )?,
                         false,
                     ))
                 } else {
@@ -92,7 +100,7 @@ impl ConventionService {
                                 self.artifacts.resolve_convention_source(
                                     read,
                                     ctx,
-                                    None,
+                                    Some(&owner_scope),
                                     owner,
                                     ConventionSourceSelection::Resource(resource),
                                 )?,
@@ -100,7 +108,7 @@ impl ConventionService {
                             ));
                         }
                     }
-                    let scoped = access::scope(read, ctx, None, false)?;
+                    let scoped = access::scope(read, ctx, Some(&owner_scope), false)?;
                     let mut before = None;
                     loop {
                         if env.stopped(self.clock.now_ms().get()) {
@@ -127,7 +135,11 @@ impl ConventionService {
                             if let Some(selection) = selection {
                                 return Ok((
                                     self.artifacts.resolve_convention_source(
-                                        read, ctx, None, &prior, selection,
+                                        read,
+                                        ctx,
+                                        Some(&owner_scope),
+                                        &prior,
+                                        selection,
                                     )?,
                                     false,
                                 ));
