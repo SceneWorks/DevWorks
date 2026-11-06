@@ -781,3 +781,6 @@ fn saved_package_preserves_an_original_human_author_too() {
     .unwrap();
     assert_eq!(version.approval.unwrap()["approvalId"], json!(review.id));
 }
+
+#[path = "approval_publication.rs"]
+mod publication;

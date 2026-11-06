@@ -2541,15 +2541,30 @@ impl CommandHandler for PackageService {
                     .len()
                     >= 32 * 1024
                 {
-                    let reference =
-                        self.publish_review_facts(ctx, env, &facts)
-                            .map_err(|e| match e {
-                                Failure::Storage(e) => e,
-                                Failure::Refused(r) => StorageError::InvalidRecord(format!(
-                                    "package review evidence refused: {:?}",
-                                    r.code
-                                )),
-                            })?;
+                    let saved_request = env
+                        .read(|s| {
+                            Ok(approval::source_review_request(
+                                s.packages(),
+                                &inspection.package_id,
+                                &i.source,
+                            ))
+                        })?
+                        .map_err(|e| match e {
+                            Failure::Storage(e) => e,
+                            Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                                "package review request refused: {:?}",
+                                r.code
+                            )),
+                        })?;
+                    let reference = self
+                        .publish_review_facts(ctx, &saved_request, env, &facts)
+                        .map_err(|e| match e {
+                            Failure::Storage(e) => e,
+                            Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                                "package review evidence refused: {:?}",
+                                r.code
+                            )),
+                        })?;
                     prep.review_evidence = Some((reference, facts));
                 }
             }

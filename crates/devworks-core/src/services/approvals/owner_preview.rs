@@ -108,8 +108,11 @@ impl SavedOperationOwners for NativeOwnerPreviews {
             &**store,
             ctx,
             env,
-            "SavedOperationReviewEvidence",
-            "Complete saved-operation owner review",
+            request,
+            (
+                "SavedOperationReviewEvidence",
+                "Complete saved-operation owner review",
+            ),
             &document,
         )?;
         env.read(|s| {
@@ -356,12 +359,19 @@ pub(crate) fn publish_review_evidence(
     store: &dyn crate::ports::storage::ApplicationStore,
     ctx: &InvocationContext,
     env: &Preparation<'_>,
-    kind: &str,
-    title: &str,
+    request: &DecodedRequest,
+    presentation: (&str, &str),
     value: &serde_json::Value,
 ) -> Result<crate::protocol::provider::ArtifactRef, Failure> {
     use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
     use serde_json::json;
+    let (kind, title) = presentation;
+    let selected = (
+        request.descriptor.name,
+        request.revision.0,
+        request.normalized.clone(),
+        request.fingerprint.as_str().to_owned(),
+    );
     let bytes = crate::jcs::canonicalize(value)
         .unwrap_or_else(|_| value.to_string())
         .into_bytes();
@@ -438,6 +448,22 @@ pub(crate) fn publish_review_evidence(
                 || deadline.is_some_and(|d| tx.now_ms() >= d)
             {
                 return Err(crate::ports::storage::StorageError::Cancelled);
+            }
+            let request = crate::services::approvals::requests::decode(
+                selected.0,
+                selected.1,
+                &selected.2,
+                true,
+            )
+            .map_err(|_| {
+                crate::ports::storage::StorageError::InvalidRecord(
+                    "owner review request no longer decodes".into(),
+                )
+            })?;
+            if request.fingerprint.as_str() != selected.3
+                || !crate::services::approvals::validate_authority(tx, &context, &request)?
+            {
+                return Err(crate::ports::storage::StorageError::ScopeDenied);
             }
             crate::services::artifacts::authorized_scope(tx.authority(), &context)
                 .map_err(|_| crate::ports::storage::StorageError::ScopeDenied)?;

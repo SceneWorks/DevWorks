@@ -117,7 +117,7 @@ impl PackageService {
         if !large_facts && !large_review {
             return Ok(preview);
         }
-        let reference = self.publish_review_facts(ctx, env, &body)?;
+        let reference = self.publish_review_facts(ctx, request, env, &body)?;
         let compact = env.read(|s| {
             Ok(self.compact_review(s.artifacts(), preview.clone(), &reference, &body))
         })??;
@@ -127,7 +127,7 @@ impl PackageService {
             return Ok(compact);
         }
         let body = json!({"binding":preview.binding,"reviewed":preview.reviewed});
-        let reference = self.publish_review_facts(ctx, env, &body)?;
+        let reference = self.publish_review_facts(ctx, request, env, &body)?;
         env.read(|s| Ok(self.compact_review(s.artifacts(), preview, &reference, &body)))?
     }
 
@@ -699,27 +699,9 @@ fn draft_from_package_source(
         .ok_or_else(|| not_found("package", &proposal.package_id))?;
     let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
         .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
-    let registry = read.registry_revision()?;
-    let (operation, command) = if package.active_digest.is_some() {
-        (
-            "addons.update",
-            json!({"kind":"Update","packageId":package.package_id,"bundle":bundle,"expectedRegistryRevision":rev(registry)}),
-        )
-    } else {
-        (
-            "addons.install",
-            json!({"kind":"Install","bundle":bundle,"expectedRegistryRevision":rev(registry)}),
-        )
-    };
-    let input = json!({"command":command});
-    let decoded = crate::services::approvals::requests::decode(operation, 1, &input, true)
-        .map_err(|_| {
-            Refusal::new(
-                DomainErrorCode::UnsupportedCapability,
-                "package_approval_request",
-                Some(proposal.id.clone()),
-            )
-        })?;
+    let decoded = source_review_request(read, &package.package_id, &bundle)?;
+    let operation = decoded.descriptor.name;
+    let input = decoded.normalized.clone();
     let scope = ctx.project_id().map_or(
         json!({"kind":"Workspace"}),
         |id| json!({"kind":"Project","projectId":id}),
@@ -731,6 +713,29 @@ fn draft_from_package_source(
         .map_err(|e|StorageError::InvalidRecord(e.to_string()))?;
     Ok(Some(input))
 }
+/// The same owner-selected install/update request is used by source staging and publication.
+pub(super) fn source_review_request(
+    read: &dyn PackageRegistryRead,
+    package_id: &str,
+    bundle: &ArtifactRef,
+) -> Result<DecodedRequest, Failure> {
+    let package = read.package(package_id)?;
+    let registry = read.registry_revision()?;
+    let (operation, command) = if package.as_ref().is_some_and(|p| p.active_digest.is_some()) {
+        (
+            "addons.update",
+            json!({"kind":"Update","packageId":package_id,"bundle":bundle,"expectedRegistryRevision":rev(registry)}),
+        )
+    } else {
+        (
+            "addons.install",
+            json!({"kind":"Install","bundle":bundle,"expectedRegistryRevision":rev(registry)}),
+        )
+    };
+    crate::services::approvals::requests::decode(operation, 1, &json!({"command":command}), true)
+        .map_err(|_| invalid("package_approval_request").into())
+}
+
 impl PackageService {
     pub(super) fn stage_package_review(
         &self,
@@ -964,10 +969,10 @@ impl PackageService {
                         let facts = self
                             .review_facts(s.packages(), &inspection, &bundle)
                             .map_err(review_failure)?;
-                        Ok(Some((source.id, source.revision, context, facts)))
+                        Ok(Some((source.id, source.revision, context, request, facts)))
                     },
                 )?;
-                let Some((source_id, source_revision, context, facts)) = prepared else {
+                let Some((source_id, source_revision, context, request, facts)) = prepared else {
                     continue;
                 };
                 let prepared_facts = if serde_json::to_vec(&facts)
@@ -978,6 +983,7 @@ impl PackageService {
                     let reference = self
                         .publish_review_facts(
                             &context,
+                            &request,
                             &Preparation::new(&*self.store, None, None),
                             &facts,
                         )

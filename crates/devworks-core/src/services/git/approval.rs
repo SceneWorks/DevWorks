@@ -218,7 +218,7 @@ impl GitService {
         let (contents, commit_evidence) = if contents.is_null() {
             (contents, None)
         } else {
-            let evidence = self.commit_review_evidence(ctx, env, &contents)?;
+            let evidence = self.commit_review_evidence(ctx, request, env, &contents)?;
             (compact_commit_manifest(&contents)?, Some(evidence))
         };
         let mut binding = binding;
@@ -605,6 +605,7 @@ impl GitService {
     fn commit_review_evidence(
         &self,
         ctx: &InvocationContext,
+        request: &DecodedRequest,
         env: &Preparation<'_>,
         manifest: &Value,
     ) -> Result<ArtifactRef, Failure> {
@@ -613,8 +614,11 @@ impl GitService {
             &*self.store,
             ctx,
             env,
-            "GitCommitApprovalEvidence",
-            "Exact Git commit contents for human review",
+            request,
+            (
+                "GitCommitApprovalEvidence",
+                "Exact Git commit contents for human review",
+            ),
             manifest,
         )
     }

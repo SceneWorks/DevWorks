@@ -425,6 +425,8 @@ struct App {
     probe_path: Option<String>,
     /// The install-directory port, when a test instruments it.
     files: Option<Arc<dyn PackageFiles>>,
+    /// Instrumented managed artifact publication for authority-race fixtures.
+    artifact_files: Option<Arc<dyn devworks_core::ports::files::ArtifactFiles>>,
     /// The host's restart budget per instance key (`config()` otherwise).
     restart_limit: Option<u32>,
     host_tick: Option<Duration>,
@@ -523,6 +525,7 @@ impl App {
             runtimes: Arc::new(RuntimeCache::new()),
             probe_path,
             files,
+            artifact_files: None,
             restart_limit: None,
             host_tick: None,
             probe_timeout: None,
@@ -555,10 +558,12 @@ impl App {
             },
         });
         let artifacts = Arc::new(ArtifactService::new(
-            Arc::new(NativeArtifactFiles::new(
-                h.root.clone(),
-                h.root.with_extension("cache"),
-            )),
+            self.artifact_files.clone().unwrap_or_else(|| {
+                Arc::new(NativeArtifactFiles::new(
+                    h.root.clone(),
+                    h.root.with_extension("cache"),
+                ))
+            }),
             src,
             Arc::new(NativeFilesystem::new()),
             h.clock(),

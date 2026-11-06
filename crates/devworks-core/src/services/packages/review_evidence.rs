@@ -92,6 +92,7 @@ impl PackageService {
     pub(super) fn publish_review_facts(
         &self,
         ctx: &InvocationContext,
+        request: &crate::admission::DecodedRequest,
         env: &Preparation<'_>,
         value: &Value,
     ) -> Result<ArtifactRef, Failure> {
@@ -100,8 +101,11 @@ impl PackageService {
             &*self.store,
             ctx,
             env,
-            "PackageApprovalEvidence",
-            "Complete signed package review facts",
+            request,
+            (
+                "PackageApprovalEvidence",
+                "Complete signed package review facts",
+            ),
             value,
         )
     }
