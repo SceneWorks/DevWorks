@@ -204,7 +204,9 @@ fn captured_modules(store: &Arc<dyn ApplicationStore>) {
         let recorded=json!({"summary":"Recorded source summary","confidence":"high","endpoints":endpoints,"services":[],"externalDependencies":[],"databaseTables":[],"updatedAtMs":"17","modelUsed":"recorded-producer","programTotals":{"endpointCount":"999","serviceCount":"2","tableCount":"3"}});
         let mut nodes=vec![StoredNode{unit_key:key.into(),node_id:"module-recorded".into(),kind:"DotnetProject".into(),name:"Recorded".into(),payload:json!({"properties":{"dotnet_project":"Recorded","analysis":recorded}})}];
         for i in 0..601{nodes.push(StoredNode{unit_key:key.into(),node_id:format!("route-{i}"),kind:"Route".into(),name:format!("route-{i}"),payload:json!({"properties":{"dotnet_project":"Recorded"}})});}
-        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:key.into(),content_digest:"opaque-recorded-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&nodes,&[])?;
+        nodes.extend([StoredNode{unit_key:key.into(),node_id:"pkg-defined".into(),kind:"NuGetPackage".into(),name:"definition".into(),payload:json!({"qualifiedName":"npm:definition","properties":{"dotnet_project":"Recorded","is_definition":" true "}})},StoredNode{unit_key:key.into(),node_id:"pkg-kept".into(),kind:"NuGetPackage".into(),name:"kept".into(),payload:json!({"qualifiedName":"npm:kept","properties":{"dotnet_project":"Recorded","version_requirement":"^1.0"}})}]);
+        let edges:Vec<_>=["pkg-defined","pkg-kept"].into_iter().map(|target|StoredEdge{unit_key:key.into(),edge_id:format!("ref-{target}"),source_node_id:"route-0".into(),target_node_id:target.into(),kind:"REFERENCES_PACKAGE".into(),payload:json!({"sourceUnit":key,"targetUnit":key,"resolution":"Resolved"})}).collect();
+        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:key.into(),content_digest:"opaque-recorded-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&nodes,&edges)?;
         tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"Other.csproj".into(),content_digest:"opaque-other-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[StoredNode{unit_key:"Other.csproj".into(),node_id:"module-other".into(),kind:"DotnetProject".into(),name:"Other".into(),payload:json!({"properties":{"dotnet_project":"Other"}})}],&[])?;
         tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"/".into(),content_digest:"opaque-root-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[StoredNode{unit_key:"/".into(),node_id:"root-recorded".into(),kind:"Repository".into(),name:"Recorded".into(),payload:json!({"properties":{"foundational":true,"sourceGroup":"captured-source-group","framework":"captured-framework"}})}],&[])?;
         tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:3,manifest:json!({})})?;
@@ -267,6 +269,12 @@ fn recorded_modules_page_full_semantic_arrays_and_indexed_drilldowns_without_fab
     for page_index in 0..30 {
         let result = invoke(&frame);
         let page = &result["value"];
+        assert_eq!(page["result"]["value"]["packageCount"], "1");
+        for package in page["result"]["value"]["packages"].as_array().unwrap() {
+            assert_eq!(package["name"], "kept");
+            assert_eq!(package["ecosystem"], "npm");
+            assert_eq!(package["version"], "^1.0");
+        }
         for module in page["result"]["value"]["internalModules"]
             .as_array()
             .unwrap()

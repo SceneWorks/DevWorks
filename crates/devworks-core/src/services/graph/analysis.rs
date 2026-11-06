@@ -195,7 +195,7 @@ fn yes(value: &Value) -> bool {
     value.as_bool().unwrap_or_else(|| {
         value
             .as_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case("true"))
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("true"))
     })
 }
 fn reference(node: &GraphNode) -> Value {
