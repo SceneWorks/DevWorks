@@ -1,6 +1,7 @@
 //! Versioned authored conventions: one scoped owner for native UI, agents and scheduled
 //! indexing. Convention data never grants authority or replaces explicit user instructions.
 pub(crate) mod access;
+pub(crate) mod control;
 pub(crate) use hierarchy::parent_path;
 mod commands;
 mod handlers;
