@@ -100,8 +100,14 @@ impl Decoder {
                         call.arguments.push_str(text);
                     }
                 } else {
-                    let old = block.get(field).and_then(Value::as_str).unwrap_or("");
-                    block[field] = json!(format!("{old}{text}"));
+                    if block.get(field).is_none() {
+                        block[field] = Value::String(String::new());
+                    }
+                    let Some(Value::String(value)) = block.get_mut(field) else {
+                        self.error(DecodeErrorKind::InvalidContent, "invalid_block_field", out);
+                        return;
+                    };
+                    value.push_str(text);
                     if field == "text" {
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
@@ -195,6 +201,14 @@ impl Decoder {
         raw: &str,
         out: &mut Vec<DecodedFrame>,
     ) {
+        if !block.is_object() {
+            self.error(
+                DecodeErrorKind::InvalidContent,
+                "invalid_content_block",
+                out,
+            );
+            return;
+        }
         let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
         let supported = matches!(kind, "text" | "tool_use" | "thinking" | "redacted_thinking");
         self.native(Some(i), kind, block, raw, supported, out);

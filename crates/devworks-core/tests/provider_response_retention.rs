@@ -589,3 +589,89 @@ fn chat_nested_unsupported_populations_keep_linear_exact_item_evidence() {
         }
     }
 }
+
+#[test]
+fn messages_text_thinking_and_signature_append_with_linear_allocation_work() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    let part = format!("{}λ", "x".repeat(128));
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        for field in ["text", "thinking", "signature"] {
+            let kind = if field == "text" { "text" } else { "thinking" };
+            let block = if field == "text" {
+                serde_json::json!({"type":kind,"text":""})
+            } else {
+                serde_json::json!({"type":kind,"thinking":if field == "thinking" {""} else {"opaque reasoning"},"signature":if field == "signature" {""} else {"signed"}})
+            };
+            let initial =
+                serde_json::json!({"type":"content_block_start","index":0,"content_block":block})
+                    .to_string();
+            let wire = serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":format!("{field}_delta"),field:part}}).to_string();
+            let mut small = None;
+            for count in [256, 2048] {
+                let (frames, allocated, _) = measured(|| {
+                    let mut decoder = Decoder::new(profile.clone());
+                    decoder.consume_data_event(None, &initial);
+                    for _ in 0..count {
+                        let frames = decoder.consume_data_event(None, &wire);
+                        assert!(
+                            !frames
+                                .iter()
+                                .any(|f| matches!(f, DecodedFrame::Error { .. }))
+                        );
+                    }
+                    let mut frames = decoder
+                        .consume_data_event(None, r#"{"type":"content_block_stop","index":0}"#);
+                    frames.extend(decoder.consume_data_event(
+                        None,
+                        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+                    ));
+                    frames.extend(decoder.consume_data_event(None, r#"{"type":"message_stop"}"#));
+                    frames.extend(decoder.finish());
+                    frames
+                });
+                let block = native(&frames)
+                    .find_map(|item| {
+                        serde_json::from_str::<serde_json::Value>(&item.raw_json)
+                            .ok()
+                            .filter(|value| value.get(field).is_some())
+                    })
+                    .expect("completed native block");
+                assert_eq!(block[field].as_str(), Some(part.repeat(count).as_str()));
+                assert!(
+                    matches!(
+                        frames.last(),
+                        Some(DecodedFrame::Terminal {
+                            outcome: DecodedOutcome::Completed,
+                            ..
+                        })
+                    ),
+                    "{profile:?}/{field}/{count}: {:?}",
+                    frames
+                        .iter()
+                        .filter(|f| matches!(
+                            f,
+                            DecodedFrame::Error { .. } | DecodedFrame::Terminal { .. }
+                        ))
+                        .collect::<Vec<_>>()
+                );
+                let bytes = initial.len() + wire.len() * count;
+                assert!(
+                    allocated < bytes * 128,
+                    "quadratic Messages append: {field}/{count}: {allocated} for {bytes}"
+                );
+                if let Some((old_bytes, old_allocated)) = small {
+                    assert!(
+                        (allocated as u128) * (old_bytes as u128)
+                            < 2 * (old_allocated as u128) * (bytes as u128),
+                        "Messages allocation grows faster than wire input"
+                    );
+                } else {
+                    small = Some((bytes, allocated));
+                }
+            }
+        }
+    }
+}
