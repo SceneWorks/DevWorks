@@ -392,6 +392,7 @@ mod tests {
             }
             TaskOutput::Stored { .. }
             | TaskOutput::Prepared { .. }
+            | TaskOutput::SettingSecret { .. }
             | TaskOutput::PackagePrepared { .. }
             | TaskOutput::Refreshed => {
                 panic!("expected a preview")

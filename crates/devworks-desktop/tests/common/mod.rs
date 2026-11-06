@@ -14,6 +14,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Heavy native cases share a process budget. Acquire once at case entry, before any boot,
+/// and retain the guard through every runtime, harness and temporary-root cleanup. A case
+/// may deliberately own multiple apps; acquiring per Engine would deadlock those scenarios.
+#[must_use = "retain the native-case guard through case cleanup"]
+pub struct NativeRuntimeCase {
+    _owned: (),
+}
+static NATIVE_CASES: (Mutex<usize>, std::sync::Condvar) =
+    (Mutex::new(0), std::sync::Condvar::new());
+const NATIVE_CASE_LIMIT: usize = 2;
+
+pub fn native_runtime_case() -> NativeRuntimeCase {
+    let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+    while *active >= NATIVE_CASE_LIMIT {
+        active = NATIVE_CASES
+            .1
+            .wait(active)
+            .unwrap_or_else(|p| p.into_inner());
+    }
+    *active += 1;
+    NativeRuntimeCase { _owned: () }
+}
+impl Drop for NativeRuntimeCase {
+    fn drop(&mut self) {
+        let mut active = NATIVE_CASES.0.lock().unwrap_or_else(|p| p.into_inner());
+        *active -= 1;
+        NATIVE_CASES.1.notify_one();
+    }
+}
+
 /// A temporary data root, removed when dropped.
 pub struct Root(pub PathBuf);
 impl Root {
