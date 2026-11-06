@@ -71,6 +71,8 @@ pub struct GraphNodeFilter {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphEdgeFilter {
+    /// Exact visible source unit; composition masking still precedes this filter.
+    pub unit_key: Option<String>,
     pub kinds: Vec<String>,
     /// Empty means no endpoint restriction; nonempty sets are exact composite identities.
     pub source_ids: Vec<GraphNodeIdentity>,
