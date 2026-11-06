@@ -1,6 +1,7 @@
 //! Emit candidate schemas or check structural DTO fixtures. No authority/engine execution.
 use devworks_contract_probe::data_delivery::*;
 use devworks_contract_probe::domain_generated::*;
+use devworks_contract_probe::domain_support::Revisioned;
 use devworks_contract_probe::*;
 use devworks_contract_probe::{package::*, provider::*};
 use schemars::schema_for;
@@ -133,12 +134,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             at_revision(v, revision)?;
                             v.validate()
                         }),
-                        "domain-query-reply" => {
-                            decode_domain::<DomainQueryReply>(&raw, |v| v.validate())
-                        }
-                        "domain-command-reply" => {
-                            decode_domain::<DomainCommandReply>(&raw, validate_command_reply)
-                        }
+                        "domain-query-reply" => decode_domain::<DomainQueryReply>(&raw, |v| {
+                            if let DomainQueryReply::Result { result, .. } = v {
+                                result.check_revision(revision)?;
+                            }
+                            v.validate()
+                        }),
+                        "domain-command-reply" => decode_domain::<DomainCommandReply>(&raw, |v| {
+                            if let CommandReply::Recorded { receipt, .. } = v {
+                                if let DomainDecision::Applied { result }
+                                | DomainDecision::NoChange { result } = &receipt.decision
+                                {
+                                    result.check_revision(revision)?;
+                                }
+                            }
+                            validate_command_reply(v)
+                        }),
                         "operation-result" => decode_domain::<OperationResult>(&raw, |v| {
                             at_revision(v, revision)?;
                             // A union alternative introduced later (the command aggregate of an
@@ -151,9 +162,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             devworks_contract_probe::domain_support::Check::check(v)
                         }),
-                        "operation-completion" => {
-                            decode_domain::<OperationCompletion>(&raw, |v| v.validate())
-                        }
+                        "operation-completion" => decode_domain::<OperationCompletion>(&raw, |v| {
+                            if let OperationCompletion::Succeeded { result, .. } = v {
+                                result.check_revision(revision)?;
+                            }
+                            v.validate()
+                        }),
                         "command-request" => serde_json::from_str::<CommandRequest>(&raw)
                             .map_err(|e| e.to_string())
                             .and_then(|mut v| {
@@ -569,6 +583,7 @@ fn at_revision<T>(v: &T, revision: u32) -> Result<(), String>
 where
     T: devworks_contract_probe::domain_support::Revisioned + Clone + serde::Serialize,
 {
+    v.check_revision(revision)?;
     let mut at = v.clone();
     at.retain_revision(revision);
     if serde_json::to_value(&at).map_err(|e| e.to_string())?
@@ -626,6 +641,9 @@ mod revision {
         v.get("x-since")
             .and_then(Value::as_u64)
             .is_some_and(|s| s > u64::from(revision))
+            || v.get("x-until")
+                .and_then(Value::as_u64)
+                .is_some_and(|end| u64::from(revision) >= end)
     }
     /// Removes the members and union alternatives introduced after `revision`.
     fn strip(v: &mut Value, revision: u32) {
@@ -729,6 +747,20 @@ mod revision {
             }
         }
         collapse(&mut v);
+        if let Some(Value::Object(defs)) = v.get_mut("$defs") {
+            for (from, to) in &renames {
+                let reference = format!("#/$defs/{to}");
+                if defs
+                    .get(from)
+                    .and_then(|d| d.get("$ref"))
+                    .and_then(Value::as_str)
+                    == Some(reference.as_str())
+                    && let Some(original) = defs.get(to).cloned()
+                {
+                    defs.insert(from.clone(), original);
+                }
+            }
+        }
         // Definitions named after a renamed one (`List_<name>_0_500`) take the recorded name too.
         if let Some(Value::Object(defs)) = v.get("$defs") {
             let primary = renames.clone();

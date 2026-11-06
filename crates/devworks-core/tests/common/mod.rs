@@ -1802,6 +1802,27 @@ impl ProjectRead for Unsupported {
     }
 }
 impl WorkRead for Unsupported {
+    fn allocation_replay(&self, _: &str) -> Result<Option<StoredAllocationReplay>, StorageError> {
+        nope()
+    }
+    fn allocation_claim(&self, _: &Id) -> Result<Option<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
+    fn allocation_claims(
+        &self,
+        _: &ProjectId,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
+    fn allocation_by_invocation(
+        &self,
+        _: &Id,
+        _: &Id,
+    ) -> Result<Option<StoredAllocationClaim>, StorageError> {
+        nope()
+    }
     fn work(&self, _: &Id) -> Result<Option<StoredWork>, StorageError> {
         nope()
     }
@@ -1851,6 +1872,25 @@ impl WorkRead for Unsupported {
     }
 }
 impl WorkRepository for Unsupported {
+    fn insert_allocation_replay(&mut self, _: &StoredAllocationReplay) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_allocation_claim(&mut self, _: &StoredAllocationClaim) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_allocation_claim(
+        &mut self,
+        _: &StoredAllocationClaim,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_status(&mut self, _: &StoredStatus, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn delete_status(&mut self, _: &ProjectId, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_work(&mut self, _: &StoredWork) -> Result<(), StorageError> {
         nope()
     }
@@ -2201,6 +2241,18 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn assignment_handoff_quiescent(&self, _: &AssignmentId) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn work_inherited_requirements(&self, _: &RootId) -> Result<Vec<Id>, StorageError> {
+        nope()
+    }
+    fn live_assignment_for_work(
+        &self,
+        _: &RootId,
+    ) -> Result<Option<StoredAssignment>, StorageError> {
+        nope()
+    }
     fn root_control(&self, _: &RootId) -> Result<Option<StoredRootControl>, StorageError> {
         nope()
     }
@@ -2301,6 +2353,14 @@ impl RunRead for Unsupported {
     }
 }
 impl RunRepository for Unsupported {
+    fn reparent_assignment(
+        &mut self,
+        _: &StoredAssignment,
+        _: i64,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_root_control(&mut self, _: &StoredRootControl) -> Result<(), StorageError> {
         nope()
     }

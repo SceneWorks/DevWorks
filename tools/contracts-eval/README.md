@@ -45,3 +45,6 @@ DW-108 registers `router.catalog` revision 3 with a query-only `RouteCatalogMode
 
 
 The same DW-108 revision-3 outputs retain concrete pin snapshots on `RouteChoice`: upstream model ID, endpoint profile and explicit identity origin. `router.route`/`router.pin` register [1,3], while `router.availability` retains [1,2,3]. `Migration25CurrentCatalog` is an observation of the current row, not a fabricated historical resolution; old receipt JSON stays unchanged. Fixture admission coverage is 502 exact operation/mode/revision bindings, computed from the register.
+
+
+DW-13/DW-109 introduces `next_work.inspect_queue` at revision 3, adds complete allocation outcomes with an explicit legacy adapter, and restores typed card metadata. `introducedRevision` makes only supported operation variants appear in each document; `kind: versioned` uses a small generated Legacy/Current adapter, `x-until` and an exact earlier-schema alias. `Revisioned::check_revision` validates non-additive shapes after projection, so impossible outcomes cannot commit under an earlier contract. The manifest includes the shared `versioned_result.py` generator. Evidence and the deliberately computed 532 native revision/mode admissions live in `docs/architecture/validation/workflow-allocation-contracts/`.

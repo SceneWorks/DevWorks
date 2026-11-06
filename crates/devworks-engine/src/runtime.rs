@@ -473,7 +473,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         None => use_cases,
     };
     let work = Arc::new(
-        WorkService::new(ids.clone(), runs.service.clone()).with_staged_plans(artifacts.clone()),
+        WorkService::new(ids.clone(), runs.service.clone())
+            .with_staged_plans(artifacts.clone())
+            .with_clock(clock.clone()),
     );
     let eval_service = Arc::new(EvalService::new(ids.clone(), clock.clone()));
     let use_cases = use_cases

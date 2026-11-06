@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-05",
-  "catalogSha256": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+  "catalogSha256": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
   "familyCount": 49,
-  "operationCount": 356,
-  "concreteInputCandidates": 356,
+  "operationCount": 357,
+  "concreteInputCandidates": 357,
   "domainInputsPending": 0,
   "families": [
     {
@@ -139,6 +139,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -430,6 +438,14 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -482,6 +498,14 @@
               "inputSchema": "domain-request.r2.schema.json",
               "resultSchema": "operation-result.r2.schema.json",
               "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -538,11 +562,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship.",
+          "semanticRules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -592,6 +624,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -700,6 +740,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -800,11 +848,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents.",
+          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -861,6 +917,14 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -913,6 +977,14 @@
               "inputSchema": "domain-request.r2.schema.json",
               "resultSchema": "operation-result.r2.schema.json",
               "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -969,11 +1041,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Create one project-owned task identity. Optional featureId uses the same membership transition/coordination rules as tasks.set_feature; no feature is required. A linked issue is a delivery obligation without revised-plan approval. Preserve issue/task identity and execution controls.",
+          "semanticRules": "Create one project-owned task identity. Optional featureId uses the same membership transition/coordination rules as tasks.set_feature; no feature is required. A linked issue is a delivery obligation without revised-plan approval. Preserve issue/task identity and execution controls. Schema revision 3 may author Story/Task/Bug taskType and bounded unique labels; metadata has no effect on execution kind, authority or blockers.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1023,11 +1103,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Standalone issue priority uses the same task priority use case and project root queue; preserve stable work identity and all execution controls.",
+          "semanticRules": "Standalone issue priority uses the same task priority use case and project root queue; preserve stable work identity and all execution controls. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1230,6 +1318,14 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -1282,6 +1378,14 @@
               "inputSchema": "domain-request.r2.schema.json",
               "resultSchema": "operation-result.r2.schema.json",
               "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -1338,11 +1442,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Project is required; parentId is an optional feature relationship, not an assignment parent. Validate any feature belongs to the same project. Without a feature, create a standalone project task shown as an issue; do not manufacture a feature or duplicate its identity. Standalone tasks use issue execution/accounting/delivery policy. Task operations accept Task/Issue representations of the same project-task model.",
+          "semanticRules": "Project is required; parentId is an optional feature relationship, not an assignment parent. Validate any feature belongs to the same project. Without a feature, create a standalone project task shown as an issue; do not manufacture a feature or duplicate its identity. Standalone tasks use issue execution/accounting/delivery policy. Task operations accept Task/Issue representations of the same project-task model. Schema revision 3 may author Story/Task/Bug taskType and bounded unique labels; metadata has no effect on execution kind, authority or blockers.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1392,11 +1504,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Task/issue priority edits use current work revision and the same priority use case as tasks.prioritize; update the owning queue revision and history atomically. A priority edit alone does not stop active work, clear blockers or invalidate the approved feature plan.",
+          "semanticRules": "Task/issue priority edits use current work revision and the same priority use case as tasks.prioritize; update the owning queue revision and history atomically. A priority edit alone does not stop active work, clear blockers or invalidate the approved feature plan. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1500,6 +1620,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1554,6 +1682,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1608,6 +1744,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1662,6 +1806,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1716,11 +1868,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature.",
+          "semanticRules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1770,6 +1930,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -1823,11 +1991,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant.",
           "familyRules": "Status identities are stable; occupied removal and reassignment is one transaction. Allocation reads the resulting current workflow.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1869,11 +2045,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant.",
           "familyRules": "Status identities are stable; occupied removal and reassignment is one transaction. Allocation reads the resulting current workflow.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1915,11 +2099,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant.",
           "familyRules": "Status identities are stable; occupied removal and reassignment is one transaction. Allocation reads the resulting current workflow.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1961,11 +2153,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Exact unique permutation of existing status IDs.",
+          "semanticRules": "Exact unique permutation of existing status IDs. Schema revision 3 returns workflowRevision, affectedWorkDigest and affectedWorkCount on every status row; revision-1 readers retain their original shape. The digest/count identify current affected work for atomic occupied-status reassignment, not an authorization grant.",
           "familyRules": "Status identities are stable; occupied removal and reassignment is one transaction. Allocation reads the resulting current workflow.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -2048,7 +2248,7 @@
             "pointer": "/kind",
             "equals": "next_work.claim_project_queue"
           },
-          "resultValueType": "ClaimRecord",
+          "resultValueType": "AllocationSelection",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -2060,11 +2260,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds.",
+          "semanticRules": "Actor/owner derived from host. Atomically select current eligible unclaimed feature/issue. Automatic feature claims require implementation approval; never clear holds. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn. Revision 3 supports repository/card-type/label filters and explicit another selection, preserves existing caller claims by default, and returns Claimed, Recovered or NoEligible outcomes with bounded current work/recovery evidence. Host actor/session and ingress identity replace caller-authored authority markers. Optional idempotencyKey is a project/caller-scoped allocation identity in addition to the runtime requestKey, preserving retries without another allocation. Recovery precedes new work where the retained source requires it; preserve previous-holder, Git/PR links, latest handoff, last activity and unmet acceptance truthfully. Legacy revision-1 successful results project to exact ClaimRecord; NoEligible remains a typed fault at revision1.",
           "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -2094,7 +2302,7 @@
             "pointer": "/kind",
             "equals": "next_work.claim_feature_task"
           },
-          "resultValueType": "ClaimRecord",
+          "resultValueType": "AllocationSelection",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -2106,11 +2314,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity.",
+          "semanticRules": "Current coordinator/descendant authority only; same feature, dependencies and per-root capacity. Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn. Revision 3 supports repository/card-type/label filters and explicit another selection, preserves existing caller claims by default, and returns Claimed, Recovered or NoEligible outcomes with bounded current work/recovery evidence. Host actor/session and ingress identity replace caller-authored authority markers. Optional idempotencyKey is a project/caller-scoped allocation identity in addition to the runtime requestKey, preserving retries without another allocation. Recovery precedes new work where the retained source requires it; preserve previous-holder, Git/PR links, latest handoff, last activity and unmet acceptance truthfully. Legacy revision-1 successful results project to exact ClaimRecord; NoEligible remains a typed fault at revision1.",
           "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -2140,7 +2356,7 @@
             "pointer": "/kind",
             "equals": "next_work.inspect_claim"
           },
-          "resultValueType": "ClaimRecord",
+          "resultValueType": "AllocationClaimRecord",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -2152,11 +2368,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn.",
           "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -2186,7 +2410,7 @@
             "pointer": "/kind",
             "equals": "next_work.release_claim"
           },
-          "resultValueType": "ClaimRecord",
+          "resultValueType": "AllocationClaimRecord",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -2198,11 +2422,66 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Schema revision 3 returns allocation-specific work kind/revision, project/root, optional durable owner session and queue revision after the atomic claim transition. Existing ClaimRecord embedded in WorkRecord stays unchanged. No eligible candidate returns a typed DomainFault with targetKind no_eligible_work and evidence, never a fabricated claim ID. Receipt replay preserves its original claim and never consumes a second allocation turn.",
+          "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 3,
+          "operation": "next_work.inspect_queue",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "next_work.inspect_queue",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "next_work.inspect_queue"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "next_work.inspect_queue"
+          },
+          "resultValueType": "AllocationQueueSnapshot",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Read the authoritative queue and workflow revisions, including empty queues. With featureId, validate visible same-project feature ownership and return its task queue revision; otherwise return the project feature/standalone queue revision. No allocation, receipt or revision bump. Introduced at schema revision 3; older callers cannot select this operation.",
           "familyRules": "Atomically claim only eligible current work with host ownership/fence. Automatic feature claim requires approved implementation; claim is not Continue.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

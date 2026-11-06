@@ -38,6 +38,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
             'router.route', 'router.pin',
+            'projects.create', 'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
+            'next_work.claim_project_queue', 'next_work.claim_feature_task',
+            'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
@@ -60,7 +63,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
             'browser.upload', 'browser.console', 'browser.network'})
-        self.assertEqual(carried['features.edit'], {2})
+        self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})
@@ -98,6 +101,21 @@ class SchemaRevisionRules(unittest.TestCase):
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3})
         self.assertEqual(generate.introduced_in(configure), {2})
+
+    def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
+        operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')
+        self.assertEqual([r['revision'] for r in operation['schemaRevisions']], [3])
+        self.assertEqual(generate.introduced_in(operation), {3})
+        results = generate.gen_results(generate.operations())
+        self.assertIn('#[schemars(extend("x-since" = 3))]\n    #[serde(rename = "next_work.inspect_queue")]', results)
+
+    def test_card_metadata_does_not_replace_execution_kind_or_legacy_claims(self):
+        self.assertEqual(generate.TYPES['WorkRecord']['fields']['claim'], '?ClaimRecord')
+        self.assertNotIn('work_kind', generate.TYPES['ClaimRecord']['fields'])
+        self.assertEqual(generate.TYPES['WorkRecord']['since']['task_type'], 3)
+        self.assertNotIn('task_type', generate.TYPES['FeaturePatch']['fields'])
+        feature = next(o for _, o in generate.operations() if o['operation'] == 'features.edit')
+        self.assertEqual(generate.introduced_in(feature), {2, 3})
 
     def test_a_history_page_result_is_projected(self):
         # HistoryPage gates its own checkpoint, so every result carrying it is projected.

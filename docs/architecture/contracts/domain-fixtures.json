@@ -2121,6 +2121,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-next_work.inspect_queue-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"next_work.inspect_queue\",\"projectId\":\"project-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-projects.list",
     "entry": "operation-result",
     "raw": "{\"kind\":\"projects.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
@@ -4203,6 +4210,13 @@
     "id": "result-evals.results",
     "entry": "operation-result",
     "raw": "{\"kind\":\"evals.results\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-next_work.inspect_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.inspect_queue\",\"value\":{\"projectId\":\"project-a\",\"queueRevision\":\"1\",\"workflowRevision\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -9023,42 +9037,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1289",
+    "id": "r3-preview-source-13-1291",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1289",
+    "id": "r3-delete-source-13-1291",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1291",
+    "id": "r3-preview-source-15-1293",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1291",
+    "id": "r3-delete-source-15-1293",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1293",
+    "id": "r3-preview-source-256-1295",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1293",
+    "id": "r3-delete-source-256-1295",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
@@ -9581,5 +9595,600 @@
     "raw": "{\"kind\":\"artifacts.read\",\"value\":{\"kind\":\"Binary\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"streamId\":\"stream-a\",\"firstByte\":\"0\",\"byteLength\":\"8\",\"expiresAtMs\":\"1000\",\"testedRepository\":{\"repositoryId\":\"id-a\",\"worktreeId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dirty\":true,\"ownershipRevision\":\"1\",\"observedAtMs\":\"0\",\"repositoryUrl\":\"https://github.com/owner/repo\"}}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "dw13-r3-status-workflows.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"workflows.list\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-status-workflows.create_status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"workflows.create_status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-status-workflows.rename_status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"workflows.rename_status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-status-workflows.order",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"workflows.order\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-full-filter-next_work.claim_project_queue",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.claim_project_queue\",\"projectId\":\"project-a\",\"expectedQueueRevision\":\"1\",\"leaseMs\":\"1\",\"repositoryId\":\"repo-a\",\"taskType\":\"Story\",\"label\":\"native\",\"another\":true,\"idempotencyKey\":\"allocation-intent-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-claimed-next_work.claim_project_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-recovered-next_work.claim_project_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Recovered\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false,\"recovery\":{\"previousOwnerId\":\"previous-actor\",\"links\":[],\"unmetAcceptance\":[],\"lastActivity\":{\"eventId\":\"event-a\",\"sequence\":\"2\",\"actorId\":\"previous-actor\",\"occurredAtMs\":\"1\",\"kind\":\"WorkEdited\",\"workId\":\"id-a\",\"payload\":{\"value\":{\"title\":\"Changed title\"}}}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-reused-next_work.claim_project_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-none-next_work.claim_project_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"NoEligible\",\"reason\":\"all_candidates_blocked\",\"reused\":false,\"evidence\":{\"code\":\"DependencyBlocked\",\"retry\":\"AfterBlockerClears\",\"correlationId\":\"correlation-a\",\"targetKind\":\"no_eligible_work\",\"blockerIds\":[],\"diagnosticId\":\"evidence-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-reject-new-outcome-at1-next_work.claim_project_queue",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-old-claim-at3-next_work.claim_project_queue",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-filters-at1-next_work.claim_project_queue",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.claim_project_queue\",\"projectId\":\"project-a\",\"expectedQueueRevision\":\"1\",\"leaseMs\":\"1\",\"repositoryId\":\"repo-a\",\"taskType\":\"Story\",\"label\":\"native\",\"another\":true,\"idempotencyKey\":\"allocation-intent-a\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-r3-full-filter-next_work.claim_feature_task",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.claim_feature_task\",\"rootId\":\"root-a\",\"expectedTaskSetRevision\":\"1\",\"leaseMs\":\"1\",\"repositoryId\":\"repo-a\",\"taskType\":\"Story\",\"label\":\"native\",\"another\":true,\"idempotencyKey\":\"allocation-intent-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-claimed-next_work.claim_feature_task",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-recovered-next_work.claim_feature_task",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"kind\":\"Recovered\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false,\"recovery\":{\"previousOwnerId\":\"previous-actor\",\"links\":[],\"unmetAcceptance\":[],\"lastActivity\":{\"eventId\":\"event-a\",\"sequence\":\"2\",\"actorId\":\"previous-actor\",\"occurredAtMs\":\"1\",\"kind\":\"WorkEdited\",\"workId\":\"id-a\",\"payload\":{\"value\":{\"title\":\"Changed title\"}}}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-reused-next_work.claim_feature_task",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-none-next_work.claim_feature_task",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"kind\":\"NoEligible\",\"reason\":\"all_candidates_blocked\",\"reused\":false,\"evidence\":{\"code\":\"DependencyBlocked\",\"retry\":\"AfterBlockerClears\",\"correlationId\":\"correlation-a\",\"targetKind\":\"no_eligible_work\",\"blockerIds\":[],\"diagnosticId\":\"evidence-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-reject-new-outcome-at1-next_work.claim_feature_task",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-old-claim-at3-next_work.claim_feature_task",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.claim_feature_task\",\"value\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-filters-at1-next_work.claim_feature_task",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.claim_feature_task\",\"rootId\":\"root-a\",\"expectedTaskSetRevision\":\"1\",\"leaseMs\":\"1\",\"repositoryId\":\"repo-a\",\"taskType\":\"Story\",\"label\":\"native\",\"another\":true,\"idempotencyKey\":\"allocation-intent-a\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-r3-claim-next_work.inspect_claim",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.inspect_claim\",\"value\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-claim-next_work.release_claim",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"next_work.release_claim\",\"value\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-reject-status-metadata-at1",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"workflows.create_status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-queue-before3-1",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"next_work.inspect_queue\",\"projectId\":\"project-a\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-reject-queue-before3-2",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"next_work.inspect_queue\",\"projectId\":\"project-a\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw109-r3-create-tasks.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"parentId\":\"feature-a\",\"taskType\":\"Bug\",\"labels\":[\"native\"]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-duplicate-tasks.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"parentId\":\"feature-a\",\"taskType\":\"Bug\",\"labels\":[\"native\",\"native\"]},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-empty-tasks.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"parentId\":\"feature-a\",\"taskType\":\"Bug\",\"labels\":[\"   \"]},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-old-create-tasks.create",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"parentId\":\"feature-a\",\"taskType\":\"Bug\",\"labels\":[\"native\"]},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw109-r3-create-issues.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"taskType\":\"Bug\",\"labels\":[\"native\"]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-duplicate-issues.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"taskType\":\"Bug\",\"labels\":[\"native\",\"native\"]},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-empty-issues.create",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"taskType\":\"Bug\",\"labels\":[\"   \"]},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-old-create-issues.create",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.create\",\"projectId\":\"project-a\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1,\"taskType\":\"Bug\",\"labels\":[\"native\"]},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw109-r3-clear-tasks.edit",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{\"clearTaskType\":true,\"labels\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-type-clear-conflict-tasks.edit",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{\"clearTaskType\":true,\"labels\":[],\"taskType\":\"Story\"}},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-r3-clear-issues.edit",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{\"clearTaskType\":true,\"labels\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw109-reject-type-clear-conflict-issues.edit",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{\"clearTaskType\":true,\"labels\":[],\"taskType\":\"Story\"}},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-legacy-receipt-unchanged",
+    "entry": "domain-command-reply",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"command-a\",\"committedSequence\":\"1\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"Applied\",\"result\":{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\"}}}},\"replayed\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-current-receipt",
+    "entry": "domain-command-reply.r3",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"command-a\",\"committedSequence\":\"1\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"Applied\",\"result\":{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}}},\"replayed\":false}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-reject-current-in-old-receipt",
+    "entry": "domain-command-reply",
+    "raw": "{\"kind\":\"Recorded\",\"protocol\":\"1.0-draft.1\",\"receipt\":{\"commandId\":\"command-a\",\"committedSequence\":\"1\",\"acceptedAtMs\":\"1\",\"requestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"decision\":{\"kind\":\"Applied\",\"result\":{\"kind\":\"next_work.claim_project_queue\",\"value\":{\"kind\":\"Claimed\",\"claim\":{\"id\":\"id-a\",\"workId\":\"id-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Held\",\"workKind\":\"Feature\",\"workRevision\":\"3\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"ownerSessionId\":\"session-a\",\"queueRevision\":\"5\"},\"work\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"labels\":[\"native\"]},\"reused\":false}}}},\"replayed\":false}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-origin-qualified-inheritance",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[\"E2\"],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-b\",\"previousInheritance\":{\"featureId\":\"feature-a\",\"requirementIds\":[\"E1\"]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-reject-previous-inheritance-before3",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"tasks.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[\"E2\"],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-b\",\"previousInheritance\":{\"featureId\":\"feature-a\",\"requirementIds\":[\"E1\"]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw13-r3-admission-features.get-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"features.get\",\"workId\":\"id-a\",\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.get",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.edit-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.edit",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.list-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"features.list\",\"projectId\":\"project-a\",\"page\":{\"limit\":20},\"statusIds\":[],\"repositoryIds\":[],\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.create\",\"projectId\":\"project-a\",\"creation\":{\"kind\":\"Single\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.create",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.create\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-issues.list-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"issues.list\",\"projectId\":\"project-a\",\"page\":{\"limit\":20},\"statusIds\":[],\"repositoryIds\":[],\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-issues.get-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"issues.get\",\"workId\":\"id-a\",\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.get",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Issue\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.create",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.create\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Issue\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.edit",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Issue\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.list-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"tasks.list\",\"projectId\":\"project-a\",\"page\":{\"limit\":20},\"statusIds\":[],\"repositoryIds\":[],\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.get-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"tasks.get\",\"workId\":\"id-a\",\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.create",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.create\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.edit",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.edit_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.edit_plan",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.edit_plan\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.dependencies-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.dependencies\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"replacement\":{\"edges\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-features.dependencies",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.dependencies\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.move-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.move\",\"taskId\":\"id-a\",\"expectedRevision\":\"1\",\"statusId\":\"id-a\",\"expectedWorkflowRevision\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.move",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.move\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.assign-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.assign\",\"taskId\":\"id-a\",\"expectedRevision\":\"1\",\"clearAssignment\":true},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.assign",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.assign\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.dependency_links-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.dependency_links\",\"taskId\":\"id-a\",\"expectedRevision\":\"1\",\"replacement\":{\"edges\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.dependency_links",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.dependency_links\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.acceptance_evidence-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.acceptance_evidence\",\"taskId\":\"id-a\",\"expectedRevision\":\"1\",\"criteria\":[{\"id\":\"id-a\",\"text\":\"Fixture content\",\"evidenceIds\":[],\"state\":\"Unmet\"}]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.acceptance_evidence",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.acceptance_evidence\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.sync_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.sync_plan\",\"featureId\":\"root-a\",\"expectedPlanRevision\":\"1\",\"expectedTaskSetRevision\":\"1\",\"tasks\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.sync_plan",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.sync_plan\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-tasks.set_feature-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.set_feature\",\"taskId\":\"id-a\",\"expectedRevision\":\"1\",\"clearFeature\":true},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-tasks.set_feature",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"tasks.set_feature\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Task\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"parentId\":\"feature-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-workflows.list-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"workflows.list\",\"projectId\":\"project-a\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-workflows.create_status-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"workflows.create_status\",\"projectId\":\"project-a\",\"expectedWorkflowRevision\":\"1\",\"label\":\"fixture\",\"category\":\"fixture\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-workflows.rename_status-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"workflows.rename_status\",\"projectId\":\"project-a\",\"statusId\":\"id-a\",\"expectedRevision\":\"1\",\"label\":\"fixture\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-workflows.order-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"workflows.order\",\"projectId\":\"project-a\",\"expectedWorkflowRevision\":\"1\",\"orderedStatusIds\":[\"id-a\"]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-next_work.inspect_claim-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"next_work.inspect_claim\",\"claimId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-next_work.release_claim-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.release_claim\",\"claimId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-projects.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.create\",\"name\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-projects.create",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"projects.create\",\"value\":{\"id\":\"project-a\",\"revision\":\"1\",\"name\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"lifecycle\":\"Active\",\"accessMode\":\"Full\"}}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]

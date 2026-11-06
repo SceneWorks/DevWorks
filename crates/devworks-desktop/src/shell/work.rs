@@ -25,13 +25,18 @@ use devworks_core::protocol::records::{
     ReadinessDisposition, ReadinessFreshness, RequirementItem, RequirementStatus, RootSnapshot,
     WorkKind, WorkRecord,
 };
-use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id, ProjectId};
+use devworks_core::protocol::{DomainErrorCode, Event, EventSubject, Id};
 use devworks_core::services::work::deps::MAX_PREREQUISITES;
 use devworks_core::services::work::fold;
-use devworks_core::services::work::workflow::{DEFAULT_STATUSES, default_status_id};
+mod workflow;
+use devworks_core::protocol::records::{
+    AllocationClaimRecord, AllocationOutcome, AllocationQueueSnapshot, AllocationRecovery,
+    AllocationSelection, StatusRecord,
+};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use workflow::{WorkflowAction, WorkflowUi};
 
 /// Feature list tabs and Issues tabs.
 pub const FEATURE_TABS: [&str; 2] = ["List", "Board"];
@@ -45,29 +50,16 @@ pub struct Column {
     pub name: String,
     pub semantic: String,
 }
-/// The project's workflow columns: the default workflow's stable statuses, then any other
-/// status a card is in (a custom status of the workflow item), never dropped from view.
-pub fn columns(project: &str, cards: &[WorkRecord]) -> Vec<Column> {
-    let p = ProjectId(Id::new(project).unwrap_or_else(|_| Id::new("project").expect("id")));
-    let mut out: Vec<Column> = DEFAULT_STATUSES
+/// Columns are exactly the project's backend workflow, in its stored order.
+pub fn columns(statuses: &[StatusRecord]) -> Vec<Column> {
+    statuses
         .iter()
-        .map(|(k, name, semantic)| Column {
-            id: default_status_id(&p, k).as_str().to_owned(),
-            name: (*name).to_owned(),
-            semantic: (*semantic).to_owned(),
+        .map(|status| Column {
+            id: status.id.as_str().to_owned(),
+            name: status.label.0.clone(),
+            semantic: status.category.0.clone(),
         })
-        .collect();
-    for c in cards {
-        let s = c.status_id.as_str();
-        if !out.iter().any(|x| x.id == s) {
-            out.push(Column {
-                id: s.to_owned(),
-                name: format!("Status {s}"),
-                semantic: String::new(),
-            });
-        }
-    }
-    out
+        .collect()
 }
 fn semantic_of(cols: &[Column], status: &str) -> String {
     cols.iter()
@@ -94,6 +86,8 @@ pub struct CreateForm {
     pub description: String,
     pub feature: Option<String>,
     pub priority: i32,
+    pub task_type: Option<String>,
+    pub labels: Vec<String>,
 }
 /// An edit of one item's title, description and priority, against the record it was opened on.
 #[derive(Clone, Debug)]
@@ -102,6 +96,8 @@ pub struct EditForm {
     pub title: String,
     pub description: String,
     pub priority: i32,
+    pub task_type: Option<String>,
+    pub labels: Vec<String>,
 }
 /// A plan draft being written for a feature, against the record it was opened on.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -175,7 +171,9 @@ pub fn edit_after_save(
         Some(l) if l.snapshot.id == saved.snapshot.id => {
             let same = l.title == saved.title
                 && l.description == saved.description
-                && l.priority == saved.priority;
+                && l.priority == saved.priority
+                && l.task_type == saved.task_type
+                && l.labels == saved.labels;
             match current {
                 Some(c) if !same => Some(EditForm { snapshot: c, ..l }),
                 _ => None,
@@ -425,6 +423,19 @@ pub struct Activity {
 
 #[derive(Default)]
 pub struct WorkUi {
+    /// Workflow drafts and inspected claims survive project switches; records remain authoritative.
+    pub workflows: BTreeMap<String, WorkflowUi>,
+    pub allocation_claims: BTreeMap<String, AllocationClaimRecord>,
+    pub allocation_recovery: BTreeMap<String, AllocationRecovery>,
+    pub allocation_reused: BTreeSet<String>,
+    pub allocation_inspect_errors: BTreeMap<String, String>,
+    pub allocation_queues: BTreeMap<(String, Option<String>), AllocationQueueSnapshot>,
+    pub allocation_busy: BTreeSet<(String, Option<String>)>,
+    pub allocation_filters: BTreeMap<String, workflow::AllocationFilters>,
+    pub allocation_requests: BTreeMap<(String, Option<String>), workflow::AllocationFilters>,
+    pub allocation_repositories: Vec<(String, String)>,
+    pub claim_lease_ms: Option<String>,
+    pub inspect_claim_id: String,
     /// The project the lists were read for.
     pub of: Option<String>,
     pub features: ListState<WorkRecord>,
@@ -498,6 +509,12 @@ impl WorkUi {
                     newest.readiness = l.readiness.clone();
                     newest.pending_readiness = l.pending_readiness.clone();
                 }
+                // A replayed older-schema receipt can omit metadata at the same work revision.
+                // Keep the fields already observed by the current-schema listing.
+                if newest.labels.is_none() && l.labels.is_some() {
+                    newest.labels = l.labels.clone();
+                    newest.task_type = l.task_type.clone();
+                }
                 Some(newest)
             }
             (Some(d), _) => Some(d.clone()),
@@ -518,6 +535,11 @@ impl WorkUi {
 #[derive(Clone, Debug)]
 enum Action {
     Reload,
+    Workflow(WorkflowAction),
+    Allocate(Option<String>, u64),
+    InspectClaim(String),
+    ReleaseClaim(String),
+    OpenWork(String),
     Create(CreateForm),
     Edit(EditForm),
     /// A work command on one item (`operation`, body).
@@ -543,6 +565,80 @@ fn kind_label(w: &WorkRecord) -> &'static str {
         WorkKind::Feature => "Feature",
         WorkKind::Task => "Task",
         WorkKind::Issue => "Issue",
+    }
+}
+fn task_type_of(work: &WorkRecord) -> Option<String> {
+    work.task_type.as_ref().map(|kind| {
+        match kind {
+            devworks_core::protocol::records::WorkItemType::Story => "Story",
+            devworks_core::protocol::records::WorkItemType::Task => "Task",
+            devworks_core::protocol::records::WorkItemType::Bug => "Bug",
+        }
+        .to_owned()
+    })
+}
+fn labels_of(work: &WorkRecord) -> Vec<String> {
+    work.labels
+        .as_ref()
+        .map(|labels| labels.0.iter().map(|label| label.0.clone()).collect())
+        .unwrap_or_default()
+}
+/// Work type is authored independently of feature membership; an unset legacy value stays unset.
+fn metadata_fields(ui: &mut Ui, typed: bool, kind: &mut Option<String>, labels: &mut Vec<String>) {
+    if typed {
+        egui::ComboBox::from_label("Work type")
+            .selected_text(kind.as_deref().unwrap_or("Not specified"))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(kind, None, "Not specified");
+                for name in ["Story", "Task", "Bug"] {
+                    ui.selectable_value(kind, Some(name.into()), name);
+                }
+            });
+    }
+    ui.label("Labels");
+    let mut remove = None;
+    for (index, label) in labels.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::multiline(label).desired_rows(1))
+                .widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::TextInput,
+                        true,
+                        format!("Label {}", index + 1),
+                    )
+                });
+            if ui
+                .small_button(format!("Remove label {}", index + 1))
+                .clicked()
+            {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        labels.remove(index);
+    }
+    if ui.button("Add label").clicked() {
+        labels.push(String::new());
+    }
+}
+fn metadata_summary(ui: &mut Ui, work: &WorkRecord) {
+    if !matches!(work.kind, WorkKind::Feature) {
+        widgets::caption(
+            ui,
+            format!(
+                "Work type: {}",
+                task_type_of(work).as_deref().unwrap_or("Not specified")
+            ),
+        );
+    }
+    let labels = labels_of(work);
+    if !labels.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for label in &labels {
+                chip(ui, label.clone(), Tone::Neutral);
+            }
+        });
     }
 }
 fn short(s: &str, n: usize) -> String {
@@ -618,6 +714,17 @@ impl Shell {
         // switch keeps them, so each reply still finishes its own save.
         let Some(p) = self.selected_project.clone() else {
             self.work = WorkUi {
+                workflows: std::mem::take(&mut self.work.workflows),
+                allocation_claims: std::mem::take(&mut self.work.allocation_claims),
+                allocation_recovery: std::mem::take(&mut self.work.allocation_recovery),
+                allocation_reused: std::mem::take(&mut self.work.allocation_reused),
+                allocation_inspect_errors: std::mem::take(&mut self.work.allocation_inspect_errors),
+                allocation_queues: std::mem::take(&mut self.work.allocation_queues),
+                allocation_busy: std::mem::take(&mut self.work.allocation_busy),
+                allocation_filters: std::mem::take(&mut self.work.allocation_filters),
+                allocation_requests: std::mem::take(&mut self.work.allocation_requests),
+                claim_lease_ms: std::mem::take(&mut self.work.claim_lease_ms),
+                inspect_claim_id: std::mem::take(&mut self.work.inspect_claim_id),
                 archive_counts: std::mem::take(&mut self.work.archive_counts),
                 plan_saving: std::mem::take(&mut self.work.plan_saving),
                 edit_saving: std::mem::take(&mut self.work.edit_saving),
@@ -629,6 +736,17 @@ impl Shell {
         if self.work.of.as_deref() != Some(p.as_str()) {
             self.work = WorkUi {
                 of: Some(p.clone()),
+                workflows: std::mem::take(&mut self.work.workflows),
+                allocation_claims: std::mem::take(&mut self.work.allocation_claims),
+                allocation_recovery: std::mem::take(&mut self.work.allocation_recovery),
+                allocation_reused: std::mem::take(&mut self.work.allocation_reused),
+                allocation_inspect_errors: std::mem::take(&mut self.work.allocation_inspect_errors),
+                allocation_queues: std::mem::take(&mut self.work.allocation_queues),
+                allocation_busy: std::mem::take(&mut self.work.allocation_busy),
+                allocation_filters: std::mem::take(&mut self.work.allocation_filters),
+                allocation_requests: std::mem::take(&mut self.work.allocation_requests),
+                claim_lease_ms: std::mem::take(&mut self.work.claim_lease_ms),
+                inspect_claim_id: std::mem::take(&mut self.work.inspect_claim_id),
                 archive_counts: std::mem::take(&mut self.work.archive_counts),
                 plan_saving: std::mem::take(&mut self.work.plan_saving),
                 edit_saving: std::mem::take(&mut self.work.edit_saving),
@@ -636,6 +754,33 @@ impl Shell {
                 ..WorkUi::default()
             };
         }
+        self.work.allocation_repositories = self
+            .selected_project_record()
+            .map(|project| {
+                project
+                    .repository_ids
+                    .0
+                    .iter()
+                    .map(|id| {
+                        let label = self
+                            .projects
+                            .repositories
+                            .items
+                            .iter()
+                            .find(|r| r.id == *id)
+                            .map(|r| r.name.0.clone())
+                            .unwrap_or_else(|| id.as_str().to_owned());
+                        (id.as_str().to_owned(), label)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.load_workflow(&p, false);
+        self.load_allocation_queue(&p, None, None);
+        if let Some(feature) = self.work.board.clone() {
+            self.load_allocation_queue(&p, Some(feature), None);
+        }
+        self.refresh_allocation_claims();
         self.work.list_at = self.work.mutations;
         self.work.staged_features.clear();
         self.work.staged_cards.clear();
@@ -774,6 +919,15 @@ impl Shell {
     fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::Workflow(action) => self.workflow_action(action),
+                Action::Allocate(feature, lease) => {
+                    if let Some(project) = self.work.of.clone() {
+                        self.load_allocation_queue(&project, feature, Some(lease));
+                    }
+                }
+                Action::InspectClaim(claim) => self.inspect_allocation(&claim),
+                Action::ReleaseClaim(claim) => self.release_allocation(&claim),
+                Action::OpenWork(id) => self.open_work(&id),
                 Action::Reload => {
                     self.load_work();
                     self.load_activity();
@@ -782,12 +936,20 @@ impl Shell {
                     let Some(p) = self.work.of.clone() else {
                         continue;
                     };
-                    let backlog = default_status_id(
-                        &ProjectId(Id::new(p.clone()).expect("listed project id")),
-                        "backlog",
-                    )
-                    .as_str()
-                    .to_owned();
+                    let Some(backlog) = self
+                        .work
+                        .workflows
+                        .get(&p)
+                        .filter(|w| w.loaded)
+                        .and_then(|w| w.rows.iter().find(|s| s.category.0 == "Backlog"))
+                        .map(|s| s.id.as_str().to_owned())
+                    else {
+                        self.work.message = Some((
+                            Tone::Attention,
+                            "Wait for the project's workflow before creating work.".into(),
+                        ));
+                        continue;
+                    };
                     let (op, body): (&'static str, Value) = match form.kind.as_str() {
                         "feature" => (
                             "features.create",
@@ -815,6 +977,18 @@ impl Shell {
                             ("tasks.create", b)
                         }
                     };
+                    let mut body = body;
+                    let metadata = if form.kind == "feature" {
+                        &mut body["creation"]
+                    } else {
+                        &mut body
+                    };
+                    metadata["labels"] = json!(form.labels);
+                    if form.kind != "feature"
+                        && let Some(kind) = &form.task_type
+                    {
+                        metadata["taskType"] = json!(kind);
+                    }
                     if self.command(
                         Slot::WorkCreate(p.clone()),
                         "Creating work",
@@ -834,6 +1008,16 @@ impl Shell {
                         changes["description"] = json!(form.description);
                     }
                     let feature = matches!(w.kind, WorkKind::Feature);
+                    if form.labels != labels_of(&w) {
+                        changes["labels"] = json!(form.labels);
+                    }
+                    if !feature && form.task_type != task_type_of(&w) {
+                        if let Some(kind) = &form.task_type {
+                            changes["taskType"] = json!(kind);
+                        } else {
+                            changes["clearTaskType"] = json!(true);
+                        }
+                    }
                     if !feature && form.priority != w.priority {
                         changes["priority"] = json!(form.priority);
                     }
@@ -1080,6 +1264,7 @@ impl Shell {
 
     /// Applies a reply for one of the work slots; returns it back when it is not one.
     pub(super) fn apply_work(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+        let (slot, reply) = self.apply_workflow(slot, reply)?;
         match (slot, reply) {
             (Slot::WorkFeatures(p) | Slot::WorkCards(p), Reply::Query(_))
                 if self.work.of.as_deref() != Some(p.as_str()) => {}
@@ -1223,7 +1408,9 @@ impl Shell {
                     self.select_project(Some(w.project_id.0.as_str().to_owned()));
                     let key = w.id.as_str().to_owned();
                     if feature {
-                        self.routes.entry(Route::Features).or_default().selection = Some(key);
+                        let view = self.routes.entry(Route::Features).or_default();
+                        view.tab = 0;
+                        view.selection = Some(key);
                         self.navigate(Route::Features);
                     } else if let Some(f) = &w.parent_id {
                         self.work.board = Some(f.as_str().to_owned());
@@ -1540,10 +1727,16 @@ impl Shell {
     pub(super) fn overview_screen(&mut self, ui: &mut Ui) {
         let screen = Route::Overview.screen();
         let online = self.online();
+        let open = self.project_open() && online.is_ok();
         let mut mem = self.routes.remove(&Route::Overview).unwrap_or_default();
         let mut actions: Vec<Action> = Vec::new();
         let project = self.selected_project.clone();
-        let cols = columns(project.as_deref().unwrap_or("p"), &self.work.cards.items);
+        let cols = self
+            .work
+            .workflows
+            .get(project.as_deref().unwrap_or(""))
+            .map(|workflow| columns(&workflow.rows))
+            .unwrap_or_default();
         let user = devworks_desktop_user();
         let work = &mut self.work;
         let (_, tab) = widgets::pane(
@@ -1608,6 +1801,7 @@ impl Shell {
                     Self::no_project(ui, &online);
                     return;
                 }
+                workflow::controls(ui, work, open, online.is_ok(), actions);
                 if tab == 0 {
                     if !Self::list_state(ui, &work.features, "features")
                         || !Self::list_state(ui, &work.cards, "tasks and issues")
@@ -1643,6 +1837,7 @@ impl Shell {
         );
         mem.tab = tab;
         self.routes.insert(Route::Overview, mem);
+        self.workflow_dialog(ui.ctx(), &mut actions);
         self.work_act(actions);
     }
 
@@ -1653,7 +1848,12 @@ impl Shell {
         let mut actions: Vec<Action> = Vec::new();
         let project = self.selected_project.clone();
         let open = self.project_open() && online.is_ok();
-        let cols = columns(project.as_deref().unwrap_or("p"), &self.work.cards.items);
+        let cols = self
+            .work
+            .workflows
+            .get(project.as_deref().unwrap_or(""))
+            .map(|workflow| columns(&workflow.rows))
+            .unwrap_or_default();
         let waiting: BTreeSet<String> = self
             .work
             .features
@@ -1750,6 +1950,7 @@ impl Shell {
                                 chip(ui, text.clone(), *tone);
                                 ui.add_space(6.0);
                             }
+                            workflow::controls(ui, work, open, online.is_ok(), actions);
                             create_form(ui, work, creating, actions);
                             if tab == 0 {
                                 feature_list(ui, work, mem, &cols, open, actions);
@@ -1823,6 +2024,7 @@ impl Shell {
         mem.tab = new_tab;
         self.routes.insert(Route::Features, mem);
         self.unlink_dialog(ui.ctx(), &mut actions);
+        self.workflow_dialog(ui.ctx(), &mut actions);
         self.work_act(actions);
     }
 
@@ -1833,7 +2035,12 @@ impl Shell {
         let mut actions: Vec<Action> = Vec::new();
         let project = self.selected_project.clone();
         let open = self.project_open() && online.is_ok();
-        let cols = columns(project.as_deref().unwrap_or("p"), &self.work.cards.items);
+        let cols = self
+            .work
+            .workflows
+            .get(project.as_deref().unwrap_or(""))
+            .map(|workflow| columns(&workflow.rows))
+            .unwrap_or_default();
         let waiting: BTreeSet<String> = self
             .work
             .cards
@@ -1889,6 +2096,7 @@ impl Shell {
                                 chip(ui, text.clone(), *tone);
                                 ui.add_space(6.0);
                             }
+                            workflow::controls(ui, work, open, online.is_ok(), actions);
                             create_form(ui, work, creating, actions);
                             issue_list(ui, work, mem, &cols, tab == 1, open, actions);
                         },
@@ -1934,6 +2142,7 @@ impl Shell {
         mem.tab = new_tab;
         self.routes.insert(Route::Issues, mem);
         self.unlink_dialog(ui.ctx(), &mut actions);
+        self.workflow_dialog(ui.ctx(), &mut actions);
         self.work_act(actions);
     }
 
@@ -2180,6 +2389,12 @@ fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &mut Vec<Act
                     .desired_rows(3),
             );
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Description"));
+            metadata_fields(
+                ui,
+                form.kind != "feature",
+                &mut form.task_type,
+                &mut form.labels,
+            );
             ui.horizontal(|ui| {
                 ui.label("Priority");
                 ui.add(egui::DragValue::new(&mut form.priority).range(-1000..=1000))
@@ -2532,6 +2747,7 @@ fn board(
         );
         return;
     };
+    workflow::next_task(ui, work, &feature, open, actions);
     let cards: Vec<WorkRecord> = work
         .cards
         .items
@@ -2539,6 +2755,21 @@ fn board(
         .filter(|c| c.parent_id.as_ref().map(Id::as_str) == Some(feature.as_str()))
         .cloned()
         .collect();
+    if cards.iter().any(|card| {
+        !cols
+            .iter()
+            .any(|column| column.id == card.status_id.as_str())
+    }) {
+        widgets::state_block(
+            ui,
+            &ViewState::Stale {
+                what: "workflow columns and cards; refresh to reconcile their current versions"
+                    .into(),
+            },
+        );
+        return;
+    }
+
     let mut dropped: Option<(WorkRecord, String)> = None;
     egui::ScrollArea::horizontal()
         .id_salt("board")
@@ -2683,9 +2914,11 @@ fn feature_detail(
     egui::ScrollArea::vertical().id_salt("feature-detail").show(ui, |ui| {
         ui.label(RichText::new(&f.title.0).strong());
         widgets::caption(ui, format!("Revision {} · {}", f.revision.as_str(), status_name(cols, f.status_id.as_str())));
+        metadata_summary(ui,f);
         if !f.description.0.is_empty() {
             ui.label(&f.description.0);
         }
+        workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
         source_control(ui, work, f.id.as_str(), actions);
         ui.add_space(6.0);
         // Approval and readiness are separate facts, shown apart.
@@ -2871,6 +3104,8 @@ fn edit_section(
                 title: w.title.0.clone(),
                 description: w.description.0.clone(),
                 priority: w.priority,
+                task_type: task_type_of(w),
+                labels: labels_of(w),
             });
         }
         return;
@@ -2887,6 +3122,12 @@ fn edit_section(
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Work title"));
     let r = ui.add(egui::TextEdit::multiline(&mut form.description).desired_rows(3));
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Work description"));
+    metadata_fields(
+        ui,
+        !matches!(w.kind, WorkKind::Feature),
+        &mut form.task_type,
+        &mut form.labels,
+    );
     if !matches!(w.kind, WorkKind::Feature) {
         ui.horizontal(|ui| {
             ui.label("Priority");
@@ -3358,6 +3599,7 @@ fn card_detail(
     egui::ScrollArea::vertical().id_salt("card-detail").show(ui, |ui| {
         ui.label(RichText::new(&w.title.0).strong());
         widgets::caption(ui, format!("{} · revision {} · priority {}", kind_label(w), w.revision.as_str(), w.priority));
+        metadata_summary(ui,w);
         if !w.description.0.is_empty() {
             ui.label(&w.description.0);
         }
@@ -3388,6 +3630,10 @@ fn card_detail(
         }
         edit_section(ui, work, w, enabled, actions);
         ui.add_space(6.0);
+        if let Some(origin) = &w.previous_inheritance {
+            widgets::caption(ui,format!("Earlier requirements from feature {}: {}",origin.feature_id.as_str(),origin.requirement_ids.0.iter().map(Id::as_str).collect::<Vec<_>>().join(", ")));
+            if ui.button("Open earlier feature").clicked() { actions.push(Action::OpenWork(origin.feature_id.as_str().into())); }
+        }
         // Membership: link, transfer or remove (remove pauses).
         let current = w
             .parent_id

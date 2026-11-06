@@ -3729,3 +3729,5 @@ fn repository_scope_removal_fences_only_cards_outside_the_active_plan() {
     );
     assert!(fx.eligible(&removed.id, Target::Root).is_empty());
 }
+
+mod metadata;

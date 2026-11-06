@@ -376,6 +376,9 @@ impl Gateway<'_> {
                 // Published under the negotiated revision's projection only.
                 let mut result = answer.result;
                 result.retain_revision(admitted.revision.0);
+                result
+                    .check_revision(admitted.revision.0)
+                    .map_err(GatewayFailure::HandlerContract)?;
                 // A union alternative introduced later (an event's command aggregate) cannot be
                 // projected away: a result carrying one below its revision is a handler fault.
                 if let crate::protocol::results::OperationResult::HistoryEvents { value } = &result
@@ -797,7 +800,9 @@ fn unit_of_work(
             // Replayed under the projection of the revision it was recorded under (the
             // negotiated one): an older receipt is never widened, a newer one never narrowed.
             let mut receipt = stored.receipt;
-            project_decision(&mut receipt.decision, stored.schema_revision);
+            if let Err(error) = project_decision(&mut receipt.decision, stored.schema_revision) {
+                return Ok(Unit::Contract(error));
+            }
             return Ok(Unit::Replayed(receipt));
         }
         Some(LedgerEntry::Incompatible {
@@ -839,7 +844,10 @@ fn unit_of_work(
                 }
             };
             // The receipt (and so every replay) carries the negotiated revision's projection.
-            project_decision(&mut decided.decision, command.revision);
+            if let Err(error) = project_decision(&mut decided.decision, command.revision) {
+                tx.rollback_to(savepoint)?;
+                return Ok(Unit::Contract(error));
+            }
             if matches!(decided.decision, DomainDecision::Refused { .. }) {
                 // Receipt-only decisions do not mutate work (step 5): every write the use case
                 // made is undone and only the receipt and its CommandDecided history remain.
@@ -1799,10 +1807,12 @@ fn conflict_fault(c: RevisionConflict, correlation_id: CorrelationId) -> DomainF
 }
 
 /// Projects a decision's result onto `revision` (members introduced later are removed).
-fn project_decision(decision: &mut DomainDecision, revision: SchemaRevision) {
+fn project_decision(decision: &mut DomainDecision, revision: SchemaRevision) -> Result<(), String> {
     if let DomainDecision::Applied { result } | DomainDecision::NoChange { result } = decision {
         result.retain_revision(revision.0);
+        result.check_revision(revision.0)?;
     }
+    Ok(())
 }
 
 fn decision_kind(d: &DomainDecision) -> &'static str {

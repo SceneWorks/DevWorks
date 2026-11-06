@@ -1,7 +1,8 @@
 //! Feature creation, the feature-owned plan slot, plan-approval requests and their decision
 //! seam, atomic plans and re-planning by reference.
 use super::items::{
-    NewCard, bump, check_evidence, completion_for, feature_scope, open_feature, tx_record,
+    NewCard, apply_metadata, bump, check_evidence, completion_for, feature_scope, open_feature,
+    tx_record,
 };
 use super::model::{ActivePlan, PendingPlan, WorkBrief, active_of, pending_of};
 use super::workflow::{self, CLOSED, finished, semantic_of};
@@ -23,7 +24,7 @@ use crate::protocol::records::{
     PlanDraft, ProposalRecord, TaskPlanEntry, WorkRecord,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
-use crate::protocol::support::{BoundedList, Check, Page};
+use crate::protocol::support::{BoundedList, Check, Label, Page, Revisioned};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RevisionDimension, RootId};
 use crate::services::sessions::{content, label, rev};
 use serde_json::json;
@@ -302,6 +303,7 @@ impl WorkService {
         priority: i64,
         caller_ref: Option<Id>,
         plan: Option<&PlanDraft>,
+        labels: Option<&[Label]>,
     ) -> R<StoredWork> {
         require_title(title)?;
         if i32::try_from(priority).is_err() {
@@ -310,19 +312,17 @@ impl WorkService {
         let repos = member_repositories(tx, project, repos)?;
         let status = match status {
             Some(s) => status_of(tx, project, s)?.0,
-            None => {
-                let id = workflow::default_status_id(project, workflow::DEFAULT_KEY);
-                status_of(tx, project, &id)?.0
-            }
+            None => workflow::default_status(tx, project)?,
         };
         if let Some(d) = plan {
             check_draft(tx, ctx, project, None, d)?;
         }
         let now = tx.now_ms();
-        let brief = WorkBrief {
+        let mut brief = WorkBrief {
             description: description.to_owned(),
             ..WorkBrief::default()
         };
+        apply_metadata(&mut brief, None, false, labels, &mut Vec::new())?;
         let w = StoredWork {
             id: tx.new_id(IdKind::Link),
             project_id: project.clone(),
@@ -372,6 +372,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &fops::CreateInput,
+        schema_revision: u32,
     ) -> R<DomainDecision> {
         open_project(tx, ctx, &i.project_id)?;
         let created = match &i.creation {
@@ -382,6 +383,7 @@ impl WorkService {
                 status_id,
                 priority,
                 plan,
+                labels,
             } => vec![self.insert_feature(
                 tx,
                 ctx,
@@ -393,12 +395,13 @@ impl WorkService {
                 i64::from(*priority),
                 None,
                 plan.as_ref(),
+                labels.as_ref().map(|l| l.0.as_slice()),
             )?],
             FeatureCreation::AtomicPlan { plan } => {
                 self.apply_atomic(tx, ctx, &i.project_id, plan, false)?
             }
             FeatureCreation::StagedPlan { artifact } => {
-                let plan = self.staged_plan(tx, ctx, &i.project_id, artifact)?;
+                let plan = self.staged_plan(tx, ctx, &i.project_id, artifact, schema_revision)?;
                 self.apply_atomic(tx, ctx, &i.project_id, &plan, false)?
             }
         };
@@ -426,6 +429,7 @@ impl WorkService {
         ctx: &InvocationContext,
         project: &ProjectId,
         a: &ArtifactRef,
+        schema_revision: u32,
     ) -> R<AtomicWorkPlan> {
         check_artifact(tx, ctx, project, a)?;
         let Some(reader) = &self.staged else {
@@ -454,6 +458,13 @@ impl WorkService {
             .map_err(|_| invalid("staged_plan", Some(&a.artifact_id)))?;
         plan.check()
             .map_err(|_| invalid("staged_plan", Some(&a.artifact_id)))?;
+        // Artifact-backed input observes the same negotiated schema as an inline plan.
+        // Refuse later fields, rather than discarding authored values or bypassing admission.
+        let mut projected = plan.clone();
+        projected.retain_revision(schema_revision);
+        if serde_json::to_value(&projected).ok() != serde_json::to_value(&plan).ok() {
+            return Err(invalid("staged_plan", Some(&a.artifact_id)));
+        }
         Ok(plan)
     }
 
@@ -574,13 +585,27 @@ impl WorkService {
                 check_draft(tx, ctx, project, Some(&f), &draft)?;
                 // Saving a draft never touches the active plan or its approval.
                 let (_, superseded) = save_pending(tx, &f, &draft)?;
-                let f = touch(tx, ctx, &f)?;
+                let mut next = f.clone();
+                let mut brief = WorkBrief::of(&f)?;
+                let metadata_changed = apply_metadata(
+                    &mut brief,
+                    None,
+                    false,
+                    fd.labels.as_ref().map(|l| l.0.as_slice()),
+                    &mut Vec::new(),
+                )?;
+                next.brief = brief.value();
+                let f = touch(tx, ctx, &next)?;
+                if metadata_changed {
+                    super::allocation::invalidate_work(tx, ctx, &f.id)?;
+                    bump(tx, project, &[f.queue()])?;
+                }
                 event(
                     tx,
                     ctx,
                     &f,
                     "PlanDraftSaved",
-                    json!({"via": "atomic_plan", "supersededProposal": superseded.as_ref().map(Id::as_str)}),
+                    json!({"via": "atomic_plan", "labelsChanged": metadata_changed, "supersededProposal": superseded.as_ref().map(Id::as_str)}),
                 )?;
                 Ok(f)
             }
@@ -599,6 +624,7 @@ impl WorkService {
                     0,
                     Some(fd.caller_ref.clone()),
                     Some(&fd.plan),
+                    fd.labels.as_ref().map(|l| l.0.as_slice()),
                 )
             }
         }
@@ -620,6 +646,9 @@ impl WorkService {
         let mut out: Vec<Planned> = Vec::new();
         let mut matched: std::collections::HashSet<Id> = std::collections::HashSet::new();
         for e in entries {
+            if e.clear_task_type == Some(true) && e.task_type.is_some() {
+                return Err(invalid("task_type", None));
+            }
             require_title(&e.title.0)?;
             let repos = member_repositories(tx, &project, &e.repository_ids.0)?;
             if let Some(allowed) = &scope
@@ -690,6 +719,8 @@ impl WorkService {
                             priority: i64::from(e.priority.unwrap_or(0)),
                             caller_ref: Some(e.client_key.clone()),
                             acceptance,
+                            task_type: e.task_type.clone(),
+                            labels: e.labels.as_ref().map(|l| l.0.clone()).unwrap_or_default(),
                         },
                     )?;
                     matched.insert(w.id.clone());
@@ -753,6 +784,13 @@ impl WorkService {
         let mut brief = WorkBrief::of(w)?;
         let mut after = w.clone();
         let mut changed: Vec<&str> = Vec::new();
+        let metadata_changed = apply_metadata(
+            &mut brief,
+            e.task_type.as_ref(),
+            e.clear_task_type.unwrap_or(false),
+            e.labels.as_ref().map(|l| l.0.as_slice()),
+            &mut changed,
+        )?;
         if e.title.0 != w.title {
             after.title = e.title.0.clone();
             changed.push("title");
@@ -793,6 +831,12 @@ impl WorkService {
         if changed.is_empty() {
             return Ok(w.clone());
         }
+        if metadata_changed {
+            super::allocation::invalidate_work(tx, ctx, &w.id)?;
+            if !queues.contains(&w.queue()) {
+                queues.push(w.queue());
+            }
+        }
         let statuses = tx.work().statuses(&w.project_id)?;
         let semantic = w
             .status_id
@@ -826,6 +870,7 @@ impl WorkService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &tops::SyncPlanInput,
+        schema_revision: u32,
     ) -> R<DomainDecision> {
         let feature = visible_feature(tx.work(), ctx, &i.feature_id.0)?;
         open_project(tx, ctx, &feature.project_id)?;
@@ -873,7 +918,7 @@ impl WorkService {
         self.write_links(tx, ctx, &project, &incoming)?;
         let project_plan = match (&i.project_plan, &i.staged_project_plan) {
             (Some(p), None) => Some(p.clone()),
-            (None, Some(a)) => Some(self.staged_plan(tx, ctx, &project, a)?),
+            (None, Some(a)) => Some(self.staged_plan(tx, ctx, &project, a, schema_revision)?),
             (None, None) => None,
             (Some(_), Some(_)) => return Err(invalid("project_plan", None)),
         };

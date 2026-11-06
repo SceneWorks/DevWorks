@@ -261,9 +261,25 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     click(&mut h, Role::Button, "Edit plan");
     form.snapshot = feature;
     h.state_mut().work.plan = Some(form);
-    click(&mut h, Role::Button, "Add requirement");
-    click(&mut h, Role::Button, "Add acceptance criterion");
-    click(&mut h, Role::Button, "Remove acceptance criterion 2");
+    // This preservation scenario invokes each real button's accessibility Click action.
+    // Render the injected draft before querying its controls, then observe each UI edit.
+    settle(&mut h);
+    for (label, acceptance_count) in [
+        ("Add requirement", 1),
+        ("Add acceptance criterion", 2),
+        ("Remove acceptance criterion 2", 1),
+    ] {
+        h.get_by_role_and_label(Role::Button, label)
+            .click_accesskit();
+        settle(&mut h);
+        let form = h.state().work.plan.as_ref().expect("the editor stays open");
+        assert_eq!(
+            form.requirements.last().map(|e| e.id.as_str()),
+            Some("E3"),
+            "after {label}"
+        );
+        assert_eq!(form.acceptance.len(), acceptance_count, "after {label}");
+    }
     let form = h.state().work.plan.as_ref().unwrap();
     assert_eq!(form.requirements.last().unwrap().id, "E3");
     let mut form = form.clone();
@@ -1488,4 +1504,84 @@ fn a_drop_decision_upload_pending_at_close_finishes_after_relaunch() {
     );
     assert!(h.state().work.plan_saving.is_empty());
     assert!(h.state().work.plan.is_none());
+}
+
+#[test]
+fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() {
+    let root = Root::new("work-native-next-feature-task");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let spy = LoseAcks::over(backend.clone(), "next_work.claim_feature_task", 0);
+    let mut h = harness(
+        shell_with(Ok(spy.clone()), &root, Script::default(), None),
+        1800.0,
+        1500.0,
+    );
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    let card = command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId":feature.project_id,"parentId":feature.id,
+        "title":"Selected feature task","description":"Implement the approved pay-by-card requirement.","repositoryIds":[],
+        "statusId":default_status_id(&feature.project_id,"ready"),"priority":10}),
+    );
+    let mut requirements = serde_json::to_value(&feature.requirements).unwrap();
+    requirements[0]["coveredByTaskIds"] = json!([card.id]);
+    let feature = command(
+        &*backend,
+        "features.edit_plan",
+        json!({"featureId":feature.id,"expectedRevision":feature.revision,
+        "plan":{"content":feature.plan,"goals":feature.goals,"repositoryIds":feature.repository_ids,"requirements":requirements,
+        "acceptance":feature.acceptance,"acceptanceTests":feature.acceptance_tests.map(|a|a.0).unwrap_or_default()}}),
+    );
+    let feature = approve_plan(&engine, &*backend, &feature);
+    let approval = feature.approval.as_ref().unwrap();
+    let feature = command(
+        &*backend,
+        "features.edit",
+        json!({"workId":feature.id,"expectedRevision":feature.revision,
+        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
+        "summary":"Ready to implement the approved feature","findings":[]}}}),
+    );
+    h.state_mut()
+        .work
+        .detail
+        .insert(feature.id.as_str().into(), feature.clone());
+    click(&mut h, Role::Button, "Refresh");
+    h.get_by_role_and_label(Role::Button, "Next task")
+        .click_accesskit();
+    settle(&mut h);
+    let claim = h
+        .state()
+        .work
+        .allocation_claims
+        .values()
+        .find(|claim| claim.work_id == card.id)
+        .unwrap();
+    assert_eq!(claim.root_id.as_ref().unwrap().0, feature.id);
+    let frames = spy.frames.lock().unwrap();
+    let frame: serde_json::Value = serde_json::from_slice(&frames[0]).unwrap();
+    assert_eq!(frame["body"]["rootId"], json!(feature.id));
+    assert_eq!(frame["schemaRevision"], 3);
+    let card = wops::work_record(backend.query(
+        "tasks.get",
+        &wops::work_get(&*backend, "tasks.get", card.id.as_str()),
+    ))
+    .unwrap();
+    assert!(
+        card.attempts.0.is_empty(),
+        "selection does not dispatch the task"
+    );
+    assert!(has_text(&h, "Open feature controls"));
+    click(&mut h, Role::Button, "Board");
+    h.get_by_role_and_label(Role::Button, "Open feature controls")
+        .click_accesskit();
+    settle(&mut h);
+    assert_eq!(
+        h.state().route_memory(Route::Features).tab,
+        0,
+        "the explicit feature link opens its detail, not a previouslyselectedboard"
+    );
 }

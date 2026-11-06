@@ -6,9 +6,9 @@ use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::{
     AcceptanceCriterion, ApprovalState, CriterionState, HandoffRecord, PendingFeaturePlan,
     PlanApproval, PlanDraft, ReadinessAssessment, RequirementItem, RequirementStatus, TouchRef,
-    WorkAttempt, WorkComment, WorkKind, WorkLink, WorkRecord,
+    WorkAttempt, WorkComment, WorkItemType, WorkKind, WorkLink, WorkRecord,
 };
-use crate::protocol::support::{BoundedList, BoundedText};
+use crate::protocol::support::{BoundedList, BoundedText, Label};
 use crate::protocol::{ActorId, AssignmentId, Counter, Id, OperationState};
 use crate::services::sessions::{content, counter, label, rev};
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,9 @@ pub struct Noted<T> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkBrief {
+    /// Authored task classification, independent of feature membership. Legacy rows stay None.
+    pub task_type: Option<WorkItemType>,
+    pub labels: Vec<Label>,
     pub description: String,
     pub goals: Vec<String>,
     /// A card's acceptance criteria. For a feature, the recorded results (state and evidence)
@@ -54,6 +57,7 @@ pub struct WorkBrief {
     /// A feature's recorded results of its active plan's acceptance tests.
     pub acceptance_tests: Vec<AcceptanceCriterion>,
     pub inherits: Vec<Id>,
+    pub previous_inheritance: Option<crate::protocol::records::WorkInheritanceOrigin>,
     pub touches: Vec<TouchRef>,
     pub links: Vec<WorkLink>,
     pub comments: Vec<Noted<WorkComment>>,
@@ -333,6 +337,8 @@ pub fn record(
         revision: rev(w.revision),
         project_id: w.project_id.clone(),
         kind,
+        task_type: brief.task_type.clone(),
+        labels: Some(BoundedList(brief.labels.clone())),
         title: label(&w.title, "work"),
         description: content(&brief.description),
         status_id: w
@@ -351,13 +357,14 @@ pub fn record(
         requirements: BoundedList(requirements.into_iter().take(128).collect()),
         acceptance: BoundedList(acceptance.into_iter().take(128).collect()),
         inherits_requirement_ids: BoundedList(brief.inherits.iter().take(128).cloned().collect()),
+        previous_inheritance: brief.previous_inheritance.clone(),
         touches: BoundedList(brief.touches.iter().take(128).cloned().collect()),
         links: BoundedList(brief.links.iter().take(128).cloned().collect()),
         comments: BoundedList(comments.into_iter().map(|c| c.item).collect()),
         handoffs: BoundedList(handoffs.into_iter().map(|h| h.item).collect()),
         attempt_count: counter(attempts.len() as i64),
         attempts: BoundedList(attempts),
-        claim: None,
+        claim: super::allocation::projected_claim(read, w)?,
         merged_awaiting_acceptance: false,
         acceptance_report: brief.acceptance_report.clone(),
         detail_cursor,

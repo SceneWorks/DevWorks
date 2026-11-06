@@ -90,6 +90,7 @@ overrides = {**{f'MCP-{n:02}':'mcp_server mcp_server_access authority graph work
  'ROUTE-16':'usage router', 'ROUTE-17':'usage router',
  **{r:'delegation work workflow controls approvals' for r in ['AGENT-12','AGENT-18','AGENT-19','AGENT-20']},
  'UI-10':'chat router systemone settings',
+ **{r:'work workflow controls delegation work_item_metadata' for r in ['WORK-02','WORK-03','WORK-04','WORK-10','WORK-11','WORK-12']},
  'EVAL-01':'eval_suites eval_package_suites eval_acceptance',
  'EVAL-02':'eval_recorded eval_mcp_records eval_acceptance',
  'EVAL-03':'eval_judges eval_acceptance',

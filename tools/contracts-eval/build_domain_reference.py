@@ -19,7 +19,7 @@ for family in reg['families']:
    payload='<br><br>'.join(parts)
   else:payload='**'+o['requestModes'][0]+'**<br>[Existing input schema](contracts/'+o['inputSchema']+')<br>'+str(o['selectionConstraint'])
   revs=[r['revision'] for r in o['schemaRevisions']]
-  if len(revs)>1:payload+='<br><br>**Schema revisions** '+', '.join(map(str,revs))+' ([revision '+str(revs[-1])+' input](contracts/'+o['schemaRevisions'][-1]['inputSchema']+'))'
+  if len(revs)>1 or revs[0]!=1:payload+='<br><br>**Schema revisions** '+', '.join(map(str,revs))+' ([revision '+str(revs[-1])+' input](contracts/'+o['schemaRevisions'][-1]['inputSchema']+'))'
   lines.append('| `'+o['operation']+'` | '+payload+' | `'+o['resultValueType']+'` |')
  lines += ['']
 lines += ['## Domain types','','Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or `kind`-tagged unions. Generic lists/pages and scalar bounds are native checked support types. A field marked *revision N+* was introduced at schema revision N: callers that negotiated an earlier revision never receive it and may not send it.','']
@@ -27,6 +27,7 @@ for name,d in TYPES.items():
  lines += ['### '+name,'']
  if d['kind']=='record':lines += ['| Field | Type |','| --- | --- |',*['| `'+re.sub(r'_([a-z])',lambda m:m[1].upper(),n)+'` | `'+t+'`'+(f" · *revision {d['since'][n]}+*" if n in d.get('since',{}) else '')+' |' for n,t in d['fields'].items()]]
  elif d['kind']=='enum':lines += [', '.join('`'+x+'`' for x in d['values'])+'.']
+ elif d['kind']=='versioned':lines += [f'Before revision {d["revision"]}: exact legacy `{d["legacy"]}`. Revision {d["revision"]} and later: `{d["current"]}`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.']
  else:
   lines += ['| Kind | Fields |','| --- | --- |',*['| `'+kind+'` | '+fields(fs)+' |' for kind,fs in d['variants'].items()]]
  lines += ['']

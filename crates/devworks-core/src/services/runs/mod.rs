@@ -707,6 +707,33 @@ fn prerequisite_gate(
     }
     Ok(())
 }
+fn inherited_scope_gate(
+    runs: &dyn RunRead,
+    plan: &PlanState,
+    work: &RootId,
+    subject: Subject,
+    conditions: &mut Vec<Condition>,
+) -> Result<(), StorageError> {
+    for requirement in runs.work_inherited_requirements(work)? {
+        let unit = plan.unit(Some(requirement.as_str()));
+        if unit.is_none_or(|unit| !unit.readiness.is_current()) {
+            let reason = unit.map_or_else(
+                || "requirement is not in the active approved plan".into(),
+                |unit| unit.readiness.describe(),
+            );
+            conditions.push(derived(
+                &format!("inherited-{}", requirement.as_str()),
+                subject.clone(),
+                unit.and_then(|u| u.readiness.revision())
+                    .or(plan.approved_revision())
+                    .unwrap_or(1),
+                HoldCause::Policy,
+                &format!("inherited requirement {}: {reason}", requirement.as_str()),
+            ));
+        }
+    }
+    Ok(())
+}
 fn derived(
     kind: &str,
     subject: Subject,
@@ -801,6 +828,13 @@ impl ControlService {
                 };
                 prerequisite_gate(runs, f, Subject::Root(f.clone()), &mut c)?;
                 repository_gate(runs, f, &root.id, root_subject.clone(), &mut c)?;
+                inherited_scope_gate(
+                    runs,
+                    &self.scope.plan(runs, &feature)?,
+                    &root.id,
+                    root_subject.clone(),
+                    &mut c,
+                )?;
                 match self.scope.plan(runs, &feature)? {
                     PlanState::Approved { feature: unit, .. } if unit.readiness.is_current() => {}
                     PlanState::Approved { feature: unit, revision, .. } => c.push(derived(
@@ -920,6 +954,7 @@ impl ControlService {
                 if purpose == ActivationPurpose::Implementation {
                     if is_feature(root) {
                         repository_gate(runs, &root.id, &a.work_id, subject.clone(), &mut c)?;
+                        inherited_scope_gate(runs, &plan, &a.work_id, subject.clone(), &mut c)?;
                     }
                     let open = runs.open_prerequisites(&a.work_id)?;
                     if let Some(p) = open.first() {
@@ -1282,6 +1317,12 @@ impl ControlService {
                 Some(root.project_id.0.clone()),
             ));
         }
+        crate::services::work::allocation::check_start(tx, self, ctx, &root).map_err(
+            |f| match f {
+                Failure::Storage(e) => Fail::Storage(e),
+                Failure::Refused(r) => Fail::Refused(r, vec![]),
+            },
+        )?;
         let control = ensure_control(tx, &root.id)?;
         let root_level = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?;
         let manual: Vec<&StoredBlocker> = root_level
@@ -1330,6 +1371,8 @@ impl ControlService {
         let plan = self.scope.plan(tx.runs(), &root)?;
         let purpose = if !is_feature(&root) {
             ActivationPurpose::Implementation
+        } else if crate::services::work::membership::needs_root_activation(tx, &root.id)? {
+            ActivationPurpose::Planning
         } else {
             match plan.unit(None) {
                 Some(u) if u.readiness.is_current() => ActivationPurpose::Implementation,
@@ -1346,7 +1389,15 @@ impl ControlService {
             plan.approved_revision(),
             "Start",
         )?;
-        let _ = activation;
+        if let Some(a) = activation {
+            crate::services::work::allocation::transfer(
+                tx,
+                &root.id.0,
+                &a.id,
+                None,
+                ctx.principal(),
+            )?;
+        }
         Ok(DomainDecision::Applied {
             result: snapshot_result(tx.runs(), &root.id, |value| OperationResult::RunsStart {
                 value,

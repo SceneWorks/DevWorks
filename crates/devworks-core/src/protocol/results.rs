@@ -98,13 +98,16 @@ pub enum OperationResult {
     #[serde(rename = "workflows.reassign_and_remove")]
     WorkflowsReassignAndRemove { value: MutationSummary },
     #[serde(rename = "next_work.claim_project_queue")]
-    NextWorkClaimProjectQueue { value: ClaimRecord },
+    NextWorkClaimProjectQueue { value: AllocationSelection },
     #[serde(rename = "next_work.claim_feature_task")]
-    NextWorkClaimFeatureTask { value: ClaimRecord },
+    NextWorkClaimFeatureTask { value: AllocationSelection },
     #[serde(rename = "next_work.inspect_claim")]
-    NextWorkInspectClaim { value: ClaimRecord },
+    NextWorkInspectClaim { value: AllocationClaimRecord },
     #[serde(rename = "next_work.release_claim")]
-    NextWorkReleaseClaim { value: ClaimRecord },
+    NextWorkReleaseClaim { value: AllocationClaimRecord },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "next_work.inspect_queue")]
+    NextWorkInspectQueue { value: AllocationQueueSnapshot },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -780,6 +783,7 @@ impl OperationResult {
             Self::NextWorkClaimFeatureTask { .. } => "next_work.claim_feature_task",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
             Self::NextWorkReleaseClaim { .. } => "next_work.release_claim",
+            Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -1146,6 +1150,7 @@ impl Check for OperationResult {
             Self::NextWorkClaimFeatureTask { value } => value.check()?,
             Self::NextWorkInspectClaim { value } => value.check()?,
             Self::NextWorkReleaseClaim { value } => value.check()?,
+            Self::NextWorkInspectQueue { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -1490,6 +1495,14 @@ impl Revisioned for OperationResult {
             Self::TasksAcceptanceEvidence { value } => value.retain_revision(revision),
             Self::TasksSyncPlan { value } => value.retain_revision(revision),
             Self::TasksSetFeature { value } => value.retain_revision(revision),
+            Self::WorkflowsList { value } => value.retain_revision(revision),
+            Self::WorkflowsCreateStatus { value } => value.retain_revision(revision),
+            Self::WorkflowsRenameStatus { value } => value.retain_revision(revision),
+            Self::WorkflowsOrder { value } => value.retain_revision(revision),
+            Self::NextWorkClaimProjectQueue { value } => value.retain_revision(revision),
+            Self::NextWorkClaimFeatureTask { value } => value.retain_revision(revision),
+            Self::NextWorkInspectClaim { value } => value.retain_revision(revision),
+            Self::NextWorkReleaseClaim { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
@@ -1564,6 +1577,16 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             _ => {}
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
+            Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            _ => Ok(()),
         }
     }
 }

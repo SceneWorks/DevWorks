@@ -1,0 +1,167 @@
+{
+  "date": "2026-11-05",
+  "scope": "DW-13/DW-109 contracts and supporting-plan alignment only; no inference or integrated service acceptance",
+  "baseCommit": "eccd2e5",
+  "counts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 357,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 357,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "operationModeBindings": 362,
+  "operationModeRevisionBindings": 532,
+  "legacySchemasByteIdentical": 56,
+  "nativeProjectionTests": {
+    "passed": 3,
+    "source": "tools/contracts-eval/tests/allocation_projection.rs"
+  },
+  "generatorTests": {
+    "passed": 9
+  },
+  "gatewayRegressions": {
+    "source": "crates/devworks-core/tests/gateway.rs",
+    "tests": [
+      "an_impossible_legacy_allocation_projection_rolls_back_handler_writes_and_receipts",
+      "a_successful_legacy_allocation_receipt_keeps_its_exact_wire_shape_on_replay"
+    ],
+    "status": "passed",
+    "passedClaimed": true,
+    "passed": 2,
+    "snapshot": "83e96f5ede52c626b44f31320a06577d9081ed46",
+    "command": "cargo test --locked -p devworks-core --test gateway allocation_",
+    "execution": "Detached exact assembled snapshot; existing transaction harness; no constructor stubs or service edits",
+    "priorAttempt": {
+      "snapshot": "5f8e5d1d1c729d42e1db383f1c35b8ab9c67cf18",
+      "status": "Added; early integrated source had four known old allocator constructor type mismatches, so execution awaits the final allocator integration"
+    }
+  },
+  "optionalStandaloneProbeStrictClippy": {
+    "status": "failed",
+    "diagnostics": 31,
+    "provenance": "mixed; baseline not compared",
+    "requiredNativeWorkspaceGate": false,
+    "unrelatedCleanupPerformed": false
+  },
+  "word": {
+    "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
+    "unchangedApprovedBlob": true,
+    "renderingClaim": "Existing approved visual QA reused; no new render or layout change"
+  },
+  "sourceSha256": {
+    "docs/architecture/implementation-slices.json": "3bfdf2cb890be627a977d1b73ec9e323799a6c191becce3133e1364bbec432bb",
+    "docs/architecture/implementation-plan.json": "25e3de422c1a919e7aa9dc24de130d25253d721605fef76869701f5a159d7a67",
+    "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
+    "docs/architecture/contracts/family-coverage.json": "8f90d40748f6fa5713fa020b01a607543bcecf32f0838f7b8e0d6ac91f565664"
+  },
+  "contractChecksPassed": true,
+  "schemaFixtures": 1785,
+  "readers": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/latest-model-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "assembledSnapshotRechecks": {
+    "snapshot": "83e96f5ede52c626b44f31320a06577d9081ed46",
+    "generatorTestsPassed": 9,
+    "regenerationDrift": false,
+    "legacySchemasByteIdentical": 56
+  }
+}

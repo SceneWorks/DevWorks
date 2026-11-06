@@ -1337,3 +1337,120 @@ fn an_event_with_a_later_aggregate_is_never_published_to_an_earlier_revision() {
         .unwrap();
     assert!(matches!(reply, DomainQueryReply::Result { .. }));
 }
+
+const CLAIM_PROJECT: &str = r#"{"mode":"Command","protocol":"1.0-draft.1","requestKey":"allocation-projection","body":{"kind":"next_work.claim_project_queue","projectId":"project-a","expectedQueueRevision":"1","leaseMs":"60000"}}"#;
+
+struct AllocationWriter {
+    no_eligible: bool,
+    calls: Count,
+}
+impl CommandHandler for AllocationWriter {
+    fn decide(
+        &self,
+        ctx: &InvocationContext,
+        _: &AdmittedCommand,
+        tx: &mut dyn WriteTransaction,
+    ) -> Result<Decided, HandlerFailure> {
+        self.calls.bump();
+        let event_id = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event_id,
+            actor: ctx.principal().clone(),
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "work".into(),
+            aggregate_id: "work-a".into(),
+            aggregate_revision: 1,
+            kind: "AllocationPrepared".into(),
+            payload: json!({"mutation":"must be transactional"}),
+        })?;
+        let value = if self.no_eligible {
+            // Deliberately violates the negotiated revision: the boundary must undo this write.
+            json!({"kind":"NoEligible","reason":"all_candidates_blocked","reused":false})
+        } else {
+            json!({"kind":"Claimed","reused":false,"claim":{
+                "id":"claim-a","workId":"work-a","ownerId":"actor-a","fence":"1",
+                "expiresAtMs":"100","state":"Held","workKind":"Feature","workRevision":"2",
+                "projectId":"project-a","rootId":"work-a","ownerSessionId":"session-a","queueRevision":"3"
+            }})
+        };
+        Ok(Decided {
+            decision: DomainDecision::Applied {
+                result: result("next_work.claim_project_queue", value),
+            },
+            operation_id: None,
+        })
+    }
+}
+
+#[test]
+fn an_impossible_legacy_allocation_projection_rolls_back_handler_writes_and_receipts() {
+    let h = Harness::new();
+    let handler = Arc::new(AllocationWriter {
+        no_eligible: true,
+        calls: Count::default(),
+    });
+    let outcome = h.gateway().command(
+        &context("user-a"),
+        "next_work.claim_project_queue",
+        CLAIM_PROJECT.as_bytes(),
+        handler.clone(),
+    );
+    assert!(matches!(outcome, Err(GatewayFailure::HandlerContract(_))));
+    assert_eq!(handler.calls.get(), 1);
+    assert_eq!(h.store.receipt_count(), 0);
+    assert!(
+        h.store.event_kinds().is_empty(),
+        "handler history mutation must roll back too"
+    );
+}
+
+#[test]
+fn a_successful_legacy_allocation_receipt_keeps_its_exact_wire_shape_on_replay() {
+    let h = Harness::new();
+    let handler = Arc::new(AllocationWriter {
+        no_eligible: false,
+        calls: Count::default(),
+    });
+    let ctx = context("user-a");
+    let first = h
+        .gateway()
+        .command(
+            &ctx,
+            "next_work.claim_project_queue",
+            CLAIM_PROJECT.as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    let first_wire = serde_json::to_value(&first).unwrap();
+    let expected = json!({"id":"claim-a","workId":"work-a","ownerId":"actor-a","fence":"1","expiresAtMs":"100","state":"Held"});
+    assert_eq!(
+        first_wire["receipt"]["decision"]["result"]["value"],
+        expected
+    );
+    let decoded: DomainCommandReply = serde_json::from_value(first_wire.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap(),
+        first_wire,
+        "old receipt decoding must not add history fields"
+    );
+    let replay = h
+        .gateway()
+        .command(
+            &ctx,
+            "next_work.claim_project_queue",
+            CLAIM_PROJECT.as_bytes(),
+            handler.clone(),
+        )
+        .unwrap();
+    let replay_wire = serde_json::to_value(&replay).unwrap();
+    assert_eq!(replay_wire["receipt"], first_wire["receipt"]);
+    assert_eq!(replay_wire["replayed"], true);
+    assert_eq!(handler.calls.get(), 1);
+    assert_eq!(h.store.receipt_count(), 1);
+    assert_eq!(
+        h.store.event_kinds(),
+        vec!["AllocationPrepared".to_owned(), "CommandDecided".to_owned()]
+    );
+}

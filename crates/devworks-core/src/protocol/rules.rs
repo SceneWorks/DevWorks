@@ -28,6 +28,23 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
     }
 }
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if matches!(
+        name,
+        "WorkRecord"
+            | "TaskPatch"
+            | "IssuePatch"
+            | "TaskPlanEntry"
+            | "FeaturePatch"
+            | "FeaturePlanDraft"
+    ) {
+        work_metadata(v)?;
+    }
+    if name == "WorkRecord" {
+        require(
+            v["kind"] != "Feature" || !present(v, "taskType"),
+            "feature cannot have a card type",
+        )?;
+    }
     eval_record(name, v)?;
     match name {
         "ClaimDraft" => require(
@@ -214,6 +231,12 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if matches!(op, "tasks.create" | "issues.create") {
+        work_metadata(v)?;
+    }
+    if op == "features.create" && v["creation"]["kind"] == "Single" {
+        work_metadata(&v["creation"])?;
+    }
     for k in [
         "repositoryIds",
         "orderedWorkIds",
@@ -567,6 +590,23 @@ fn eval_record(name: &str, v: &Value) -> Result<(), String> {
         require(
             checks.iter().all(|c| seen.insert(c["id"].to_string())),
             "duplicate eval check identity",
+        )?;
+    }
+    Ok(())
+}
+
+fn work_metadata(v: &Value) -> Result<(), String> {
+    require(
+        !(present(v, "taskType") && v["clearTaskType"] == true),
+        "task type cannot be set and cleared together",
+    )?;
+    if let Some(labels) = v["labels"].as_array() {
+        require(unique(v, "labels"), "duplicate work label")?;
+        require(
+            labels
+                .iter()
+                .all(|s| s.as_str().is_some_and(|s| !s.trim().is_empty())),
+            "empty work label",
         )?;
     }
     Ok(())

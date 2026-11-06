@@ -249,6 +249,14 @@ pub enum Slot {
     JobCommand(String),
     /// Every feature of a project (all pages, read in order).
     WorkFeatures(String),
+    /// The complete authoritative workflow, fenced by load generation.
+    WorkWorkflow(String, u64),
+    WorkWorkflowCommand(String),
+    /// A queue snapshot; a lease requests a claim after the read completes.
+    AllocationQueue(String, Option<String>, Option<u64>),
+    AllocationClaim(String, Option<String>),
+    AllocationInspect(String),
+    AllocationRelease(String),
     /// Every card (feature task or standalone issue) of a project.
     WorkCards(String),
     /// The project change feed (Activity) of a project.
@@ -413,6 +421,13 @@ pub const COMMANDS: &[&str] = &[
     "tasks.prioritize",
     "tasks.dependency_links",
     "tasks.set_feature",
+    "workflows.create_status",
+    "workflows.rename_status",
+    "workflows.order",
+    "workflows.reassign_and_remove",
+    "next_work.claim_project_queue",
+    "next_work.claim_feature_task",
+    "next_work.release_claim",
     "runs.start",
     "runs.pause",
     "runs.continue",

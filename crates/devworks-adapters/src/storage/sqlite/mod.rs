@@ -22,6 +22,7 @@
 //!   the public API exposes rusqlite types, rows, statements or a generic execute-SQL.
 //! * **Async facade.** [`write_async`] wraps the same admission with a Tokio `oneshot`; dropping
 //!   the future stops waiting but never rolls back an admitted job.
+mod allocations;
 mod artifacts;
 mod authority;
 mod browser;
@@ -31,6 +32,7 @@ mod connections;
 mod diagnostics;
 mod evals;
 mod git;
+mod handoff;
 mod indexing;
 mod jobs;
 mod knowledge;
@@ -56,7 +58,7 @@ pub use migrations::{
     MIGRATION_0013_SHA256, MIGRATION_0014_SHA256, MIGRATION_0015_SHA256, MIGRATION_0016_SHA256,
     MIGRATION_0017_SHA256, MIGRATION_0018_SHA256, MIGRATION_0019_SHA256, MIGRATION_0020_SHA256,
     MIGRATION_0021_SHA256, MIGRATION_0022_SHA256, MIGRATION_0023_SHA256, MIGRATION_0024_SHA256,
-    MIGRATION_0025_SHA256, MIGRATIONS, Migration,
+    MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};

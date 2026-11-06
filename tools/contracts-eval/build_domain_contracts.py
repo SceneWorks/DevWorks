@@ -2,6 +2,7 @@
 from pathlib import Path
 import json,re,subprocess
 from domain_spec import TYPES,OPS,LEGACY_RESULTS,FAMILY_RULES
+from versioned_result import generate as gen_versioned
 ROOT=Path(__file__).resolve().parents[2]; OUT=ROOT/'tools/contracts-eval/src/domain_generated.rs'
 def pascal(s): return ''.join(p[:1].upper()+p[1:] for p in re.split('[._-]',s))
 def rust(t):
@@ -39,7 +40,7 @@ def record_attrs(d):
  return ''.join(a+'\n' for a in out)
 def tokens(t):return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*',t))
 # Members introduced in a later operation schema revision ("since") and the types that carry one.
-RC={n for n,d in TYPES.items() if d.get('since') or d.get('variantSince')}
+RC={n for n,d in TYPES.items() if d.get('since') or d.get('variantSince') or d['kind']=='versioned'}
 while True:
  grown=set(RC)
  for n,d in TYPES.items():
@@ -67,6 +68,8 @@ for name,d in TYPES.items():
   if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{',*retain(d['fields'],d.get('since',{}),'self.'),'}}','']
  elif d['kind']=='enum':
   lines += [ATTR+f'pub enum {name} {{',*['    '+pascal(v)+',' if v[0].isupper() else '    #[serde(rename = "'+v+'")] '+pascal(v)+',' for v in d['values']],'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
+ elif d['kind']=='versioned':
+  lines += [gen_versioned(name,d,TYPES),'']
  else:
   lines += [TAG+f'pub enum {name} {{']
   vs=d.get('variantSince',{})
@@ -88,7 +91,7 @@ for mode in ['Query','Command']:
  for n,d in OPS.items():
   if included(d,mode):
    one=d.get('exactlyOne',[]);fs=opfields(d,mode)
-   lines += ['    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
+   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')
@@ -103,14 +106,15 @@ for mode in ['Query','Command']:
   if included(d,mode):
    fs=opfields(d,mode);since=opsince(d,mode);gated={k:t for k,t in fs.items() if k in since or tokens(t)&RC}
    if gated:arms.append(f' Self::{pascal(n)} {{'+','.join(gated)+',..} => {'+''.join(retain(gated,since,'','*'))+'},')
- lines += [f'impl Revisioned for Domain{mode} {{fn retain_revision(&mut self,{"revision" if arms else "_"}:u32){{',*([ 'match self {',*arms,' _ => {}','}'] if arms else []),'}}','']
+ introduced=[(n,d['introducedRevision']) for n,d in OPS.items() if included(d,mode) and d.get('introducedRevision',1)>1]
+ lines += [f'impl Revisioned for Domain{mode} {{fn retain_revision(&mut self,{"revision" if arms else "_"}:u32){{',*([ 'match self {',*arms,' _ => {}','}'] if arms else []),'}', f'fn check_revision(&self,{"revision" if introduced else "_revision"}:u32)->Result<(),String>{{match self{{',*[f'Self::{pascal(n)} {{..}} if revision<{r}=>Err("operation predates its introduction".into()),' for n,r in introduced],'_=>Ok(())}}','}','']
 lines += [ATTR+'#[serde(tag="mode", rename_all_fields="camelCase", deny_unknown_fields)]',
  'pub enum DomainRequest { Query {protocol:Protocol, query_id:QueryId, body:DomainQuery}, Command {protocol:Protocol, request_key:RequestKey, body:DomainCommand} }',
  'impl DomainRequest {pub fn validate(&self)->Result<(),String>{match self{Self::Query{body,..}=>body.check(),Self::Command{body,..}=>body.check()}} pub fn operation(&self)->&\'static str{match self{Self::Query{body,..}=>body.operation(),Self::Command{body,..}=>body.operation()}}}',
- 'impl Revisioned for DomainRequest {fn retain_revision(&mut self,revision:u32){match self{Self::Query{body,..}=>body.retain_revision(revision),Self::Command{body,..}=>body.retain_revision(revision)}}}', '']
+ 'impl Revisioned for DomainRequest {fn retain_revision(&mut self,revision:u32){match self{Self::Query{body,..}=>body.retain_revision(revision),Self::Command{body,..}=>body.retain_revision(revision)}} fn check_revision(&self,revision:u32)->Result<(),String>{match self{Self::Query{body,..}=>body.check_revision(revision),Self::Command{body,..}=>body.check_revision(revision)}}}', '']
 results={n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS
 lines += [TAG+'pub enum OperationResult {']
-for n,t in results.items(): lines += [f'    #[serde(rename="{n}")] {pascal(n)} {{value:{rust(t)}}},']
+for n,t in results.items(): lines += [*([f'    #[schemars(extend("x-since" = {OPS[n]["introducedRevision"]}))]'] if OPS.get(n,{}).get('introducedRevision',1)>1 else []),f'    #[serde(rename="{n}")] {pascal(n)} {{value:{rust(t)}}},']
 lines += ['}', 'impl OperationResult {pub fn operation(&self)->&\'static str{match self{']
 for n in results: lines += [f' Self::{pascal(n)} {{..}}=>"{n}",']
 lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),String>{match self{']
@@ -118,7 +122,7 @@ for n in results:lines += [f' Self::{pascal(n)} {{value}}=>value.check()?,']
 lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value(self).map_err(|e|e.to_string())?) }}', '']
 # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
 projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage'})]
-lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}}','']
+lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned'],'_=>Ok(())}}','}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.
 lines += [TAG+'''pub enum DomainDecision {

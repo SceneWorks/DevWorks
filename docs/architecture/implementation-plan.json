@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "289d6547ecfc378670ea56b8978ffff3ba3fe42e009b65a805f3982b111b3b10",
-    "devworks-capability-catalog.json": "60e23fb3097be23b03eef408b3a7f466ea94452ae47061e02f15363f5ac026b7",
+    "implementation-slices.json": "3bfdf2cb890be627a977d1b73ec9e323799a6c191becce3133e1364bbec432bb",
+    "devworks-capability-catalog.json": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "1539d99cc176272090bca64a6a34ab9543688178af209a351221eba5c9a9456f",
+    "contracts/family-coverage.json": "8f90d40748f6fa5713fa020b01a607543bcecf32f0838f7b8e0d6ac91f565664",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
-    "codegraph-work-map.json": "13310c40c64d9bf533bc43319adae03655b11cf862d18b12387fae405e56a38f"
+    "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
-    "slices": 77,
+    "slices": 78,
     "operationFamilies": 49,
-    "operations": 356,
+    "operations": 357,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 356,
+    "inputSchemaCandidates": 357,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -53,6 +53,7 @@
     "DW-010",
     "DW-011",
     "DW-012",
+    "DW-109",
     "DW-013",
     "DW-014",
     "DW-015",
@@ -1133,18 +1134,20 @@
       ],
       "dependsOnKeys": [
         "work",
-        "controls"
+        "controls",
+        "work_item_metadata"
       ],
       "acceptance": "Priority features/issues share a project queue; automatic feature claims require current implementation approval. Child-task claims stay within their feature. Status removal reassigns occupied records atomically; inspect/release claims obey ownership fences. Filter unsatisfied dependencies before priority and manual rank; use atomic queue revisions for edits/claims. Prove concurrent dependency edits cannot form a project-wide cycle and high-priority blocked tasks cannot bypass prerequisites. No automatic preemption on priority changes. Keep-working yields a fully dependency-blocked root only after quiescence, allowing prerequisite roots to run while preserving one active root, coordinator lineage and explicit holds; valid task-level interleaving across features must not deadlock. Membership changes update root/feature queue eligibility atomically and fence stale claims; an owned task never gains a second execution. Relinking cannot clear an unlink pause.",
       "gates": [
         "G01",
         "G11"
       ],
-      "status": "Planned; implementation not authorized or started",
+      "status": "Native implementation in progress; acceptance tracked by DW-13",
       "readinessAcceptance": "Automatic allocation skips incomplete/unapproved plans and wholly blocked roots without eligible independent work. An otherwise eligible approved feature with missing/stale assessment can activate its coordinator to assess readiness, but cannot dispatch implementation until cleared. Locally blocked roots may allocate assessed independent tasks. Activation/dispatch rechecks changed readiness and finding revisions; keep-working and schedules preserve the shared gate and independent holds.",
       "dependsOn": [
         "DW-012",
-        "DW-009"
+        "DW-009",
+        "DW-109"
       ],
       "ownedOperations": [
         "workflows.list",
@@ -1155,7 +1158,8 @@
         "next_work.claim_project_queue",
         "next_work.claim_feature_task",
         "next_work.inspect_claim",
-        "next_work.release_claim"
+        "next_work.release_claim",
+        "next_work.inspect_queue"
       ],
       "primaryRequirements": [],
       "supportingRequirements": [
@@ -4672,7 +4676,8 @@
         "mcp_server",
         "mcp_server_access",
         "session_auto_routing",
-        "model_latest"
+        "model_latest",
+        "work_item_metadata"
       ],
       "acceptance": "A1: Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance. A2: Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status. A3: Integrated Auto/latest acceptance reuses the latest-model story, DW-22 and DW-107 evidence: all eight aliases and explicit/custom choices work across native/host/job entry points; hourly complete inventories promote/fall back and remove/restore availability across providers including SystemOne without deleting configuration or reacting to failed/partial lists. New/replacement tier and pinless Low-classifier allocations use latest/custom pools with independent durable cursors; eligible concrete pins, the chosen Auto tier and known receipt resolutions survive alias promotion and restart. No extra inference/benchmark campaign is implied, and normal CI executes no inference.",
       "gates": [
@@ -4744,7 +4749,8 @@
         "DW-063",
         "DW-064",
         "DW-107",
-        "DW-108"
+        "DW-108",
+        "DW-109"
       ],
       "ownedOperations": [],
       "primaryRequirements": [
@@ -5451,6 +5457,55 @@
         "ROUTE-27"
       ],
       "supportingRequirements": [],
+      "capabilityCases": [],
+      "sourceEntryIds": [],
+      "workloads": [],
+      "pendingInputSchemas": [],
+      "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
+      "key": "work_item_metadata",
+      "id": "DW-109",
+      "type": "Bug",
+      "title": "Restore task type and labels for retained work allocation filters",
+      "operations": [],
+      "dependsOnKeys": [
+        "work"
+      ],
+      "acceptance": "Humans and agents can set/edit story/task/bug type and bounded unique labels through shared revision-checked work operations; values persist across restart and membership changes without altering native work kind or prior history. Retained next_work repository/type/label filters select only matching eligible work and report nonmatches honestly, including legacy records without type; native success/fault/roundtrip evidence and legacy schema projections pass.",
+      "gates": [
+        "G01",
+        "G11"
+      ],
+      "status": "Tracked supporting restoration; native acceptance belongs to DW-109",
+      "codegraphItem": "DW-109",
+      "codegraphFeature": "DW-F5",
+      "codegraphStateAtSync": "in_progress",
+      "integratesOperations": [
+        "features.create",
+        "features.edit",
+        "projects.create",
+        "tasks.create",
+        "tasks.edit",
+        "issues.create",
+        "issues.edit",
+        "tasks.sync_plan",
+        "next_work.claim_project_queue",
+        "next_work.claim_feature_task"
+      ],
+      "dependsOn": [
+        "DW-012"
+      ],
+      "ownedOperations": [],
+      "primaryRequirements": [],
+      "supportingRequirements": [
+        "WORK-02",
+        "WORK-03",
+        "WORK-04",
+        "WORK-10",
+        "WORK-11",
+        "WORK-12"
+      ],
       "capabilityCases": [],
       "sourceEntryIds": [],
       "workloads": [],
@@ -7590,7 +7645,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -7609,7 +7665,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -7628,7 +7685,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -7742,7 +7800,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -7761,7 +7820,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -7780,7 +7840,8 @@
       "supportingSlices": [
         "workflow",
         "controls",
-        "delegation"
+        "delegation",
+        "work_item_metadata"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
     },
@@ -12948,7 +13009,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationSelection",
       "requestModes": [
         "Command"
       ],
@@ -12962,7 +13023,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationSelection",
       "requestModes": [
         "Command"
       ],
@@ -12976,7 +13037,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Query"
       ],
@@ -12990,9 +13051,23 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ClaimRecord",
+      "resultValueType": "AllocationClaimRecord",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "next_work.inspect_queue",
+      "family": "next_work",
+      "serviceOwner": "WorkService",
+      "primarySlice": "workflow",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "AllocationQueueSnapshot",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },

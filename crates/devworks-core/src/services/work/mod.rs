@@ -71,7 +71,9 @@
 //! CodeGraph's preview token is replaced by the expected plan and task-set revisions.
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
-use crate::operations::{OperationInput, features as fops, issues as iops, tasks as tops};
+use crate::operations::{
+    OperationInput, features as fops, issues as iops, tasks as tops, workflows as wops,
+};
 use crate::ports::storage::{
     ACTIVE, ARCHIVED, DELETED, FEATURE, NewEvent, ProjectRead, ReadSnapshot, StorageError,
     StoredProject, StoredStatus, StoredWork, WorkRead, WriteTransaction,
@@ -91,18 +93,26 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub mod allocation;
 pub mod deps;
 pub mod items;
+pub mod membership;
 pub mod model;
 pub mod plans;
 pub mod queue;
 pub mod readiness;
 pub mod workflow;
+pub mod workflow_ops;
 
 pub use model::{fold, link_id, plan_digest, plan_units, search_key};
 
 /// The operations [`WorkService`] is registered for.
-pub const OPERATIONS: [&str; 24] = [
+pub const OPERATIONS: [&str; 34] = [
+    "next_work.claim_project_queue",
+    "next_work.claim_feature_task",
+    "next_work.inspect_claim",
+    "next_work.inspect_queue",
+    "next_work.release_claim",
     "features.list",
     "features.get",
     "features.create",
@@ -127,6 +137,11 @@ pub const OPERATIONS: [&str; 24] = [
     "tasks.acceptance_evidence",
     "tasks.sync_plan",
     "tasks.set_feature",
+    "workflows.list",
+    "workflows.create_status",
+    "workflows.rename_status",
+    "workflows.order",
+    "workflows.reassign_and_remove",
 ];
 /// History aggregate of a work item (`aggregate_id` = work ID).
 pub const WORK_AGGREGATE: &str = "work";
@@ -343,6 +358,7 @@ pub struct WorkService {
     ids: Arc<dyn IdSource>,
     runs: Arc<ControlService>,
     staged: Option<Arc<dyn plans::StagedPlans>>,
+    clock: Option<Arc<dyn crate::ports::Clock>>,
 }
 
 impl WorkService {
@@ -352,11 +368,17 @@ impl WorkService {
             ids,
             runs,
             staged: None,
+            clock: None,
         }
     }
     /// Reads staged atomic plans (artifact content) through `staged`.
     pub fn with_staged_plans(mut self, staged: Arc<dyn plans::StagedPlans>) -> Self {
         self.staged = Some(staged);
+        self
+    }
+    /// Supplies the host clock for current lease inspection; no wire argument can supply time.
+    pub fn with_clock(mut self, clock: Arc<dyn crate::ports::Clock>) -> Self {
+        self.clock = Some(clock);
         self
     }
     pub(crate) fn correlation(&self) -> CorrelationId {
@@ -377,6 +399,15 @@ impl QueryHandler for WorkService {
         use crate::protocol::results::OperationResult as O;
         use items::Family;
         let answered = match query.input() {
+            OperationInput::Workflows(wops::Input::List(i)) => self
+                .list_workflow(snapshot, ctx, i)
+                .map(|(v, s)| (O::WorkflowsList { value: v }, s)),
+            OperationInput::NextWork(crate::operations::next_work::Input::InspectClaim(i)) => {
+                self.inspect_claim(snapshot, ctx, i)
+            }
+            OperationInput::NextWork(crate::operations::next_work::Input::InspectQueue(i)) => {
+                self.inspect_queue(snapshot, ctx, i)
+            }
             OperationInput::Features(fops::Input::List(i)) => self
                 .list(snapshot, ctx, Family::Features, &items::list_args(i))
                 .map(|(v, s)| (O::FeaturesList { value: v }, s)),
@@ -419,8 +450,41 @@ impl CommandHandler for WorkService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let outcome = match command.input() {
+            OperationInput::Workflows(i) => match i {
+                wops::Input::CreateStatus(i) => self.create_status(tx, ctx, i),
+                wops::Input::RenameStatus(i) => self.rename_status(tx, ctx, i),
+                wops::Input::Order(i) => self.order_statuses(tx, ctx, i),
+                wops::Input::ReassignAndRemove(i) => self.reassign_and_remove_status(tx, ctx, i),
+                _ => Err(refuse(
+                    DomainErrorCode::UnsupportedCapability,
+                    "operation",
+                    None,
+                )),
+            },
+            OperationInput::NextWork(i) => match i {
+                crate::operations::next_work::Input::ClaimProjectQueue(i) => self.allocate_project(
+                    tx,
+                    ctx,
+                    i,
+                    command.identity(),
+                    command.schema_revision().0,
+                ),
+                crate::operations::next_work::Input::ClaimFeatureTask(i) => {
+                    self.allocate_task(tx, ctx, i, command.identity(), command.schema_revision().0)
+                }
+                crate::operations::next_work::Input::ReleaseClaim(i) => {
+                    self.release_allocation(tx, ctx, i)
+                }
+                _ => Err(refuse(
+                    DomainErrorCode::UnsupportedCapability,
+                    "operation",
+                    None,
+                )),
+            },
             OperationInput::Features(i) => match i {
-                fops::Input::Create(i) => self.create_features(tx, ctx, i),
+                fops::Input::Create(i) => {
+                    self.create_features(tx, ctx, i, command.schema_revision().0)
+                }
                 fops::Input::EditPlan(i) => self.edit_plan(tx, ctx, i),
                 fops::Input::Prioritize(i) => self.prioritize_features(tx, ctx, i),
                 fops::Input::Dependencies(i) => self.feature_dependencies(tx, ctx, i),
@@ -450,7 +514,7 @@ impl CommandHandler for WorkService {
                 tops::Input::Assign(i) => self.assign(tx, ctx, i),
                 tops::Input::DependencyLinks(i) => self.task_dependencies(tx, ctx, i),
                 tops::Input::AcceptanceEvidence(i) => self.acceptance_evidence(tx, ctx, i),
-                tops::Input::SyncPlan(i) => self.sync_plan(tx, ctx, i),
+                tops::Input::SyncPlan(i) => self.sync_plan(tx, ctx, i, command.schema_revision().0),
                 tops::Input::SetFeature(i) => self.set_feature(tx, ctx, i),
                 _ => Err(refuse(
                     DomainErrorCode::UnsupportedCapability,
