@@ -91,6 +91,7 @@ pub(super) fn endpoint(
     Ok(if ambiguous { None } else { found })
 }
 
+#[derive(Clone)]
 pub(super) struct Edge {
     pub raw: GraphEdge,
     pub source: GraphNodeIdentity,
