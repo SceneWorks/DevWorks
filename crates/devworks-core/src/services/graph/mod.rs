@@ -1,4 +1,5 @@
 //! Exact composed graph reads, private source capture, and retention leases.
+mod analysis;
 mod budget;
 mod cursor;
 mod dataset;
