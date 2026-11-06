@@ -223,7 +223,7 @@ pub struct StoredDecisionModel {
     pub updated_at_ms: i64,
 }
 
-pub trait RouterRead {
+pub trait RouterRead: super::EmbeddingRead {
     fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError>;
     fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError>;
     /// Last native account identity generation, retained even after a connection is removed.
@@ -262,7 +262,7 @@ pub trait RouterRead {
     fn route_request(&self, id: &Id) -> Result<Option<StoredRouteRequest>, StorageError>;
 }
 
-pub trait RouterRepository: RouterRead {
+pub trait RouterRepository: RouterRead + super::EmbeddingRepository {
     /// Inserts `model` at revision 1 (`expected_revision` `None`; an existing ID is
     /// [`StorageError::Duplicate`]) or replaces it at `expected_revision`, storing
     /// `expected_revision + 1`. A stale revision is [`StorageError::RevisionConflict`].

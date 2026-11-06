@@ -1711,6 +1711,75 @@ impl JobRepository for Unsupported {
         nope()
     }
 }
+impl EmbeddingRead for Unsupported {
+    fn embedding_candidate(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredEmbeddingCandidate>, StorageError> {
+        nope()
+    }
+    fn embedding_candidates(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredEmbeddingCandidate>, StorageError> {
+        nope()
+    }
+    fn embedding_qualification(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredEmbeddingQualification>, StorageError> {
+        nope()
+    }
+    fn embedding_selection(&self) -> Result<StoredEmbeddingSelection, StorageError> {
+        nope()
+    }
+}
+impl EmbeddingRepository for Unsupported {
+    fn insert_embedding_candidate(
+        &mut self,
+        _: &StoredEmbeddingCandidate,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn start_embedding_qualification(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &StoredEmbeddingProbe,
+    ) -> Result<StoredEmbeddingQualification, StorageError> {
+        nope()
+    }
+    fn stage_embedding_probe_evidence(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &OperationId,
+        _: &AttemptFence,
+        _: &StoredEmbeddingEvidence,
+    ) -> Result<StoredEmbeddingQualification, StorageError> {
+        nope()
+    }
+    fn finish_embedding_qualification(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &OperationId,
+        _: &AttemptFence,
+        _: EmbeddingQualificationState,
+        _: Option<&str>,
+    ) -> Result<StoredEmbeddingQualification, StorageError> {
+        nope()
+    }
+    fn select_embedding_candidate(
+        &mut self,
+        _: i64,
+        _: Option<(&Id, i64)>,
+    ) -> Result<StoredEmbeddingSelection, StorageError> {
+        nope()
+    }
+}
 impl RouterRead for Unsupported {
     fn route_requests(
         &self,
