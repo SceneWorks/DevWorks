@@ -969,7 +969,14 @@ fn native_task_lifecycle(with_pr: bool) {
     let rebased = git(tree_path, &["rev-parse", "HEAD"]);
     assert_ne!(rebased, new_head);
     let force = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"agent-rebased-force","command":{"kind":"Push","worktreeId":current.id,"remoteId":"origin","targetRef":current.branch,"expectedHead":{"format":"Sha1","hex":rebased},"expectedRemote":{"format":"Sha1","hex":new_head},"mode":"ForceWithLease"}});
-    let operation = approvals::approve_owned_force(&h, store.clone(), service.clone(), &gateway, &agent, &force);
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &force,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
