@@ -248,10 +248,19 @@ impl Decoder {
         }
         self.native(None, "message", v, raw, true, out);
         if let Some(content) = v.get("content").and_then(Value::as_array) {
-            for (i, block) in content.iter().enumerate() {
-                let ordinal = i.to_string();
-                let block_raw = usage::raw_at(raw, &["content", &ordinal]).unwrap_or(raw);
-                self.message_block(i as u64, block, true, block_raw, out);
+            let Some(raw_blocks) = usage::raw_array_at(raw, &["content"])
+                .filter(|blocks| blocks.len() == content.len())
+            else {
+                self.error(
+                    DecodeErrorKind::InvalidContent,
+                    "invalid_message_content",
+                    out,
+                );
+                self.ended = true;
+                return;
+            };
+            for (i, (block, block_raw)) in content.iter().zip(raw_blocks).enumerate() {
+                self.message_block(i as u64, block, true, block_raw.get(), out);
             }
         } else {
             self.error(

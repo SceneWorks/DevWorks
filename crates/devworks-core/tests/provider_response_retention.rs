@@ -2,7 +2,10 @@
 use devworks_core::protocol::provider::EndpointProfile;
 use devworks_core::providers::decode::{DecodedFrame, DecodedOutcome, Decoder};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+static MEASUREMENT: Mutex<()> = Mutex::new(());
 
 struct Allocator;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
@@ -107,6 +110,7 @@ fn decode(profile: EndpointProfile, raw: &str, streaming: bool) -> Vec<DecodedFr
 }
 #[test]
 fn aggregate_and_stream_terminal_many_item_retention_and_allocations_are_linear() {
+    let _measurement = MEASUREMENT.lock().unwrap();
     for profile in [
         EndpointProfile::OpenAiResponses,
         EndpointProfile::CodexSubscriptionResponses,
@@ -197,6 +201,61 @@ fn aggregate_and_stream_terminal_many_item_retention_and_allocations_are_linear(
                 } else {
                     small = Some((wire.len(), allocated));
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn messages_many_blocks_parse_work_and_exact_evidence_are_linear() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    let block = r#"{ "type":"text", "text":"native text", "opaque":{"amount":1.2300e+004,"integer":9007199254740993,"escaped":"\u0061"} }"#;
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        let mut small = None;
+        for count in [64, 2_000] {
+            let wire = format!(
+                r#"{{"id":"native-message","type":"message","role":"assistant","content":[{}],"stop_reason":"end_turn"}}"#,
+                vec![block; count].join(",")
+            );
+            let (frames, allocated, peak) = measured(|| decode(profile.clone(), &wire, false));
+            assert!(matches!(
+                frames.last(),
+                Some(DecodedFrame::Terminal {
+                    outcome: DecodedOutcome::Completed,
+                    ..
+                })
+            ));
+            let blocks: Vec<_> = native(&frames).filter(|item| item.kind == "text").collect();
+            assert_eq!(blocks.len(), count);
+            for (i, observation) in blocks.iter().enumerate() {
+                assert_eq!(observation.ordinal, Some(i as u64));
+                assert_eq!(observation.raw_json, block);
+            }
+            assert_eq!(
+                native(&frames).filter(|item| item.raw_json == wire).count(),
+                1
+            );
+            assert_eq!(frames.iter().filter(|f| matches!(f, DecodedFrame::TextDelta { text, .. } if text == "native text")).count(), count);
+            eprintln!(
+                "Messages count={count} wireBytes={} allocated={allocated} peakLive={peak}",
+                wire.len()
+            );
+            assert!(
+                allocated < wire.len() * 128,
+                "repeated enclosing-array parse: {allocated} allocated for {} bytes",
+                wire.len()
+            );
+            if let Some((small_bytes, small_allocated)) = small {
+                assert!(
+                    (allocated as u128) * (small_bytes as u128)
+                        < 2 * (small_allocated as u128) * (wire.len() as u128),
+                    "parse allocations grow faster than input"
+                );
+            } else {
+                small = Some((wire.len(), allocated));
             }
         }
     }

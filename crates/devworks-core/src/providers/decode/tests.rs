@@ -548,6 +548,24 @@ fn messages_arguments_keep_exact_native_numeric_lexemes_and_empty_fragments_are_
 }
 
 #[test]
+fn messages_escaped_structural_keys_preserve_exact_block_and_argument_bytes() {
+    let arguments = r#"{ "n":9007199254740993, "small":1.2300e+004, "escaped":"\u0061" }"#;
+    let block =
+        format!(r#"{{"type":"tool_use","id":"native","name":"lookup","in\u0070ut":{arguments}}}"#);
+    let wire = format!(r#"{{"co\u006etent":[{block}],"stop_reason":"tool_use"}}"#);
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        let frames = Decoder::new(profile).consume_aggregate(wire.as_bytes());
+        assert_eq!(outcome(&frames), &DecodedOutcome::ToolCallsReady);
+        assert_eq!(calls(&frames)[0].arguments_raw, arguments);
+        assert!(frames.iter().any(|f| matches!(f, DecodedFrame::Native { observation } if observation.kind == "tool_use" && observation.raw_json == block)));
+        assert_eq!(frames.iter().filter(|f| matches!(f, DecodedFrame::Native { observation } if observation.raw_json == wire)).count(), 1);
+    }
+}
+
+#[test]
 fn contradictory_native_stop_reasons_are_not_reclassified_as_tool_ready() {
     for reason in ["end_turn", "max_tokens"] {
         let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(&serde_json::to_vec(&json!({"content":[{"type":"tool_use","id":"native","name":"lookup","input":{}}],"stop_reason":reason})).unwrap());
