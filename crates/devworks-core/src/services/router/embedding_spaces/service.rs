@@ -144,6 +144,7 @@ impl EmbeddingSpaceService {
                 space,
                 context,
                 operation_fence,
+                operation_state: operation.state,
             })))
         })
     }
