@@ -1723,6 +1723,9 @@ impl RouterRead for Unsupported {
     fn route_request(&self, _: &Id) -> Result<Option<StoredRouteRequest>, StorageError> {
         nope()
     }
+    fn connection_account_revision(&self, _: &Id) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     fn connection(&self, _: &Id) -> Result<Option<StoredConnection>, StorageError> {
         nope()
     }
