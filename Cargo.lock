@@ -979,6 +979,7 @@ dependencies = [
 name = "devworks-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "jiff",
  "num-rational",
  "schemars",

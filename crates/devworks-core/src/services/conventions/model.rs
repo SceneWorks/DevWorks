@@ -122,3 +122,7 @@ pub fn resource(
     result.check().map_err(StorageError::InvalidRecord)?;
     Ok(result)
 }
+
+#[path = "manifest_writer.rs"]
+mod manifest_writer;
+pub use manifest_writer::{EditorConvention, EditorResource, EditorText, write_editor_manifest};
