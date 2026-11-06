@@ -65,3 +65,99 @@ impl Shell {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::protocol::{
+        AttemptId, Id, Revision,
+        provider::{TranscriptBody, TranscriptEntry},
+    };
+    use devworks_engine::providers::live::LiveTurn;
+    fn id(s: &str) -> Id {
+        s.to_owned().try_into().unwrap()
+    }
+    fn turn(revision: u64, finalized_through: Option<i64>) -> LiveTurn {
+        LiveTurn {
+            session_id: id("current"),
+            attempt_id: AttemptId(id("attempt")),
+            context_epoch: 0,
+            revision,
+            text: format!("response {revision}"),
+            finalized_through,
+        }
+    }
+    #[test]
+    fn live_text_reply_cannot_replace_a_newer_selection_or_clear_it_from_an_old_generation() {
+        let mut shell = Shell::new(ShellInit {
+            backend: Err("offline".into()),
+            dialogs: Box::new(NativeDialogs),
+            memory_path: None,
+            control: None,
+            version: "test".into(),
+        });
+        shell.preview_target = Some("current".into());
+        shell.chat.selected = Some("current".into());
+        shell.preview_generation = 3;
+        shell.apply_live_text(
+            "current",
+            3,
+            Ok(TaskOutput::TextPreview(Some(turn(2, None)))),
+        );
+        shell.apply_live_text(
+            "current",
+            2,
+            Ok(TaskOutput::TextPreview(Some(turn(3, None)))),
+        );
+        shell.apply_live_text("other", 3, Ok(TaskOutput::TextPreview(None)));
+        shell.apply_live_text("current", 2, Err("old authorization refusal".into()));
+        assert_eq!(shell.chat.text_preview.as_ref().unwrap().revision, 2);
+        shell.apply_live_text(
+            "current",
+            3,
+            Ok(TaskOutput::TextPreview(Some(turn(1, None)))),
+        );
+        assert_eq!(shell.chat.text_preview.as_ref().unwrap().revision, 2);
+        shell.chat.selected = Some("other".into());
+        shell.apply_live_text(
+            "current",
+            3,
+            Ok(TaskOutput::TextPreview(Some(turn(4, None)))),
+        );
+        shell.chat.reconcile_text_preview();
+        assert!(shell.chat.text_preview.is_none());
+    }
+    #[test]
+    fn final_preview_survives_registry_eviction_until_the_canonical_sequence_arrives() {
+        let mut chat = Chat::new();
+        chat.selected = Some("current".into());
+        chat.apply_text_preview(Some(turn(1, None)));
+        chat.apply_text_preview(None);
+        assert!(
+            chat.text_preview.is_none(),
+            "dropped unfinished output is cleared"
+        );
+        chat.apply_text_preview(Some(turn(2, Some(5))));
+        chat.apply_text_preview(None);
+        assert!(
+            chat.text_preview.is_some(),
+            "final canonical handover cannot blank the response"
+        );
+        chat.transcripts
+            .entry("current".into())
+            .or_default()
+            .entries
+            .push(TranscriptEntry {
+                entry_id: id("entry"),
+                sequence: Revision::new(5).unwrap(),
+                body: TranscriptBody::AssistantAttempt {
+                    request_id: id("request"),
+                    attempt_id: AttemptId(id("attempt")),
+                    visible_text: "response 2".into(),
+                    interrupted: false,
+                },
+            });
+        chat.reconcile_text_preview();
+        assert!(chat.text_preview.is_none());
+    }
+}
