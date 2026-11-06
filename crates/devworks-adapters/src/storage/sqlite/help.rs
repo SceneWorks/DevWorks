@@ -204,32 +204,70 @@ fn staged_topics(
         ],
     )
 }
-macro_rules! help_reads { ($ty:ty) => { impl HelpRead for $ty {
-    fn help_head(&self)->Result<StoredHelpHead,StorageError>{head(self.conn)}
-    fn help_drafts(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredHelpDraft>,StorageError>{
-        page(limit)?; let mut stmt=db(self.conn.prepare_cached("SELECT id,operation_id FROM help_generations WHERE state='Draft' AND id>?1 ORDER BY id LIMIT ?2"))?;
-        let rows=db(db(stmt.query_map(params![after.map_or("",Id::as_str),i64::from(limit)],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))))?.collect::<rusqlite::Result<Vec<_>>>())?;
-        rows.into_iter().map(|(g,o)|Ok(StoredHelpDraft{generation_id:id(g)?,operation_id:OperationId(id(o)?)})).collect()
-    }
-    fn help_topic(&self,generation:&Id,id:&Id)->Result<Option<StoredHelpTopic>,StorageError>{Ok(topics(self.conn,"g.state='Published' AND t.generation_id=?1 AND t.id=?2",params![generation.as_str(),id.as_str()])?.into_iter().next())}
-    fn help_topics(&self,generation:&Id,filter:&HelpFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredHelpTopic>,StorageError>{
-        page(limit)?;
-        if filter.query.as_ref().is_some_and(|q| !text(q,1,4096) || *q!=q.to_lowercase()) || filter.screen_id.as_ref().is_some_and(|s|!text(s,1,256)){return Err(invalid("invalid Help filter"));}
-        topics(self.conn,"g.state='Published' AND t.generation_id=?1 AND t.id>?2 AND (?3 IS NULL OR instr(t.search_text,?3)>0) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM help_topic_screens s WHERE s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)) AND (?5 IS NULL OR t.package_id=?5) ORDER BY t.id LIMIT ?6",params![generation.as_str(),after.map_or("",Id::as_str),filter.query,filter.screen_id,filter.package_id.as_ref().map(Id::as_str),i64::from(limit)])
-    }
-    fn help_passage(&self,generation:&Id,id:&Id,offset:i64,chars:u32)->Result<Option<String>,StorageError>{
-        if offset<0 || chars==0 || chars>MAX_HELP_PASSAGE_CHARS {return Err(invalid("Help passage bounds invalid"));}
-        let start=offset.checked_add(1).ok_or_else(||invalid("Help passage offset overflow"))?;
-        db(self.conn.query_row("SELECT substr(t.body,?3,?4) FROM help_topics t JOIN help_generations g ON g.id=t.generation_id WHERE g.state='Published' AND t.generation_id=?1 AND t.id=?2 AND t.availability='Available'",params![generation.as_str(),id.as_str(),start,i64::from(chars)],|r|r.get(0)).optional())
-    }
-} }; }
+macro_rules! help_reads {
+    ($ty:ty) => {
+        impl HelpRead for $ty {
+            fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
+                head(self.conn)
+            }
+            fn help_drafts(&self, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
+                page(limit)?;
+                let mut stmt = db(self.conn.prepare_cached(
+                    "SELECT id,operation_id FROM help_generations WHERE state='Draft' AND id>?1 ORDER BY id LIMIT ?2"
+                ))?;
+                let rows = db(db(stmt.query_map(
+                    params![after.map_or("", Id::as_str), i64::from(limit)],
+                    |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))
+                ))?.collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(|(g,o)| Ok(StoredHelpDraft {
+                    generation_id: id(g)?, operation_id: OperationId(id(o)?)
+                })).collect()
+            }
+            fn help_topic(&self, generation: &Id, id: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+                Ok(topics(self.conn, "g.state='Published' AND t.generation_id=?1 AND t.id=?2",
+                    params![generation.as_str(), id.as_str()])?.into_iter().next())
+            }
+            fn help_topics(&self, generation: &Id, filter: &HelpFilter, after: Option<&Id>, limit: u16) -> Result<Vec<StoredHelpTopic>, StorageError> {
+                page(limit)?;
+                if filter.query.as_ref().is_some_and(|q| !text(q,1,4096) || *q != q.to_lowercase())
+                    || filter.screen_id.as_ref().is_some_and(|s| !text(s,1,256))
+                {
+                    return Err(invalid("invalid Help filter"));
+                }
+                let mut tail = String::from("g.state='Published' AND t.generation_id=?1 AND t.id>?2");
+                if filter.query.is_some() { tail.push_str(" AND instr(t.search_text,?3)>0"); }
+                if filter.screen_id.is_some() { tail.push_str(" AND EXISTS(SELECT 1 FROM help_topic_screens s WHERE s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)"); }
+                if filter.package_id.is_some() { tail.push_str(" AND t.package_id=?5"); }
+                tail.push_str(" ORDER BY t.id LIMIT ?6");
+                topics(self.conn, &tail, params![generation.as_str(), after.map_or("",Id::as_str), filter.query, filter.screen_id, filter.package_id.as_ref().map(Id::as_str), i64::from(limit)])
+            }
+            fn help_passage(&self, generation: &Id, id: &Id, offset: i64, chars: u32) -> Result<Option<String>, StorageError> {
+                if offset < 0 || chars == 0 || chars > MAX_HELP_PASSAGE_CHARS {
+                    return Err(invalid("Help passage bounds invalid"));
+                }
+                let start = offset.checked_add(1).ok_or_else(|| invalid("Help passage offset overflow"))?;
+                db(self.conn.query_row(
+                    "SELECT substr(t.body,?3,?4) FROM help_topics t JOIN help_generations g ON g.id=t.generation_id WHERE g.state='Published' AND t.generation_id=?1 AND t.id=?2 AND t.availability='Available'",
+                    params![generation.as_str(), id.as_str(), start, i64::from(chars)], |r| r.get(0)
+                ).optional())
+            }
+        }
+    };
+}
 help_reads!(Snapshot<'_>);
 help_reads!(Unit<'_>);
 
+struct DocumentRecords {
+    reference: Option<ArtifactRef>,
+    content: Option<String>,
+    provenance: String,
+    operations: String,
+    screens: String,
+}
 fn validate_document(
     conn: &Connection,
     document: &StoredHelpDocument,
-) -> Result<(Option<ArtifactRef>, String, String, String, String), StorageError> {
+) -> Result<DocumentRecords, StorageError> {
     let t = &document.topic;
     if !text(&t.version, 1, 256)
         || !text(&t.title, 1, 256)
@@ -310,15 +348,20 @@ fn validate_document(
         }
         None
     };
-    Ok((
+    Ok(DocumentRecords {
         reference,
-        serde_json::to_string(&t.content_ref)
+        content: t
+            .content_ref
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
             .map_err(|_| invalid("invalid Help reference JSON"))?,
-        t.provenance.to_string(),
-        serde_json::to_string(&t.related_operations)
+        provenance: t.provenance.to_string(),
+        operations: serde_json::to_string(&t.related_operations)
             .map_err(|_| invalid("invalid Help operation list"))?,
-        serde_json::to_string(&t.screen_ids).map_err(|_| invalid("invalid Help screen list"))?,
-    ))
+        screens: serde_json::to_string(&t.screen_ids)
+            .map_err(|_| invalid("invalid Help screen list"))?,
+    })
 }
 fn generation(conn: &Connection, id: &Id) -> Result<Option<(String, String)>, StorageError> {
     db(conn
@@ -329,8 +372,10 @@ fn generation(conn: &Connection, id: &Id) -> Result<Option<(String, String)>, St
         )
         .optional())
 }
+// Staging handles and output revisions are not source identity. Each digest was checked
+// against actual guide bytes before staging; a no-op preserves the published references.
 fn equal_topics(conn: &Connection, a: &Id, b: &Id) -> Result<bool, StorageError> {
-    let fields = "id,version,title,content_digest,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision";
+    let fields = "id,version,title,content_digest,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count";
     db(conn.query_row(&format!("SELECT NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?1 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?2) AND NOT EXISTS(SELECT {fields} FROM help_topics WHERE generation_id=?2 EXCEPT SELECT {fields} FROM help_topics WHERE generation_id=?1)"),params![a.as_str(),b.as_str()],|r|r.get(0)))
 }
 impl HelpRepository for Unit<'_> {
@@ -377,20 +422,25 @@ impl HelpRepository for Unit<'_> {
         &mut self,
         document: &StoredHelpDocument,
     ) -> Result<StoredHelpTopic, StorageError> {
-        let (reference, content, provenance, operations, screens) =
-            validate_document(self.conn, document)?;
+        let DocumentRecords {
+            reference,
+            content,
+            provenance,
+            operations,
+            screens,
+        } = validate_document(self.conn, document)?;
         let t = &document.topic;
         let current = head(self.conn)?;
         let op = current
             .generation_operation_id
             .ok_or_else(|| invalid("Help staging requires a generation operation claim"))?;
         operation(self.conn, &op)?;
-        if let Some((state, owner)) = generation(self.conn, &t.generation_id)? {
-            if state != "Draft" || owner != op.0.as_str() {
-                return Err(invalid(
-                    "Help generation is published or belongs to another operation",
-                ));
-            }
+        if let Some((state, owner)) = generation(self.conn, &t.generation_id)?
+            && (state != "Draft" || owner != op.0.as_str())
+        {
+            return Err(invalid(
+                "Help generation is published or belongs to another operation",
+            ));
         }
         if let Some(old) = self.staged_help_topic(&t.generation_id, &t.id)? {
             let identical:bool=db(self.conn.query_row("SELECT body=?3 AND search_text=?4 FROM help_topics WHERE generation_id=?1 AND id=?2",params![t.generation_id.as_str(),t.id.as_str(),document.body,document.search_text],|r|r.get(0)))?;
@@ -404,7 +454,7 @@ impl HelpRepository for Unit<'_> {
             };
         }
         db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![t.generation_id.as_str(),op.0.as_str()]))?;
-        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,body,search_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,t.content_ref.as_ref().map(|_|content.as_str()),reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.body,document.search_text]))?;
+        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,body,search_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,content,reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.body,document.search_text]))?;
         for screen in &t.screen_ids {
             db(self.conn.execute(
                 "INSERT INTO help_topic_screens(generation_id,topic_id,screen_id) VALUES(?1,?2,?3)",
@@ -434,7 +484,8 @@ impl HelpRepository for Unit<'_> {
         }
         let op = expected_operation.expect("checked");
         operation(self.conn, op)?;
-        if !text(&new.app_version, 1, 256)
+        if new.revision < 1
+            || !text(&new.app_version, 1, 256)
             || !digest(&new.source_digest)
             || new.registry_revision != expected_registry_revision
             || new.updated_at_ms < 0
@@ -446,10 +497,11 @@ impl HelpRepository for Unit<'_> {
             .generation_id
             .as_ref()
             .ok_or_else(|| invalid("Help publication requires a generation"))?;
-        if let Some((_, owner)) = generation(self.conn, gen_id)? {
-            if owner != op.0.as_str() && current.generation_id.as_ref() != Some(gen_id) {
-                return Err(invalid("Help draft belongs to another operation"));
-            }
+        if let Some((_, owner)) = generation(self.conn, gen_id)?
+            && owner != op.0.as_str()
+            && current.generation_id.as_ref() != Some(gen_id)
+        {
+            return Err(invalid("Help draft belongs to another operation"));
         }
         let count: i64 = db(self.conn.query_row(
             "SELECT count(*) FROM help_topics WHERE generation_id=?1",
@@ -459,16 +511,12 @@ impl HelpRepository for Unit<'_> {
         if count != expected_topic_count {
             return Err(invalid("Help generation is incomplete"));
         }
-        if current.generation_id.is_some()
+        if let Some(published) = current.generation_id.as_ref()
             && current.app_version == new.app_version
             && current.registry_revision == new.registry_revision
             && current.source_digest == new.source_digest
         {
-            if !equal_topics(
-                self.conn,
-                current.generation_id.as_ref().expect("checked"),
-                gen_id,
-            )? {
+            if !equal_topics(self.conn, published, gen_id)? {
                 return Err(invalid(
                     "unchanged Help source identity has different content",
                 ));
