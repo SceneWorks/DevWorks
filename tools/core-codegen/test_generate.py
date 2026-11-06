@@ -110,6 +110,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(view['earlierName'], 'ProposalRecord')
         self.assertEqual(view['earlierBefore'], 3)
         self.assertIn('operation_preview', view['since'])
+        self.assertEqual(view['since']['reviewed_source'], 3)
         self.assertNotIn('payload', generate.TYPES['ProposalRecord']['fields'])
         byname = {o['operation']: o for _, o in generate.operations()}
         for name in ['approvals.review_queue', 'notifications.mark_read']:

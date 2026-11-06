@@ -964,6 +964,11 @@ frame=request('approvals.review_queue','Query');frame['body']['page']['limit']=5
 case('dw14-review-max-limit','domain-request.r3',frame)
 mutate('dw14-review-limit-51','dw14-review-max-limit',['body','page','limit'],51,False,True)
 
+# Source-owned review payloads retain their closed typed limits instead of one JSON metadata cap.
+for kind,source in [('settings',{'kind':'Settings','entries':[sample('SettingAssignment')]}),('plan',{'kind':'FeaturePlan','plan':sample('PlanDraft')})]:
+ inspected=sample('ApprovalViewRecord');inspected['reviewedSource']=source
+ case('dw14-typed-review-'+kind,'operation-result.r3',{'kind':'approvals.inspect','value':inspected})
+case('dw14-typed-review-before3','operation-result',{'kind':'approvals.inspect','value':inspected},False,False)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue

@@ -28,9 +28,9 @@
   "generatorTests": {
     "passed": 10
   },
-  "schemaFixtures": 1838,
-  "domainFixtures": 1509,
-  "negativeDomainFixtures": 344,
+  "schemaFixtures": 1841,
+  "domainFixtures": 1512,
+  "negativeDomainFixtures": 345,
   "contractChecksPassed": true,
   "nativeCoreChecks": {
     "status": "passed",
@@ -51,9 +51,9 @@
   },
   "sourceSha256": {
     "docs/architecture/implementation-slices.json": "64ef39f050faf5d4655cbb1646e7be5b1cc3b829eaa88e98ba7f287a057c1c71",
-    "docs/architecture/implementation-plan.json": "333faf305ab38cd0af9e4e3150c9bef610d7d291cb376352544a0e7f8c683c53",
+    "docs/architecture/implementation-plan.json": "d9c498ceb4e273c5dbea1ebdc71f2a7db169afa8a9a00fd8e50e8f48031fb0da",
     "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
-    "docs/architecture/contracts/family-coverage.json": "7a208230e00d8f4480a12ddd7aa3114e5bb0a7beb74dde412a0aa86d269d675a"
+    "docs/architecture/contracts/family-coverage.json": "89f09a247afcf0cafd662be3b48b35361811a90dfa296a16c1e99b51283d6e55"
   },
   "planningReaders": {
     "date": "2026-11-05",
@@ -189,5 +189,19 @@
     "source": "tools/contracts-eval/tests/allocation_projection.rs"
   },
   "regenerationDrift": false,
-  "formatCheckPassed": true
+  "formatCheckPassed": true,
+  "largeReviewedSourceRegression": {
+    "passed": 2,
+    "source": "tools/contracts-eval/tests/approval_review.rs",
+    "cases": [
+      "Typed PlanDraft above512KiB round-trips all required content; legacy metadata wrapper rejects size",
+      "Aggregate settings above512KiB retains each bounded typed SchemaValue; no truncation"
+    ],
+    "sourceCommit": "01f5625",
+    "legacySchemasByteIdentical": 56,
+    "nativeContractTestsPassed": 20,
+    "domainFixtures": 1512,
+    "fixtureSha256": "e07f4d63e2602161730f53fecb9f375cb28b8bfbab47d979f29cdfa04828dde2",
+    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures"
+  }
 }

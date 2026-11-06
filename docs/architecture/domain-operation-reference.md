@@ -3695,6 +3695,7 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `resumeStatus` | `?Label` · *revision 3+* |
 | `resumedOperationId` | `?OperationId` · *revision 3+* |
 | `operationPreview` | `?SavedOperationPreview` · *revision 3+* |
+| `reviewedSource` | `?ApprovalReviewedContent` · *revision 3+* |
 
 ### SavedOperationPreview
 
@@ -3751,6 +3752,13 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `url` | `?Url` |
 | `artifact` | `?ArtifactRef` |
 | `projectId` | `?ProjectId` |
+
+### ApprovalReviewedContent
+
+| Kind | Fields |
+| --- | --- |
+| `Settings` | `entries`: `Items<SettingAssignment>` |
+| `FeaturePlan` | `plan`: `PlanDraft` |
 
 ## Machine sources
 
