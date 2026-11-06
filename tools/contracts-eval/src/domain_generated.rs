@@ -8335,6 +8335,13 @@ pub struct PendingFeaturePlan {
     )]
     #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
     pub budget: Option<FeatureBudgetInput>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub plan_digest: Option<Digest>,
 }
 impl Check for PendingFeaturePlan {
     fn check(&self) -> Result<(), String> {
@@ -8342,6 +8349,7 @@ impl Check for PendingFeaturePlan {
         self.draft.check()?;
         self.approval.check()?;
         self.budget.check()?;
+        self.plan_digest.check()?;
         super::domain_rules::record(
             "PendingFeaturePlan",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -8354,6 +8362,9 @@ impl Revisioned for PendingFeaturePlan {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.budget = None;
+        }
+        if revision < 3 {
+            self.plan_digest = None;
         }
     }
 }

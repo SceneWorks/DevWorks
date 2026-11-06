@@ -2985,10 +2985,12 @@
         "revision": "Revision",
         "draft": "PlanDraft",
         "approval": "?PlanApproval",
-        "budget": "?FeatureBudgetInput"
+        "budget": "?FeatureBudgetInput",
+        "plan_digest": "?Digest"
       },
       "since": {
-        "budget": 3
+        "budget": 3,
+        "plan_digest": 3
       }
     },
     "GithubIssueIntakeState": {
