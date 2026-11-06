@@ -882,7 +882,7 @@ let f=Fx::new("CodexSubscriptionResponses",Script::sse("event: error\ndata: {\"t
 
 #[path = "providers/auto_routes.rs"]
 mod auto_routes;
-#[path = "providers/subscription_limits.rs"]
-mod subscription_limits;
 #[path = "providers/content_order.rs"]
 mod content_order;
+#[path = "providers/subscription_limits.rs"]
+mod subscription_limits;
