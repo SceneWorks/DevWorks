@@ -603,6 +603,67 @@ impl NativePackageFiles {
 }
 
 impl PackageFiles for NativePackageFiles {
+    fn read_verified(
+        &self,
+        package_id: &str,
+        manifest_digest: &str,
+        expected: &InspectedFile,
+        max: u64,
+    ) -> Result<Vec<u8>, PackageFileError> {
+        use devworks_core::authority::destructive::{EntryKind, FilesystemResolver};
+        use devworks_core::authority::reads::{ReadRequest, ReadRoot, VerifiedReader};
+        if !Self::valid_name(package_id, manifest_digest)
+            || !safe_path(&expected.path)
+            || expected.byte_length > max
+        {
+            return Err(PackageFileError::Mismatch(
+                "invalid or oversized package file".into(),
+            ));
+        }
+        let filesystem = crate::fs::NativeFilesystem::new();
+        let directory = self.directory(package_id, manifest_digest);
+        let root = filesystem
+            .resolve(
+                directory
+                    .to_str()
+                    .ok_or_else(|| PackageFileError::Io("unsupported install path".into()))?,
+                None,
+            )
+            .map_err(|_| PackageFileError::Missing("installed package directory".into()))?;
+        if root.entry_kind != EntryKind::Directory
+            || root
+                .linked_ancestors
+                .iter()
+                .any(|path| path.starts_with(&self.root))
+        {
+            return Err(PackageFileError::Mismatch(
+                "installed package directory changed".into(),
+            ));
+        }
+        let root = ReadRoot {
+            location: root.entry.path,
+            identity: root.entry.identity,
+        };
+        let bytes = filesystem
+            .read(&ReadRequest {
+                root: &root,
+                relative: &expected.path,
+                max_bytes: max,
+                allow_hard_links: false,
+            })
+            .map_err(|_| {
+                PackageFileError::Mismatch(
+                    "installed package file is unavailable or changed".into(),
+                )
+            })?
+            .bytes;
+        if bytes.len() as u64 != expected.byte_length || sha256_hex(&bytes) != expected.sha256 {
+            return Err(PackageFileError::Mismatch(
+                "installed package file digest changed".into(),
+            ));
+        }
+        Ok(bytes)
+    }
     fn publish(
         &self,
         package_id: &str,

@@ -238,6 +238,29 @@ fn install_directories_publish_atomically_and_detect_modification() {
         .publish(&pkg, &digest, &b.files, &b.inspection.files)
         .unwrap();
     store.verify(&pkg, &digest, &b.inspection.files).unwrap();
+    let guide = b
+        .inspection
+        .files
+        .iter()
+        .find(|file| file.path == b.inspection.help_file)
+        .unwrap();
+    let guide_bytes = &b
+        .files
+        .iter()
+        .find(|file| file.path == guide.path)
+        .unwrap()
+        .bytes;
+    assert_eq!(
+        store
+            .read_verified(&pkg, &digest, guide, guide.byte_length)
+            .unwrap(),
+        *guide_bytes
+    );
+    assert!(
+        store
+            .read_verified(&pkg, &digest, guide, guide.byte_length - 1)
+            .is_err()
+    );
     assert_eq!(
         store.installed().unwrap(),
         vec![(pkg.clone(), digest.clone())]
@@ -255,6 +278,10 @@ fn install_directories_publish_atomically_and_detect_modification() {
     // A changed byte and an added file are both modifications of signed content.
     std::fs::write(store.path(&pkg, &digest, "help.md"), b"# Tampered\n").unwrap();
     assert!(matches!(
+        store.read_verified(&pkg, &digest, guide, 1024),
+        Err(PackageFileError::Mismatch(_))
+    ));
+    assert!(matches!(
         store.verify(&pkg, &digest, &b.inspection.files),
         Err(PackageFileError::Mismatch(_))
     ));
@@ -263,6 +290,19 @@ fn install_directories_publish_atomically_and_detect_modification() {
         .publish(&pkg, &digest, &b.files, &b.inspection.files)
         .unwrap();
     store.verify(&pkg, &digest, &b.inspection.files).unwrap();
+    #[cfg(unix)]
+    {
+        // Even identical signed bytes through an external symlink must not be followed.
+        let external = r.with_extension("outside-guide");
+        std::fs::write(&external, guide_bytes).unwrap();
+        let help = store.path(&pkg, &digest, &guide.path);
+        std::fs::remove_file(&help).unwrap();
+        std::os::unix::fs::symlink(&external, &help).unwrap();
+        assert!(store.read_verified(&pkg, &digest, guide, 1024).is_err());
+        std::fs::remove_file(&help).unwrap();
+        std::fs::write(&help, guide_bytes).unwrap();
+        std::fs::remove_file(&external).unwrap();
+    }
     std::fs::write(store.path(&pkg, &digest, "dropped.so"), b"x").unwrap();
     assert!(matches!(
         store.verify(&pkg, &digest, &b.inspection.files),

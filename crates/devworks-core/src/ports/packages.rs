@@ -245,6 +245,19 @@ impl std::fmt::Display for PackageFileError {
 
 /// Content-addressed install directories `<root>/<package>/<manifest digest>/`.
 pub trait PackageFiles: Send + Sync {
+    /// Reads one manifest-declared regular file without following links, bounded by `max`.
+    /// The returned bytes must match the exact installed inspection's digest and size.
+    fn read_verified(
+        &self,
+        _package_id: &str,
+        _manifest_digest: &str,
+        _expected: &InspectedFile,
+        _max: u64,
+    ) -> Result<Vec<u8>, PackageFileError> {
+        Err(PackageFileError::Io(
+            "verified package reads are unavailable".into(),
+        ))
+    }
     /// Publishes a verified version: writes into a private staging directory, flushes, verifies
     /// every digest, then renames it into place. Idempotent: an existing directory whose
     /// contents verify is kept; a staging directory never becomes visible half-written.
