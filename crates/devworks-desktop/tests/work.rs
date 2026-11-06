@@ -261,9 +261,25 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     click(&mut h, Role::Button, "Edit plan");
     form.snapshot = feature;
     h.state_mut().work.plan = Some(form);
-    click(&mut h, Role::Button, "Add requirement");
-    click(&mut h, Role::Button, "Add acceptance criterion");
-    click(&mut h, Role::Button, "Remove acceptance criterion 2");
+    // This preservation scenario invokes each real button's accessibility Click action.
+    // Render the injected draft before querying its controls, then observe each UI edit.
+    settle(&mut h);
+    for (label, acceptance_count) in [
+        ("Add requirement", 1),
+        ("Add acceptance criterion", 2),
+        ("Remove acceptance criterion 2", 1),
+    ] {
+        h.get_by_role_and_label(Role::Button, label)
+            .click_accesskit();
+        settle(&mut h);
+        let form = h.state().work.plan.as_ref().expect("the editor stays open");
+        assert_eq!(
+            form.requirements.last().map(|e| e.id.as_str()),
+            Some("E3"),
+            "after {label}"
+        );
+        assert_eq!(form.acceptance.len(), acceptance_count, "after {label}");
+    }
     let form = h.state().work.plan.as_ref().unwrap();
     assert_eq!(form.requirements.last().unwrap().id, "E3");
     let mut form = form.clone();
