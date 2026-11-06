@@ -270,7 +270,7 @@ fn complete(s: &SqliteStore, fence: AttemptFence) -> StoredEmbeddingQualificatio
             &id("candidate"),
             3,
             &OperationId(id("qualification-operation")),
-            &fence,
+            Some(&fence),
             EmbeddingQualificationState::Qualified,
             None,
         )
@@ -389,7 +389,7 @@ fn native_evidence_is_staged_before_terminal_qualification_and_survives_restart(
                 &id("candidate"),
                 2,
                 &OperationId(id("qualification-operation")),
-                &f,
+                Some(&f),
                 EmbeddingQualificationState::Qualified,
                 None
             ))
@@ -568,7 +568,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
             &id("candidate"),
             2,
             &OperationId(id("qualification-operation")),
-            &f,
+            Some(&f),
             EmbeddingQualificationState::Unknown,
             Some("native outcome unknown"),
         )?;
@@ -635,7 +635,7 @@ fn unknown_probe_reconciles_same_identity_without_resend() {
             &id("candidate"),
             4,
             &OperationId(id("qualification-operation")),
-            &fence,
+            Some(&fence),
             EmbeddingQualificationState::Qualified,
             None,
         )
@@ -727,7 +727,7 @@ fn existing_vector_identity_is_never_relabelled_by_qualification() {
                 &id("candidate"),
                 3,
                 &OperationId(id("qualification-operation")),
-                &fence,
+                Some(&fence),
                 EmbeddingQualificationState::Qualified,
                 None,
             )
@@ -805,7 +805,7 @@ fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
                     &id("candidate"),
                     revision,
                     &OperationId(id("qualification-operation")),
-                    &fence,
+                    Some(&fence),
                     EmbeddingQualificationState::Qualified,
                     None
                 ),
@@ -815,7 +815,7 @@ fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
                 &id("candidate"),
                 revision,
                 &OperationId(id("qualification-operation")),
-                &fence,
+                Some(&fence),
                 EmbeddingQualificationState::Cancelled,
                 Some("configuration intent cancelled after native completion"),
             )
@@ -1140,7 +1140,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
                     &id("candidate"),
                     3,
                     &OperationId(id("qualification-operation")),
-                    &fence,
+                    Some(&fence),
                     EmbeddingQualificationState::Qualified,
                     None
                 ),
@@ -1153,7 +1153,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
                     &id("candidate"),
                     3,
                     &OperationId(id("qualification-operation")),
-                    &stale,
+                    Some(&stale),
                     state,
                     None
                 ),
@@ -1163,7 +1163,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
                 &id("candidate"),
                 3,
                 &OperationId(id("qualification-operation")),
-                &fence,
+                Some(&fence),
                 state,
                 Some("exact journal outcome retained after authority changed"),
             )
@@ -1182,4 +1182,67 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
             0
         );
     }
+}
+
+#[test]
+fn cancellation_before_dispatch_records_no_invented_attempt_fence() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let probe = run_write(&s, WriteOptions::default(), |tx| {
+        let p = probe_intent(tx, "unattempted-cancel")?;
+        tx.router()
+            .start_embedding_qualification(&id("candidate"), 1, &p)?;
+        Ok(p)
+    })
+    .unwrap();
+    let p = probe.clone();
+    assert!(
+        run_write(&s, WriteOptions::default(), move |tx| tx
+            .router()
+            .finish_embedding_qualification(
+                &id("candidate"),
+                2,
+                &p.operation_id,
+                None,
+                EmbeddingQualificationState::Cancelled,
+                None
+            ))
+        .is_err()
+    );
+    let p = probe.clone();
+    let q = run_write(&s, WriteOptions::default(), move |tx| {
+        tx.queue().cancel(&p.delivery_id)?;
+        assert!(
+            tx.operations()
+                .operation(&p.operation_id)?
+                .unwrap()
+                .attempts
+                .is_empty()
+        );
+        tx.router().finish_embedding_qualification(
+            &id("candidate"),
+            2,
+            &p.operation_id,
+            None,
+            EmbeddingQualificationState::Cancelled,
+            Some("cancelled before native dispatch"),
+        )
+    })
+    .unwrap();
+    assert_eq!(q.state, EmbeddingQualificationState::Cancelled);
+    assert!(q.evidence.is_none());
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM embedding_spaces", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM router_requests", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }

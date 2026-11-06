@@ -150,13 +150,15 @@ pub trait EmbeddingRepository: EmbeddingRead {
     /// The host verifies raw manifest/vector content before calling this method. The writer
     /// rechecks the exact journal fence, original store/authority, current candidate source,
     /// usage attempt, quiescent balance and artifact metadata. Qualified requires real terminal
-    /// ObservedComplete; failed/unknown/cancelled work never creates a vector space.
+    /// ObservedComplete; failed/unknown/cancelled work never creates a vector space. A missing
+    /// fence is accepted only for actual unattempted CancelledBeforeDispatch plus its exact
+    /// cancelled delivery; no synthetic attempt zero is minted.
     fn finish_embedding_qualification(
         &mut self,
         candidate_id: &Id,
         expected_revision: i64,
         operation_id: &OperationId,
-        fence: &AttemptFence,
+        fence: Option<&AttemptFence>,
         state: EmbeddingQualificationState,
         reason: Option<&str>,
     ) -> Result<StoredEmbeddingQualification, StorageError>;

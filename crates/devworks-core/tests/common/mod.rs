@@ -1769,7 +1769,7 @@ impl EmbeddingRepository for Unsupported {
         _: &Id,
         _: i64,
         _: &OperationId,
-        _: &AttemptFence,
+        _: Option<&AttemptFence>,
         _: EmbeddingQualificationState,
         _: Option<&str>,
     ) -> Result<StoredEmbeddingQualification, StorageError> {

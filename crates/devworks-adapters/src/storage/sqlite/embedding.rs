@@ -340,7 +340,7 @@ impl EmbeddingRepository for Unit<'_> {
         id: &Id,
         expected: i64,
         operation_id: &OperationId,
-        fence: &AttemptFence,
+        fence: Option<&AttemptFence>,
         state: EmbeddingQualificationState,
         reason: Option<&str>,
     ) -> Result<StoredEmbeddingQualification, StorageError> {
@@ -370,18 +370,22 @@ impl EmbeddingRepository for Unit<'_> {
         let operation = self
             .operation(operation_id)?
             .ok_or_else(|| invalid("embedding operation absent"))?;
+        let cancelled = probe_cancelled(self, &p)?;
+        let no_attempt_cancel = state == EmbeddingQualificationState::Cancelled
+            && operation.state == OperationState::CancelledBeforeDispatch
+            && cancelled;
         if operation
             .latest_attempt()
             .map(AttemptRecord::fence)
             .as_ref()
-            != Some(fence)
+            != fence
+            || (fence.is_none() && !no_attempt_cancel)
         {
             return Err(StorageError::LeaseLost {
                 kind: "embedding_probe",
                 id: id.as_str().into(),
             });
         }
-        let cancelled = probe_cancelled(self, &p)?;
         if state == EmbeddingQualificationState::Qualified && cancelled {
             return Err(StorageError::Cancelled);
         }
