@@ -229,6 +229,7 @@ Values: NodeWindow, WholeFile.
 | `language` | `?Label` |
 | `framework` | `?Label` |
 | `foundational` | `bool` |
+| `readme_source` | `?CodeSourceLocation` |
 
 ## CodeOverview
 
@@ -282,7 +283,7 @@ Values: NodeWindow, WholeFile.
 | `inbound` | `Rows<CodeRepositoryLink>` |
 | `outbound` | `Rows<CodeRepositoryLink>` |
 | `packages` | `Rows<CodePackageDependency>` |
-| `package_count` | `Counter` |
+| `package_count` | `?Counter` |
 | `package_counts_by_ecosystem` | `Rows<CodeCount>` |
 | `supertypes` | `Rows<CodeSupertype>` |
 | `internal_modules` | `Rows<CodeModuleAnalysis>` |
@@ -564,3 +565,5 @@ Values: Recorded, NotAnalyzed, Unavailable.
 | `tables` | `CodeModuleDrilldown` |
 | `recorded` | `?CodeRecordedModuleAnalysis` |
 
+
+`CodeArchitecture.package_count` is present only after a complete aggregate; a work-limited population stays unknown. `CodeOverviewRepository.readme_source` is present only for an actual private capture in the same resolved repository snapshot. Metadata-only overview never supplies it.
