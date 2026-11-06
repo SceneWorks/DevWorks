@@ -1,5 +1,6 @@
 //! Durable portable imports: private staged entries become public in one fenced transaction.
 mod commands;
+mod maintenance;
 pub(crate) mod parser;
 mod status;
 mod worker;
@@ -9,6 +10,7 @@ use crate::{
     services::artifacts::ArtifactService,
 };
 pub use commands::{EFFECT_CONSUMER, PreparedImport};
+pub use maintenance::ImportCleanup;
 use std::sync::Arc;
 pub use worker::ImportOutcome;
 pub struct ImportService {

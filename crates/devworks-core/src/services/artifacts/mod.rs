@@ -2002,7 +2002,10 @@ impl ArtifactService {
 
 /// After a tombstone: a blob no live version names any more becomes `UnlinkPending` (returns
 /// `true`); bytes another surviving version needs stay `Present`.
-fn release_blob(tx: &mut dyn WriteTransaction, digest: &str) -> Result<bool, StorageError> {
+pub(crate) fn release_blob(
+    tx: &mut dyn WriteTransaction,
+    digest: &str,
+) -> Result<bool, StorageError> {
     if tx.artifacts().live_references(digest)? > 0 {
         return Ok(false);
     }

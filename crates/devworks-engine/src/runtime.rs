@@ -904,6 +904,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
     let mut tasks = vec![delivery, collection, housekeeping];
+    let (imports, collection_wakeup) = (conventions.imports(), collector.clone());
+    tasks.push(tokio::spawn(async move {
+        let mut after = None;
+        while !imports.is_stopped() {
+            let (service, position) = (imports.clone(), after.clone());
+            if let Ok(Ok(pass)) =
+                tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position)).await
+            {
+                after = pass.next;
+                if pass.released {
+                    collection_wakeup.trigger.notify_one();
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }));
     if let Some(service) = &git {
         tasks.push(tokio::spawn(crate::git::run(service.clone())));
     }
