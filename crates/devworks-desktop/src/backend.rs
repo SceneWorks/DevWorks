@@ -154,6 +154,7 @@ pub enum Slot {
     PriceRefresh,
     PriceOperation,
     HelpTopics(u64, bool),
+    HelpProbe(u64),
     HelpRead(u64),
     HelpGenerate,
     ApprovalsList,
@@ -428,6 +429,7 @@ struct Pending {
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "help.generate_capability_docs",
     "router.price_refresh",
     "router.price_override",
     "approvals.record_human_decision",

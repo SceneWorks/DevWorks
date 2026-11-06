@@ -2783,7 +2783,7 @@ impl Shell {
             self.load_connections();
         }
         match self.route {
-            Route::Help if !self.help.loading => self.refresh_help(),
+            Route::Help if !self.help.loading => self.probe_help(),
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
             Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),

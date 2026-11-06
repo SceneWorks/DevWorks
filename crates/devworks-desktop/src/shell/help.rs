@@ -86,6 +86,29 @@ impl Shell {
             self.load_help_topics(false);
         }
     }
+    pub(super) fn probe_help(&mut self) {
+        self.help.list_generation = self.help.list_generation.wrapping_add(1);
+        let generation = self.help.list_generation;
+        let scope = self.help.scope.clone();
+        let operation = match scope {
+            HelpScope::Search(_) => "help.search",
+            HelpScope::Screen(_) => "help.topic_for_screen",
+            HelpScope::Package { .. } => "help.package_guides",
+        };
+        self.help.loading = true;
+        if !self.query(
+            Slot::HelpProbe(generation),
+            "Checking local Help status",
+            operation,
+            move |b| match scope {
+                HelpScope::Search(query) => help_ops::search(b, &query, None),
+                HelpScope::Screen(screen) => help_ops::context(b, &screen, None),
+                HelpScope::Package { id, version } => help_ops::guides(b, &id, &version, None),
+            },
+        ) {
+            self.help.loading = false;
+        }
+    }
     fn help_snapshot(&mut self, snapshot: HelpSnapshot) {
         if let Some(operation) = &snapshot.generation_operation {
             let complete = matches!(operation.state, OperationState::ObservedComplete);
@@ -113,7 +136,8 @@ impl Shell {
     }
     pub(super) fn apply_help(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
         match (slot, reply) {
-            (Slot::HelpTopics(generation, _), _) if generation != self.help.list_generation => {}
+            (Slot::HelpTopics(generation, _) | Slot::HelpProbe(generation), _)
+                if generation != self.help.list_generation => {}
             (Slot::HelpRead(generation), _) if generation != self.help.read_generation => {}
             (Slot::HelpTopics(_, append), Reply::Query(outcome)) => {
                 self.help.loading = false;
@@ -162,6 +186,32 @@ impl Shell {
                         } else if changed && self.help.selected.is_some() && !self.help.reading {
                             // Ask the owner about the inspected exact version; never silently
                             // replace it with another installed package/app version.
+                            self.read_help_passage();
+                        }
+                    }
+                    Err(error) => self.help.error = Some(error.describe()),
+                }
+            }
+            (Slot::HelpProbe(_), Reply::Query(outcome)) => {
+                self.help.loading = false;
+                match help_ops::topics(outcome) {
+                    Ok(page) => {
+                        let changed = self.help.snapshot.as_ref().is_some_and(|old| {
+                            old.help_revision != page.snapshot.help_revision
+                                || old.registry_revision != page.snapshot.registry_revision
+                                || old.app_version.0 != page.snapshot.app_version.0
+                        });
+                        self.help_snapshot(page.snapshot);
+                        self.help.error = None;
+                        if !matches!(page.availability, HelpAvailability::Available) {
+                            self.help.notice = Some(page.reason.map_or_else(
+                                || format!("Documentation: {:?}", page.availability),
+                                |reason| reason.0,
+                            ));
+                        } else if changed {
+                            self.help.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
+                        }
+                        if changed && self.help.selected.is_some() && !self.help.reading {
                             self.read_help_passage();
                         }
                     }

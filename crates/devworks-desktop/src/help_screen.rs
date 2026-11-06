@@ -342,6 +342,7 @@ impl HelpScreen {
                     ),
                 );
                 if let Some(version) = current_version
+                    && version.0 != requested_version.0
                     && ui
                         .add_enabled(
                             online && !self.reading,
