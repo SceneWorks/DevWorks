@@ -14,6 +14,10 @@ fn unwinding_returns_the_owned_permit_and_two_permits_can_overlap() {
         let second = budget::acquire();
         sent.send(failed.is_err()).unwrap();
         drop((first, second));
+        let exclusive = budget::acquire_exclusive();
+        drop(exclusive);
+        let returned = budget::acquire();
+        drop(returned);
     });
     assert!(
         received

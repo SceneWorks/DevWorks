@@ -29,6 +29,7 @@ fn page(
 }
 #[test]
 fn native_graph_reads_reuse_one_pin_and_stream_exact_source_after_checkout_removal() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -300,6 +301,7 @@ fn native_graph_reads_reuse_one_pin_and_stream_exact_source_after_checkout_remov
 
 #[test]
 fn native_graph_pin_keeps_selection_gaps_and_rechecks_authority_for_every_member() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -548,6 +550,7 @@ impl devworks_core::ports::files::ArtifactFiles for ControlledFiles {
 }
 #[test]
 fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_poisoning_reads() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -655,6 +658,7 @@ fn native_source_verification_obeys_cancel_deadline_and_work_bounds_without_pois
 
 #[test]
 fn native_swift_dependency_pin_does_not_duplicate_its_declared_cross_repository_link() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -745,6 +749,7 @@ fn native_swift_dependency_pin_does_not_duplicate_its_declared_cross_repository_
 
 #[test]
 fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without_main_fallback() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1002,6 +1007,7 @@ fn native_current_maps_owned_git_identity_to_the_actual_indexed_worktree_without
 
 #[test]
 fn native_overlay_read_operators_expose_only_relevant_formerly_mapped_callers() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1170,6 +1176,7 @@ impl devworks_core::ports::indexing::StructuralParser for CapturedConfidence {
 }
 #[test]
 fn native_fallback_confidence_survives_publication_and_counts_distinct_answer_nodes() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -1327,6 +1334,7 @@ impl devworks_core::ports::indexing::StructuralParser for CapturedForeignCall {
 }
 #[test]
 fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_ambiguous() {
+    let _case = native_runtime_case();
     use devworks_core::ports::indexing::StructuralParser;
     let h = Harness::new();
     let executor = runtime();
@@ -1482,6 +1490,7 @@ fn native_captured_foreign_identity_never_selects_ordinal_zero_when_the_view_is_
 
 #[test]
 fn native_tied_spans_select_methods_and_complete_overlay_coverage_matches_its_manifests() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();

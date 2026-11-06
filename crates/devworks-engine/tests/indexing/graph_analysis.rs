@@ -23,6 +23,7 @@ fn graph(
 
 #[test]
 fn indexed_architecture_overview_and_dependencies_preserve_exact_facts_and_unknown_analysis() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -148,6 +149,7 @@ fn indexed_architecture_overview_and_dependencies_preserve_exact_facts_and_unkno
 
 #[test]
 fn declared_schema_and_metadata_overview_do_not_invent_empty_graph_measurements() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -220,6 +222,7 @@ fn captured_modules(store: &Arc<dyn ApplicationStore>) {
 #[test]
 fn recorded_modules_page_full_semantic_arrays_and_indexed_drilldowns_without_fabricating_provenance()
  {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
