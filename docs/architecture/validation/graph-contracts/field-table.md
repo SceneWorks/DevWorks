@@ -141,7 +141,7 @@ Values: NodeWindow, WholeFile.
 | `description` | `?Content` |
 | `language` | `?Label` |
 | `framework` | `?Label` |
-| `foundational` | `bool` |
+| `foundational` | `?bool` |
 
 ## CodeSearchHit
 
@@ -228,7 +228,7 @@ Values: NodeWindow, WholeFile.
 | `source_group` | `?Content` |
 | `language` | `?Label` |
 | `framework` | `?Label` |
-| `foundational` | `bool` |
+| `foundational` | `?bool` |
 | `readme_source` | `?CodeSourceLocation` |
 
 ## CodeOverview
