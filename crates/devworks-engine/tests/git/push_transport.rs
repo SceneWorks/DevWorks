@@ -58,7 +58,7 @@ impl State {
         let credential_calls = home.join("fake-credential-calls");
         std::fs::write(
             &credentials,
-            format!("#!/bin/sh\ncase \"$1\" in get|store|erase) ;; *) exit 1 ;; esac\ncat >/dev/null\nprintf '%s\\n' \"$1\" >> {}\nif [ \"$1\" = get ]; then printf 'username=fixture\npassword=fixture-auth-secret\n'; fi\n",shell_word(&credential_calls)),
+            format!("#!/bin/sh\ncase \"$1\" in get|store|erase) ;; *) exit 1 ;; esac\n/bin/cat >/dev/null\nprintf '%s\\n' \"$1\" >> {}\nif [ \"$1\" = get ]; then printf 'username=fixture\npassword=fixture-auth-secret\n'; fi\n",shell_word(&credential_calls)),
         )
         .unwrap();
         #[cfg(unix)]
@@ -105,6 +105,7 @@ impl State {
                 ("GIT_CONFIG_NOSYSTEM", "1"),
                 ("GIT_CONFIG_SYSTEM", null_config()),
                 ("GIT_CONFIG_GLOBAL", null_config()),
+                ("GIT_TERMINAL_PROMPT", "0"),
             ] {
                 assert!(
                     out.env.iter().any(|(k, v)| k == key && v == value),
@@ -124,6 +125,7 @@ impl State {
         }
         assert!(
             !out.env.iter().any(|(key, _)| key.starts_with("SSH_")
+                || key.starts_with("GPG_")
                 || matches!(
                     key.as_str(),
                     "GIT_ASKPASS" | "GIT_SSH" | "GIT_SSH_COMMAND" | "GNUPGHOME" | "GPG_TTY"
