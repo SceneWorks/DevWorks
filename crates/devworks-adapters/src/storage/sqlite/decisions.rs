@@ -95,7 +95,8 @@ fn limit(n: u16) -> Result<i64, StorageError> {
     }
 }
 fn bounded(s: &str, max: usize, empty: bool) -> Result<(), StorageError> {
-    if s.len() > max || (!empty && s.trim().is_empty()) {
+    let count = s.chars().count();
+    if count > max || s.contains('\0') || (!empty && count == 0) {
         Err(invalid("decision text is empty or exceeds its bound"))
     } else {
         Ok(())
@@ -308,7 +309,7 @@ fn notification_list(
     n: u16,
 ) -> Result<Vec<StoredNotification>, StorageError> {
     let n = limit(n)?;
-    if f.categories.len() > 32 {
+    if f.categories.len() > 128 {
         return Err(invalid("too many notification categories"));
     }
     let mut sql = String::from("SELECT * FROM notifications WHERE user_id=?");
@@ -333,7 +334,7 @@ fn notification_list(
             vec!["?"; f.categories.len()].join(",")
         ));
         for category in &f.categories {
-            bounded(category, 128, false)?;
+            bounded(category, 256, false)?;
             p.push(Sql::Text(category.clone()));
         }
     }
@@ -577,7 +578,7 @@ impl DecisionRepository for Unit<'_> {
         let result = r
             .result
             .as_ref()
-            .map(|v| encoded(v, MAX_DECISION_JSON_BYTES, false))
+            .map(|v| encoded(v, usize::MAX, false))
             .transpose()?;
         let a = one_approval(self.conn, &r.approval_id)?.ok_or_else(|| StorageError::NotFound {
             kind: "approval",
@@ -669,12 +670,12 @@ impl DecisionRepository for Unit<'_> {
         actor(self.conn, &n.user_id, PrincipalKind::Human)?;
         bounded(&n.title, 256, false)?;
         bounded(&n.body, 65_536, true)?;
-        bounded(&n.category, 128, false)?;
+        bounded(&n.category, 256, false)?;
         bounded(&n.source_id, 512, false)?;
         if !n.links.is_array() || n.links.as_array().is_some_and(|v| v.len() > 128) {
             return Err(invalid("notification links must be a bounded array"));
         }
-        let links = encoded(&n.links, MAX_DECISION_JSON_BYTES, false)?;
+        let links = encoded(&n.links, usize::MAX, false)?;
         if let Some(root) = &n.root_id {
             let project: Option<String> = db(self
                 .conn

@@ -753,3 +753,283 @@ fn project_tombstone_preserves_decision_history_and_does_not_remove_notification
     })
     .unwrap();
 }
+
+fn seed_os(s: &SqliteStore) {
+    let mut n = notification("os-card", "human-a", "required-input");
+    n.category = "Approval".into();
+    n.requires_input = true;
+    n.decision_id = Some(id("os-pending"));
+    put(s, approval("os-pending"), None).unwrap();
+    put_notification(s, n, None).unwrap();
+    run_write(s, WriteOptions::default(), |tx| {
+        tx.decisions().bind_notification_user(&actor("human-a"))
+    })
+    .unwrap();
+}
+fn claim_os(
+    s: &SqliteStore,
+    expected: Option<i64>,
+    retry: bool,
+) -> Result<StoredOsNotificationDelivery, StorageError> {
+    run_write(s, WriteOptions::default(), move |tx| {
+        tx.decisions().claim_os_notification_delivery(
+            &actor("human-a"),
+            &id("os-card"),
+            expected,
+            retry,
+        )
+    })
+}
+fn settle_os(
+    s: &SqliteStore,
+    fence: OsNotificationDeliveryFence,
+    state: &'static str,
+) -> Result<StoredOsNotificationDelivery, StorageError> {
+    run_write(s, WriteOptions::default(), move |tx| {
+        tx.decisions().settle_os_notification_delivery(
+            &actor("human-a"),
+            &id("os-card"),
+            &fence,
+            state,
+            Some("platform outcome"),
+        )
+    })
+}
+
+#[test]
+fn os_delivery_identity_ignores_read_ack_revision_and_never_resubmits_submitted() {
+    let h = Harness::new();
+    let s = seed(&h);
+    seed_os(&s);
+    assert!(matches!(
+        run_write(&s, WriteOptions::default(), |tx| tx
+            .decisions()
+            .claim_os_notification_delivery(
+                &actor("human-b"),
+                &id("os-card"),
+                None,
+                false
+            )),
+        Err(StorageError::ScopeDenied)
+    ));
+    let claimed = claim_os(&s, None, false).unwrap();
+    assert_eq!((claimed.attempt, claimed.revision), (1, 1));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut n = tx
+            .decisions()
+            .notification(&actor("human-a"), &id("os-card"))?
+            .unwrap();
+        n.read = true;
+        n.revision = 2;
+        tx.decisions().put_notification(&n, Some(1))
+    })
+    .unwrap();
+    let submitted = settle_os(&s, claimed.fence(), "Submitted").unwrap();
+    assert_eq!(submitted.state, "Submitted");
+    assert!(matches!(
+        claim_os(&s, Some(submitted.revision), true),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut n = tx
+            .decisions()
+            .notification(&actor("human-a"), &id("os-card"))?
+            .unwrap();
+        n.acknowledged = true;
+        n.revision = 3;
+        tx.decisions().put_notification(&n, Some(2))
+    })
+    .unwrap();
+    assert!(matches!(
+        claim_os(&s, Some(submitted.revision), true),
+        Err(StorageError::ScopeDenied)
+    ));
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(
+            r.decisions()
+                .os_notification_delivery(&actor("human-a"), &id("os-card"))?,
+            Some(submitted)
+        );
+        assert_eq!(
+            r.decisions().approval(&id("os-pending"))?.unwrap().state,
+            "Pending"
+        );
+        assert!(
+            r.decisions()
+                .os_notification_delivery(&actor("human-b"), &id("os-card"))?
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn os_known_non_delivery_requires_explicit_retry_and_late_attempt_cannot_settle() {
+    let h = Harness::new();
+    let s = seed(&h);
+    seed_os(&s);
+    let first = claim_os(&s, None, false).unwrap();
+    let denied = settle_os(&s, first.fence(), "Denied").unwrap();
+    assert!(matches!(
+        claim_os(&s, Some(denied.revision), false),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    let retry = claim_os(&s, Some(denied.revision), true).unwrap();
+    assert_eq!(retry.attempt, 2);
+    assert!(matches!(
+        settle_os(&s, first.fence(), "Submitted"),
+        Err(StorageError::RevisionConflict(_))
+    ));
+    let mut wrong = retry.fence();
+    wrong.attempt = 1;
+    assert!(matches!(
+        settle_os(&s, wrong, "Submitted"),
+        Err(StorageError::LeaseLost { .. })
+    ));
+    let mut wrong = retry.fence();
+    wrong.boot_id = id("wrong-boot");
+    assert!(matches!(
+        settle_os(&s, wrong, "Submitted"),
+        Err(StorageError::LeaseLost { .. })
+    ));
+    let unavailable = settle_os(&s, retry.fence(), "Unavailable").unwrap();
+    let final_attempt = claim_os(&s, Some(unavailable.revision), true).unwrap();
+    assert_eq!(final_attempt.attempt, 3);
+    let unknown = settle_os(&s, final_attempt.fence(), "Unknown").unwrap();
+    assert!(matches!(
+        claim_os(&s, Some(unknown.revision), true),
+        Err(StorageError::InvalidRecord(_))
+    ));
+}
+
+#[test]
+fn os_prior_boot_claim_recovery_is_unknown_not_a_blind_resend() {
+    let h = Harness::new();
+    let s = seed(&h);
+    seed_os(&s);
+    let old = claim_os(&s, None, false).unwrap();
+    drop(s);
+    let s = h.store();
+    assert_ne!(s.info().boot_id.as_ref(), Some(&old.boot_id));
+    assert!(matches!(
+        settle_os(&s, old.fence(), "Submitted"),
+        Err(StorageError::LeaseLost { .. })
+    ));
+    assert_eq!(
+        run_write(&s, WriteOptions::default(), |tx| tx
+            .decisions()
+            .recover_os_notification_deliveries())
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        run_write(&s, WriteOptions::default(), |tx| tx
+            .decisions()
+            .recover_os_notification_deliveries())
+        .unwrap(),
+        0
+    );
+    let recovered = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.decisions()
+            .os_notification_delivery(&actor("human-a"), &id("os-card"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(recovered.state, "Unknown");
+    assert_eq!(recovered.attempt, 1);
+    assert_eq!(recovered.revision, 2);
+    assert!(matches!(
+        claim_os(&s, Some(recovered.revision), true),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let n = r
+            .decisions()
+            .notification(&actor("human-a"), &id("os-card"))?
+            .unwrap();
+        assert!(!n.read);
+        assert!(!n.acknowledged);
+        assert_eq!(
+            r.decisions().approval(&id("os-pending"))?.unwrap().state,
+            "Pending"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn os_concurrent_workers_claim_one_attempt_and_acknowledged_candidates_are_refused() {
+    let h = Harness::new();
+    let s = Arc::new(seed(&h));
+    seed_os(&s);
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = [0, 1]
+        .into_iter()
+        .map(|_| {
+            let s = s.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                claim_os(&s, None, false)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(StorageError::Duplicate { .. })))
+            .count(),
+        1
+    );
+    let mut n = notification("already-ack", "human-a", "already-ack");
+    n.requires_input = true;
+    put_notification(&s, n.clone(), None).unwrap();
+    n.acknowledged = true;
+    n.revision = 2;
+    put_notification(&s, n, Some(1)).unwrap();
+    assert!(matches!(
+        run_write(s.as_ref(), WriteOptions::default(), |tx| tx
+            .decisions()
+            .claim_os_notification_delivery(
+                &actor("human-a"),
+                &id("already-ack"),
+                None,
+                false
+            )),
+        Err(StorageError::ScopeDenied)
+    ));
+}
+
+#[test]
+fn legal_unicode_notification_text_uses_the_protocol_character_bounds() {
+    let h = Harness::new();
+    let s = seed(&h);
+    let mut n = notification("unicode", "human-a", "unicode-source");
+    n.title = "界".repeat(256);
+    n.body = "界".repeat(65_536);
+    put_notification(&s, n.clone(), None).unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(
+            r.decisions()
+                .notification(&actor("human-a"), &id("unicode"))?,
+            Some(n)
+        );
+        let mut categories = filter("human-a");
+        categories.categories = (0..128).map(|n| format!("OtherCategory{n}")).collect();
+        assert!(
+            r.decisions()
+                .notifications(&categories, None, 500)?
+                .is_empty()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
