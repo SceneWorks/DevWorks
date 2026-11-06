@@ -773,3 +773,147 @@ fn home_requires_a_project_for_knowledge_review_and_filters_before_paging() {
         "clearing the project never issues a global fallback"
     );
 }
+
+fn signed_package_proposal(
+    engine: &devworks_desktop::host::Engine,
+    root: &Root,
+) -> ApprovalViewRecord {
+    use devworks_core::fingerprint::sha256_hex;
+    use devworks_core::protocol::results::OperationResult;
+    let b = engine.backend();
+    let helper = b"inert signed fixture; deliberately not a host target";
+    let help =
+        b"# Native signed package review\nExact source bytes stay attached to the owner review.";
+    let manifest=json!({"packageId":"native-signed-review","version":"1.0.0","publisherId":"native-test-publisher","protocolMin":{"major":1,"minor":0},"protocolMax":{"major":1,"minor":0},"minimumHostVersion":"0.1.0","dependencies":[],"runtimes":[],"schemaAssets":[],"requestedLimits":{"maxConcurrent":1,"queueCapacity":4,"maxMemoryBytes":"1048576","streamCreditBytes":4096},"targets":[{"targetTriple":"riscv64gc-unknown-none-elf","entrypoint":"bin/helper"}],"files":[{"path":"bin/helper","sha256":sha256_hex(helper),"byteLength":helper.len().to_string()},{"path":"help.md","sha256":sha256_hex(help),"byteLength":help.len().to_string()}],"stateSchema":{"schemaId":"native-signed-review/state","revision":"1","sha256":"a".repeat(64)},"configurationSchema":{"schemaId":"native-signed-review/config","revision":"1","sha256":"b".repeat(64)},"helpFile":"help.md","requestedPermissions":[],"contributions":[{"kind":"Tool","meta":{"id":"native-signed-review/inspect","inputSchema":{"schemaId":"native-signed-review/in","revision":"1","sha256":"c".repeat(64)},"outputSchema":{"schemaId":"native-signed-review/out","revision":"1","sha256":"d".repeat(64)},"helpTopic":"help","required":false,"cancellation":"Cooperative"},"requestedEffect":"ReadCandidate"}]}).to_string();
+    let key = ed25519_dalek::SigningKey::from_bytes(&[17; 32]);
+    let bundle = devworks_adapters::packages::write_bundle(
+        manifest.as_bytes(),
+        &[
+            ("bin/helper", helper.as_slice()),
+            ("help.md", help.as_slice()),
+        ],
+        Some(&key),
+    );
+    use devworks_core::ports::packages::PackageInspector;
+    let inspection = devworks_adapters::packages::BundleInspector
+        .inspect(&bundle)
+        .unwrap();
+    assert!(
+        inspection.inspection.signer_key.is_some(),
+        "the actual inspector verified the signature"
+    );
+    let path = root.file("native-signed-review.dwpkg", &bundle);
+    let ticket = b.mint_workspace_upload(&path).unwrap();
+    let source = ops::saved_artifact(b.command(
+        "artifacts.save",
+        &ops::save_workspace_artifact(
+            &*b,
+            ticket.as_str(),
+            "Native signed source bundle",
+            "application/vnd.devworks.package",
+            &sha256_hex(&bundle),
+            bundle.len() as u64,
+            &[],
+        ),
+    ))
+    .unwrap();
+    let result = ops::command_result(b.command(
+        "addons.propose",
+        &ops::command_frame(
+            &*b,
+            "addons.propose",
+            json!({"source":source.artifact,"manifestDigest":sha256_hex(manifest.as_bytes())}),
+        ),
+    ))
+    .unwrap();
+    assert!(matches!(result, OperationResult::AddonsPropose { .. }));
+    let (rows, _) = dops::approvals(b.query(
+        "approvals.list",
+        &dops::query(
+            &*b,
+            "approvals.list",
+            json!({"scope":{"kind":"Workspace"},"page":{"limit":100}}),
+        ),
+    ))
+    .unwrap();
+    let proposal = rows
+        .iter()
+        .find(|p| p.operation_kind.0 == "addons.install")
+        .expect("owner-generated package review");
+    dops::approval(b.query(
+        "approvals.inspect",
+        &dops::query(&*b, "approvals.inspect", json!({"proposalId":proposal.id})),
+    ))
+    .unwrap()
+}
+#[test]
+fn native_small_signed_package_approves_owner_review_without_rendering_binary_source_as_text() {
+    use devworks_core::protocol::records::{ApprovalState, ArtifactReadContent};
+    let root = Root::new("approval-native-binary-package");
+    let engine = start(&root);
+    let b = engine.backend();
+    let p = signed_package_proposal(&engine, &root);
+    let artifact = p.artifact.as_ref().unwrap();
+    assert_eq!(artifact.media_type, "application/vnd.devworks.package");
+    assert!(
+        matches!(
+            ops::read_content(b.query("artifacts.read", &ops::artifact_read(&*b, artifact)))
+                .unwrap(),
+            ArtifactReadContent::Binary { .. }
+        ),
+        "this is the actual binary read path"
+    );
+    assert!(p.reviewed_content.as_ref().unwrap().0["inspection"].is_object());
+    let mut h = open(&engine, &root, &p);
+    assert!(
+        h.state().decisions.text.is_none(),
+        "a verified source attachment never creates a mandatory text reader"
+    );
+    assert!(has_text(&h, "Package source attachment"));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Open package source artifact")
+            .is_some()
+    );
+    rationale(
+        &mut h,
+        "I reviewed the exact signed package, permissions and incompatible target; no helper should launch here.",
+    );
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Approve exact proposal")
+            .accesskit_node()
+            .is_disabled()
+    );
+    press(&mut h, "Approve exact proposal");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    loop {
+        let current = dops::approval(b.query(
+            "approvals.inspect",
+            &dops::query(&*b, "approvals.inspect", json!({"proposalId":p.id})),
+        ))
+        .unwrap();
+        assert!(matches!(current.state, ApprovalState::Approved));
+        if current
+            .resume_status
+            .as_ref()
+            .is_some_and(|s| s.0 == "Admitted")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "exact saved installation readmits: {:?}",
+            current.resume_status
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        engine
+            .host()
+            .runtime()
+            .packages()
+            .unwrap()
+            .instance_status("native-signed-review")
+            .is_empty(),
+        "the deliberately unsupported target never launches a helper"
+    );
+}
