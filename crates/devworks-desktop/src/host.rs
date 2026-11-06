@@ -906,3 +906,7 @@ mod provider_refresh_shutdown_tests;
 #[cfg(test)]
 #[path = "host/usage_shutdown_tests.rs"]
 mod usage_shutdown_tests;
+
+#[cfg(test)]
+#[path = "host/provider_refresh_lock_tests.rs"]
+mod provider_refresh_lock_tests;
