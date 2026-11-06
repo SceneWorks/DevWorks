@@ -193,13 +193,18 @@ pub(super) fn assert_reviewed_commit(
         gateway,
         &agent,
         &frame,
-        matches!(case, ReviewedCommitCase::UnavailablePolicy),
-        matches!(
+        if matches!(case, ReviewedCommitCase::UnavailablePolicy) {
+            Some(PreviewRefusal::PolicyUnavailable)
+        } else if matches!(
             case,
             ReviewedCommitCase::LateTrackedFilter
                 | ReviewedCommitCase::LateUntrackedFilter
                 | ReviewedCommitCase::LateStatusFilter
-        ),
+        ) {
+            Some(PreviewRefusal::Source)
+        } else {
+            None
+        },
     );
     let Some(operation) = operation else {
         assert!(!marker.exists());
@@ -578,8 +583,13 @@ pub(super) fn approve_owned_force(
     agent: &devworks_core::context::InvocationContext,
     force: &serde_json::Value,
 ) -> devworks_core::protocol::OperationId {
-    approve_owned_force_result(h, store, service, gateway, agent, force, false, false)
+    approve_owned_force_result(h, store, service, gateway, agent, force, None)
         .expect("accepted reviewed operation")
+}
+
+enum PreviewRefusal {
+    PolicyUnavailable,
+    Source,
 }
 
 fn approve_owned_force_result(
@@ -589,8 +599,7 @@ fn approve_owned_force_result(
     gateway: &Gateway<'_>,
     agent: &devworks_core::context::InvocationContext,
     force: &serde_json::Value,
-    expect_unavailable: bool,
-    expect_source_refusal: bool,
+    expected_refusal: Option<PreviewRefusal>,
 ) -> Option<devworks_core::protocol::OperationId> {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{ActorId, CommandReply};
@@ -681,10 +690,10 @@ fn approve_owned_force_result(
     let reply = cases
         .command(gateway, agent, "approvals.propose", &propose)
         .unwrap();
-    if expect_unavailable || expect_source_refusal {
+    if expected_refusal.is_some() {
         let wire = serde_json::to_value(&reply).unwrap();
         assert_eq!(wire["receipt"]["decision"]["kind"], "Refused");
-        if expect_unavailable {
+        if matches!(expected_refusal, Some(PreviewRefusal::PolicyUnavailable)) {
             assert_eq!(
                 wire["receipt"]["decision"]["fault"]["code"],
                 "UnsupportedCapability"

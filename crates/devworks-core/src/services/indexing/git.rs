@@ -813,8 +813,24 @@ impl Git<'_> {
     /// attribution if HEAD changes during observation; never substitute a repository's
     /// primary checkout for the host-resolved invocation worktree.
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
+        self.revision_with_policy(dir, None)
+    }
+    /// Reviewed preparation/status can hash tracked contents. A late new filter name must
+    /// be constrained by the same kernel policy as the eventual reviewed index write.
+    pub fn reviewed_revision_observation(
+        &self,
+        dir: &Path,
+    ) -> Result<RevisionObservation, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.revision_with_policy(dir, Some(&policy))
+    }
+    fn revision_with_policy(
+        &self,
+        dir: &Path,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<RevisionObservation, GitFault> {
         let before = self.head(dir)?.ok_or(GitFault::Unborn)?;
-        let dirty = self.safe_dirty(dir, 0)?;
+        let dirty = self.safe_dirty(dir, 0, policy)?;
         let branch = self.branch(dir)?;
         let after = self.head(dir)?;
         if after.as_deref() != Some(before.as_str()) {
@@ -845,7 +861,12 @@ impl Git<'_> {
     /// tracked or untracked paths need them before hashing; never invent a dirty bit using raw
     /// bytes in place of a configured canonical transformation. Submodules are read separately so
     /// each repository's local filter configuration receives the same checks.
-    fn safe_dirty(&self, dir: &Path, depth: usize) -> Result<bool, GitFault> {
+    fn safe_dirty(
+        &self,
+        dir: &Path,
+        depth: usize,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<bool, GitFault> {
         if depth > 32 {
             return Err(GitFault::Unqualified);
         }
@@ -944,20 +965,26 @@ impl Git<'_> {
                 }
             }
         }
-        let mut spec = self.spec(
-            dir,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=normal",
-                "--ignore-submodules=dirty",
-            ],
-            None,
-        );
-        // Even an attribute change between the check and status cannot select an executable
-        // from the observed configuration. Configuration itself is host-controlled state.
-        let mut count = 2;
+        let args = [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=dirty",
+        ];
+        let mut spec = match policy {
+            Some(policy) => self.reviewed_spec(dir, &args, None, policy)?,
+            None => self.spec(dir, &args, None),
+        };
+        // Disable the observed filter names if attributes change after qualification. On
+        // reviewed reads the kernel launch policy also blocks a newly configured name;
+        // re-reading configuration afterward cannot undo a helper's prior execution.
+        let mut count = spec
+            .env
+            .iter()
+            .find(|(key, _)| key == "GIT_CONFIG_COUNT")
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .ok_or(GitFault::Unqualified)?;
         for name in overrides {
             for (suffix, value) in [("clean", ""), ("process", ""), ("required", "false")] {
                 spec.env.push((
@@ -1017,7 +1044,7 @@ impl Git<'_> {
                 return Err(GitFault::SourceChanged);
             }
             dirty |= self.head(&child)?.as_deref() != Some(&expected);
-            dirty |= self.safe_dirty(&child, depth + 1)?;
+            dirty |= self.safe_dirty(&child, depth + 1, policy)?;
         }
         Ok(dirty)
     }
@@ -1244,7 +1271,7 @@ impl Git<'_> {
             if committed.is_some() {
                 self.head_observation(dir)
             } else {
-                self.revision_observation(dir)
+                self.revision_with_policy(dir, Some(&execution_policy))
             }
         };
         let before = observe()?;

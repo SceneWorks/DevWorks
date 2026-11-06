@@ -1129,7 +1129,11 @@ impl GitService {
                         _ => return changed("reviewed commit contents changed before staging"),
                     }
                 }
-                match git.revision_observation(path) {
+                match if job.reviewed_binding.is_some() {
+                    git.reviewed_revision_observation(path)
+                } else {
+                    git.revision_observation(path)
+                } {
                     Ok(o)
                         if o.head == expected.hex
                             && o.branch.as_deref() == Some(&job.tree.branch) =>
@@ -1184,7 +1188,11 @@ impl GitService {
                 "Git helper did not establish the requested postcondition".into(),
             );
         }
-        match git.revision_observation(path) {
+        match if job.reviewed_binding.is_some() {
+            git.reviewed_revision_observation(path)
+        } else {
+            git.revision_observation(path)
+        } {
             Ok(observation) => {
                 if let Action::Commit { expected, .. } = &job.action
                     && (observation.head == expected.hex
@@ -1247,7 +1255,11 @@ impl GitService {
                 ),
             };
         }
-        let observed = match git.revision_observation(path) {
+        let observed = match if job.reviewed_binding.is_some() {
+            git.reviewed_revision_observation(path)
+        } else {
+            git.revision_observation(path)
+        } {
             Ok(o) if o.branch.as_deref() == Some(&job.tree.branch) => o,
             _ => return EffectOutcome::Unknown("worktree outcome is not observable".into()),
         };

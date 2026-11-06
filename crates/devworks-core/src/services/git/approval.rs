@@ -166,7 +166,7 @@ impl GitService {
         self.verify_target(&git, &target)
             .map_err(|e| read_failure(e, &repository.id))?;
         let physical = git
-            .revision_observation(target.path())
+            .reviewed_revision_observation(target.path())
             .map_err(|e| read_failure(e, &repository.id))?;
         let (native, artifact, contents) = match &request.input {
             OperationInput::Git(ops::Input::Push(i)) => (
