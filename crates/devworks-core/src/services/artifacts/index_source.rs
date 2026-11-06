@@ -87,3 +87,25 @@ impl ArtifactService {
         Ok(bytes)
     }
 }
+
+impl ArtifactService {
+    /// Verified bounded-buffer access for graph source pages. The visitor may retain only its
+    /// requested byte window; a successful return has verified the entire immutable blob.
+    pub(crate) fn scan_index_source(
+        &self,
+        read: &dyn ReadSnapshot,
+        expected: &StoredGraphSourceCapture,
+        mut visit: impl FnMut(&[u8]) -> bool,
+    ) -> Result<(), super::lifecycle::ExactReadRefusal> {
+        use super::lifecycle::ExactReadRefusal;
+        use sha2::{Digest, Sha256};
+        let length=u64::try_from(expected.byte_count).map_err(|_|ExactReadRefusal::Unreadable)?;
+        let _hold=self.readers.acquire(&expected.blob_digest);
+        if read.graph().graph_source_capture(&expected.id).map_err(ExactReadRefusal::Storage)?.as_ref()!=Some(expected){return Err(ExactReadRefusal::NotFound);}
+        if !read.artifacts().blob(&expected.blob_digest).map_err(ExactReadRefusal::Storage)?.is_some_and(|b|b.generation==expected.blob_generation&&b.byte_count==expected.byte_count){return Err(ExactReadRefusal::Unreadable);}
+        let mut stream=self.files.open(&expected.blob_digest,&expected.blob_generation,length).map_err(|_|ExactReadRefusal::Unreadable)?;
+        let mut buffer=[0;8192];let mut hash=Sha256::new();let mut total=0u64;
+        loop{let count=stream.read(&mut buffer).map_err(|_|ExactReadRefusal::Unreadable)?;if count==0{break;}total=total.checked_add(count as u64).ok_or(ExactReadRefusal::Unreadable)?;if total>length{return Err(ExactReadRefusal::Unreadable);}hash.update(&buffer[..count]);if !visit(&buffer[..count]){return Err(ExactReadRefusal::Unreadable);}}
+        if total!=length||hash.finalize().iter().map(|b|format!("{b:02x}")).collect::<String>()!=expected.blob_digest{return Err(ExactReadRefusal::Unreadable);}Ok(())
+    }
+}

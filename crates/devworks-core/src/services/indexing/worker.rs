@@ -393,6 +393,29 @@ pub(crate) fn rows_of(
                     json!({"resolution": e.resolution.as_str(), "targetUnit": unit}),
                 )
             }
+            EdgeTarget::RepositoryNode {
+                repository_id,
+                unit,
+                kind,
+                qualified_name,
+            } => {
+                let target_repository = repository_id.as_str();
+                let id = match kind.as_str() {
+                    "File" => file_node_id(target_repository, unit),
+                    "Repository" | "Folder" => {
+                        dir_node_id(target_repository, unit.trim_start_matches('/'))
+                    }
+                    _ => node_id(target_repository, unit, kind, qualified_name, 0),
+                };
+                (
+                    id.clone(),
+                    id,
+                    json!({
+                        "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
+                        "targetUnit":unit, "targetQualifiedName":qualified_name,
+                    }),
+                )
+            }
         };
         payload["confidence"] = json!((f64::from(e.confidence) * 100.0).round() / 100.0);
         payload["provenance"] = json!({"extractor": extractor});

@@ -8,6 +8,7 @@ use crate::protocol::{DomainErrorCode, Id, ReadStamp};
 use crate::services::sessions::{Failure, Refusal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::{Cell, RefCell};
 
 const PAGE_BYTES: usize = 512 * 1024;
 
@@ -19,13 +20,103 @@ pub(super) struct Metadata<'a> {
     pub scope: &'a DataScope,
     pub now_ms: i64,
     pub stamp: ReadStamp,
+    pub position: Position,
+    pub limit: usize,
+    pub next: RefCell<Option<Position>>,
+    pub budget: RefCell<Budget>,
+    pub encoded_bytes: Cell<usize>,
+    pub cursors: Option<&'a super::cursor::Cursors>,
+}
+
+impl Metadata<'_> {
+    /// Scope and current repository authority precede every metadata row, including the
+    /// unavailable/no-view path. The visitor decides the page boundary; storage remains paged.
+    pub fn repositories(
+        &self,
+        mut visit: impl FnMut(StoredRepository) -> Result<bool, Failure>,
+    ) -> Result<(), Failure> {
+        let project = match self.scope {
+            DataScope::Project { project_id } => {
+                crate::services::projects::visible_project(
+                    self.read.projects(),
+                    self.context,
+                    project_id,
+                )?;
+                Some(project_id.clone())
+            }
+            DataScope::Workspace if self.context.project_id().is_none() => None,
+            DataScope::Workspace => {
+                return Err(Refusal::new(
+                    DomainErrorCode::PermissionDenied,
+                    "workspace_scope",
+                    None,
+                )
+                .into());
+            }
+        };
+        let filter = RepositoryFilter {
+            project,
+            text: None,
+            languages: Vec::new(),
+            include_deleted: false,
+        };
+        let mut after = None;
+        loop {
+            let rows = self
+                .read
+                .projects()
+                .repositories(&filter, after.as_ref(), 128)?;
+            let more = rows.len() == 128;
+            for repository in rows {
+                if !self.budget.borrow_mut().visit() {
+                    return Ok(());
+                }
+                super::scope::authorize(self.read, self.context, self.scope, &repository.id)?;
+                after = Some(repository.id.clone());
+                if !visit(repository)? {
+                    return Ok(());
+                }
+            }
+            if !more {
+                return Ok(());
+            }
+        }
+    }
+    pub fn retain_wire<T: serde::Serialize>(&self, value: &T) -> Result<bool, Failure> {
+        let size = serde_json::to_vec(value)
+            .map_err(|_| Refusal::new(DomainErrorCode::ViewUnavailable, "graph_projection", None))?
+            .len();
+        if self.encoded_bytes.get() != 0
+            && self.encoded_bytes.get().saturating_add(size) > PAGE_BYTES
+        {
+            return Ok(false);
+        }
+        self.encoded_bytes
+            .set(self.encoded_bytes.get().saturating_add(size));
+        Ok(true)
+    }
+    pub fn cursor(&self, position: &Position) -> Result<String, Failure> {
+        self.cursors
+            .ok_or(StorageError::CursorExpired)?
+            .encode(position)
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Position {
     pub offset: usize,
     pub property: Option<properties::Position>,
     pub source_byte: Option<usize>,
+    pub drilldown: Option<DrilldownPosition>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DrilldownPosition {
+    /// Stable ordinal of the exact repository/module identity, not a potentially 64KiB name.
+    pub module_index: usize,
+    pub node_kind: String,
 }
 
 pub(super) struct Reader<'a> {
@@ -38,6 +129,8 @@ pub(super) struct Reader<'a> {
     pub gaps: Vec<&'static str>,
     modules: Option<Modules>,
     encoded_bytes: usize,
+    indexing: Option<&'a crate::services::indexing::IndexEnv>,
+    cursors: Option<&'a super::cursor::Cursors>,
 }
 
 impl<'a> Reader<'a> {
@@ -58,7 +151,84 @@ impl<'a> Reader<'a> {
             gaps: Vec::new(),
             modules: None,
             encoded_bytes: 0,
+            indexing: None,
+            cursors: None,
         }
+    }
+
+    pub fn with_indexing(
+        mut self,
+        indexing: Option<&'a crate::services::indexing::IndexEnv>,
+    ) -> Self {
+        self.indexing = indexing;
+        self
+    }
+    pub fn with_cursors(mut self, cursors: &'a super::cursor::Cursors) -> Self {
+        self.cursors = Some(cursors);
+        self
+    }
+    pub fn cursor(&self, position: &Position) -> Result<String, Failure> {
+        self.cursors
+            .ok_or(StorageError::CursorExpired)?
+            .encode(position)
+    }
+    pub fn file_language(&self, path: &str) -> (Option<String>, bool) {
+        super::languages::describe(self.indexing.map(|env| &*env.parser), path)
+    }
+
+    pub fn readme_source(
+        &mut self,
+        repository: &Id,
+    ) -> Result<Option<crate::protocol::records::CodeSourceLocation>, Failure> {
+        let scope = self.scoped_repository(repository)?;
+        let mut selected: Option<GraphNode> = None;
+        super::scan::nodes(
+            self.read,
+            &scope,
+            &GraphNodeFilter {
+                pattern: Some("readme%".into()),
+                kinds: vec!["File".into()],
+                ..Default::default()
+            },
+            &mut self.budget,
+            |node, _| {
+                let path = &node.node.unit_key;
+                let lower = path.to_lowercase();
+                if path.contains('/') || !(lower == "readme" || lower.starts_with("readme.")) {
+                    return Ok(true);
+                }
+                let rank = (lower != "readme.md", path.as_str());
+                let better = selected.as_ref().is_none_or(|old| {
+                    rank < (
+                        old.node.unit_key.to_lowercase() != "readme.md",
+                        old.node.unit_key.as_str(),
+                    )
+                });
+                if better {
+                    selected = Some(node);
+                }
+                Ok(true)
+            },
+        )?;
+        if self.budget.exhausted.is_some() {
+            if !self.gaps.contains(&"readme_selection_incomplete") {
+                self.gaps.push("readme_selection_incomplete");
+            }
+            return Ok(None);
+        }
+        let Some(node) = selected else {
+            return Ok(None);
+        };
+        let view = self
+            .selected
+            .layers
+            .iter()
+            .find(|v| &v.view.repository_id == repository)
+            .expect("scoped repository view");
+        let Some((unit, capture)) = model::capture(self.read, view, &node.node.unit_key)? else {
+            return Ok(None);
+        };
+        model::location(&view.view, &unit, &capture, &Value::Null)
     }
 
     pub fn scope(&self) -> &GraphScope {
@@ -106,28 +276,18 @@ impl<'a> Reader<'a> {
         raw: &GraphNode,
         property: Option<&properties::Position>,
     ) -> Result<(CodeNode, Option<properties::Position>), Failure> {
-        if self.modules.is_none() {
-            self.modules = Some(Modules::load(
-                self.read,
-                &self.selected.pin.scope,
-                &mut self.budget,
-            )?);
-        }
-        let (owner, ambiguous) = self.modules.as_ref().expect("loaded modules").owner(raw);
-        if ambiguous && !self.gaps.contains(&"ambiguous_internal_module") {
-            self.gaps.push("ambiguous_internal_module");
-        }
+        let owner = self.internal_module(raw)?;
         model::node(
             self.read,
             &self.selected.pin.scope,
             &self.selected.layers,
             raw,
             property,
-            owner,
+            owner.as_deref(),
         )
     }
 
-    pub fn module_matches(&mut self, raw: &GraphNode, requested: &str) -> Result<bool, Failure> {
+    pub fn internal_module(&mut self, raw: &GraphNode) -> Result<Option<String>, Failure> {
         if self.modules.is_none() {
             self.modules = Some(Modules::load(
                 self.read,
@@ -139,7 +299,11 @@ impl<'a> Reader<'a> {
         if ambiguous && !self.gaps.contains(&"ambiguous_internal_module") {
             self.gaps.push("ambiguous_internal_module");
         }
-        Ok(owner == Some(requested))
+        Ok(owner.map(str::to_owned))
+    }
+
+    pub fn module_matches(&mut self, raw: &GraphNode, requested: &str) -> Result<bool, Failure> {
+        Ok(self.internal_module(raw)?.as_deref() == Some(requested))
     }
 
     pub fn find_id(&mut self, id: &Id) -> Result<Option<GraphNode>, Failure> {

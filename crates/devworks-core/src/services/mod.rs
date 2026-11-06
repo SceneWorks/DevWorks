@@ -292,6 +292,14 @@ impl UseCases {
         self
     }
 
+    /// Registers the shared exact-view graph query and trust operators.
+    pub fn with_graph(mut self, service: Arc<graph::GraphService>) -> Self {
+        for op in graph::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
     /// Registers the indexing family (`IndexCoordinator`).
     pub fn with_indexing(mut self, service: Arc<indexing::IndexCoordinator>) -> Self {
         for op in indexing::OPERATIONS {

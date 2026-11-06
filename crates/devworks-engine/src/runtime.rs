@@ -612,6 +612,15 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         )),
         None => use_cases,
     };
+    let use_cases = use_cases.with_graph(Arc::new(
+        devworks_core::services::graph::GraphService::new(
+            store.clone(),
+            clock.clone(),
+            ids.clone(),
+            artifacts.clone(),
+        )
+        .with_indexing(index_supervisor.as_ref().map(|ix| ix.env().clone())),
+    ));
     // Native jobs may run only the maintenance commands this composition can execute.
     let jobs = Arc::new(
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)

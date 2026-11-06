@@ -61,7 +61,7 @@ pub(super) fn select(
                 let pin = read.graph().graph_pin(pin_id)?.ok_or_else(|| scope::unavailable(Some(pin_id.clone())));
                 match pin {
                     Ok(pin) => {
-                        let selected = (|| {
+                        (|| {
                             check_pin(&pin, ctx, data_scope, now)?;
                             for missing in &pin.unavailable_repositories { scope::authorize(read, ctx, data_scope, &missing.repository_id)?; }
                             let mut layers = Vec::with_capacity(pin.scope.views.len());
@@ -73,8 +73,7 @@ pub(super) fn select(
                                 layers.push(view);
                             }
                             Ok(Selected { pin, layers })
-                        })();
-                        selected
+                        })()
                     }
                     Err(e) => Err(e),
                 }
@@ -160,12 +159,18 @@ pub(super) fn select(
                 .iter()
                 .filter_map(|w| w.expires_at_ms)
                 .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
-            selected.pin = tx.graph().renew_graph_pin(
-                &selected.pin.id,
-                &selected.pin.owner_namespace,
-                current.revision,
-                expiry,
-            )?;
+            selected.pin = if expiry > current.expires_at_ms {
+                tx.graph().renew_graph_pin(
+                    &selected.pin.id,
+                    &selected.pin.owner_namespace,
+                    current.revision,
+                    expiry,
+                )?
+            } else {
+                // A repeated page in the same clock tick (or at the overlay's hard
+                // expiry ceiling) reuses the still-live lease without a false renewal.
+                current
+            };
         } else {
             selected.pin.created_at_ms = tx.now_ms();
             selected.pin.expires_at_ms = selected

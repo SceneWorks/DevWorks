@@ -211,7 +211,14 @@ pub(super) fn node(
         .flatten();
     let properties = properties::page(&raw.node.payload["properties"], property_position)
         .map_err(|_| Refusal::new(DomainErrorCode::ViewUnavailable, "graph_properties", None))?;
-    let optional = |key: &str| raw.node.payload.get(key).filter(|v| !v.is_null()).cloned();
+    let optional = |key: &str| {
+        raw.node
+            .payload
+            .get(key)
+            .or_else(|| raw.node.payload["properties"].get(key))
+            .filter(|v| !v.is_null())
+            .cloned()
+    };
     let projected = CodeNode {
         node_id: wire(json!(raw.node.node_id))?,
         repository_id: raw.repository_id.clone(),
@@ -231,7 +238,10 @@ pub(super) fn node(
         do_not_trust: trust.as_ref().is_some_and(|t| !t.trusted),
         trust_score: optional("trustScore").map(wire).transpose()?,
         description: optional("description").map(wire).transpose()?,
-        analysis_confidence: optional("analysisConfidence").map(wire).transpose()?,
+        analysis_confidence: optional("analysisConfidence")
+            .or_else(|| optional("analysis_confidence"))
+            .map(wire)
+            .transpose()?,
         confidence: optional("confidence").map(wire).transpose()?,
         extraction_source: raw.node.payload["provenance"]
             .get("extractor")
@@ -239,7 +249,10 @@ pub(super) fn node(
             .cloned()
             .map(wire)
             .transpose()?,
-        fallback_reason: optional("fallbackReason").map(wire).transpose()?,
+        fallback_reason: optional("fallbackReason")
+            .or_else(|| optional("fallback_reason"))
+            .map(wire)
+            .transpose()?,
         trust_revision: rev(trust.map_or(1, |t| t.revision)),
         content_digest: captured
             .as_ref()
@@ -263,7 +276,12 @@ pub(super) fn edge(raw: &scan::Edge) -> Result<CodeEdge, Failure> {
         target_repository_id: raw.target.repository_id.clone(),
         producing_unit: Some(GraphUnitKey(raw.raw.edge.unit_key.clone())),
         edge_kind: wire(json!(raw.raw.edge.kind))?,
-        resolution: payload.get("resolution").cloned().map(wire).transpose()?,
+        resolution: payload
+            .get("resolution")
+            .filter(|v| v.is_string())
+            .cloned()
+            .map(wire)
+            .transpose()?,
         confidence: payload
             .get("confidence")
             .filter(|v| v.is_number())
@@ -272,6 +290,8 @@ pub(super) fn edge(raw: &scan::Edge) -> Result<CodeEdge, Failure> {
             .transpose()?,
         confidence_band: payload
             .get("confidenceBand")
+            .or_else(|| payload["properties"].get("confidence_band"))
+            .filter(|v| v.is_string())
             .cloned()
             .map(wire)
             .transpose()?,

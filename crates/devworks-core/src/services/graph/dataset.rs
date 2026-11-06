@@ -51,7 +51,7 @@ pub(super) fn nodes(
 
 pub(super) struct Edges {
     pub linked: Vec<scan::Edge>,
-    pub unmapped: Vec<GraphEdge>,
+    pub unmapped: Vec<scan::Unmapped>,
 }
 
 pub(super) fn edges(
@@ -65,9 +65,19 @@ pub(super) fn edges(
     scan::edges(read, scope, layers, budget, |edge, budget| {
         let raw = match &edge {
             Ok(edge) => &edge.raw,
-            Err(raw) => raw,
+            Err(unmapped) => &unmapped.raw,
         };
-        let bytes = std::mem::size_of::<scan::Edge>()
+        let original_bytes = match &edge {
+            Ok(_) => 0,
+            Err(e) => {
+                e.original.edge.payload.to_string().len()
+                    + e.original.edge.unit_key.len()
+                    + e.original.edge.target_node_id.len()
+                    + e.original.edge.source_node_id.len()
+            }
+        };
+        let bytes = original_bytes
+            + std::mem::size_of::<scan::Edge>()
             + raw.edge.unit_key.len()
             + raw.edge.edge_id.len()
             + raw.edge.source_node_id.len()
@@ -86,24 +96,26 @@ pub(super) fn edges(
 }
 
 pub(super) fn low_node(node: &GraphNode) -> bool {
-    ["confidence", "analysisConfidence", "confidenceBand"]
-        .iter()
-        .any(|key| {
-            node.node
-                .payload
-                .get(*key)
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|v| v.eq_ignore_ascii_case("low"))
-        })
+    [
+        "confidence",
+        "analysisConfidence",
+        "confidenceBand",
+        "analysis_confidence",
+        "confidence_band",
+    ]
+    .iter()
+    .any(|key| {
+        node.node
+            .payload
+            .get(*key)
+            .or_else(|| node.node.payload["properties"].get(*key))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|v| v.eq_ignore_ascii_case("low"))
+    })
 }
 
 pub(super) fn low_edge(edge: &scan::Edge) -> bool {
-    edge.raw
-        .edge
-        .payload
-        .get("confidenceBand")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|v| v.eq_ignore_ascii_case("low"))
+    confidence_band(&edge.raw).is_some_and(|v| v.eq_ignore_ascii_case("low"))
         || edge
             .raw
             .edge
@@ -111,4 +123,13 @@ pub(super) fn low_edge(edge: &scan::Edge) -> bool {
             .get("confidence")
             .and_then(serde_json::Value::as_f64)
             .is_some_and(|v| v < 0.5)
+}
+
+pub(super) fn confidence_band(edge: &GraphEdge) -> Option<&str> {
+    let payload = &edge.edge.payload;
+    payload
+        .get("confidenceBand")
+        .or_else(|| payload.get("confidence_band"))
+        .or_else(|| payload["properties"].get("confidence_band"))
+        .and_then(serde_json::Value::as_str)
 }
