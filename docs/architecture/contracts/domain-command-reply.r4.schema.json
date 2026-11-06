@@ -4179,6 +4179,14 @@
     "ConventionRetrieval": {
       "additionalProperties": false,
       "properties": {
+        "embeddingOperation": {
+          "$ref": "#/$defs/OperationRef",
+          "x-since": 3
+        },
+        "embeddingRequestId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
         "embeddingSpace": {
           "anyOf": [
             {

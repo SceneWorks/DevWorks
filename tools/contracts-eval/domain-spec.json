@@ -5633,7 +5633,13 @@
         "embedding_space": "?Content",
         "reason": "?Content",
         "gaps": "Items<Content>",
-        "more_gaps": "bool"
+        "more_gaps": "bool",
+        "embedding_request_id": "?Id",
+        "embedding_operation": "?OperationRef"
+      },
+      "since": {
+        "embedding_request_id": 3,
+        "embedding_operation": 3
       }
     },
     "ConventionSearchHit": {

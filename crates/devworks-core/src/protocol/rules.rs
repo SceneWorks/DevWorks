@@ -318,6 +318,7 @@ fn convention_record(name: &str, v: &Value) -> Result<(), String> {
         )?;
     }
     if name == "ConventionRetrieval" {
+        require(present(v,"embeddingRequestId")==present(v,"embeddingOperation"),"embedding custody needs its actual request and preparation operation")?;
         require(
             (v["mode"] == "Hybrid") == present(v, "embeddingSpace"),
             "hybrid retrieval needs an actual compatible embedding space",

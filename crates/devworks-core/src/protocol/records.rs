@@ -15370,6 +15370,20 @@ pub struct ConventionRetrieval {
     pub reason: Option<Content>,
     pub gaps: Items<Content>,
     pub more_gaps: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub embedding_request_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationRef", extend("x-since" = 3))]
+    pub embedding_operation: Option<OperationRef>,
 }
 impl Check for ConventionRetrieval {
     fn check(&self) -> Result<(), String> {
@@ -15378,11 +15392,24 @@ impl Check for ConventionRetrieval {
         self.reason.check()?;
         self.gaps.check()?;
         self.more_gaps.check()?;
+        self.embedding_request_id.check()?;
+        self.embedding_operation.check()?;
         crate::protocol::rules::record(
             "ConventionRetrieval",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConventionRetrieval {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.embedding_request_id = None;
+        }
+        if revision < 3 {
+            self.embedding_operation = None;
+        }
     }
 }
 
@@ -15436,6 +15463,12 @@ impl Check for ConventionSearchPage {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConventionSearchPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.retrieval.retain_revision(revision);
     }
 }
 
@@ -15910,6 +15943,9 @@ impl Revisioned for ConventionSearchPageResult {
             if let Some(legacy) = legacy {
                 *self = Self::Legacy(legacy);
             }
+        }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
