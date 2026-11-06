@@ -760,7 +760,23 @@
         "state": "ItemState",
         "current_view_id": "?Id",
         "writes_enabled": "bool",
-        "metadata_only": "bool"
+        "metadata_only": "bool",
+        "config": "?ConnectionConfig",
+        "owner_id": "?ActorId",
+        "profile": "?SchemaAdapterProfile",
+        "coverage": "?Coverage",
+        "last_synced_at_ms": "?Counter",
+        "last_error": "?Text",
+        "active_operation_id": "?Id"
+      },
+      "since": {
+        "config": 5,
+        "owner_id": 5,
+        "profile": 5,
+        "coverage": 5,
+        "last_synced_at_ms": 5,
+        "last_error": 5,
+        "active_operation_id": 5
       }
     },
     "ConnectionConfig": {
@@ -774,7 +790,29 @@
         "schemas": "Items<Label>",
         "include_patterns": "Items<Text>",
         "exclude_patterns": "Items<Text>",
-        "writes_enabled": "bool"
+        "writes_enabled": "bool",
+        "enabled": "?bool",
+        "project_access": "?Items<SchemaProjectAccess>",
+        "workspace_exposed": "?bool",
+        "authentication": "?SchemaAuthMode",
+        "username": "?Label",
+        "tls": "?SchemaTlsMode",
+        "ca_certificate": "?ArtifactRef",
+        "exposure_mode": "?SchemaExposureMode",
+        "display_name": "?Label",
+        "environment": "?Label"
+      },
+      "since": {
+        "enabled": 5,
+        "project_access": 5,
+        "workspace_exposed": 5,
+        "authentication": 5,
+        "username": 5,
+        "tls": 5,
+        "ca_certificate": 5,
+        "exposure_mode": 5,
+        "display_name": 5,
+        "environment": 5
       }
     },
     "SchemaObject": {
@@ -786,7 +824,11 @@
         "qualified_name": "Text",
         "definition": "?ArtifactRef",
         "parent_id": "?Id",
-        "coverage": "Coverage"
+        "coverage": "Coverage",
+        "metadata": "?SchemaObjectMetadata"
+      },
+      "since": {
+        "metadata": 5
       }
     },
     "SchemaRelation": {
@@ -5957,6 +5999,95 @@
           "page": "ConventionResourcePage"
         }
       }
+    },
+    "SchemaAuthMode": {
+      "kind": "enum",
+      "values": [
+        "File",
+        "Password"
+      ]
+    },
+    "SchemaTlsMode": {
+      "kind": "enum",
+      "values": [
+        "VerifyFull",
+        "VerifyCa",
+        "LoopbackPlaintext"
+      ]
+    },
+    "SchemaSourceAction": {
+      "kind": "enum",
+      "values": [
+        "Save",
+        "Remove"
+      ]
+    },
+    "SchemaExposureMode": {
+      "kind": "enum",
+      "values": [
+        "Hidden",
+        "SchemaOnly",
+        "ReadOnly",
+        "ReadWrite"
+      ]
+    },
+    "SchemaProjectAccess": {
+      "kind": "record",
+      "fields": {
+        "project_id": "Id",
+        "metadata_enabled": "bool",
+        "data_read_enabled": "bool",
+        "data_write_enabled": "bool"
+      }
+    },
+    "SchemaAdapterProfile": {
+      "kind": "record",
+      "fields": {
+        "driver": "Label",
+        "server_version": "Label",
+        "authentication": "Label",
+        "tls": "Label",
+        "read_only_boundary": "Text",
+        "supported_metadata": "Items<MetadataObjectKind>",
+        "unsupported_metadata": "Items<MetadataObjectKind>",
+        "limitations": "Items<Text>"
+      }
+    },
+    "SchemaParameter": {
+      "kind": "record",
+      "fields": {
+        "name": "Label",
+        "ordinal": "Counter",
+        "mode": "Label",
+        "data_type": "Text",
+        "nullable": "bool"
+      }
+    },
+    "SchemaObjectMetadata": {
+      "kind": "record",
+      "fields": {
+        "name": "Label",
+        "catalog": "Label",
+        "schema": "?Label",
+        "comment": "?Content",
+        "data_type": "?Text",
+        "ordinal": "?Counter",
+        "nullable": "?bool",
+        "primary_key": "?bool",
+        "default_value": "?Text",
+        "column_key": "?Label",
+        "extra": "?Text",
+        "unique": "?bool",
+        "index_type": "?Label",
+        "column_names": "Items<Label>",
+        "constraint_type": "?Label",
+        "referenced_table": "?Text",
+        "referenced_columns": "Items<Label>",
+        "check_clause": "?Content",
+        "routine_type": "?Label",
+        "parameters": "Items<SchemaParameter>",
+        "definition_sql": "?Content"
+      }
     }
   },
   "operations": {
@@ -7193,7 +7324,7 @@
       "result": "Page<SchemaConnection>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained."
     },
     "schemas.objects": {
       "operation": "schemas.objects",
@@ -7210,7 +7341,7 @@
       "result": "Page<SchemaObject>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained."
     },
     "schemas.relationships": {
       "operation": "schemas.relationships",
@@ -7225,31 +7356,39 @@
       "result": "Page<SchemaRelation>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained."
     },
     "schemas.index": {
       "operation": "schemas.index",
       "mode": "Command",
       "fields": {
         "connection_id": "Id",
-        "expected_revision": "Revision"
+        "expected_revision": "Revision",
+        "test_only": "?bool"
       },
       "result": "IndexRunRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine."
+      "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly validates the actual metadata connection/profile without publishing a schema view; normal indexing atomically publishes an immutable scoped metadata snapshot, preserving last-good data on failure.",
+      "since": {
+        "test_only": 5
+      }
     },
     "schemas.refresh": {
       "operation": "schemas.refresh",
       "mode": "Command",
       "fields": {
         "connection_id": "Id",
-        "expected_revision": "Revision"
+        "expected_revision": "Revision",
+        "test_only": "?bool"
       },
       "result": "IndexRunRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine."
+      "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly uses the same bounded native metadata probe. Native sync-all independently admits every eligible source through this operation and reports each outcome.",
+      "since": {
+        "test_only": 5
+      }
     },
     "schemas.remove_index": {
       "operation": "schemas.remove_index",
@@ -7270,12 +7409,16 @@
         "scope": "DataScope",
         "connection_id": "?Id",
         "expected_revision": "?Revision",
-        "config": "ConnectionConfig"
+        "config": "ConnectionConfig",
+        "action": "?SchemaSourceAction"
       },
       "result": "SchemaConnection",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Create or compare-and-edit; credential references are host-issued. HelixDB source reading is excluded; reject unsupported engines. App persistence uses SQLite/FTS5/sqlite-vec."
+      "rules": "Create or compare-and-edit; credential references are host-issued. HelixDB source reading is excluded; reject unsupported engines. App persistence uses SQLite/FTS5/sqlite-vec. Revision5 Save configures enablement, explicit project access, exposure and qualified auth/TLS; Remove retires the definition and indexed metadata without altering the source database. Only native Human configuration may change connection/global/project write policy; no policy grants implicit target execution.",
+      "since": {
+        "action": 5
+      }
     },
     "database.read": {
       "operation": "database.read",
@@ -11176,6 +11319,38 @@
     ],
     "router.embedding_spaces": [
       3
+    ],
+    "schemas.connections": [
+      1,
+      5
+    ],
+    "schemas.objects": [
+      1,
+      5
+    ],
+    "schemas.relationships": [
+      1,
+      5
+    ],
+    "schemas.index": [
+      1,
+      5
+    ],
+    "schemas.refresh": [
+      1,
+      5
+    ],
+    "schemas.remove_index": [
+      1,
+      5
+    ],
+    "schemas.configure": [
+      1,
+      5
+    ],
+    "database.configure_sensitive_columns": [
+      1,
+      5
     ]
   },
   "familyRules": {

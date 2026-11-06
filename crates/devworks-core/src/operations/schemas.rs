@@ -96,16 +96,28 @@ impl Revisioned for RelationshipsInput {
 pub struct IndexInput {
     pub connection_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub test_only: Option<bool>,
 }
 impl Check for IndexInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
+        self.test_only.check()?;
         Ok(())
     }
 }
 impl Revisioned for IndexInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.test_only = None;
+        }
+    }
 }
 
 /// `schemas.refresh` Command input.
@@ -114,16 +126,28 @@ impl Revisioned for IndexInput {
 pub struct RefreshInput {
     pub connection_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub test_only: Option<bool>,
 }
 impl Check for RefreshInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
+        self.test_only.check()?;
         Ok(())
     }
 }
 impl Revisioned for RefreshInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.test_only = None;
+        }
+    }
 }
 
 /// `schemas.remove_index` Command input.
@@ -154,6 +178,13 @@ pub struct ConfigureInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<Revision>,
     pub config: ConnectionConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaSourceAction", extend("x-since" = 5))]
+    pub action: Option<SchemaSourceAction>,
 }
 impl Check for ConfigureInput {
     fn check(&self) -> Result<(), String> {
@@ -161,11 +192,17 @@ impl Check for ConfigureInput {
         self.connection_id.check()?;
         self.expected_revision.check()?;
         self.config.check()?;
+        self.action.check()?;
         Ok(())
     }
 }
 impl Revisioned for ConfigureInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.action = None;
+        }
+        self.config.retain_revision(revision);
+    }
 }
 
 /// An admitted input of the `schemas` family, built only for the selected operation and mode.

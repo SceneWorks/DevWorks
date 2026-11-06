@@ -29,6 +29,7 @@ pub mod queue;
 pub mod resources;
 pub mod router;
 pub mod runs;
+pub mod schemas;
 pub mod sessions;
 pub mod usage;
 pub mod web;

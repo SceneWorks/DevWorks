@@ -1628,6 +1628,55 @@ pub struct SchemaConnection {
     pub current_view_id: Option<Id>,
     pub writes_enabled: bool,
     pub metadata_only: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ConnectionConfig", extend("x-since" = 5))]
+    pub config: Option<ConnectionConfig>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 5))]
+    pub owner_id: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaAdapterProfile", extend("x-since" = 5))]
+    pub profile: Option<SchemaAdapterProfile>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Coverage", extend("x-since" = 5))]
+    pub coverage: Option<Coverage>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 5))]
+    pub last_synced_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 5))]
+    pub last_error: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 5))]
+    pub active_operation_id: Option<Id>,
 }
 impl Check for SchemaConnection {
     fn check(&self) -> Result<(), String> {
@@ -1640,11 +1689,46 @@ impl Check for SchemaConnection {
         self.current_view_id.check()?;
         self.writes_enabled.check()?;
         self.metadata_only.check()?;
+        self.config.check()?;
+        self.owner_id.check()?;
+        self.profile.check()?;
+        self.coverage.check()?;
+        self.last_synced_at_ms.check()?;
+        self.last_error.check()?;
+        self.active_operation_id.check()?;
         super::domain_rules::record(
             "SchemaConnection",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SchemaConnection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.config = None;
+        } else {
+            self.config.retain_revision(revision);
+        }
+        if revision < 5 {
+            self.owner_id = None;
+        }
+        if revision < 5 {
+            self.profile = None;
+        }
+        if revision < 5 {
+            self.coverage = None;
+        }
+        if revision < 5 {
+            self.last_synced_at_ms = None;
+        }
+        if revision < 5 {
+            self.last_error = None;
+        }
+        if revision < 5 {
+            self.active_operation_id = None;
+        }
     }
 }
 
@@ -1661,6 +1745,76 @@ pub struct ConnectionConfig {
     pub include_patterns: Items<Text>,
     pub exclude_patterns: Items<Text>,
     pub writes_enabled: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub enabled: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<SchemaProjectAccess>", extend("x-since" = 5))]
+    pub project_access: Option<Items<SchemaProjectAccess>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 5))]
+    pub workspace_exposed: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaAuthMode", extend("x-since" = 5))]
+    pub authentication: Option<SchemaAuthMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 5))]
+    pub username: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaTlsMode", extend("x-since" = 5))]
+    pub tls: Option<SchemaTlsMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 5))]
+    pub ca_certificate: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaExposureMode", extend("x-since" = 5))]
+    pub exposure_mode: Option<SchemaExposureMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 5))]
+    pub display_name: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 5))]
+    pub environment: Option<Label>,
 }
 impl Check for ConnectionConfig {
     fn check(&self) -> Result<(), String> {
@@ -1673,11 +1827,56 @@ impl Check for ConnectionConfig {
         self.include_patterns.check()?;
         self.exclude_patterns.check()?;
         self.writes_enabled.check()?;
+        self.enabled.check()?;
+        self.project_access.check()?;
+        self.workspace_exposed.check()?;
+        self.authentication.check()?;
+        self.username.check()?;
+        self.tls.check()?;
+        self.ca_certificate.check()?;
+        self.exposure_mode.check()?;
+        self.display_name.check()?;
+        self.environment.check()?;
         super::domain_rules::record(
             "ConnectionConfig",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConnectionConfig {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.enabled = None;
+        }
+        if revision < 5 {
+            self.project_access = None;
+        }
+        if revision < 5 {
+            self.workspace_exposed = None;
+        }
+        if revision < 5 {
+            self.authentication = None;
+        }
+        if revision < 5 {
+            self.username = None;
+        }
+        if revision < 5 {
+            self.tls = None;
+        }
+        if revision < 5 {
+            self.ca_certificate = None;
+        }
+        if revision < 5 {
+            self.exposure_mode = None;
+        }
+        if revision < 5 {
+            self.display_name = None;
+        }
+        if revision < 5 {
+            self.environment = None;
+        }
     }
 }
 
@@ -1693,6 +1892,13 @@ pub struct SchemaObject {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Id>,
     pub coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SchemaObjectMetadata", extend("x-since" = 5))]
+    pub metadata: Option<SchemaObjectMetadata>,
 }
 impl Check for SchemaObject {
     fn check(&self) -> Result<(), String> {
@@ -1703,11 +1909,20 @@ impl Check for SchemaObject {
         self.definition.check()?;
         self.parent_id.check()?;
         self.coverage.check()?;
+        self.metadata.check()?;
         super::domain_rules::record(
             "SchemaObject",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for SchemaObject {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.metadata = None;
+        }
     }
 }
 
@@ -6850,7 +7065,9 @@ impl Revisioned for RouterConfigAction {
                 return Err("union variant predates its introduction: CreateEmbeddingSpace".into());
             }
             Self::QualifyEmbeddingSpace { .. } if revision < 3 => {
-                return Err("union variant predates its introduction: QualifyEmbeddingSpace".into());
+                return Err(
+                    "union variant predates its introduction: QualifyEmbeddingSpace".into(),
+                );
             }
             Self::SelectEmbeddingSpace { .. } if revision < 3 => {
                 return Err("union variant predates its introduction: SelectEmbeddingSpace".into());
@@ -16462,6 +16679,201 @@ impl Check for ConventionResourcesView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SchemaAuthMode {
+    File,
+    Password,
+}
+impl Check for SchemaAuthMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SchemaTlsMode {
+    VerifyFull,
+    VerifyCa,
+    LoopbackPlaintext,
+}
+impl Check for SchemaTlsMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SchemaSourceAction {
+    Save,
+    Remove,
+}
+impl Check for SchemaSourceAction {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum SchemaExposureMode {
+    Hidden,
+    SchemaOnly,
+    ReadOnly,
+    ReadWrite,
+}
+impl Check for SchemaExposureMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaProjectAccess {
+    pub project_id: Id,
+    pub metadata_enabled: bool,
+    pub data_read_enabled: bool,
+    pub data_write_enabled: bool,
+}
+impl Check for SchemaProjectAccess {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.metadata_enabled.check()?;
+        self.data_read_enabled.check()?;
+        self.data_write_enabled.check()?;
+        super::domain_rules::record(
+            "SchemaProjectAccess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaAdapterProfile {
+    pub driver: Label,
+    pub server_version: Label,
+    pub authentication: Label,
+    pub tls: Label,
+    pub read_only_boundary: Text,
+    pub supported_metadata: Items<MetadataObjectKind>,
+    pub unsupported_metadata: Items<MetadataObjectKind>,
+    pub limitations: Items<Text>,
+}
+impl Check for SchemaAdapterProfile {
+    fn check(&self) -> Result<(), String> {
+        self.driver.check()?;
+        self.server_version.check()?;
+        self.authentication.check()?;
+        self.tls.check()?;
+        self.read_only_boundary.check()?;
+        self.supported_metadata.check()?;
+        self.unsupported_metadata.check()?;
+        self.limitations.check()?;
+        super::domain_rules::record(
+            "SchemaAdapterProfile",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaParameter {
+    pub name: Label,
+    pub ordinal: Counter,
+    pub mode: Label,
+    pub data_type: Text,
+    pub nullable: bool,
+}
+impl Check for SchemaParameter {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.ordinal.check()?;
+        self.mode.check()?;
+        self.data_type.check()?;
+        self.nullable.check()?;
+        super::domain_rules::record(
+            "SchemaParameter",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaObjectMetadata {
+    pub name: Label,
+    pub catalog: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_type: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_key: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_key: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_type: Option<Label>,
+    pub column_names: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint_type: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referenced_table: Option<Text>,
+    pub referenced_columns: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_clause: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_type: Option<Label>,
+    pub parameters: Items<SchemaParameter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_sql: Option<Content>,
+}
+impl Check for SchemaObjectMetadata {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.catalog.check()?;
+        self.schema.check()?;
+        self.comment.check()?;
+        self.data_type.check()?;
+        self.ordinal.check()?;
+        self.nullable.check()?;
+        self.primary_key.check()?;
+        self.default_value.check()?;
+        self.column_key.check()?;
+        self.extra.check()?;
+        self.unique.check()?;
+        self.index_type.check()?;
+        self.column_names.check()?;
+        self.constraint_type.check()?;
+        self.referenced_table.check()?;
+        self.referenced_columns.check()?;
+        self.check_clause.check()?;
+        self.routine_type.check()?;
+        self.parameters.check()?;
+        self.definition_sql.check()?;
+        super::domain_rules::record(
+            "SchemaObjectMetadata",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -19924,11 +20336,25 @@ pub enum DomainCommand {
     SchemasIndex {
         connection_id: Id,
         expected_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 5))]
+        test_only: Option<bool>,
     },
     #[serde(rename = "schemas.refresh")]
     SchemasRefresh {
         connection_id: Id,
         expected_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 5))]
+        test_only: Option<bool>,
     },
     #[serde(rename = "schemas.remove_index")]
     SchemasRemoveIndex {
@@ -19943,6 +20369,13 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_revision: Option<Revision>,
         config: ConnectionConfig,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SchemaSourceAction", extend("x-since" = 5))]
+        action: Option<SchemaSourceAction>,
     },
     #[serde(rename = "database.execute_write")]
     DatabaseExecuteWrite {
@@ -21812,16 +22245,20 @@ impl Check for DomainCommand {
             Self::SchemasIndex {
                 connection_id,
                 expected_revision,
+                test_only,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
+                test_only.check()?;
             }
             Self::SchemasRefresh {
                 connection_id,
                 expected_revision,
+                test_only,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
+                test_only.check()?;
             }
             Self::SchemasRemoveIndex {
                 connection_id,
@@ -21835,11 +22272,13 @@ impl Check for DomainCommand {
                 connection_id,
                 expected_revision,
                 config,
+                action,
             } => {
                 scope.check()?;
                 connection_id.check()?;
                 expected_revision.check()?;
                 config.check()?;
+                action.check()?;
             }
             Self::DatabaseExecuteWrite {
                 connection_id,
@@ -23188,6 +23627,22 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 3 {
                     *idempotency_key = None;
+                }
+            }
+            Self::SchemasIndex { test_only, .. } => {
+                if revision < 5 {
+                    *test_only = None;
+                }
+            }
+            Self::SchemasRefresh { test_only, .. } => {
+                if revision < 5 {
+                    *test_only = None;
+                }
+            }
+            Self::SchemasConfigure { config, action, .. } => {
+                config.retain_revision(revision);
+                if revision < 5 {
+                    *action = None;
                 }
             }
             Self::KnowledgeRecord { batch, .. } => {
@@ -24994,6 +25449,10 @@ impl Revisioned for OperationResult {
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::SchemasConnections { value } => value.retain_revision(revision),
+            Self::SchemasObjects { value } => value.retain_revision(revision),
+            Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),

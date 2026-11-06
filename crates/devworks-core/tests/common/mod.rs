@@ -393,6 +393,9 @@ impl ReadSnapshot for MemSnapshot {
     fn conventions(&self) -> &dyn ConventionRead {
         &self.unsupported
     }
+    fn schemas(&self) -> &dyn SchemaRead {
+        &self.unsupported
+    }
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
@@ -506,6 +509,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
+        &mut self.unsupported
+    }
+    fn schemas(&mut self) -> &mut dyn SchemaRepository {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
@@ -3785,6 +3791,84 @@ impl ConventionImportRepository for Unsupported {
         _: &devworks_core::protocol::OperationId,
         _: u16,
     ) -> Result<bool, StorageError> {
+        nope()
+    }
+}
+
+impl SchemaRead for Unsupported {
+    fn schema_credential_in_use(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn schema_inventory_revision(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn schema_source(&self, _: &Id) -> Result<Option<StoredSchemaSource>, StorageError> {
+        nope()
+    }
+    fn schema_sources(
+        &self,
+        _: &SchemaVisibility,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredSchemaSource>, StorageError> {
+        nope()
+    }
+    fn schema_view(&self, _: &Id) -> Result<Option<StoredSchemaView>, StorageError> {
+        nope()
+    }
+    fn schema_objects(
+        &self,
+        _: &Id,
+        _: &SchemaObjectFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<devworks_core::protocol::records::SchemaObject>, StorageError> {
+        nope()
+    }
+    fn schema_relations(
+        &self,
+        _: &Id,
+        _: &[Id],
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<devworks_core::protocol::records::SchemaRelation>, StorageError> {
+        nope()
+    }
+    fn schema_publication(
+        &self,
+        _: &OperationId,
+    ) -> Result<Option<StoredSchemaPublication>, StorageError> {
+        nope()
+    }
+}
+impl SchemaRepository for Unsupported {
+    fn create_schema_source(&mut self, _: &StoredSchemaSource) -> Result<(), StorageError> {
+        nope()
+    }
+    fn revise_schema_source(&mut self, _: &StoredSchemaSource, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn create_schema_view(&mut self, _: &StoredSchemaView) -> Result<(), StorageError> {
+        nope()
+    }
+    fn append_schema_rows(
+        &mut self,
+        _: &Id,
+        _: &[devworks_core::protocol::records::SchemaObject],
+        _: &[devworks_core::protocol::records::SchemaRelation],
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn seal_schema_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn remove_schema_views(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn record_schema_publication(
+        &mut self,
+        _: &StoredSchemaPublication,
+    ) -> Result<(), StorageError> {
         nope()
     }
 }
