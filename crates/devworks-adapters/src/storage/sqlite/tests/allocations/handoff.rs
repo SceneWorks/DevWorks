@@ -655,3 +655,218 @@ fn same_root_restoration_never_revives_an_unmarked_ended_assignment() {
     })
     .unwrap();
 }
+/// A source which dispatched before association changed: the immutable execution/work binding
+/// remains authoritative even though a coordinator has no semantic assignment ID.
+fn coordinator_usage(
+    h: &Harness,
+    s: &SqliteStore,
+    name: &str,
+    root: &str,
+    execution: &str,
+    work: &str,
+    session: &str,
+) {
+    let raw = h.raw();
+    let operation = format!("operation-{name}");
+    let request = format!("request-{name}");
+    let actor = s.info().host_actor;
+    let boot = s.info().boot_id.unwrap();
+    raw.execute("INSERT INTO operations(id,root_id,capability,schema_version,args_digest,payload_json,state,revision,created_at) VALUES(?1,?2,'router.request',1,?3,'{}','Dispatching',3,?4)",rusqlite::params![operation,root,"a".repeat(64),T0]).unwrap();
+    raw.execute("INSERT INTO operation_attempts(id,operation_id,attempt_no,boot_id,state,observations_json) VALUES(?1,?2,1,?3,'Dispatching','[]')",rusqlite::params![name,operation,boot.as_str()]).unwrap();
+    raw.execute("INSERT INTO router_requests(request_id,operation_id,purpose,session_id,project_id,model_id,connection_id,created_at) VALUES(?1,?2,'Conversation',?3,'project','sol','connection',?4)",rusqlite::params![request,operation,session,T0]).unwrap();
+    raw.execute("INSERT INTO usage_attempts(attempt_id,request_id,operation_id,attempt_number,project_id,work_id,assignment_id,execution_root_id,execution_id,session_id,actor_id,role,purpose,catalog_model_id,connection_id,endpoint_profile,access_mode,pricing_snapshot_json,state,revision,created_at) VALUES(?1,?2,?3,1,'project',?4,NULL,?5,?6,?7,?8,'Coordinator','Conversation','sol','connection','OpenAiResponses','ApiKey','{}','Dispatched',2,?9)",rusqlite::params![name,request,operation,work,root,execution,session,actor.0.as_str(),T0]).unwrap();
+    run_write(s, WriteOptions::default(), {
+        let name = name.to_owned();
+        move |tx| {
+            tx.usage().put_attempt_balance(
+                &StoredAttemptBalance {
+                    attempt_id: id(&name),
+                    revision: 1,
+                    priced_micro_usd: None,
+                    reserved_micro_usd: Some(10),
+                    classification: "Untracked".into(),
+                    monetary_complete: false,
+                    incomplete: true,
+                    unknown_tail: false,
+                    local_quiescent: false,
+                    summary: json!({}),
+                },
+                None,
+            )
+        }
+    })
+    .unwrap();
+}
+#[test]
+fn issue_coordinator_without_semantic_assignment_fences_read_and_atomic_handoff_until_local_close()
+{
+    let h = Harness::new();
+    let s = seeded(&h);
+    let old_execution = activate(&s, "issue");
+    let actor = s.info().host_actor;
+    let execution_id = old_execution.id.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let parent = assignment("target-coordinator", "feature", "feature", None);
+        tx.sessions()
+            .insert_session(&session(&parent, actor.clone()))?;
+        tx.runs().insert_assignment(&parent)?;
+        let mut coordinator = assignment("issue-coordinator", "issue", "issue", None);
+        coordinator.state = AssignmentState::Superseded;
+        coordinator.execution_id = Some(execution_id);
+        coordinator.checkpoint = Some(marker(None));
+        tx.sessions()
+            .insert_session(&session(&coordinator, actor))?;
+        tx.runs().insert_assignment(&coordinator)?;
+        let mut issue = tx.work().work(&id("issue"))?.unwrap();
+        issue.parent_feature_id = Some(id("feature"));
+        issue.revision += 1;
+        tx.work().update_work(&issue, 1)
+    })
+    .unwrap();
+    coordinator_usage(
+        &h,
+        &s,
+        "issue-source",
+        "issue",
+        old_execution.id.as_str(),
+        "issue",
+        "session-issue-coordinator",
+    );
+    let moved = read_snapshot(&s, &ReadOptions::default(), |r| {
+        let mut a = r
+            .runs()
+            .assignment(&AssignmentId(id("issue-coordinator")))?
+            .unwrap();
+        a.root_id = RootId(id("feature"));
+        a.parent_id = Some(AssignmentId(id("target-coordinator")));
+        a.execution_id = None;
+        a.state = AssignmentState::Waiting;
+        a.generation += 1;
+        a.revision += 1;
+        a.checkpoint = None;
+        Ok(a)
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("issue-coordinator"))))
+        .unwrap()
+    );
+    assert!(matches!(
+        reparent(&s, moved.clone(), 1, 1),
+        Err(StorageError::Busy)
+    ));
+    // Stopping the old epoch is not proof that the local source closed, and a later epoch must
+    // not make the immutable old source disappear from the handoff boundary.
+    h.raw()
+        .execute(
+            "UPDATE executions SET phase='Stopped',outcome='Interrupted',stopped_at=?1 WHERE id=?2",
+            rusqlite::params![T0, old_execution.id.as_str()],
+        )
+        .unwrap();
+    let mut newer = old_execution;
+    newer.id = id("later-issue-execution");
+    newer.generation = 2;
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.runs().insert_activation(&newer)
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("issue-coordinator"))))
+        .unwrap()
+    );
+    assert!(matches!(
+        reparent(&s, moved.clone(), 1, 1),
+        Err(StorageError::Busy)
+    ));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut b = tx.usage().attempt_balance(&id("issue-source"))?.unwrap();
+        b.revision += 1;
+        b.local_quiescent = true;
+        b.unknown_tail = true;
+        b.reserved_micro_usd = None;
+        tx.usage().put_attempt_balance(&b, Some(1))
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("issue-coordinator"))))
+        .unwrap()
+    );
+    reparent(&s, moved, 1, 1).unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let a = r
+            .runs()
+            .assignment(&AssignmentId(id("issue-coordinator")))?
+            .unwrap();
+        assert_eq!(a.root_id, RootId(id("feature")));
+        assert_eq!(
+            r.sessions().session(&a.session_id)?.unwrap().context_epoch,
+            1
+        );
+        let source = r.usage().inference_attempt(&id("issue-source"))?.unwrap();
+        assert_eq!(source.execution_root_id, Some(RootId(id("issue"))));
+        assert!(source.assignment_id.is_none());
+        assert!(
+            r.usage()
+                .attempt_balance(&source.attempt_id)?
+                .unwrap()
+                .unknown_tail
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn unrelated_parent_coordinator_without_assignment_does_not_veto_worker_handoff() {
+    let h = Harness::new();
+    let (s, moved) = fixture(&h, None);
+    let execution = read_snapshot(&s, &ReadOptions::default(), |r| {
+        Ok(r.runs()
+            .assignment(&AssignmentId(id("worker")))?
+            .unwrap()
+            .execution_id
+            .unwrap())
+    })
+    .unwrap();
+    h.raw()
+        .execute(
+            "UPDATE assignments SET execution_id=?1 WHERE id='coord-a'",
+            [execution.as_str()],
+        )
+        .unwrap();
+    coordinator_usage(
+        &h,
+        &s,
+        "parent-source",
+        "feature",
+        execution.as_str(),
+        "feature",
+        "session-coord-a",
+    );
+    assert!(
+        read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .assignment_handoff_quiescent(&AssignmentId(id("worker"))))
+        .unwrap()
+    );
+    reparent(&s, moved, 1, 1).unwrap();
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| r
+            .runs()
+            .inference_quiescent(&RootId(id("feature"))))
+        .unwrap()
+    );
+    assert!(
+        !read_snapshot(&s, &ReadOptions::default(), |r| Ok(r
+            .usage()
+            .attempt_balance(&id("parent-source"))?
+            .unwrap()
+            .local_quiescent))
+        .unwrap()
+    );
+}
