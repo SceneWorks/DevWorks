@@ -1520,7 +1520,7 @@ fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom
     );
 }
 
-#[path = "usage_official.rs"]
+#[path = "usage/official.rs"]
 mod official;
-#[path = "usage_refresh.rs"]
+#[path = "usage/refresh.rs"]
 mod refresh;
