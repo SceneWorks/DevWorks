@@ -322,19 +322,18 @@ fn eligible(
         if control_of(tx.runs(), &RootId(w.id.clone()))?.desired == DesiredExecution::Paused {
             return Ok(false);
         }
-        if let Some(assignment) = tx.runs().live_assignment_for_work(&RootId(w.id.clone()))? {
-            if assignment.root_id == r.id
-                && !service
-                    .evaluate(
-                        tx.runs(),
-                        &r,
-                        &Target::Assignment(assignment.id),
-                        ActivationPurpose::Implementation,
-                    )?
-                    .eligible
-            {
-                return Ok(false);
-            }
+        if let Some(assignment) = tx.runs().live_assignment_for_work(&RootId(w.id.clone()))?
+            && assignment.root_id == r.id
+            && !service
+                .evaluate(
+                    tx.runs(),
+                    &r,
+                    &Target::Assignment(assignment.id),
+                    ActivationPurpose::Implementation,
+                )?
+                .eligible
+        {
+            return Ok(false);
         }
         let plan = service.scope().plan(tx.runs(), &r)?;
         let PlanState::Approved { feature: unit, .. } = &plan else {
@@ -395,13 +394,12 @@ fn eligible(
     };
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
-        if let PlanState::Approved { units, .. } = &plan {
-            if units
+        if let PlanState::Approved { units, .. } = &plan
+            && units
                 .values()
                 .any(|u| matches!(u.readiness, Readiness::Blocked { .. }))
-            {
-                return Ok(false);
-            }
+        {
+            return Ok(false);
         }
         return Ok(unit.readiness.is_current()
             || matches!(unit.readiness, Readiness::Missing | Readiness::Stale { .. }));
