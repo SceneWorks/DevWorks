@@ -49,7 +49,8 @@
         "result_artifact": "?ArtifactRef",
         "created_at_ms": "Counter",
         "updated_at_ms": "Counter",
-        "space_id": "Id"
+        "space_id": "Id",
+        "can_qualify": "bool"
       }
     },
     "EmbeddingSpacePage": {
@@ -60,7 +61,9 @@
         "has_more": "bool",
         "selection_revision": "Revision",
         "selected_space_id": "?Id",
-        "selected_candidate_id": "?Id"
+        "selected_candidate_id": "?Id",
+        "qualification_available": "bool",
+        "availability_reason": "?Text"
       }
     },
     "RouterConfigAction": {
