@@ -21,17 +21,55 @@ use devworks_core::{
     },
 };
 use std::{io::Read, path::Path, process::Command, sync::Arc};
-fn git(path: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(["-c", "commit.gpgsign=false"])
-        .args(args)
+// Fixture setup preserves intentional repository-local hooks and filters, but never reads
+// the developer's auth/signing configuration or inherits executable Git environment settings.
+fn fixture_command(program: &str, path: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.env_clear();
+    for key in [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    command
         .current_dir(path)
+        .env("HOME", path)
+        .env("USERPROFILE", path)
+        .env("XDG_CONFIG_HOME", path)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", null)
+        .env("GIT_CONFIG_GLOBAL", null)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
         .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-        .output()
-        .unwrap();
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid");
+    command
+}
+fn fixture_git(path: &Path) -> Command {
+    let mut command = fixture_command("git", path);
+    command.args([
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "tag.gpgsign=false",
+        "-c",
+        "push.gpgsign=false",
+    ]);
+    command
+}
+fn git(path: &Path, args: &[&str]) -> String {
+    let output = fixture_git(path).args(args).output().unwrap();
     assert!(
         output.status.success(),
         "git {args:?} exited {:?}: stdout={} stderr={}",
@@ -178,7 +216,7 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
             .to_string()
             .contains("UnsupportedCapability")
     );
-    let marker = Command::new("git")
+    let marker = fixture_git(&source)
         .args(["config", "--get", "probe.executed"])
         .current_dir(&source)
         .output()
@@ -266,7 +304,7 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
             .contains("UnsupportedCapability")
     );
     assert_eq!(
-        Command::new("git")
+        fixture_git(&parent.join("sub"))
             .args(["config", "--get", "probe.executed"])
             .current_dir(parent.join("sub"))
             .status()
@@ -279,19 +317,125 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
 
 #[test]
 fn native_worktree_creation_is_journaled_isolated_and_recoverable() {
-    native_task_lifecycle(false);
+    native_task_lifecycle(false, None);
 }
 #[test]
 fn native_task_pr_is_observed_linked_and_recovered_after_response_loss() {
-    native_task_lifecycle(true);
+    native_task_lifecycle(true, None);
 }
-fn native_task_lifecycle(with_pr: bool) {
+#[derive(Clone, Copy, Debug)]
+enum ReviewedCommitCase {
+    PreCommit,
+    ConfiguredPreCommit,
+    PostIndex,
+    Signer,
+    UnexpectedTree,
+    UnexpectedMessage,
+    ChangedHookNames,
+    LateConfiguredHook,
+    UnavailablePolicy,
+    LateTrackedFilter,
+    LateUntrackedFilter,
+    IgnoredSubmodule,
+    LateStatusFilter,
+}
+
+#[test]
+fn reviewed_commit_never_executes_traditional_or_configured_hooks_or_signer() {
+    for case in [
+        ReviewedCommitCase::PreCommit,
+        ReviewedCommitCase::ConfiguredPreCommit,
+        ReviewedCommitCase::PostIndex,
+        ReviewedCommitCase::Signer,
+    ] {
+        native_task_lifecycle(false, Some(case));
+    }
+}
+
+#[test]
+fn reviewed_commit_does_not_accept_unexpected_committed_tree_or_message_on_recovery() {
+    for case in [
+        ReviewedCommitCase::UnexpectedTree,
+        ReviewedCommitCase::UnexpectedMessage,
+    ] {
+        native_task_lifecycle(false, Some(case));
+    }
+}
+
+#[test]
+fn reviewed_commit_blocks_new_hook_added_at_the_native_spawn_boundary() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateConfiguredHook));
+}
+
+#[test]
+fn reviewed_commit_policy_unavailable_refuses_before_proposal() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::UnavailablePolicy));
+}
+
+#[test]
+fn reviewed_commit_refuses_changed_hook_name_witness_before_dispatch() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::ChangedHookNames));
+}
+
+#[test]
+fn reviewed_manifest_capture_blocks_tracked_filter_at_patch_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateTrackedFilter));
+}
+#[test]
+fn reviewed_manifest_capture_blocks_untracked_filter_at_patch_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateUntrackedFilter));
+}
+
+#[test]
+fn reviewed_preparation_blocks_new_filter_at_status_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateStatusFilter));
+}
+
+#[test]
+fn reviewed_manifest_includes_gitlinks_despite_user_diff_ignore_all() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::IgnoredSubmodule));
+}
+
+fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase>) {
+    native_task_lifecycle_with_create(with_pr, reviewed_case, None);
+}
+fn native_task_lifecycle_with_create(
+    with_pr: bool,
+    reviewed_case: Option<ReviewedCommitCase>,
+    reviewed_create: Option<worktree_hooks::CreateCase>,
+) {
+    native_task_lifecycle_transport(with_pr, reviewed_case, reviewed_create, false, false, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_push_isolates_late_repository_transport_configuration_and_preserves_trusted_auth() {
+    native_task_lifecycle_transport(false, None, None, true, false, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_local_push_trusts_only_the_exact_approved_server_and_never_its_client_hooks() {
+    native_task_lifecycle_transport(false, None, None, true, true, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_https_push_preserves_trusted_credential_helpers_and_isolates_repository_helpers() {
+    native_task_lifecycle_transport(false, None, None, true, false, true);
+}
+fn native_task_lifecycle_transport(
+    with_pr: bool,
+    reviewed_case: Option<ReviewedCommitCase>,
+    reviewed_create: Option<worktree_hooks::CreateCase>,
+    push_case: bool,
+    local_case: bool,
+    https_case: bool,
+) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
     use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let store = h.open();
+    let push_state = push_case.then(|| Arc::new(push_transport::State::new(&h.root, https_case)));
     let source = h.root.join("source");
     let owned = h.root.join("worktrees");
     std::fs::create_dir_all(&source).unwrap();
@@ -303,12 +447,39 @@ fn native_task_lifecycle(with_pr: bool) {
     // This fixture asserts exact LF bytes; do not inherit the host's checkout conversion.
     git(&source, &["config", "core.autocrlf", "false"]);
     std::fs::write(source.join("a.txt"), "base\n").unwrap();
+    if matches!(reviewed_case, Some(ReviewedCommitCase::IgnoredSubmodule)) {
+        let nested = h.root.join("submodule-source");
+        std::fs::create_dir(&nested).unwrap();
+        git(&nested, &["init", "-b", "main"]);
+        std::fs::write(nested.join("item.txt"), "first\n").unwrap();
+        git(&nested, &["add", "."]);
+        git(&nested, &["commit", "-m", "first"]);
+        git(
+            &source,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                nested.to_str().unwrap(),
+                "nested",
+            ],
+        );
+    }
     git(&source, &["add", "a.txt"]);
     git(&source, &["commit", "-m", "base"]);
     let head = git(&source, &["rev-parse", "HEAD"]);
     let remote = h.root.join("remote.git");
-    let remote_url = remote.to_string_lossy().into_owned();
-    git(&source, &["init", "--bare", &remote_url]);
+    let local_remote_url = remote.to_string_lossy().into_owned();
+    git(&source, &["init", "--bare", &local_remote_url]);
+    let remote_url = if let Some(url) = push_state.as_ref().and_then(|state| state.https_url()) {
+        url
+    } else if push_state.is_some() && !local_case {
+        format!("ssh://git@fixture{}", remote.display())
+    } else {
+        local_remote_url
+    };
+    git(&remote, &["config", "http.receivepack", "true"]);
     git(&source, &["remote", "add", "origin", &remote_url]);
     std::fs::write(source.join("a.txt"), "user change\n").unwrap();
     let path = source.to_string_lossy().into_owned();
@@ -370,14 +541,22 @@ fn native_task_lifecycle(with_pr: bool) {
     let filesystem = Arc::new(NativeFilesystem::new());
     let processes = Arc::new(ProcessSupervisor::new(
         store.clone(),
-        Arc::new(NativeProcessHost),
+        Arc::new(ReviewedProcessHost {
+            case: reviewed_case,
+            push: push_state.clone(),
+            injected: std::sync::atomic::AtomicBool::new(false),
+        }),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
     ));
-    let helpers = Arc::new(CommitReplyLost(SupervisedHelpers {
-        supervisor: processes.clone(),
-        store: store.clone(),
-        fs: filesystem.clone(),
-    }));
+    let helpers = Arc::new(CommitReplyLost(
+        SupervisedHelpers {
+            supervisor: processes.clone(),
+            store: store.clone(),
+            fs: filesystem.clone(),
+        },
+        reviewed_case,
+        push_state.clone(),
+    ));
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
@@ -404,6 +583,9 @@ fn native_task_lifecycle(with_pr: bool) {
         h.ids.clone(),
         h.clock(),
         GitConfig {
+            transport: Some(Arc::new(
+                devworks_adapters::git_transport::NativeGitTransportFiles,
+            )),
             roots: vec![RegisteredGitRoot {
                 id: id("owned-root"),
                 path: std::fs::canonicalize(&owned).unwrap(),
@@ -418,21 +600,11 @@ fn native_task_lifecycle(with_pr: bool) {
             ..GitConfig::default()
         },
     ));
-    let info = store.info();
-    let ctx = HostIngress::new(&*store)
-        .context(
-            info.host_actor,
-            PrincipalKind::Host,
-            id("invoke"),
-            id("git-test"),
-            Counter::new(info.restore_epoch).unwrap(),
-            Revision::new(1).unwrap(),
-        )
-        .with_lineage(
-            Some(ProjectId(id("project"))),
-            Some(RootId(id("task"))),
-            None,
-        );
+    let ctx = principal(&*store, "git-human", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project"))),
+        Some(RootId(id("task"))),
+        None,
+    );
     let authority = HostAuthority {
         store: &*store,
         clock: &*h.clock,
@@ -444,7 +616,19 @@ fn native_task_lifecycle(with_pr: bool) {
         ids: &*h.ids,
     };
     let frame = serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"create-tree","body":{"kind":"git.worktree","repositoryId":"repo","workId":"task","expectedRevision":"1","action":"Create","base":{"format":"Sha1","hex":head},"registeredRootId":"owned-root"}});
-    if !with_pr {
+    if let Some(case) = reviewed_create {
+        worktree_hooks::assert_reviewed_create(
+            &h,
+            store.clone(),
+            service.clone(),
+            &gateway,
+            &ctx,
+            (&source, &frame),
+            case,
+        );
+        return;
+    }
+    if !with_pr && reviewed_case.is_none() {
         let mut cancelled = frame.clone();
         cancelled["requestKey"] = serde_json::json!("cancel-create");
         let op = match gateway
@@ -571,6 +755,18 @@ fn native_task_lifecycle(with_pr: bool) {
         "recovery reads its durable result without replay"
     );
     let tree_path = Path::new(&after.path);
+    if let Some(case) = reviewed_case {
+        approvals::assert_reviewed_commit(
+            &h,
+            store.clone(),
+            (service, artifacts),
+            &gateway,
+            &ctx,
+            &after,
+            case,
+        );
+        return;
+    }
     std::fs::write(tree_path.join("new.txt"), "new task work\n").unwrap();
     let requested_message = "\nTask implementation   \n\nBody   \n";
     let message = artifacts
@@ -622,13 +818,19 @@ fn native_task_lifecycle(with_pr: bool) {
     );
     let committed_head = git(tree_path, &["rev-parse", "HEAD"]);
     let result = service.observe(&record);
-    assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
+    assert!(
+        matches!(result, EffectOutcome::Completed(_)),
+        "{result:?}\n{}",
+        push_state
+            .as_ref()
+            .map_or_else(String::new, |state| state.diagnostics())
+    );
     assert_eq!(
         git(tree_path, &["rev-parse", "HEAD"]),
         committed_head,
         "recovery must not create another commit"
     );
-    let raw = Command::new("git")
+    let raw = fixture_git(tree_path)
         .args(["cat-file", "commit", "HEAD"])
         .current_dir(tree_path)
         .output()
@@ -774,7 +976,13 @@ fn native_task_lifecycle(with_pr: bool) {
     };
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
-    assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
+    assert!(
+        matches!(result, EffectOutcome::Completed(_)),
+        "{result:?}\n{}",
+        push_state
+            .as_ref()
+            .map_or_else(String::new, |state| state.diagnostics())
+    );
     assert_eq!(git(&remote, &["rev-parse", &current.branch]), new_head);
     assert_eq!(service.observe(&record), result);
     let stale = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"stale-push","command":{"kind":"Push","worktreeId":current.id,"remoteId":"origin","targetRef":current.branch,"expectedHead":current.head,"expectedRemote":{"format":"Sha1","hex":head},"mode":"Normal"}});
@@ -965,25 +1173,32 @@ fn native_task_lifecycle(with_pr: bool) {
             Some(RootId(id("task"))),
             None,
         );
+    if let Some(state) = &push_state {
+        push_transport::exercise(push_transport::Fixture {
+            h: &h,
+            store: store.clone(),
+            service: service.clone(),
+            gateway: &gateway,
+            agent: &agent,
+            tree: &current,
+            remote: &remote,
+            state,
+        });
+        assert!(processes.owned().is_empty());
+        return;
+    }
     git(tree_path, &["commit", "--amend", "-m", "Rebased task"]);
     let rebased = git(tree_path, &["rev-parse", "HEAD"]);
     assert_ne!(rebased, new_head);
     let force = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"agent-rebased-force","command":{"kind":"Push","worktreeId":current.id,"remoteId":"origin","targetRef":current.branch,"expectedHead":{"format":"Sha1","hex":rebased},"expectedRemote":{"format":"Sha1","hex":new_head},"mode":"ForceWithLease"}});
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            force.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &force,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
@@ -996,21 +1211,14 @@ fn native_task_lifecycle(with_pr: bool) {
     forbidden["requestKey"] = serde_json::json!("default-ref-force");
     forbidden["command"]["expectedHead"]["hex"] = serde_json::json!(another);
     forbidden["command"]["expectedRemote"]["hex"] = serde_json::json!(rebased);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            forbidden.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &forbidden,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(matches!(result, EffectOutcome::Failed(_)), "{result:?}");
@@ -1027,21 +1235,14 @@ fn native_task_lifecycle(with_pr: bool) {
     let mut alias = forbidden;
     alias["requestKey"] = serde_json::json!("symbolic-main-force");
     alias["command"]["expectedRemote"]["hex"] = serde_json::json!(main_before);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            alias.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &alias,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(
@@ -1117,9 +1318,166 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
     }
 }
 
+/// Intercept at the last actual native spawn boundary, after every Git configuration witness.
+/// The requested process policy still runs through the real native adapter and kernel.
+struct ReviewedProcessHost {
+    case: Option<ReviewedCommitCase>,
+    push: Option<Arc<push_transport::State>>,
+    injected: std::sync::atomic::AtomicBool,
+}
+impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        let mut environment = NativeProcessHost.environment();
+        if let Some(state) = &self.push {
+            state.environment(&mut environment);
+        }
+        environment
+    }
+    fn probe(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.terminate(identity)
+    }
+    fn spawn(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        let fixture_spec = self.push.as_ref().map(|state| state.auth_spec(spec));
+        let spec = fixture_spec.as_ref().unwrap_or(spec);
+        if let Some(state) = &self.push {
+            state.before_spawn(spec);
+            if state.refuse_postcondition(spec) {
+                return Err(devworks_core::ports::process::ProcessError::Spawn(
+                    "controlled lost push observation".into(),
+                ));
+            }
+        }
+        if matches!(self.case, Some(ReviewedCommitCase::UnavailablePolicy))
+            && spec.no_child_processes
+            && spec.args == ["--version"]
+        {
+            return Err(
+                devworks_core::ports::process::ProcessError::EnforcementUnavailable(
+                    "controlled unavailable platform".into(),
+                ),
+            );
+        }
+        if matches!(self.case, Some(ReviewedCommitCase::LateStatusFilter))
+            && spec.args.first().is_some_and(|arg| arg == "status")
+            && let Some(path) = spec.cwd.as_deref()
+            && path.join(".manifest-race-armed").exists()
+            && !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            git(
+                path,
+                &[
+                    "config",
+                    "filter.new-filter.clean",
+                    "printf ran > review-hook-marker; cat",
+                ],
+            );
+            std::fs::write(path.join(".gitattributes"), "a.txt filter=new-filter\n").unwrap();
+        }
+        if matches!(
+            self.case,
+            Some(ReviewedCommitCase::LateTrackedFilter | ReviewedCommitCase::LateUntrackedFilter)
+        ) && spec.args.first().is_some_and(|arg| arg == "diff")
+            && spec.args.iter().any(|arg| arg == "--binary")
+            && let Some(path) = spec.cwd.as_deref()
+            && path.join(".manifest-race-armed").exists()
+            && spec.args.last().is_some_and(|arg| {
+                arg == if matches!(self.case, Some(ReviewedCommitCase::LateTrackedFilter)) {
+                    "a.txt"
+                } else {
+                    "reviewed.txt"
+                }
+            })
+            && !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let target = if matches!(self.case, Some(ReviewedCommitCase::LateTrackedFilter)) {
+                "a.txt"
+            } else {
+                "reviewed.txt"
+            };
+            std::fs::write(
+                path.join(".gitattributes"),
+                format!("{target} filter=probe\n"),
+            )
+            .unwrap();
+        }
+        if spec.no_child_processes
+            && matches!(
+                spec.args.first().map(String::as_str),
+                Some("add" | "commit")
+            )
+        {
+            for (key, expected) in [
+                ("index.threads", "1"),
+                ("pack.threads", "1"),
+                ("core.preloadIndex", "false"),
+                ("checkout.workers", "1"),
+                ("gc.auto", "0"),
+                ("maintenance.auto", "false"),
+                ("commit.gpgSign", "false"),
+            ] {
+                let suffix = spec
+                    .env
+                    .iter()
+                    .find_map(|(name, value)| {
+                        (name.starts_with("GIT_CONFIG_KEY_") && value == key)
+                            .then(|| name.trim_start_matches("GIT_CONFIG_KEY_"))
+                    })
+                    .expect("explicit helper-free option");
+                assert!(spec.env.iter().any(|(name, value)| name
+                    == &format!("GIT_CONFIG_VALUE_{suffix}")
+                    && value == expected));
+            }
+            if matches!(self.case, Some(ReviewedCommitCase::LateConfiguredHook))
+                && spec.args.first().is_some_and(|v| v == "commit")
+                && !self
+                    .injected
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let path = spec.cwd.as_deref().unwrap();
+                git(path, &["config", "hook.late.event", "pre-commit"]);
+                git(
+                    path,
+                    &[
+                        "config",
+                        "hook.late.command",
+                        "printf ran > review-hook-marker",
+                    ],
+                );
+            }
+        }
+        NativeProcessHost.spawn(spec)
+    }
+}
+
 /// Lose the successful commit reply before the Git owner can checkpoint it. All native
 /// processes still run through the real supervisor; recovery must observe, never replay.
-struct CommitReplyLost(SupervisedHelpers);
+struct CommitReplyLost(
+    SupervisedHelpers,
+    Option<ReviewedCommitCase>,
+    Option<Arc<push_transport::State>>,
+);
 impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
     fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
         self.0.filesystem()
@@ -1134,7 +1492,42 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         limits: devworks_core::services::indexing::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
-        self.0.run(ctx, spec, limits, stop)
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, false);
+        }
+        let verb = spec.args.first().cloned().unwrap_or_default();
+        let flags = spec
+            .args
+            .iter()
+            .filter(|arg| matches!(arg.as_str(), "--symref" | "--refs" | "--get-url"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let result = self.0.run(ctx, spec, limits, stop);
+        if let Some(state) = &self.2 {
+            state.note_failure(&verb, &flags, &result);
+        }
+        result
+    }
+    fn run_difference(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        self.0.run_difference(ctx, spec, limits, stop)
+    }
+    fn run_recorded_difference(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        self.0
+            .run_recorded_difference(ctx, spec, limits, stop, operation)
     }
     fn run_recorded(
         &self,
@@ -1145,11 +1538,45 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         operation: &devworks_core::protocol::OperationId,
         approved_hold: bool,
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
-        let commit = spec.args.iter().any(|arg| arg == "commit");
-        let reply = self
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, true);
+        }
+        let commit = spec.args.first().is_some_and(|arg| arg == "commit");
+        let directory = spec.cwd.clone();
+        let verb = spec.args.first().cloned().unwrap_or_default();
+        let flags = spec
+            .args
+            .iter()
+            .filter(|arg| matches!(arg.as_str(), "--symref" | "--refs" | "--get-url"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let result = self
             .0
-            .run_recorded(ctx, spec, limits, stop, operation, approved_hold)?;
+            .run_recorded(ctx, spec, limits, stop, operation, approved_hold);
+        if let Some(state) = &self.2 {
+            state.note_failure(&verb, &flags, &result);
+        }
+        let reply = result?;
         if commit {
+            if let Some(case) = self.1 {
+                let path = directory.as_deref().unwrap();
+                match case {
+                    ReviewedCommitCase::UnexpectedTree => {
+                        std::fs::write(path.join("unexpected.txt"), "not reviewed\n").unwrap();
+                        git(path, &["add", "unexpected.txt"]);
+                        git(path, &["commit", "--amend", "--no-edit"]);
+                    }
+                    ReviewedCommitCase::UnexpectedMessage => {
+                        git(
+                            path,
+                            &["commit", "--amend", "-m", "not the reviewed message"],
+                        );
+                    }
+                    _ => {}
+                }
+                return Ok(reply);
+            }
             Err(
                 devworks_core::services::indexing::helper::HelperFault::Uncertain(
                     "successful commit reply lost".into(),
@@ -1160,3 +1587,12 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         }
     }
 }
+
+#[path = "git/approvals.rs"]
+mod approvals;
+
+#[path = "git/worktree_hooks.rs"]
+mod worktree_hooks;
+
+#[path = "git/push_transport.rs"]
+mod push_transport;

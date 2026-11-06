@@ -151,3 +151,19 @@ impl GitService {
         Ok((tree, repository, work))
     }
 }
+
+impl GitService {
+    /// attach_command computes the proposed ownership in memory; it writes nothing. Reuse its
+    /// complete assignment/process quiescence rules while retaining the current source binding.
+    pub(crate) fn approval_attach_binding(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        id: &Id,
+    ) -> Result<StoredGitWorktree, Failure> {
+        self.attach_command(tx, ctx, id)?;
+        tx.git()
+            .git_worktree(id)?
+            .ok_or_else(|| refuse(DomainErrorCode::NotFound, "worktree", id))
+    }
+}

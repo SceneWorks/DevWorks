@@ -32,6 +32,9 @@ class SchemaRevisionRules(unittest.TestCase):
         carried = {o['operation']: generate.introduced_in(o) for _, o in generate.operations()}
         self.assertEqual({n for n, s in carried.items() if s}, {
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
+            'approvals.list', 'approvals.inspect', 'approvals.propose', 'approvals.record_human_decision',
+            'approvals.review_queue', 'notifications.list', 'notifications.read',
+            'notifications.acknowledge', 'notifications.mark_read',
             'history.git_links', 'history.evidence_links', 'history.tool_usage', 'sessions.briefing',
             'resources.list', 'resources.acquire', 'resources.renew', 'resources.release',
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
@@ -101,6 +104,21 @@ class SchemaRevisionRules(unittest.TestCase):
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3})
         self.assertEqual(generate.introduced_in(configure), {2})
+
+    def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):
+        view = generate.TYPES['ApprovalViewRecord']
+        self.assertEqual(view['earlierName'], 'ProposalRecord')
+        self.assertEqual(view['earlierBefore'], 3)
+        self.assertIn('operation_preview', view['since'])
+        self.assertEqual(view['since']['reviewed_source'], 3)
+        self.assertNotIn('payload', generate.TYPES['ProposalRecord']['fields'])
+        self.assertEqual(generate.TYPES['ApprovalContent']['variants']['SavedOperation']['input'], 'SavedCommandInput')
+        self.assertIn('SavedCommandInput', generate.SUPPORT)
+        byname = {o['operation']: o for _, o in generate.operations()}
+        for name in ['approvals.review_queue', 'notifications.mark_read']:
+            self.assertEqual([r['revision'] for r in byname[name]['schemaRevisions']], [3])
+        self.assertEqual(byname['approvals.review_queue']['resultValueType'], 'KnowledgeReviewPage')
+        self.assertEqual([r['revision'] for r in byname['notifications.settings']['schemaRevisions']], [1])
 
     def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
         operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')

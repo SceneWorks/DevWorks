@@ -90,6 +90,8 @@ pub struct PendingCommand {
     pub label: String,
     pub operation: String,
     pub frame: Vec<u8>,
+    #[serde(default)]
+    pub dispatch: crate::backend::CommandDispatch,
 }
 
 /// The message an unconfirmed `sessions.append_message` submitted: its text and the stored

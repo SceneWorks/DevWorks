@@ -110,6 +110,7 @@ mod artifacts;
 mod authority;
 mod browser;
 mod connections;
+mod decisions;
 mod diagnostics;
 mod evals;
 mod git;
@@ -1285,3 +1286,5 @@ fn a_cancelled_read_stops_waiting_promptly() {
     })
     .unwrap();
 }
+
+mod approval_service;

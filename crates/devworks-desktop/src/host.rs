@@ -174,6 +174,7 @@ impl std::fmt::Display for StartError {
 /// The booted host: the runtime handle and the host-bound user identity.
 pub struct Host {
     runtime: Arc<Runtime>,
+    async_runtime: tokio::runtime::Handle,
     ctx: InvocationContext,
     sources: Arc<HostArtifactSources>,
     data_root: PathBuf,
@@ -340,6 +341,9 @@ async fn compose(
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.native_notifications = Some(Arc::new(
+        crate::native_notifications::NativeOsNotifications::new(),
+    ));
     // The run-control quiesce (live work held for Continue) gets this cooperative period; it
     // stays within the shell's Quiescing bound, so the window persists only after it ended.
     runtime_config.shutdown_grace = runtime_config
@@ -355,6 +359,9 @@ async fn compose(
             let root = Id::new(format!("git-root-{}", &digest[..24])).ok()?;
             Some(devworks_engine::git::GitComposition {
                 config: devworks_core::services::git::GitConfig {
+                    transport: Some(Arc::new(
+                        devworks_adapters::git_transport::NativeGitTransportFiles,
+                    )),
                     roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
                     filesystem: Some(Arc::new(NativeFilesystem::new())),
                     github: Some(Arc::new(
@@ -439,7 +446,8 @@ async fn compose(
     tokio::task::spawn_blocking(move || {
         run_write(&*st, WriteOptions::default(), move |tx| {
             tx.actors()
-                .register(&registered, PrincipalKind::Human, &name)
+                .register(&registered, PrincipalKind::Human, &name)?;
+            tx.decisions().bind_notification_user(&registered)
         })
     })
     .await
@@ -454,8 +462,10 @@ async fn compose(
         Counter::new(info.restore_epoch).map_err(|e| StartError::Thread(e.to_owned()))?,
         Revision::new(1).expect("positive"),
     );
+    runtime.notification_wakeup();
     Ok(Host {
         runtime: Arc::new(runtime),
+        async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,
         data_root: config.data_root.clone(),
@@ -707,6 +717,26 @@ impl Backend for DesktopBackend {
     }
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
+    }
+    fn human_decision(&self, frame: &[u8]) -> CommandOutcome {
+        self.host
+            .runtime
+            .record_human_decision(&self.host.ctx, frame)
+    }
+    fn set_application_focus(&self, focused: Option<bool>) {
+        self.host.runtime.set_notification_focus(focused);
+    }
+    fn os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        self.host.runtime.notification_permission()
+    }
+    fn request_os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        self.host
+            .async_runtime
+            .block_on(self.host.runtime.request_notification_permission())
     }
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String> {
         self.host

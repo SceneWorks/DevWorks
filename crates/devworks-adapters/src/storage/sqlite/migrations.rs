@@ -357,6 +357,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0026_allocations.sql"),
         rebuilds_tables: false,
     },
+    // Earlier writers cannot capture reviewed plan content or preserve decision wakeup bindings.
+    Migration {
+        version: 27,
+        minimum_reader: 8,
+        minimum_writer: 27,
+        sql: include_str!("migrations/0027_decisions.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -670,3 +678,7 @@ pub const MIGRATION_0025_SHA256: &str =
 /// Recorded checksum of migration 26.
 pub const MIGRATION_0026_SHA256: &str =
     "11c429872a1895385d75fd449994beb9bda95ccaf4e920dea63b944da3e2d478";
+
+/// Recorded checksum of migration 27.
+pub const MIGRATION_0027_SHA256: &str =
+    "dafafed20991660c492ef38f23448111618cecb0b5f061793f266271a75c1c8f";

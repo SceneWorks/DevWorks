@@ -139,6 +139,8 @@ pub struct DecodedRequest {
     pub binding: &'static ModeBinding,
     pub key: CallerKey,
     pub input: OperationInput,
+    /// Canonical typed selected arguments, without envelope identity or authority.
+    pub normalized: Value,
     pub fingerprint: Fingerprint,
     /// The negotiated schema revision: it selects the strict decoder, enters the fingerprint and
     /// the receipt, and decides the result projection.
@@ -243,6 +245,7 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
         binding,
         key,
         input: decoded.input,
+        normalized: decoded.normalized,
         fingerprint,
         revision,
         effect,

@@ -101,6 +101,8 @@ pub enum GitFault {
     SourceChanged,
     Unborn,
     Unqualified,
+    /// The reviewed mutation cannot run Git with its required helper-free launch policy.
+    ReviewedUnavailable,
     /// Output that does not parse as Git's documented format.
     Malformed(String),
 }
@@ -111,6 +113,9 @@ impl std::fmt::Display for GitFault {
             Self::SourceChanged => f.write_str("Git HEAD changed during observation"),
             Self::Unqualified => {
                 f.write_str("dirty-state reading cannot safely qualify this checkout")
+            }
+            Self::ReviewedUnavailable => {
+                f.write_str("helper-free reviewed Git execution is unavailable")
             }
             Self::Unborn => f.write_str("unborn HEAD has no tested revision"),
             Self::Malformed(m) => write!(f, "unexpected git output: {m}"),
@@ -205,9 +210,96 @@ fn windows_component_safe(part: &str) -> bool {
         })
 }
 
+fn supported_reviewed_version(version: &str) -> bool {
+    if version.lines().count() != 1 {
+        return false;
+    }
+    let Some(number) = version
+        .strip_prefix("git version ")
+        .and_then(|v| v.split_whitespace().next())
+    else {
+        return false;
+    };
+    let mut parts = number.split('.');
+    matches!((parts.next().and_then(|v| v.parse::<u64>().ok()), parts.next().and_then(|v| v.parse::<u64>().ok())), (Some(major), Some(minor)) if (major, minor) >= (2, 31))
+}
+
+/// Git for Windows' cmd/git.exe is a launcher. The --exec-path from the trusted configured
+/// distribution identifies the actual mingw binary; never guess a different installation.
+#[cfg(any(windows, test))]
+fn windows_reviewed_program(exec_path: &str) -> Option<String> {
+    let path = windows_path_argument(exec_path)?.replace('\\', "/");
+    let rest = if path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().get(2) == Some(&b'/')
+    {
+        &path[3..]
+    } else {
+        path.strip_prefix("//")?
+    };
+    if rest
+        .split('/')
+        .any(|p| p.is_empty() || !windows_component_safe(p))
+    {
+        return None;
+    }
+    let distribution = path.strip_suffix("/libexec/git-core")?;
+    if !matches!(
+        distribution.rsplit('/').next()?,
+        "mingw64" | "mingw32" | "clangarm64" | "ucrt64"
+    ) {
+        return None;
+    }
+    Some(format!("{distribution}/bin/git.exe"))
+}
+
 #[cfg(test)]
 mod process_argument_tests {
-    use super::windows_path_argument;
+    use super::{supported_reviewed_version, windows_path_argument, windows_reviewed_program};
+
+    #[test]
+    fn reviewed_git_keeps_the_supported_floor_and_resolves_only_its_distribution() {
+        for version in [
+            "git version 2.31.0",
+            "git version 2.54.0.windows.1",
+            "git version 2.54.0 (Apple Git-157)",
+        ] {
+            assert!(supported_reviewed_version(version));
+        }
+        for version in [
+            "git version 2.30.9",
+            "git version unknown",
+            "version 2.54.0",
+            "git version 2.54.0\nextra",
+        ] {
+            assert!(!supported_reviewed_version(version));
+        }
+        for (path, expected) in [
+            (
+                r"C:\Program Files\Git\mingw64\libexec\git-core",
+                "C:/Program Files/Git/mingw64/bin/git.exe",
+            ),
+            (
+                r"\\?\C:\PortableGit\mingw32\libexec\git-core",
+                "C:/PortableGit/mingw32/bin/git.exe",
+            ),
+            (
+                "//host/share/Git/clangarm64/libexec/git-core",
+                "//host/share/Git/clangarm64/bin/git.exe",
+            ),
+        ] {
+            assert_eq!(windows_reviewed_program(path).as_deref(), Some(expected));
+        }
+        for path in [
+            "relative/mingw64/libexec/git-core",
+            "C:/Git/cmd/git.exe",
+            "C:/other/libexec/git-core",
+            "C:/Git/../mingw64/libexec/git-core",
+            "C:/Git/mingw64/libexec/git-core/extra",
+        ] {
+            assert!(windows_reviewed_program(path).is_none(), "{path}");
+        }
+    }
 
     #[test]
     fn canonical_windows_paths_keep_their_target_in_git_arguments() {
@@ -260,7 +352,9 @@ impl Git<'_> {
         spec.env.extend(vec![
             ("GIT_CONFIG_COUNT".into(), "2".into()),
             ("GIT_CONFIG_KEY_0".into(), "core.fsmonitor".into()),
-            ("GIT_CONFIG_VALUE_0".into(), "false".into()),
+            // Empty disables fsmonitor on the supported Git 2.31 floor too; older Git
+            // interprets the nonempty string "false" as a monitor command pathname.
+            ("GIT_CONFIG_VALUE_0".into(), String::new()),
             // v0/v1 hide non-HEAD symbolic refs. Local and qualified GitHub transports must
             // request v2 so a task-name alias cannot conceal a protected destination.
             ("GIT_CONFIG_KEY_1".into(), "protocol.version".into()),
@@ -318,12 +412,205 @@ impl Git<'_> {
         )?)
     }
 
+    /// Qualify the actual executable under the same process policy used by reviewed writes.
+    /// This runs before proposal creation, outside any storage writer. A Windows Git launcher
+    /// cannot spawn its real Git under this policy, so locate the trusted distribution first.
+    fn reviewed_program(&self, dir: &Path) -> Result<(String, String), GitFault> {
+        #[cfg(windows)]
+        let program = {
+            let path = self
+                .line(dir, &["--exec-path"])?
+                .ok_or(GitFault::ReviewedUnavailable)?;
+            windows_reviewed_program(&path).ok_or(GitFault::ReviewedUnavailable)?
+        };
+        #[cfg(not(windows))]
+        let program = self.program.to_owned();
+        let mut spec = self.spec(dir, &["--version"], None);
+        spec.program = program.clone();
+        spec.no_child_processes = true;
+        let output = self
+            .runner
+            .run(
+                self.ctx,
+                spec,
+                HelperLimits {
+                    deadline: self.deadline,
+                    max_stdout: 64 * 1024,
+                },
+                self.stop,
+            )
+            .map_err(|error| match error {
+                HelperFault::Cancelled
+                | HelperFault::TimedOut
+                | HelperFault::Storage(_)
+                | HelperFault::Uncertain(_) => GitFault::Helper(error),
+                _ => GitFault::ReviewedUnavailable,
+            })?;
+        let version = std::str::from_utf8(&output)
+            .map_err(|_| GitFault::ReviewedUnavailable)?
+            .trim();
+        if !supported_reviewed_version(version) {
+            return Err(GitFault::ReviewedUnavailable);
+        }
+        Ok((program, version.to_owned()))
+    }
+
+    /// Names only: hook command bodies may contain secrets and never enter approval evidence.
+    pub fn reviewed_commit_policy(&self, dir: &Path) -> Result<serde_json::Value, GitFault> {
+        let (program, version) = self.reviewed_program(dir)?;
+        let output = match self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                "^hook\\..*\\.(event|command|parallel|enabled)$",
+            ],
+            64 * 1024,
+        ) {
+            Ok(bytes) => bytes,
+            Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        let mut names = std::collections::BTreeSet::new();
+        for key in output.split(|b| *b == 0).filter(|key| !key.is_empty()) {
+            let key = std::str::from_utf8(key).map_err(|_| GitFault::Unqualified)?;
+            let name = key
+                .strip_prefix("hook.")
+                .and_then(|key| key.rsplit_once('.'))
+                .map(|(name, _)| name)
+                .ok_or(GitFault::Unqualified)?;
+            if name.is_empty() || name.len() > 4096 || name.chars().any(char::is_control) {
+                return Err(GitFault::Unqualified);
+            }
+            names.insert(name.to_owned());
+            if names.len() > 256 {
+                return Err(GitFault::Unqualified);
+            }
+        }
+        Ok(serde_json::json!({"gitVersion":version,"gitProgram":program,"hookNames":names}))
+    }
+
+    /// Fixed helper-free launch profile shared by reviewed writes and their patch evidence.
+    /// The policy carries the already-qualified actual Git executable, including Windows.
+    fn reviewed_spec(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        policy: &serde_json::Value,
+    ) -> Result<ProcessSpec, GitFault> {
+        let mut spec = self.spec(dir, args, stdin);
+        spec.program = policy["gitProgram"]
+            .as_str()
+            .ok_or(GitFault::ReviewedUnavailable)?
+            .to_owned();
+        spec.no_child_processes = true;
+        let mut overrides = vec![
+            ("index.threads".to_owned(), "1".to_owned()),
+            ("pack.threads".to_owned(), "1".to_owned()),
+            ("core.preloadIndex".to_owned(), "false".to_owned()),
+            ("checkout.workers".to_owned(), "1".to_owned()),
+            ("gc.auto".to_owned(), "0".to_owned()),
+            ("maintenance.auto".to_owned(), "false".to_owned()),
+            ("core.hooksPath".to_owned(), "/dev/null".to_owned()),
+            ("commit.gpgSign".to_owned(), "false".to_owned()),
+        ];
+        for name in policy["hookNames"]
+            .as_array()
+            .ok_or(GitFault::Unqualified)?
+        {
+            let name = name.as_str().ok_or(GitFault::Unqualified)?;
+            overrides.push((format!("hook.{name}.event"), String::new()));
+            overrides.push((format!("hook.{name}.enabled"), "false".to_owned()));
+        }
+        let mut count = 2;
+        for (key, value) in overrides {
+            spec.env.push((format!("GIT_CONFIG_KEY_{count}"), key));
+            spec.env.push((format!("GIT_CONFIG_VALUE_{count}"), value));
+            count += 1;
+        }
+        spec.env
+            .iter_mut()
+            .find(|(key, _)| key == "GIT_CONFIG_COUNT")
+            .expect("fixed helper configuration")
+            .1 = count.to_string();
+        Ok(spec)
+    }
+
+    fn reviewed_read(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        max: usize,
+        policy: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        Ok(self.runner.run(
+            self.ctx,
+            self.reviewed_spec(dir, args, None, policy)?,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: max,
+            },
+            self.stop,
+        )?)
+    }
+
+    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
+    /// The current hook-name/version witness is checked on either side of every index write.
+    pub(crate) fn reviewed_mutation(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        operation: &OperationId,
+        expected: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        if &policy != expected {
+            return Err(GitFault::SourceChanged);
+        }
+        let spec = self.reviewed_spec(dir, args, stdin, &policy)?;
+        let result = self.runner.run_recorded(
+            self.ctx,
+            spec,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 1024 * 1024,
+            },
+            self.stop,
+            operation,
+            false,
+        )?;
+        if self.reviewed_commit_policy(dir)? != policy {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(result)
+    }
+
     /// Resolve one literal ref, with no revision-expression interpretation.
     pub fn branch_head(&self, dir: &Path, reference: &str) -> Result<Option<String>, GitFault> {
         if !reference.starts_with("refs/heads/") || reference.contains(['\0', '\n']) {
             return Err(GitFault::Malformed("invalid branch ref".into()));
         }
         self.line(dir, &["show-ref", "--verify", "--hash", reference])
+    }
+
+    /// Local-only configuration inventory for the host-owned transport boundary. Values may
+    /// contain credentials: callers must never publish them as approval or journal evidence.
+    pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {
+        self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--show-scope",
+                "--show-origin",
+                "--list",
+            ],
+            1024 * 1024,
+        )
     }
 
     /// All push destinations of the named remote. The Git service requires exactly one and
@@ -505,12 +792,13 @@ impl Git<'_> {
         if !oid_ok(head) {
             return Err(GitFault::Malformed("invalid commit ID".into()));
         }
-        let bytes = self.run(
-            dir,
-            &["show", "--no-patch", "--format=%B", head],
-            64 * 1024 + 1024,
-        )?;
-        String::from_utf8(bytes).map_err(|_| GitFault::Malformed("commit message encoding".into()))
+        let bytes = self.run(dir, &["cat-file", "commit", head], 64 * 1024 + 1024)?;
+        let body = bytes
+            .windows(2)
+            .position(|w| w == b"\n\n")
+            .ok_or_else(|| GitFault::Malformed("commit headers".into()))?;
+        String::from_utf8(bytes[body + 2..].to_vec())
+            .map_err(|_| GitFault::Malformed("commit message encoding".into()))
     }
 
     /// Parents of an exact commit object (never a revision expression).
@@ -541,8 +829,24 @@ impl Git<'_> {
     /// attribution if HEAD changes during observation; never substitute a repository's
     /// primary checkout for the host-resolved invocation worktree.
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
+        self.revision_with_policy(dir, None)
+    }
+    /// Reviewed preparation/status can hash tracked contents. A late new filter name must
+    /// be constrained by the same kernel policy as the eventual reviewed index write.
+    pub fn reviewed_revision_observation(
+        &self,
+        dir: &Path,
+    ) -> Result<RevisionObservation, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.revision_with_policy(dir, Some(&policy))
+    }
+    fn revision_with_policy(
+        &self,
+        dir: &Path,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<RevisionObservation, GitFault> {
         let before = self.head(dir)?.ok_or(GitFault::Unborn)?;
-        let dirty = self.safe_dirty(dir, 0)?;
+        let dirty = self.safe_dirty(dir, 0, policy)?;
         let branch = self.branch(dir)?;
         let after = self.head(dir)?;
         if after.as_deref() != Some(before.as_str()) {
@@ -570,10 +874,15 @@ impl Git<'_> {
     }
 
     /// Git may run arbitrary clean/process filters while computing status. Determine whether
-    /// tracked paths need them before hashing; never invent a dirty bit using raw bytes in
-    /// place of a configured canonical transformation. Submodules are read separately so
+    /// tracked or untracked paths need them before hashing; never invent a dirty bit using raw
+    /// bytes in place of a configured canonical transformation. Submodules are read separately so
     /// each repository's local filter configuration receives the same checks.
-    fn safe_dirty(&self, dir: &Path, depth: usize) -> Result<bool, GitFault> {
+    fn safe_dirty(
+        &self,
+        dir: &Path,
+        depth: usize,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<bool, GitFault> {
         if depth > 32 {
             return Err(GitFault::Unqualified);
         }
@@ -639,6 +948,16 @@ impl Git<'_> {
                 ));
             }
         }
+        if !filters.is_empty() {
+            // A no-index diff applies clean/process conversion to new files too. Qualify all
+            // untracked paths without decoding or line-splitting their NUL-delimited names.
+            let untracked = self.run(
+                dir,
+                &["ls-files", "-z", "--others", "--exclude-standard"],
+                MAX_LISTING_BYTES,
+            )?;
+            paths.extend_from_slice(&untracked);
+        }
         if !filters.is_empty() && !paths.is_empty() {
             let attributes = self.runner.run(
                 self.ctx,
@@ -662,20 +981,26 @@ impl Git<'_> {
                 }
             }
         }
-        let mut spec = self.spec(
-            dir,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=normal",
-                "--ignore-submodules=dirty",
-            ],
-            None,
-        );
-        // Even an attribute change between the check and status cannot select an executable
-        // from the observed configuration. Configuration itself is host-controlled state.
-        let mut count = 2;
+        let args = [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=dirty",
+        ];
+        let mut spec = match policy {
+            Some(policy) => self.reviewed_spec(dir, &args, None, policy)?,
+            None => self.spec(dir, &args, None),
+        };
+        // Disable the observed filter names if attributes change after qualification. On
+        // reviewed reads the kernel launch policy also blocks a newly configured name;
+        // re-reading configuration afterward cannot undo a helper's prior execution.
+        let mut count = spec
+            .env
+            .iter()
+            .find(|(key, _)| key == "GIT_CONFIG_COUNT")
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .ok_or(GitFault::Unqualified)?;
         for name in overrides {
             for (suffix, value) in [("clean", ""), ("process", ""), ("required", "false")] {
                 spec.env.push((
@@ -735,7 +1060,7 @@ impl Git<'_> {
                 return Err(GitFault::SourceChanged);
             }
             dirty |= self.head(&child)?.as_deref() != Some(&expected);
-            dirty |= self.safe_dirty(&child, depth + 1)?;
+            dirty |= self.safe_dirty(&child, depth + 1, policy)?;
         }
         Ok(dirty)
     }
@@ -906,6 +1231,217 @@ impl Git<'_> {
         )?;
         parse_name_status(&out)
     }
+    /// Exact bounded tracked/index/untracked commit contents, including symlink target text.
+    /// Patches are captured twice; a changing source is never presented as one stable review.
+    /// No temporary index, staging, object write or source-file publication occurs here.
+    pub fn commit_manifest(&self, dir: &Path, base: &str) -> Result<serde_json::Value, GitFault> {
+        let first = self.capture_commit_manifest(dir, base, false, None)?;
+        if self.capture_commit_manifest(dir, base, false, None)? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    /// The exact index about to be committed. Matching the reviewed worktree manifest after
+    /// `add --all` catches a content/filter/index race before the commit is admitted.
+    pub fn staged_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+    ) -> Result<serde_json::Value, GitFault> {
+        let first = self.capture_commit_manifest(dir, base, true, None)?;
+        if self.capture_commit_manifest(dir, base, true, None)? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    /// The actual committed tree changes, in the same representation as the reviewed source.
+    /// Reading fixed object IDs proves contents independently of the current worktree/index.
+    pub fn committed_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<serde_json::Value, GitFault> {
+        if !oid_ok(head) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        let first = self.capture_commit_manifest(dir, base, false, Some(head))?;
+        if self.capture_commit_manifest(dir, base, false, Some(head))? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    fn capture_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+        staged: bool,
+        committed: Option<&str>,
+    ) -> Result<serde_json::Value, GitFault> {
+        if !oid_ok(base) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        const BOUND: usize = 16 * 1024 * 1024;
+        let execution_policy = self.reviewed_commit_policy(dir)?;
+        let observe = || {
+            if committed.is_some() {
+                self.head_observation(dir)
+            } else {
+                self.revision_with_policy(dir, Some(&execution_policy))
+            }
+        };
+        let before = observe()?;
+        if committed.is_some_and(|head| head != before.head) {
+            return Err(GitFault::SourceChanged);
+        }
+        // A worktree diff with `none` launches status inside each initialized submodule.
+        // `dirty` still includes every changed gitlink HEAD, overriding user `all`, while
+        // excluding child-worktree dirt that an outer `add --all` cannot commit. Object/index
+        // diffs do not inspect child worktrees and use `none` for their exact stored gitlinks.
+        let submodules = if staged || committed.is_some() {
+            "--ignore-submodules=none"
+        } else {
+            "--ignore-submodules=dirty"
+        };
+        let mut args = vec!["diff"];
+        if staged {
+            args.push("--cached");
+        }
+        args.extend([
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            submodules,
+            "--submodule=short",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            base,
+        ]);
+        args.extend(committed);
+        args.push("--");
+        let changed = self.reviewed_read(dir, &args, MAX_LISTING_BYTES, &execution_policy)?;
+        let mut paths = std::collections::BTreeMap::new();
+        for raw in changed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            let path =
+                path_of(raw).ok_or_else(|| GitFault::Malformed("tracked approval path".into()))?;
+            paths.insert(path, false);
+        }
+        if !staged && committed.is_none() {
+            let untracked = self.run(
+                dir,
+                &["ls-files", "-z", "--others", "--exclude-standard"],
+                MAX_LISTING_BYTES,
+            )?;
+            for raw in untracked.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                let path = path_of(raw)
+                    .ok_or_else(|| GitFault::Malformed("untracked approval path".into()))?;
+                paths.insert(path, true);
+            }
+        }
+        let honor_filemode = if paths.values().any(|untracked| *untracked) {
+            match self
+                .line(dir, &["config", "--bool", "--get", "core.fileMode"])?
+                .as_deref()
+            {
+                None | Some("true") => true,
+                Some("false") => false,
+                _ => return Err(GitFault::Malformed("core.fileMode".into())),
+            }
+        } else {
+            true
+        };
+        let mut files = Vec::new();
+        let mut total = 0usize;
+        for (path, untracked) in paths {
+            let mut bytes = if untracked {
+                self.runner.run_difference(
+                    self.ctx,
+                    self.reviewed_spec(
+                        dir,
+                        &[
+                            "diff",
+                            "--no-index",
+                            "--no-color",
+                            "--no-ext-diff",
+                            "--no-textconv",
+                            submodules,
+                            "--submodule=short",
+                            "--binary",
+                            "--no-renames",
+                            "--src-prefix=a/",
+                            "--dst-prefix=b/",
+                            "--",
+                            "/dev/null",
+                            &path,
+                        ],
+                        None,
+                        &execution_policy,
+                    )?,
+                    HelperLimits {
+                        deadline: self.deadline,
+                        max_stdout: BOUND,
+                    },
+                    self.stop,
+                )?
+            } else {
+                let mut args = vec!["diff"];
+                if staged {
+                    args.push("--cached");
+                }
+                args.extend([
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    submodules,
+                    "--submodule=short",
+                    "--binary",
+                    "--no-renames",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                    base,
+                ]);
+                args.extend(committed);
+                args.extend(["--", &path]);
+                self.reviewed_read(dir, &args, BOUND, &execution_policy)?
+            };
+            // No-index diff uses raw filesystem modes. Git add ignores a new regular file's
+            // executable bit when core.fileMode=false; match its mode without altering patch
+            // content, binary data or symlink metadata. The new-file header is the second line.
+            if untracked
+                && !honor_filemode
+                && let Some(start) = bytes.iter().position(|b| *b == b'\n').map(|at| at + 1)
+                && bytes[start..].starts_with(b"new file mode 100755\n")
+            {
+                bytes[start..start + b"new file mode 100755\n".len()]
+                    .copy_from_slice(b"new file mode 100644\n");
+            }
+            total = total.saturating_add(bytes.len());
+            if total > BOUND {
+                return Err(GitFault::Helper(HelperFault::OutputTooLarge));
+            }
+            files.push(
+                serde_json::json!({"path":path,"patch":String::from_utf8_lossy(&bytes),
+                "sha256":crate::fingerprint::sha256_hex(&bytes),"byteLength":bytes.len()}),
+            );
+        }
+        let after = observe()?;
+        if before.head != after.head
+            || before.branch != after.branch
+            || self.reviewed_commit_policy(dir)? != execution_policy
+        {
+            return Err(GitFault::SourceChanged);
+        }
+        let base_head = if committed.is_some() {
+            base
+        } else {
+            &before.head
+        };
+        Ok(
+            serde_json::json!({"head":base_head,"branch":before.branch,"executionPolicy":execution_policy,"files":files}),
+        )
+    }
+
     /// Staged and unstaged changes of a worktree against `base` (its `HEAD`, or the empty tree
     /// on an unborn branch), plus indexable untracked files (ignored files excluded).
     pub fn local_changes(
@@ -1201,6 +1737,72 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn filter_qualification_preserves_every_nul_delimited_path_byte() {
+        use crate::context::PrincipalKind;
+        use crate::protocol::{ActorId, Counter, Id, Revision, StoreId};
+        struct Qualification;
+        impl HelperRunner for Qualification {
+            fn run(
+                &self,
+                _: &InvocationContext,
+                spec: ProcessSpec,
+                _: HelperLimits,
+                _: &(dyn Fn() -> bool + Sync),
+            ) -> Result<Vec<u8>, HelperFault> {
+                if spec.args.iter().any(|a| a == "rev-parse") {
+                    return Ok("a".repeat(40).into_bytes());
+                }
+                if spec.args.iter().any(|a| a == "config") {
+                    return Ok(b"filter.probe.clean\nexternal-program\0".to_vec());
+                }
+                if spec.args.iter().any(|a| a == "ls-files") {
+                    if spec.args.iter().any(|a| a == "--stage") {
+                        return Ok(
+                            format!("100644 {} 0\t.gitattributes\0", "a".repeat(40)).into_bytes()
+                        );
+                    }
+                    assert!(spec.args.iter().any(|a| a == "--others"));
+                    return Ok(b"sub dir/line\nname.probe\0non-utf8-\xff.probe\0".to_vec());
+                }
+                if spec.args.iter().any(|a| a == "check-attr") {
+                    assert_eq!(
+                        spec.stdin.as_deref(),
+                        Some(
+                            b".gitattributes\0sub dir/line\nname.probe\0non-utf8-\xff.probe\0"
+                                .as_slice()
+                        )
+                    );
+                    return Ok(b".gitattributes\0filter\0unspecified\0sub dir/line\nname.probe\0filter\0probe\0non-utf8-\xff.probe\0filter\0probe\0".to_vec());
+                }
+                panic!(
+                    "filter qualification must refuse before status or diff: {:?}",
+                    spec.args
+                );
+            }
+        }
+        let ctx = InvocationContext::new(
+            ActorId(Id::new("host").unwrap()),
+            PrincipalKind::Host,
+            Id::new("invoke").unwrap(),
+            Id::new("git").unwrap(),
+            StoreId(Id::new("store").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let capture = Git {
+            runner: &Qualification,
+            ctx: &ctx,
+            program: "git",
+            deadline: Duration::from_secs(5),
+            stop: &|| false,
+        };
+        assert!(matches!(
+            capture.revision_observation(Path::new("/owned/worktree")),
+            Err(GitFault::Unqualified)
+        ));
+    }
 
     #[test]
     fn a_blob_read_admits_the_largest_accepted_file() {

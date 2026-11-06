@@ -986,8 +986,22 @@ fn completion_cards_float_below_the_toolbar_without_moving_content_or_taking_foc
         "expanded to every message"
     );
     click(&mut h, Role::Button, "Dismiss Card b");
-    assert!(h.query_by_label("Card b").is_none() && h.query_by_label("Card a").is_some());
+    assert!(
+        h.query_by_label("Card b").is_some() && h.query_by_label("Card a").is_some(),
+        "presentation waits for a durable acknowledgment"
+    );
     assert_eq!(h.state_mut().completions.take_dismissed(), ["b"]);
+    let remaining = h
+        .state()
+        .completions
+        .cards()
+        .iter()
+        .filter(|c| c.id != "b")
+        .cloned()
+        .collect();
+    h.state_mut().completions.reconcile(remaining);
+    settle(&mut h);
+    assert!(h.query_by_label("Card b").is_none());
     // Navigation keeps undismissed cards.
     click_nav(&mut h, "Settings");
     assert!(h.query_by_label("Card a").is_some());

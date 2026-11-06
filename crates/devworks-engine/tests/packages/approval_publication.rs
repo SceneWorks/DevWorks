@@ -1,0 +1,357 @@
+use super::*;
+use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
+use std::{io::Read, path::Path};
+
+/// The blob has been staged durably, but its artifact metadata UOW has not begun.
+struct PublicationGate {
+    inner: NativeArtifactFiles,
+    gate: Arc<Gate>,
+}
+impl ArtifactFiles for PublicationGate {
+    fn publish(
+        &self,
+        name: &str,
+        source: &mut dyn Read,
+        digest: &str,
+        bytes: u64,
+        reuse: Option<&str>,
+        generation: &str,
+    ) -> Result<PublishedBlob, FileFault> {
+        let published = self
+            .inner
+            .publish(name, source, digest, bytes, reuse, generation)?;
+        self.gate.pass(IdKind::ArtifactVersion);
+        Ok(published)
+    }
+    fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
+        self.inner.managed_path(d, g)
+    }
+    fn present(&self, d: &str, g: &str, n: u64) -> Result<bool, FileFault> {
+        self.inner.present(d, g, n)
+    }
+    fn inspect(&self, d: &str, g: &str) -> Result<Option<u64>, FileFault> {
+        self.inner.inspect(d, g)
+    }
+    fn read_range(&self, d: &str, g: &str, n: u64, o: u64, m: usize) -> Result<Vec<u8>, FileFault> {
+        self.inner.read_range(d, g, n, o, m)
+    }
+    fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
+        self.inner.open(d, g, n)
+    }
+    fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.unlink(d, g)
+    }
+    fn quarantine(&self, d: &str, g: &str) -> Result<(), FileFault> {
+        self.inner.quarantine(d, g)
+    }
+    fn staged(&self) -> Result<Vec<String>, FileFault> {
+        self.inner.staged()
+    }
+    fn remove_staged(&self, n: &str) -> Result<(), FileFault> {
+        self.inner.remove_staged(n)
+    }
+    fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault> {
+        self.inner.stored_files()
+    }
+    fn write_derived(&self, k: &str, b: &[u8]) -> Result<(), FileFault> {
+        self.inner.write_derived(k, b)
+    }
+    fn read_derived(&self, k: &str, m: usize) -> Result<Option<Vec<u8>>, FileFault> {
+        self.inner.read_derived(k, m)
+    }
+    fn collect_derived(&self) -> Result<u64, FileFault> {
+        self.inner.collect_derived()
+    }
+    fn export(&self, d: &str, g: &str, n: u64, p: &Path, o: bool) -> Result<(), FileFault> {
+        self.inner.export(d, g, n, p, o)
+    }
+}
+fn domain_rows(a: &App) -> (i64, i64, i64, i64) {
+    rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap().query_row("SELECT (SELECT count(*) FROM decision_approvals),(SELECT count(*) FROM work_items),(SELECT count(*) FROM repositories),(SELECT count(*) FROM knowledge_entities)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap()
+}
+#[test]
+fn evidence_publication_rechecks_revocation_tools_and_scope_in_its_commit() {
+    let _serial = serial();
+    for change in ["revoked", "tools", "project"] {
+        let mut a = App::unbooted(Harness::new(), None, None);
+        let gate = Arc::new(Gate::default());
+        a.artifact_files = Some(Arc::new(PublicationGate {
+            inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
+            gate: gate.clone(),
+        }));
+        let mut composition = a.composition();
+        composition.authority = Arc::new(RealAuthority {
+            store: a.store.clone(),
+            clock: a.h.clock(),
+        });
+        a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+        let (spec, bytes, _, _) = large_signed_bundle(&format!("publication-{change}"));
+        let bundle = a.save(&a.agent, &bytes);
+        let args = json!({"command":{"kind":"Install","bundle":bundle,"expectedRegistryRevision":a.registry().to_string()}});
+        let request =
+            devworks_core::services::approvals::requests::decode("addons.install", 2, &args, true)
+                .unwrap();
+        let frame=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"publisher-revocation-race","body":{"kind":"approvals.propose","scope":{"kind":"Workspace"},"operationKind":"addons.install","target":{"id":spec.package,"revision":"1"},"contentDigest":request.fingerprint.as_str(),"summary":"Exact signed source","payload":{"kind":"SavedOperation","schemaRevision":"2","input":args}}})).unwrap();
+        let before = domain_rows(&a);
+        let artifacts = read(&*a.store, |s| {
+            s.artifacts()
+                .list_workspace(Some(a.agent.principal()), &[], None, 500)
+        })
+        .len();
+        gate.arm(IdKind::ArtifactVersion);
+        let _release = Release(gate.clone());
+        let reply = std::thread::scope(|scope| {
+            let a_ref = &a;
+            let pending = scope.spawn(move || {
+                a_ref
+                    .app()
+                    .command(&a_ref.agent, "approvals.propose", &frame)
+                    .unwrap()
+            });
+            assert!(
+                gate.entered(Duration::from_secs(10)),
+                "publisher did not enter its pre-commit gate"
+            );
+            let principal =
+                read(&*a.store, |s| s.authority().principal(a.agent.principal())).unwrap();
+            let human = a.user.clone();
+            let actor = a.agent.principal().clone();
+            write(&*a.store, move |tx| {
+                if change == "revoked" {
+                    devworks_core::authority::service::revoke_principal(
+                        tx,
+                        &human,
+                        &actor,
+                        principal.revision,
+                    )
+                } else {
+                    bind_principal(
+                        tx,
+                        &human,
+                        NewPrincipalBinding {
+                            actor,
+                            kind: PrincipalKind::Agent,
+                            role: Some(AgentRole::Worker),
+                            project_id: (change == "project").then(|| ProjectId(id("project-a"))),
+                            tool_families: (change == "tools").then(|| vec!["approvals".into()]),
+                            bound_by: human.principal().clone(),
+                        },
+                        Some(principal.revision),
+                    )
+                }
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+            })
+            .unwrap();
+            gate.release();
+            pending.join().unwrap()
+        });
+        assert!(
+            !matches!(
+                reply,
+                CommandReply::Recorded {
+                    receipt: devworks_core::protocol::Receipt {
+                        decision: DomainDecision::Applied { .. }
+                            | DomainDecision::NoChange { .. }
+                            | DomainDecision::Accepted { .. },
+                        ..
+                    },
+                    ..
+                }
+            ),
+            "{change}: {reply:?}"
+        );
+        assert_eq!(
+            read(&*a.store, |s| s.artifacts().list_workspace(
+                Some(a.agent.principal()),
+                &[],
+                None,
+                500
+            ))
+            .len(),
+            artifacts,
+            "{change}: unauthorized evidence became visible"
+        );
+        assert_eq!(
+            domain_rows(&a),
+            before,
+            "{change}: owner snapshot publication changed domain rows"
+        );
+        assert!(read(&*a.store, |s| s.packages().package(&spec.package)).is_none());
+        let current = read(&*a.store, |s| s.authority().principal(a.agent.principal())).unwrap();
+        assert_eq!(
+            current.revision, 2,
+            "the independent authority change must remain committed"
+        );
+        if change == "revoked" {
+            assert!(!current.active)
+        }
+    }
+}
+
+#[test]
+fn bootstrap_skips_a_source_revoked_during_publication_and_continues() {
+    let _serial = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    let gate = Arc::new(Gate::default());
+    a.artifact_files = Some(Arc::new(PublicationGate {
+        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
+        gate: gate.clone(),
+    }));
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+    let (spec, bytes, digest, _) = large_signed_bundle("a-bootstrap-race");
+    let bundle = a.save(&a.agent, &bytes);
+    let source=match applied(a.domain(&a.agent,"addons.propose",json!({"kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":spec.package}))){OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    let review = saved(&a, &source);
+    let reference: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(review.artifact.clone().unwrap()).unwrap();
+    // Force a real publication instead of the exact-evidence cache hit on this bootstrap pass.
+    let tag=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"bootstrap-replace-evidence","body":{"kind":"artifacts.tag","artifactId":reference.artifact_id,"expectedRevision":"1","tags":["retained-old-review"]}})).unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    let next = Spec::new("z-bootstrap-eligible", "1.0.0");
+    let (bytes, digest) = super::super::bundle(&next);
+    let bundle = a.save(&a.user, &bytes);
+    applied(a.domain(&a.user,"addons.propose",json!({"kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":next.package})));
+    let before = domain_rows(&a);
+    let artifacts = read(&*a.store, |s| {
+        s.artifacts()
+            .list_workspace(Some(a.agent.principal()), &[], None, 500)
+    })
+    .len();
+    gate.arm(IdKind::ArtifactVersion);
+    let _release = Release(gate.clone());
+    let service = a.app().packages().unwrap().service().clone();
+    let result = std::thread::scope(|scope| {
+        let pending = scope.spawn(move || service.sync_pending_reviews());
+        assert!(
+            gate.entered(Duration::from_secs(10)),
+            "bootstrap never reached the publication commit gap"
+        );
+        let principal = read(&*a.store, |s| s.authority().principal(a.agent.principal())).unwrap();
+        let human = a.user.clone();
+        let actor = a.agent.principal().clone();
+        write(&*a.store, move |tx| {
+            devworks_core::authority::service::revoke_principal(
+                tx,
+                &human,
+                &actor,
+                principal.revision,
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+        gate.release();
+        pending.join().unwrap()
+    });
+    assert_eq!(
+        result.unwrap(),
+        1,
+        "bootstrap must continue to the later eligible Human source"
+    );
+    assert_eq!(domain_rows(&a), before);
+    assert_eq!(
+        read(&*a.store, |s| s.artifacts().list_workspace(
+            Some(a.agent.principal()),
+            &[],
+            None,
+            500
+        ))
+        .len(),
+        artifacts
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().proposal(&source.id))
+            .unwrap()
+            .state,
+        "Pending"
+    );
+    assert!(
+        !read(&*a.store, |s| s.packages().package(&spec.package))
+            .unwrap()
+            .installed
+    );
+    assert!(
+        !read(&*a.store, |s| s.authority().principal(a.agent.principal()))
+            .unwrap()
+            .active
+    );
+}
+
+#[test]
+fn bootstrap_rechecks_source_deleted_after_preparation_before_staging_any_review() {
+    let _serial = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    let gate = Arc::new(Gate::default());
+    a.artifact_files = Some(Arc::new(PublicationGate {
+        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
+        gate: gate.clone(),
+    }));
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+    let (spec, bytes, digest, _) = large_signed_bundle("a-source-delete-race");
+    let bundle = a.save(&a.agent, &bytes);
+    let source = match applied(a.domain(&a.agent,"addons.propose",json!({
+        "kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":spec.package
+    }))) {OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    let old_review = saved(&a, &source);
+    let old_source = read(&*a.store, |s| s.packages().proposal(&source.id)).unwrap();
+    let evidence: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(old_review.artifact.clone().unwrap()).unwrap();
+    let tag=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"replace-deletion-race-evidence","body":{"kind":"artifacts.tag","artifactId":evidence.artifact_id,"expectedRevision":"1","tags":["retained-old-review"]}})).unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    let healthy = Spec::new("z-after-source-delete-race", "1.0.0");
+    let (healthy_source, _, _) = propose(&a, &healthy);
+    let healthy_review = saved(&a, &healthy_source);
+    let before = domain_rows(&a);
+    gate.arm(IdKind::ArtifactVersion);
+    let _release = Release(gate.clone());
+    let service = a.app().packages().unwrap().service().clone();
+    let result = std::thread::scope(|scope| {
+        let pending = scope.spawn(move || service.sync_pending_reviews());
+        assert!(
+            gate.entered(Duration::from_secs(10)),
+            "source read preflight must precede evidence publication"
+        );
+        let reference: devworks_core::protocol::provider::ArtifactRef =
+            serde_json::from_value(bundle).unwrap();
+        let artifact = read(&*a.store, |s| {
+            s.artifacts().artifact(&reference.artifact_id)
+        })
+        .unwrap();
+        let deletion=serde_json::to_vec(&json!({"protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"delete-during-review-sync","deletion":{"kind":"DeleteVersion","artifactId":reference.artifact_id,"versionId":reference.version_id,"expectedRevision":artifact.revision.to_string(),"expectedReferenceRevision":artifact.reference_revision.to_string()}})).unwrap();
+        applied(
+            a.app()
+                .command(&a.user, "artifacts.delete", &deletion)
+                .unwrap(),
+        );
+        gate.release();
+        pending.join().unwrap()
+    });
+    assert_eq!(
+        result.unwrap(),
+        1,
+        "continue to the later eligible source after the writer preflight skips this source"
+    );
+    assert_eq!(
+        domain_rows(&a),
+        before,
+        "no partial approval supersession or unrelated domain mutation"
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().proposal(&source.id)).unwrap(),
+        old_source
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.decisions().approval(&old_review.id)).unwrap(),
+        old_review
+    );
+    assert_eq!(saved(&a, &healthy_source), healthy_review);
+}

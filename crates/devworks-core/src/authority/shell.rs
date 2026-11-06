@@ -1826,6 +1826,11 @@ fn git_dir(dir: &Option<Word>) -> Word {
 }
 
 fn git(args: &[Word], c: &mut Collector) -> bool {
+    // Exact discovery forms only: --exec-path=<path> and extra arguments stay unmodeled.
+    if args.len() == 1 && matches!(args[0].text.as_str(), "--version" | "--exec-path") {
+        return true;
+    }
+
     let mut j = 0;
     let mut dir: Option<Word> = None;
     while let Some(a) = args.get(j) {
@@ -1863,6 +1868,30 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         return true;
     };
     let rest = &args[j + 1..];
+    // These are literal argv data consumed by the modeled Git transport, not nested shell
+    // commands. In particular ssh://git@host must not count its username as a second Git.
+    if matches!(sub.text.as_str(), "ls-remote" | "push" | "fetch" | "remote") {
+        for word in rest {
+            if !word.dynamic
+                && !word.text.chars().any(char::is_control)
+                && (matches!(url::Url::parse(&word.text), Ok(url) if matches!(url.scheme(), "https"|"ssh"|"file"))
+                    || word
+                        .text
+                        .strip_prefix("git@github.com:")
+                        .is_some_and(|path| {
+                            !path.is_empty() && !path.chars().any(char::is_whitespace)
+                        }))
+            {
+                let mut data = BTreeMap::new();
+                lexical(&word.text, &mut data);
+                for (name, count) in data {
+                    for _ in 0..count {
+                        c.claim(&name);
+                    }
+                }
+            }
+        }
+    }
     let consequential = |c: &mut Collector, dir: &Option<Word>| {
         c.push(DestructiveKind::Consequential, &[git_dir(dir)])
     };
@@ -2653,4 +2682,38 @@ pub fn preflight_command_in(
         }
     }
     written
+}
+
+#[cfg(test)]
+mod transport_operand_tests {
+    use super::*;
+    #[test]
+    fn literal_git_transport_urls_are_data_but_nested_shell_execution_is_not() {
+        let argv = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).into())
+                .collect::<Vec<String>>()
+        };
+        for remote in [
+            "ssh://git@host/repository",
+            "https://host/git",
+            "git@github.com:owner/repository",
+        ] {
+            assert!(matches!(
+                assess_command(&argv(&["git", "ls-remote", "--", remote]), None),
+                ShellAssessment::NoRecognizedDestruction { .. }
+            ));
+        }
+        assert!(matches!(
+            assess_command(
+                &argv(&[
+                    "sh",
+                    "-c",
+                    "git ls-remote ssh://git@host/repository; rm -rf /tmp/target"
+                ]),
+                None
+            ),
+            ShellAssessment::Destructive { .. } | ShellAssessment::NeedsInput(_)
+        ));
+    }
 }

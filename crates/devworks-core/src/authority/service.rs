@@ -66,6 +66,7 @@ impl GrantBinding {
         request: &AuthorityRequest<'_>,
         exact: bool,
         policy_digest: &str,
+        native: bool,
     ) -> bool {
         if exact && self.request_digest.is_none() {
             return false;
@@ -77,7 +78,8 @@ impl GrantBinding {
         {
             return false;
         }
-        self.operation == request.descriptor.name
+        (!native || self.project_id.as_ref() == ctx.project_id())
+            && self.operation == request.descriptor.name
             && self
                 .action
                 .as_deref()
@@ -107,6 +109,50 @@ fn deny(reason: DenialReason) -> Denied {
     Denied {
         denial: AuthorityDenial::Policy(reason),
         reason,
+    }
+}
+
+fn reviewed_verdict(verdict: Verdict, operation: &str) -> Verdict {
+    match verdict {
+        Verdict::Allow => Verdict::NeedsGrant {
+            kind: if policy::NATIVE_EXECUTION.contains(&operation) {
+                GrantKind::NativeExecution
+            } else {
+                GrantKind::Operation
+            },
+            exact: true,
+            reason: DenialReason::ApprovalRequired,
+        },
+        v => v,
+    }
+}
+/// The same current ownership refinement and exact reviewed requirement used by admission.
+pub(crate) fn reviewed_grant_kind(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &AuthorityRequest<'_>,
+) -> Result<GrantKind, AdminError> {
+    let binding = match ctx.principal_kind() {
+        PrincipalKind::Human | PrincipalKind::Host => None,
+        _ => tx.authority().principal(ctx.principal())?,
+    };
+    let policy = resolve_policy(tx.configuration(), ctx.project_id())?;
+    let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, &[]);
+    if matches!(
+        verdict,
+        Verdict::NeedsGrant {
+            reason: DenialReason::ApprovalRequired,
+            ..
+        }
+    ) && super::git::owned_force_in(tx, ctx, request.input)?.is_some()
+    {
+        verdict =
+            policy::evaluate_with_owned_task(ctx, binding.as_ref(), &policy, request, &[], true);
+    }
+    match reviewed_verdict(verdict, request.descriptor.name) {
+        Verdict::NeedsGrant { kind, .. } => Ok(kind),
+        Verdict::Deny(reason) => Err(AdminError::Denied(reason)),
+        Verdict::Allow => unreachable!("reviewed operation is exact"),
     }
 }
 
@@ -243,6 +289,13 @@ fn decide_in(
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     let mut verdict = policy::evaluate(ctx, binding.as_ref(), &policy, request, protected_branches);
+    if let Some(reviewed) = ctx.reviewed_operation()
+        && (reviewed.operation() != request.descriptor.name
+            || reviewed.request_digest() != request.fingerprint.as_str()
+            || reviewed.schema_revision() == 0)
+    {
+        return Err(deny(DenialReason::ApprovalRequired));
+    }
     let mut ownership = None;
     if matches!(
         verdict,
@@ -262,6 +315,9 @@ fn decide_in(
                 true,
             );
         }
+    }
+    if ctx.reviewed_operation().is_some() {
+        verdict = reviewed_verdict(verdict, request.descriptor.name);
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
@@ -302,7 +358,13 @@ fn decide_in(
                 else {
                     continue;
                 };
-                if !binding.covers(ctx, request, exact, &digest) {
+                if !binding.covers(
+                    ctx,
+                    request,
+                    exact,
+                    &digest,
+                    grant.kind == GrantKind::NativeExecution,
+                ) {
                     continue;
                 }
                 if grant.usable_by(ctx.principal(), now) {
@@ -675,7 +737,7 @@ pub fn revoke_principal(
 /// Mints an `Operation` or `NativeExecution` grant from the user's trusted local action. The
 /// holder may be an agent: it can exercise the grant only within its binding. Every grant has
 /// an explicit expiry within [`MAX_GRANT_LIFETIME_MS`] and 1..=[`MAX_GRANT_USES`] uses. Native
-/// grants bind one exact request, a project and the effective policy digest of that project.
+/// grants bind one exact request, an exact workspace/project scope and its effective policy digest.
 /// Primary repository deletion has its own confirmation seam.
 pub fn mint_grant(
     tx: &mut dyn WriteTransaction,
@@ -684,6 +746,52 @@ pub fn mint_grant(
     kind: GrantKind,
     binding: GrantBinding,
     bounds: GrantBounds,
+) -> Result<AuthorityGrant, AdminError> {
+    mint_grant_in(tx, ctx, holder, kind, binding, bounds, false)
+}
+
+/// The saved-operation owner is the only source of a newly supported exact Workspace native grant.
+pub(crate) fn mint_reviewed_grant(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    approval_id: &Id,
+    holder: ActorId,
+    kind: GrantKind,
+    binding: GrantBinding,
+    bounds: GrantBounds,
+) -> Result<AuthorityGrant, AdminError> {
+    let p = tx
+        .decisions()
+        .approval(approval_id)?
+        .ok_or(AdminError::Invalid("reviewed approval missing"))?;
+    let a = tx
+        .decisions()
+        .human_decision(crate::ports::storage::ApprovalSource::Generic, approval_id)?
+        .ok_or(AdminError::Invalid("reviewed human audit missing"))?;
+    let decision:crate::operations::approvals::RecordHumanDecisionInput=serde_json::from_value(json!({"proposalId":p.id,"expectedRevision":(p.revision-1).to_string(),"contentDigest":p.content_digest,"decision":"Approve","rationale":a.rationale})).map_err(|_|AdminError::Invalid("reviewed human input"))?;
+    if p.state != "Approved"
+        || a.decision != "Approved"
+        || p.author != holder
+        || p.decided_by.as_ref() != Some(ctx.principal())
+        || a.actor != *ctx.principal()
+        || p.operation_kind != binding.operation
+        || binding.request_digest.as_deref() != Some(p.content_digest.as_str())
+        || p.payload["content"]["kind"] != "SavedOperation"
+        || !ctx.human_decision_matches(&decision)
+    {
+        return Err(AdminError::Invalid("workspace native approval binding"));
+    }
+    mint_grant_in(tx, ctx, holder, kind, binding, bounds, true)
+}
+
+fn mint_grant_in(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    holder: ActorId,
+    kind: GrantKind,
+    binding: GrantBinding,
+    bounds: GrantBounds,
+    reviewed_workspace: bool,
 ) -> Result<AuthorityGrant, AdminError> {
     let command = registry::find(&binding.operation).and_then(|d| d.binding(Mode::Command));
     if command.is_none() {
@@ -699,10 +807,12 @@ pub fn mint_grant(
                     "a native grant binds one exact native execution request",
                 ));
             }
-            let Some(project) = binding.project_id.as_ref() else {
-                return Err(AdminError::Invalid("a native grant binds its project"));
-            };
-            let current = resolve_policy(tx.configuration(), Some(project))?.digest();
+            if binding.project_id.is_none() && (!reviewed_workspace || bounds.uses != 1) {
+                return Err(AdminError::Invalid(
+                    "a workspace native grant is exact and single-use",
+                ));
+            }
+            let current = resolve_policy(tx.configuration(), binding.project_id.as_ref())?.digest();
             if binding.policy_digest.as_deref() != Some(current.as_str()) {
                 return Err(AdminError::Invalid(
                     "a native grant binds the current effective policy of its project",
@@ -941,5 +1051,119 @@ impl PrincipalRoles for HostRoles {
         (bound.active && bound.kind == PrincipalKind::Agent)
             .then_some(bound.role)
             .flatten()
+    }
+}
+
+#[cfg(test)]
+mod reviewed_scope_tests {
+    use super::*;
+    use crate::admission::{self, Selection};
+    use crate::protocol::{Counter, Revision, StoreId};
+    fn id(s: &str) -> Id {
+        Id::new(s).unwrap()
+    }
+    fn context(project: Option<&str>) -> InvocationContext {
+        InvocationContext::new(
+            ActorId(id("agent")),
+            PrincipalKind::Agent,
+            id("invocation"),
+            id("namespace"),
+            StoreId(id("store")),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_lineage(project.map(|p| ProjectId(id(p))), None, None)
+    }
+    #[test]
+    fn reviewed_kind_preserves_current_operation_requirement_and_hard_denial() {
+        assert!(
+            matches!(
+                reviewed_verdict(Verdict::Allow, "git.push"),
+                Verdict::NeedsGrant {
+                    kind: GrantKind::NativeExecution,
+                    exact: true,
+                    ..
+                }
+            ),
+            "an ownership-refined Full force-push still spends its exact reviewed native grant"
+        );
+        for reason in [DenialReason::ApprovalRequired, DenialReason::GrantRequired] {
+            assert!(
+                matches!(
+                    reviewed_verdict(
+                        Verdict::NeedsGrant {
+                            kind: GrantKind::Operation,
+                            exact: true,
+                            reason
+                        },
+                        "git.push"
+                    ),
+                    Verdict::NeedsGrant {
+                        kind: GrantKind::Operation,
+                        ..
+                    }
+                ),
+                "an unowned force or Full package operation keeps its actual operation requirement"
+            );
+        }
+        assert!(matches!(
+            reviewed_verdict(Verdict::Deny(DenialReason::ProtectedBranch), "git.push"),
+            Verdict::Deny(DenialReason::ProtectedBranch)
+        ));
+        assert!(matches!(
+            reviewed_verdict(Verdict::Deny(DenialReason::ReadOnlyRole), "jobs.enable"),
+            Verdict::Deny(DenialReason::ReadOnlyRole)
+        ));
+    }
+    #[test]
+    fn native_workspace_grants_are_exact_scope_policy_and_normalized_request_bindings() {
+        let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"request","body":{"kind":"process.execute","spec":{"executableRef":"id-a","args":[],"workingDirectory":{"rootId":"id-a","relative":"src/main.rs"},"environment":[],"profile":"VerifiedRead","timeoutMs":"0","outputLimitBytes":"0"}}});
+        let decoded = admission::decode(
+            Selection {
+                operation: "process.execute",
+                mode: Mode::Command,
+            },
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+        let request = AuthorityRequest {
+            descriptor: decoded.descriptor,
+            binding: decoded.binding,
+            effect: decoded.effect,
+            action: decoded.action,
+            input: &decoded.input,
+            fingerprint: &decoded.fingerprint,
+        };
+        let binding = GrantBinding {
+            operation: "process.execute".into(),
+            action: None,
+            request_digest: Some(decoded.fingerprint.as_str().into()),
+            project_id: None,
+            root_id: None,
+            policy_digest: Some("same-policy".into()),
+        };
+        assert!(binding.covers(&context(None), &request, true, "same-policy", true));
+        assert!(!binding.covers(
+            &context(Some("project")),
+            &request,
+            true,
+            "same-policy",
+            true
+        ));
+        assert!(!binding.covers(&context(None), &request, true, "changed-policy", true));
+        let mut different = binding.clone();
+        different.request_digest = Some("f".repeat(64));
+        assert!(!different.covers(&context(None), &request, true, "same-policy", true));
+        let mut project = binding;
+        project.project_id = Some(ProjectId(id("project")));
+        assert!(project.covers(
+            &context(Some("project")),
+            &request,
+            true,
+            "same-policy",
+            true
+        ));
+        assert!(!project.covers(&context(None), &request, true, "same-policy", true));
+        assert!(!project.covers(&context(Some("other")), &request, true, "same-policy", true));
     }
 }

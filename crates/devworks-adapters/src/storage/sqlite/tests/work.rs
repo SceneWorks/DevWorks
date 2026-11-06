@@ -3731,3 +3731,58 @@ fn repository_scope_removal_fences_only_cards_outside_the_active_plan() {
 }
 
 mod metadata;
+
+mod notifications;
+#[test]
+fn legacy_plan_approval_can_be_re_requested_with_a_new_exact_snapshot() {
+    let fx = Fx::new();
+    let project = fx.project("Legacy review", &[]);
+    let feature = fx.feature(&project, "Feature", &[]);
+    let document = fx.artifact(&project, 1);
+    let feature = fx.plan(&feature, &document, &[("E1", "ship")]);
+    let request = |f: &WorkRecord| {
+        let pending = f.pending_plan.as_ref().unwrap();
+        fx.command(&fx.agent(),"features.request_plan_approval",json!({"featureId":f.id,"expectedRevision":f.revision,"planRevision":pending.revision,"planDigest":plan_digest(&pending.draft)}))
+    };
+    let OperationResult::FeaturesRequestPlanApproval { value: old } = applied(request(&feature))
+    else {
+        panic!("proposal")
+    };
+    let legacy_id = old.id.clone();
+    fx.store
+        .with_writer_connection(move |c| {
+            super::super::conn::db(c.execute(
+                "UPDATE plan_proposals SET reviewed_snapshot_json=NULL WHERE id=?1",
+                [legacy_id.as_str()],
+            ))
+            .map(|_| ())
+        })
+        .unwrap();
+    let feature = fx.fresh(&feature);
+    let OperationResult::FeaturesRequestPlanApproval { value: fresh } = applied(request(&feature))
+    else {
+        panic!("fresh proposal")
+    };
+    assert_ne!(old.id, fresh.id);
+    let old_id = old.id.clone();
+    let fresh_id = fresh.id.clone();
+    fx.read(|s| {
+        let old = s.work().proposal(&old_id)?.unwrap();
+        let fresh = s.work().proposal(&fresh_id)?.unwrap();
+        assert_eq!(old.state, "Superseded");
+        assert!(old.reviewed_snapshot.is_none());
+        assert_eq!(fresh.state, "Pending");
+        assert!(fresh.reviewed_snapshot.is_some());
+        assert_eq!(old.plan_digest, fresh.plan_digest);
+        Ok(())
+    });
+    let feature = fx.fresh(&feature);
+    assert!(feature.plan.is_none());
+    let DomainDecision::NoChange {
+        result: OperationResult::FeaturesRequestPlanApproval { value: again },
+    } = recorded(request(&feature))
+    else {
+        panic!("exact captured proposal should be reused")
+    };
+    assert_eq!(again.id, fresh.id);
+}

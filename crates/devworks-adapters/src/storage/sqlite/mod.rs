@@ -29,6 +29,7 @@ mod browser;
 mod configuration;
 mod conn;
 mod connections;
+mod decisions;
 mod diagnostics;
 mod evals;
 mod git;
@@ -37,6 +38,7 @@ mod indexing;
 mod jobs;
 mod knowledge;
 mod migrations;
+mod notification_delivery;
 mod packages;
 mod projects;
 mod repos;
@@ -58,7 +60,7 @@ pub use migrations::{
     MIGRATION_0013_SHA256, MIGRATION_0014_SHA256, MIGRATION_0015_SHA256, MIGRATION_0016_SHA256,
     MIGRATION_0017_SHA256, MIGRATION_0018_SHA256, MIGRATION_0019_SHA256, MIGRATION_0020_SHA256,
     MIGRATION_0021_SHA256, MIGRATION_0022_SHA256, MIGRATION_0023_SHA256, MIGRATION_0024_SHA256,
-    MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATIONS, Migration,
+    MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATION_0027_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};

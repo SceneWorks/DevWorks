@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+pub mod decisions;
 pub mod indexing;
 pub mod jobs;
 pub mod projects;
@@ -173,6 +174,7 @@ pub struct Shell {
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
+    pub decisions: decisions::DecisionsUi,
     scrolls: Scrolls,
     lifecycle: Lifecycle,
     status: Option<String>,
@@ -315,6 +317,7 @@ impl Shell {
             work: work::WorkUi::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
+            decisions: decisions::DecisionsUi::default(),
             scrolls: Scrolls::restoring(&memory.scroll),
             lifecycle: Lifecycle::Open,
             status: None,
@@ -426,6 +429,10 @@ impl Shell {
     fn load_route(&mut self) {
         match self.route {
             Route::Chat => self.ensure_conversation_loaded(),
+            Route::Approvals => {
+                self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
+                self.load_approvals();
+            }
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
@@ -1698,6 +1705,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
+            return;
+        };
         match (slot, reply) {
             // Started before a session mutation was applied: it may lack that change.
             (Slot::SessionsList, Reply::Query(_))
@@ -2704,6 +2714,16 @@ impl Shell {
             }
         }
         self.refresh_waiting_first_routes();
+        self.load_completion_notifications();
+        if self.route == Route::Approvals
+            && !self.pending(&Slot::ApprovalsList)
+            && !self.pending(&Slot::ReviewQueue)
+        {
+            self.load_approvals();
+        }
+        if self.notifications_open && !self.pending(&Slot::NotificationsList) {
+            self.load_notification_history();
+        }
         // Background discovery commits independently of the manual refresh command. Read the
         // completed inventory on normal hints/periodic repair, including while Settings is open.
         // Loading keeps unsaved model edits and leaves unknown configure outcomes untouched.
@@ -2861,6 +2881,9 @@ impl Shell {
                 }
                 SettingsAction::OpenAddOns => self.navigate(Route::AddOns),
                 SettingsAction::OpenJobs => self.navigate(Route::Jobs),
+                SettingsAction::OpenNotifications => {
+                    self.notifications_open = true;
+                }
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
@@ -3152,6 +3175,7 @@ impl Shell {
                         label: u.label.clone(),
                         operation: u.operation().to_owned(),
                         frame: u.frame().to_vec(),
+                        dispatch: u.dispatch,
                     })
                     .collect()
             })
@@ -3234,7 +3258,9 @@ impl Shell {
         let mut confirming: Vec<String> = Vec::new();
         for c in pending.commands {
             let slot = c.slot.clone();
-            let Some(u) = Unresolved::restored(c.slot, c.label, &c.operation, c.frame) else {
+            let Some(u) =
+                Unresolved::restored_dispatch(c.slot, c.label, &c.operation, c.frame, c.dispatch)
+            else {
                 continue;
             };
             match &slot {
@@ -3341,6 +3367,9 @@ impl Shell {
     /// Renders one frame of the whole application into `ui` (the root viewport's UI).
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        if let Some(b) = self.backend() {
+            b.set_application_focus(ctx.input(|i| i.viewport().focused));
+        }
         if !self.started {
             self.started = true;
             theme::apply(&ctx);
@@ -3352,6 +3381,7 @@ impl Shell {
                 });
             }
             self.load_sessions();
+            self.load_completion_notifications();
             // The navigation's project selector lists the projects on every screen.
             if self.route != Route::Portfolio && self.route != Route::Repositories {
                 self.load_projects();
@@ -4018,6 +4048,7 @@ impl Shell {
                 self.routes.entry(Route::Knowledge).or_default().tab = self.knowledge.tab;
                 self.knowledge_actions(actions);
             }
+            Route::Approvals => self.approvals_screen(ui),
             Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),
@@ -4506,41 +4537,12 @@ impl Shell {
     fn overlays(&mut self, ctx: &egui::Context) {
         let card_actions = self.completions.ui(ctx, TOOLBAR + 8.0);
         for a in card_actions {
-            if let CardAction::Open(id) = a {
-                // Reading or opening completed work never dismisses its card.
-                self.open_work(&id);
-            }
+            self.completion_action(ctx, a);
         }
         if let Some(text) = self.completions.take_announcement() {
             self.announce(text);
         }
-        if self.notifications_open {
-            let mut open = true;
-            egui::Window::new("Notifications")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, TOOLBAR + 4.0))
-                .show(ctx, |ui| {
-                    ui.label(format!(
-                        "{} completion card{} on screen.",
-                        self.completions.cards().len(),
-                        if self.completions.cards().len() == 1 {
-                            ""
-                        } else {
-                            "s"
-                        }
-                    ));
-                    widgets::state_block(
-                        ui,
-                        &ViewState::Unavailable {
-                            what: "notification history, read state and filters".into(),
-                            owner: "DW-14".into(),
-                        },
-                    );
-                });
-            self.notifications_open = open;
-        }
+        self.notification_center(ctx);
         if self.updates_open {
             let mut open = true;
             egui::Window::new("Updates")

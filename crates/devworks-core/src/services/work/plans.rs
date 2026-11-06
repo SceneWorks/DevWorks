@@ -1016,6 +1016,7 @@ impl WorkService {
             && p.state == "Pending"
             && p.plan_revision == i.plan_revision.get()
             && p.plan_digest == digest
+            && p.reviewed_snapshot.is_some()
         {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesRequestPlanApproval {
@@ -1036,8 +1037,17 @@ impl WorkService {
             decided_by: None,
             decided_at_ms: None,
             summary: format!("Approve the revised plan of {}", f.title),
+            reviewed_snapshot: s.pending.clone(),
         };
         tx.work().put_proposal(&p, None)?;
+        crate::services::notifications::notify_approval(
+            tx,
+            crate::ports::storage::ApprovalSource::FeaturePlan,
+            &p.id,
+            Some(&f.project_id),
+            "Review feature plan",
+            &p.summary,
+        )?;
         let after = touch(tx, ctx, &f)?;
         event(
             tx,

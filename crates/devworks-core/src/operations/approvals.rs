@@ -14,7 +14,7 @@ use crate::protocol::provider::{ArtifactRef, Digest};
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Id, Revision};
+use crate::protocol::{Id, ProjectId, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -67,6 +67,13 @@ pub struct ProposeInput {
     pub summary: Content,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalContent", extend("x-since" = 3))]
+    pub payload: Option<ApprovalContent>,
 }
 impl Check for ProposeInput {
     fn check(&self) -> Result<(), String> {
@@ -76,11 +83,16 @@ impl Check for ProposeInput {
         self.content_digest.check()?;
         self.summary.check()?;
         self.artifact.check()?;
+        self.payload.check()?;
         Ok(())
     }
 }
 impl Revisioned for ProposeInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.payload = None;
+        }
+    }
 }
 
 /// `approvals.record_human_decision` Command input.
@@ -107,6 +119,25 @@ impl Revisioned for RecordHumanDecisionInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `approvals.review_queue` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewQueueInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub page: PageRequest,
+}
+impl Check for ReviewQueueInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ReviewQueueInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `approvals` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -118,6 +149,8 @@ pub enum Input {
     Propose(ProposeInput),
     /// `approvals.record_human_decision` (Command).
     RecordHumanDecision(RecordHumanDecisionInput),
+    /// `approvals.review_queue` (Query).
+    ReviewQueue(ReviewQueueInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -126,6 +159,7 @@ impl Input {
             Self::Inspect(_) => "approvals.inspect",
             Self::Propose(_) => "approvals.propose",
             Self::RecordHumanDecision(_) => "approvals.record_human_decision",
+            Self::ReviewQueue(_) => "approvals.review_queue",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -134,6 +168,7 @@ impl Input {
             Self::Inspect(_) => Mode::Query,
             Self::Propose(_) => Mode::Command,
             Self::RecordHumanDecision(_) => Mode::Command,
+            Self::ReviewQueue(_) => Mode::Query,
         }
     }
 }

@@ -73,7 +73,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: test
+      - run: cargo test --workspace --locked
+
+  windows_foundation:
+    name: test (windows-foundation)
+    runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
@@ -83,11 +97,36 @@ jobs:
         with:
           shared-key: test
       - name: Qualify Windows filesystem and Git source boundaries
-        if: runner.os == 'Windows'
         shell: bash
         timeout-minutes: 30
         run: |
           cargo test -p devworks-adapters --lib --locked fs::tests::physical_identity_survives_rename_and_refuses_replaced_read_roots -- --exact
           cargo test -p devworks-engine --test browser --locked browser_evidence_resolves_its_invocation_worktree_and_preserves_old_sources -- --exact
           cargo test -p devworks-engine --test git --locked
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --exclude devworks-engine --locked
+
+  windows_engine:
+    name: test (windows-engine)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install toolchain from rust-toolchain.toml
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: test
+      - run: cargo test -p devworks-engine --locked
+
+  windows_complete:
+    name: test (windows-latest)
+    needs: [windows_foundation, windows_engine]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require both complete Windows partitions
+        run: |
+          test "${{ needs.windows_foundation.result }}" = success
+          test "${{ needs.windows_engine.result }}" = success

@@ -1,9 +1,11 @@
 //! Native Git use cases. All process work is prepared outside store snapshots; the answer
 //! rechecks repository/worktree ownership against the snapshot the gateway returns.
+mod approval;
 mod commands;
 pub mod context;
 pub mod github;
 mod location;
+mod transport;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, git as ops};
@@ -26,6 +28,7 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub struct GitConfig {
+    pub transport: Option<Arc<dyn crate::ports::git_transport::GitTransportFiles>>,
     pub program: String,
     pub deadline: Duration,
     pub roots: Vec<RegisteredGitRoot>,
@@ -35,6 +38,7 @@ pub struct GitConfig {
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
+            transport: None,
             program: "git".into(),
             deadline: Duration::from_secs(30),
             roots: Vec::new(),
@@ -51,6 +55,7 @@ pub struct GitService {
     clock: Arc<dyn Clock>,
     config: GitConfig,
     stopping: std::sync::atomic::AtomicBool,
+    approval_control: std::sync::RwLock<Option<Arc<crate::services::runs::ControlService>>>,
 }
 #[derive(Clone)]
 struct Target {
@@ -83,6 +88,10 @@ fn read_failure(error: GitFault, repository: &Id) -> Failure {
         GitFault::Unqualified => (
             DomainErrorCode::UnsupportedCapability,
             "git_dirty_qualification",
+        ),
+        GitFault::ReviewedUnavailable => (
+            DomainErrorCode::UnsupportedCapability,
+            "git_reviewed_process_policy",
         ),
         GitFault::Unborn => (DomainErrorCode::UnsupportedCapability, "git_unborn"),
         GitFault::Malformed(_) => (DomainErrorCode::ExternalFailure, "git_output"),
@@ -129,7 +138,14 @@ impl GitService {
             clock,
             config,
             stopping: std::sync::atomic::AtomicBool::new(false),
+            approval_control: std::sync::RwLock::new(None),
         }
+    }
+    pub(crate) fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
+        *self
+            .approval_control
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Some(control);
     }
     pub fn stop(&self) {
         self.stopping

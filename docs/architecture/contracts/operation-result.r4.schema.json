@@ -527,6 +527,128 @@
       ],
       "type": "object"
     },
+    "ApprovalContent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "$ref": "#/$defs/List_SettingAssignment_1_128"
+            },
+            "kind": {
+              "const": "Settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "FeaturePlan",
+              "type": "string"
+            },
+            "proposalId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "proposalId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assessmentRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "featureId": {
+              "$ref": "#/$defs/Id"
+            },
+            "findingId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "FindingRisk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "featureId",
+            "findingId",
+            "assessmentRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/SavedCommandInput"
+            },
+            "kind": {
+              "const": "SavedOperation",
+              "type": "string"
+            },
+            "schemaRevision": {
+              "$ref": "#/$defs/PositiveCounter"
+            }
+          },
+          "required": [
+            "kind",
+            "schemaRevision",
+            "input"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ApprovalReviewedContent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "$ref": "#/$defs/List_SettingAssignment_0_128"
+            },
+            "kind": {
+              "const": "Settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "FeaturePlan",
+              "type": "string"
+            },
+            "plan": {
+              "$ref": "#/$defs/PlanDraft"
+            }
+          },
+          "required": [
+            "kind",
+            "plan"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalState": {
       "enum": [
         "Pending",
@@ -536,6 +658,104 @@
         "Expired"
       ],
       "type": "string"
+    },
+    "ApprovalViewRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "operationKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "operationPreview": {
+          "$ref": "#/$defs/SavedOperationPreview",
+          "x-since": 3
+        },
+        "payload": {
+          "$ref": "#/$defs/ApprovalContent",
+          "x-since": 3
+        },
+        "rationale": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "requestedBy": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "resumeStatus": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "resumedOperationId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "reviewedContent": {
+          "$ref": "#/$defs/BoundedUntrustedJson",
+          "x-since": 3
+        },
+        "reviewedSource": {
+          "$ref": "#/$defs/ApprovalReviewedContent",
+          "x-since": 3
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "scope": {
+          "$ref": "#/$defs/DataScope",
+          "x-since": 3
+        },
+        "scopeDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 3
+        },
+        "stale": {
+          "type": "boolean",
+          "x-since": 3
+        },
+        "state": {
+          "$ref": "#/$defs/ApprovalState"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "targetId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "contentDigest",
+        "state",
+        "operationKind",
+        "targetId",
+        "targetRevision",
+        "summary"
+      ],
+      "type": "object"
     },
     "ArtifactExport": {
       "additionalProperties": false,
@@ -5169,6 +5389,116 @@
       ],
       "type": "object"
     },
+    "KnowledgeReviewItem": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "challenges": {
+          "$ref": "#/$defs/List_LessonChallenge_0_500"
+        },
+        "entry": {
+          "$ref": "#/$defs/KnowledgeClaim"
+        },
+        "informational": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/KnowledgeReviewKind"
+        },
+        "moreChallenges": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "other": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "otherAuthor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "recurrence": {
+          "$ref": "#/$defs/Counter"
+        },
+        "sinceMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "kind",
+        "entry",
+        "priority",
+        "recurrence",
+        "sinceMs",
+        "challenges",
+        "informational"
+      ],
+      "type": "object"
+    },
+    "KnowledgeReviewKind": {
+      "enum": [
+        "Challenge",
+        "ProposedRule",
+        "Contradiction"
+      ],
+      "type": "string"
+    },
+    "KnowledgeReviewPage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_KnowledgeReviewItem_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
     "KnowledgeRevisionEntry": {
       "additionalProperties": false,
       "properties": {
@@ -5750,6 +6080,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_ApprovalViewRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/ApprovalViewRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_ArtifactRecord_0_500": {
       "items": {
         "$ref": "#/$defs/ArtifactRecord"
@@ -6126,6 +6464,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_KnowledgeReviewItem_0_500": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeReviewItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_KnowledgeRevisionEntry_0_500": {
       "items": {
         "$ref": "#/$defs/KnowledgeRevisionEntry"
@@ -6163,6 +6509,14 @@
         "$ref": "#/$defs/LessonChallenge"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_LessonChallenge_0_500": {
+      "items": {
+        "$ref": "#/$defs/LessonChallenge"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -6238,6 +6592,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_NotificationLink_0_128": {
+      "items": {
+        "$ref": "#/$defs/NotificationLink"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_NotificationRecord_0_500": {
       "items": {
         "$ref": "#/$defs/NotificationRecord"
@@ -6297,14 +6659,6 @@
     "List_ProjectRecord_0_500": {
       "items": {
         "$ref": "#/$defs/ProjectRecord"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_ProposalRecord_0_500": {
-      "items": {
-        "$ref": "#/$defs/ProposalRecord"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -6460,6 +6814,22 @@
       },
       "maxItems": 500,
       "minItems": 0,
+      "type": "array"
+    },
+    "List_SettingAssignment_0_128": {
+      "items": {
+        "$ref": "#/$defs/SettingAssignment"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_SettingAssignment_1_128": {
+      "items": {
+        "$ref": "#/$defs/SettingAssignment"
+      },
+      "maxItems": 128,
+      "minItems": 1,
       "type": "array"
     },
     "List_SettingEntry_0_500": {
@@ -7251,6 +7621,58 @@
       ],
       "type": "object"
     },
+    "NotificationLink": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
     "NotificationRecord": {
       "additionalProperties": false,
       "properties": {
@@ -7259,6 +7681,10 @@
         },
         "body": {
           "$ref": "#/$defs/Text0To65536"
+        },
+        "category": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
         },
         "createdAtMs": {
           "$ref": "#/$defs/Counter"
@@ -7276,6 +7702,22 @@
         "id": {
           "$ref": "#/$defs/Id"
         },
+        "links": {
+          "$ref": "#/$defs/List_NotificationLink_0_128",
+          "x-since": 3
+        },
+        "projectId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "read": {
+          "type": "boolean",
+          "x-since": 3
+        },
+        "requiresInput": {
+          "type": "boolean",
+          "x-since": 3
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
@@ -7288,6 +7730,10 @@
               "type": "null"
             }
           ]
+        },
+        "sourceId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
         },
         "title": {
           "$ref": "#/$defs/Text1To256"
@@ -8499,7 +8945,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ProposalRecord_0_500"
+          "$ref": "#/$defs/List_ApprovalViewRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -11440,6 +11886,39 @@
       ],
       "type": "string"
     },
+    "SavedCommandInput": {
+      "description": "Closed selected-operation argument object, bounded by the existing 1MiB/100-container frame ceiling; no aggregate DynamicJson node limit. The actual selected admission rechecks operation schema, inner JSON bounds and authority. Outer proposal framing remains unchanged.",
+      "not": {
+        "required": [
+          "kind"
+        ]
+      },
+      "type": "object"
+    },
+    "SavedOperationPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "projectIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "targetIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        }
+      },
+      "required": [
+        "effect",
+        "targetIds",
+        "projectIds",
+        "requestDigest"
+      ],
+      "type": "object"
+    },
     "Schedule": {
       "oneOf": [
         {
@@ -11826,6 +12305,22 @@
         "title",
         "contextEpoch",
         "closed"
+      ],
+      "type": "object"
+    },
+    "SettingAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "value": {
+          "$ref": "#/$defs/SchemaValue"
+        }
+      },
+      "required": [
+        "key",
+        "value"
       ],
       "type": "object"
     },
@@ -16178,7 +16673,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ProposalRecord"
+          "$ref": "#/$defs/ApprovalViewRecord"
         }
       },
       "required": [
@@ -16195,7 +16690,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ProposalRecord"
+          "$ref": "#/$defs/ApprovalViewRecord"
         }
       },
       "required": [
@@ -16212,7 +16707,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/ProposalRecord"
+          "$ref": "#/$defs/ApprovalViewRecord"
         }
       },
       "required": [
@@ -18576,6 +19071,42 @@
         },
         "value": {
           "$ref": "#/$defs/AllocationQueueSnapshot"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 3
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "approvals.review_queue",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/KnowledgeReviewPage"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 3
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "notifications.mark_read",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/NotificationRecord"
         }
       },
       "required": [

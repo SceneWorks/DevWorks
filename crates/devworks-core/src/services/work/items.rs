@@ -883,6 +883,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         if !queues.is_empty() {
             super::items::bump(tx, &before.project_id, &queues)?;
         }
@@ -1105,6 +1106,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         if metadata_changed || status_changed {
             super::allocation::invalidate_work(tx, ctx, &before.id)?;
             bump(tx, &before.project_id, &[before.queue()])?;
@@ -1168,6 +1170,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         // A feature's task-set revision covers its cards' workflow status (a re-plan closes the
         // unfinished cards it leaves out, so it must not act on a status it did not see).
         bump(tx, &before.project_id, &[before.queue()])?;
@@ -1241,6 +1244,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         event(
             tx,
             ctx,
@@ -1316,6 +1320,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         event(
             tx,
             ctx,
@@ -1660,6 +1665,7 @@ impl WorkService {
         after.updated_at_ms = tx.now_ms();
         after.updated_by = Some(ctx.principal().clone());
         tx.work().update_work(&after, before.revision)?;
+        crate::services::notifications::verified_transition(tx, &before, &after)?;
         let mut affected_queues = vec![before.queue(), queue];
         if !affected_queues.iter().any(|key| key == PROJECT_QUEUE) {
             affected_queues.push(PROJECT_QUEUE.into());

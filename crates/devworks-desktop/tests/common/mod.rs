@@ -308,6 +308,17 @@ impl Backend for Gated {
         }
         out
     }
+    fn human_decision(&self, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        let operation = "approvals.record_human_decision";
+        if !self.gate.after {
+            self.gate.wait(operation, frame);
+        }
+        let out = self.inner.human_decision(frame);
+        if self.gate.after {
+            self.gate.wait(operation, frame);
+        }
+        out
+    }
     fn refresh_packages(&self) -> Result<(), String> {
         self.inner.refresh_packages()
     }
@@ -431,6 +442,23 @@ impl Backend for LoseAcks {
             "protocol": "1.0-draft.1", "requestKey": "lost", "correlationId": "lost"}))
             .unwrap(),
         )
+    }
+    fn human_decision(&self, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        if self.operation != "approvals.record_human_decision" {
+            return self.inner.human_decision(frame);
+        }
+        self.frames.lock().unwrap().push(frame.to_vec());
+        let lose = self
+            .losses
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if !lose || !self.requests {
+            let out = self.inner.human_decision(frame);
+            if !lose {
+                return out;
+            }
+        }
+        Ok(serde_json::from_value(serde_json::json!({"kind":"CommandStatusUnknown","protocol":"1.0-draft.1","requestKey":"lost","correlationId":"lost"})).unwrap())
     }
     fn refresh_packages(&self) -> Result<(), String> {
         self.inner.refresh_packages()

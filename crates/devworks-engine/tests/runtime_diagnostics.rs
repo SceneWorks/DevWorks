@@ -291,6 +291,11 @@ fn boot_feeds_health_and_records_recovery_and_failures() {
         readiness.message.0
     );
     rt.block_on(app.shutdown());
+    drop(app);
+    // An independently retained diagnostics view observes the end of the dispatcher;
+    // it cannot keep the dispatcher and all of its consumer services alive.
+    let released = parts.diagnostics.health_entries(&user).unwrap();
+    assert_eq!(health(check(&released, "queue.dispatcher")), "Unavailable");
 }
 
 #[test]
@@ -423,6 +428,11 @@ fn the_retention_settings_bound_the_log() {
     drop(store);
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
+    // The boot monitor prunes once before sleeping; finish that pass before
+    // seeding records whose removals this test attributes to its explicit calls.
+    rt.block_on(until("initial diagnostics monitor pass", || {
+        parts.diagnostics.monitor().write_probe.is_some()
+    }));
     let svc = parts.diagnostics.clone();
     write(&**app.store(), move |tx| {
         for i in 0..1_005 {
