@@ -1,27 +1,51 @@
 //! Retained MarkdownWikiChunker semantics (CodeGraph afe73560), without a document-sized
 //! word/chunk array. One bounded source is owned at a time; the overlap window is 512 words.
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 pub const WORDS: usize = 512;
 pub const OVERLAP: usize = 64;
 
+/// A single retained heading segment. Parent sharing bounds the entire generation's
+/// breadcrumb bytes by its source, including repeated large ancestor headings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownSection {
+    pub index: u64,
+    pub heading: Arc<str>,
+    pub parent: Option<Arc<MarkdownSection>>,
+}
+impl MarkdownSection {
+    pub fn path(&self) -> String {
+        match &self.parent {
+            Some(parent) => format!("{} > {}", parent.path(), self.heading),
+            None => self.heading.to_string(),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkdownChunk {
     pub index: u64,
-    pub section_path: String,
+    pub section: Arc<MarkdownSection>,
     pub text: String,
-    pub embedding_text: String,
+}
+impl MarkdownChunk {
+    /// Materialize only the input currently being sent, never every generation prefix.
+    pub fn embedding_text(&self) -> String {
+        format!("{}\n\n{}", self.section.path(), self.text)
+    }
 }
 struct Section {
     text: String,
-    path: String,
+    path: Arc<MarkdownSection>,
     offset: usize,
     window: VecDeque<String>,
     short: bool,
     done: bool,
 }
 impl Section {
-    fn new(text: &str, path: String) -> Self {
+    fn new(text: &str, path: Arc<MarkdownSection>) -> Self {
         Self {
             text: text.to_owned(),
             path,
@@ -78,11 +102,12 @@ impl Section {
 /// truncated: a single long word or heading can exceed an ordinary display-field bound.
 pub struct MarkdownChunks {
     source: String,
-    path: String,
+    root: Arc<MarkdownSection>,
     scan: usize,
     section_start: usize,
-    breadcrumb: BTreeMap<usize, String>,
-    section_breadcrumb: Vec<String>,
+    breadcrumb: BTreeMap<usize, Arc<MarkdownSection>>,
+    section_breadcrumb: Arc<MarkdownSection>,
+    next_section: u64,
     current: Option<Section>,
     ended: bool,
     index: u64,
@@ -102,13 +127,19 @@ impl MarkdownChunks {
         } else {
             0
         };
+        let root = Arc::new(MarkdownSection {
+            index: 0,
+            heading: Arc::from(section_path),
+            parent: None,
+        });
         Self {
             source,
-            path: section_path.to_owned(),
+            root: root.clone(),
             scan: start,
             section_start: start,
             breadcrumb: BTreeMap::new(),
-            section_breadcrumb: Vec::new(),
+            section_breadcrumb: root,
+            next_section: 1,
             current: None,
             ended: false,
             index: 0,
@@ -135,17 +166,22 @@ impl MarkdownChunks {
                 }
             }
             let text = self.source[self.section_start..end].trim();
-            let path = if self.section_breadcrumb.is_empty() {
-                self.path.clone()
-            } else {
-                format!("{} > {}", self.path, self.section_breadcrumb.join(" > "))
-            };
-            let section = (!text.is_empty() && !pure_code(text)).then(|| Section::new(text, path));
+            let section = (!text.is_empty() && !pure_code(text))
+                .then(|| Section::new(text, self.section_breadcrumb.clone()));
             if let Some((level, title, start)) = next {
-                self.breadcrumb.retain(|key, _| *key <= level);
-                self.breadcrumb
-                    .insert(level, format!("{} {title}", "#".repeat(level)));
-                self.section_breadcrumb = self.breadcrumb.values().cloned().collect();
+                self.breadcrumb.retain(|key, _| *key < level);
+                let parent = self
+                    .breadcrumb
+                    .last_key_value()
+                    .map_or_else(|| self.root.clone(), |(_, parent)| parent.clone());
+                let heading = Arc::new(MarkdownSection {
+                    index: self.next_section,
+                    heading: Arc::from(format!("{} {title}", "#".repeat(level))),
+                    parent: Some(parent),
+                });
+                self.next_section += 1;
+                self.breadcrumb.insert(level, heading.clone());
+                self.section_breadcrumb = heading;
                 self.section_start = start;
             } else {
                 self.ended = true;
@@ -172,8 +208,7 @@ impl Iterator for MarkdownChunks {
                 self.index += 1;
                 return Some(MarkdownChunk {
                     index,
-                    section_path: section.path.clone(),
-                    embedding_text: format!("{}\n\n{text}", section.path),
+                    section: section.path.clone(),
                     text,
                 });
             }
@@ -206,11 +241,11 @@ mod tests {
         let chunks: Vec<_> = MarkdownChunks::new(input, "Messaging").collect();
         assert_eq!(chunks.len(), 3);
         assert_eq!(
-            chunks[0].embedding_text,
+            chunks[0].embedding_text(),
             "Messaging > # Overview\n\nIntro text."
         );
         assert_eq!(
-            chunks[1].section_path,
+            chunks[1].section.path(),
             "Messaging > # Overview > ## Consumers"
         );
         assert_eq!(chunks[1].index, 1);
@@ -260,8 +295,8 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(chunk.text, word);
-        assert_eq!(chunk.section_path, format!("P > # {heading}"));
-        assert!(chunk.embedding_text.ends_with(&word));
+        assert_eq!(chunk.section.path(), format!("P > # {heading}"));
+        assert!(chunk.embedding_text().ends_with(&word));
         assert_eq!(
             MarkdownChunks::new(&"x".repeat(16_777_215), "P")
                 .next()
@@ -270,5 +305,31 @@ mod tests {
                 .len(),
             16_777_215
         );
+    }
+    #[test]
+    fn legal_large_ancestor_heading_is_shared_across_all_chunks_and_child_sections() {
+        let heading = "h".repeat(8 * 1024 * 1024);
+        let source = format!(
+            "# {heading}\n{}\n## First\nfirst\n## Second\nsecond",
+            "word ".repeat(600_000)
+        );
+        assert!(source.len() < 16_777_215);
+        let mut chunks = MarkdownChunks::new(&source, "P");
+        let first = chunks.next().unwrap();
+        let ancestor = first.section.clone();
+        let mut count = 1;
+        for chunk in chunks {
+            count += 1;
+            if chunk.section.index == ancestor.index {
+                assert!(Arc::ptr_eq(&chunk.section, &ancestor));
+            } else {
+                assert!(Arc::ptr_eq(
+                    chunk.section.parent.as_ref().unwrap(),
+                    &ancestor
+                ));
+            }
+        }
+        assert!(count > 1_000);
+        assert_eq!(ancestor.heading.len(), heading.len() + 2);
     }
 }
