@@ -77,6 +77,7 @@ pub struct PreparedEmbeddingProbe {
     pub(super) space: EmbeddingSpace,
     pub(super) context: InvocationContext,
     pub(super) operation_fence: AttemptFence,
+    pub(super) operation_state: crate::protocol::OperationState,
 }
 impl PreparedEmbeddingProbe {
     pub fn candidate_id(&self) -> &Id {
@@ -99,6 +100,9 @@ impl PreparedEmbeddingProbe {
     }
     pub fn operation_id(&self) -> &OperationId {
         &self.probe.operation_id
+    }
+    pub fn operation_state(&self) -> crate::protocol::OperationState {
+        self.operation_state
     }
     pub fn operation_fence(&self) -> &AttemptFence {
         &self.operation_fence

@@ -789,9 +789,22 @@ pub(crate) fn reference_from_transcript(
     session: &Id,
     root: Option<RootId>,
 ) -> Result<(), StorageError> {
+    reference_from_host_owner(tx, ctx, reference, &SubjectKey::session(session), root)
+}
+
+/// Records an already validated host-owned reference in its producing unit of work. The caller
+/// must establish the exact immutable version and owning subject before invoking this helper.
+/// This is not a public reference operation or an authority grant.
+pub(crate) fn reference_from_host_owner(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    reference: &ArtifactRef,
+    subject: &SubjectKey,
+    root: Option<RootId>,
+) -> Result<(), StorageError> {
     let added = tx.artifacts().add_link(&ArtifactLink {
         version_id: reference.version_id.clone(),
-        subject: SubjectKey::session(session),
+        subject: subject.clone(),
         purpose: LinkPurpose::Reference,
     })?;
     if !added {
@@ -811,11 +824,11 @@ pub(crate) fn reference_from_transcript(
         ctx,
         &artifact,
         root,
-        None,
+        (subject.kind == "operation").then(|| OperationId(subject.id.clone())),
         "ArtifactReferenced",
         json!({
-            "versionId": reference.version_id.as_str(), "subjectKind": "session",
-            "subjectId": session.as_str(), "referenceRevision": artifact.reference_revision,
+            "versionId": reference.version_id.as_str(), "subjectKind": subject.kind,
+            "subjectId": subject.id.as_str(), "referenceRevision": artifact.reference_revision,
         }),
     )?;
     Ok(())

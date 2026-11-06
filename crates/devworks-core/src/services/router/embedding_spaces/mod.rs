@@ -10,3 +10,7 @@ mod resolve;
 pub use resolve::{resolve_selected_in, resolve_selected_read};
 mod service;
 pub use service::{EFFECT_CONSUMER, EmbeddingSpaceService, PROBE_KIND, PROBE_TEXT};
+mod evidence;
+pub use evidence::{NativeProbeResult, VerifiedProbeEvidence};
+
+mod inputs;
