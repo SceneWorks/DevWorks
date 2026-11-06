@@ -972,9 +972,9 @@ impl SecretStore for SourceGateSecrets {
     fn name(&self)->&'static str { "controlled source-authority gate" }
     fn put(&self,key:&SecretKey,value:&Secret)->Result<(),devworks_core::ports::secrets::SecretError>{self.inner.put(key,value)}
     fn get(&self,key:&SecretKey)->Result<Option<Secret>,devworks_core::ports::secrets::SecretError>{
-        if self.reads.fetch_add(1,Ordering::SeqCst)+1==self.at {
-            if let Some(change)=self.change.lock().unwrap().take(){change();}
-        }
+        if self.reads.fetch_add(1,Ordering::SeqCst)+1==self.at
+            && let Some(change)=self.change.lock().unwrap().take(){change();}
+
         self.inner.get(key)
     }
     fn delete(&self,key:&SecretKey)->Result<bool,devworks_core::ports::secrets::SecretError>{self.inner.delete(key)}
