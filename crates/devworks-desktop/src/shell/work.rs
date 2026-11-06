@@ -88,6 +88,7 @@ pub struct CreateForm {
     pub priority: i32,
     pub task_type: Option<String>,
     pub labels: Vec<String>,
+    pub budget: crate::usage_screen::BudgetDraft,
 }
 /// An edit of one item's title, description and priority, against the record it was opened on.
 #[derive(Clone, Debug)]
@@ -98,6 +99,8 @@ pub struct EditForm {
     pub priority: i32,
     pub task_type: Option<String>,
     pub labels: Vec<String>,
+    pub budget: crate::usage_screen::BudgetDraft,
+    pub budget_changed: bool,
 }
 /// A plan draft being written for a feature, against the record it was opened on.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -125,6 +128,9 @@ pub struct PlanForm {
     pub drops: BTreeMap<String, DropDraft>,
     #[serde(default)]
     pub statuses: BTreeMap<String, RequirementStatus>,
+    /// None preserves the effective policy; Some is an exact pending cap proposal.
+    #[serde(default)]
+    pub budget: Option<crate::usage_screen::BudgetDraft>,
 }
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DropDraft {
@@ -173,7 +179,9 @@ pub fn edit_after_save(
                 && l.description == saved.description
                 && l.priority == saved.priority
                 && l.task_type == saved.task_type
-                && l.labels == saved.labels;
+                && l.labels == saved.labels
+                && l.budget == saved.budget
+                && l.budget_changed == saved.budget_changed;
             match current {
                 Some(c) if !same => Some(EditForm { snapshot: c, ..l }),
                 _ => None,
@@ -185,7 +193,8 @@ pub fn edit_after_save(
 
 /// Whether two plan forms hold the same edits (what a save submits).
 pub fn same_plan_edits(a: &PlanForm, b: &PlanForm) -> bool {
-    a.text == b.text
+    a.budget == b.budget
+        && a.text == b.text
         && a.requirements == b.requirements
         && a.acceptance == b.acceptance
         && a.acceptance_tests == b.acceptance_tests
@@ -292,6 +301,11 @@ pub fn open_plan_form(f: &WorkRecord) -> PlanForm {
     };
     PlanForm {
         snapshot: f.clone(),
+        budget: f
+            .pending_plan
+            .as_ref()
+            .and_then(|pending| pending.budget.as_ref())
+            .map(crate::usage_screen::BudgetDraft::from_input),
         text: String::new(),
         requirements: base
             .requirements
@@ -984,6 +998,15 @@ impl Shell {
                         &mut body
                     };
                     metadata["labels"] = json!(form.labels);
+                    if form.kind == "feature" {
+                        match form.budget.input() {
+                            Ok(input) => metadata["budget"] = input,
+                            Err(error) => {
+                                self.work.message = Some((Tone::Bad, error));
+                                continue;
+                            }
+                        }
+                    }
                     if form.kind != "feature"
                         && let Some(kind) = &form.task_type
                     {
@@ -1016,6 +1039,15 @@ impl Shell {
                             changes["taskType"] = json!(kind);
                         } else {
                             changes["clearTaskType"] = json!(true);
+                        }
+                    }
+                    if feature && form.budget_changed {
+                        match form.budget.input() {
+                            Ok(input) => changes["budget"] = input,
+                            Err(error) => {
+                                self.work.message = Some((Tone::Bad, error));
+                                continue;
+                            }
                         }
                     }
                     if !feature && form.priority != w.priority {
@@ -1091,7 +1123,10 @@ impl Shell {
                     let Some(pending) = w.pending_plan.clone() else {
                         continue;
                     };
-                    let digest = devworks_core::services::work::plan_digest(&pending.draft);
+                    let Some(digest) = pending.plan_digest.as_ref() else {
+                        self.work.message=Some((Tone::Attention,"Refresh the feature to read its captured pending plan token before requesting approval.".into()));
+                        continue;
+                    };
                     let body = json!({"featureId": w.id, "expectedRevision": w.revision,
                         "planRevision": pending.revision, "planDigest": digest});
                     self.command(
@@ -1249,8 +1284,17 @@ impl Shell {
         let w = &form.snapshot;
         // Every live requirement of the active plan stays in the draft (dropping one needs an
         // explicit decision); what the form does not show is kept from its starting draft.
-        let body = json!({"featureId": w.id, "expectedRevision": w.revision,
+        let mut body = json!({"featureId": w.id, "expectedRevision": w.revision,
             "plan": plan_body(form, content)});
+        if let Some(budget) = &form.budget {
+            match budget.input() {
+                Ok(input) => body["budget"] = input,
+                Err(error) => {
+                    self.work.message = Some((Tone::Bad, error));
+                    return;
+                }
+            }
+        }
         self.command(
             Slot::WorkPlan(w.id.as_str().to_owned()),
             "Saving the plan draft",
@@ -2427,8 +2471,13 @@ fn create_form(ui: &mut Ui, work: &mut WorkUi, busy: bool, actions: &mut Vec<Act
                         egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Feature")
                     });
             }
+            if form.kind == "feature" {
+                form.budget.ui(ui);
+            }
             ui.horizontal(|ui| {
-                let ok = !busy && !form.title.trim().is_empty();
+                let ok = !busy
+                    && !form.title.trim().is_empty()
+                    && (form.kind != "feature" || form.budget.input().is_ok());
                 if ui.add_enabled(ok, egui::Button::new("Create")).clicked() {
                     submit = Some(form.clone());
                 }
@@ -2913,6 +2962,7 @@ fn feature_detail(
 ) {
     egui::ScrollArea::vertical().id_salt("feature-detail").show(ui, |ui| {
         ui.label(RichText::new(&f.title.0).strong());
+        if let Some(budget)=&f.budget {crate::usage_screen::budget_status(ui,budget);}else{widgets::caption(ui,"Feature accounting is unavailable; the effective spending policy is unknown.");}
         widgets::caption(ui, format!("Revision {} · {}", f.revision.as_str(), status_name(cols, f.status_id.as_str())));
         metadata_summary(ui,f);
         if !f.description.0.is_empty() {
@@ -2972,6 +3022,7 @@ fn feature_detail(
         if let Some(p) = &f.pending_plan {
             ui.add_space(4.0);
             ui.label(RichText::new(format!("Pending revision {}", p.revision.as_str())).strong());
+            if let Some(budget)=&p.budget {crate::usage_screen::budget_choice(ui,budget);}
             for r in &p.draft.requirements.0 {
                 ui.label(format!("{}: {}", r.id.as_str(), r.statement.0));
             }
@@ -2982,7 +3033,7 @@ fn feature_detail(
             if requested {
                 widgets::caption(ui, "Approval requested: decide it in Approvals.");
             } else if ui
-                .add_enabled(enabled, egui::Button::new("Request approval"))
+                .add_enabled(enabled&&p.plan_digest.is_some(), egui::Button::new("Request approval"))
                 .clicked()
             {
                 actions.push(Action::RequestApproval(f.clone()));
@@ -3106,6 +3157,8 @@ fn edit_section(
                 priority: w.priority,
                 task_type: task_type_of(w),
                 labels: labels_of(w),
+                budget: crate::usage_screen::BudgetDraft::from_view(w.budget.as_ref()),
+                budget_changed: false,
             });
         }
         return;
@@ -3128,6 +3181,9 @@ fn edit_section(
         &mut form.task_type,
         &mut form.labels,
     );
+    if matches!(w.kind, WorkKind::Feature) {
+        form.budget_changed |= form.budget.ui(ui);
+    }
     if !matches!(w.kind, WorkKind::Feature) {
         ui.horizontal(|ui| {
             ui.label("Priority");
@@ -3139,7 +3195,13 @@ fn edit_section(
     }
     let mut cancel = false;
     ui.horizontal(|ui| {
-        if ui.add_enabled(enabled, egui::Button::new("Save")).clicked() {
+        if ui
+            .add_enabled(
+                enabled && (!matches!(w.kind, WorkKind::Feature) || form.budget.input().is_ok()),
+                egui::Button::new("Save"),
+            )
+            .clicked()
+        {
             actions.push(Action::Edit(form.clone()));
         }
         if widgets::secondary_button(ui, "Cancel").clicked() {
@@ -3174,6 +3236,17 @@ fn plan_form(
         ui,
         "Saving makes this the pending revision; the active plan stays in force until it is approved.",
     );
+    let mut propose = form.budget.is_some();
+    if ui
+        .checkbox(&mut propose, "Propose a spending cap change with this plan")
+        .changed()
+    {
+        form.budget =
+            propose.then(|| crate::usage_screen::BudgetDraft::from_view(f.budget.as_ref()));
+    }
+    if let Some(budget) = &mut form.budget {
+        budget.ui(ui);
+    }
     let r = ui.add(
         egui::TextEdit::multiline(&mut form.text)
             .hint_text("Plan text (leave empty to keep the current text)")
@@ -3240,6 +3313,11 @@ fn plan_form(
 
 /// Refuse unsupported omissions before submitting, preserving the whole draft.
 pub fn plan_error(form: &PlanForm) -> Option<String> {
+    if let Some(budget) = &form.budget
+        && let Err(error) = budget.input()
+    {
+        return Some(error);
+    }
     if form.snapshot.approval.is_some() {
         for r in &form.snapshot.requirements.0 {
             match form.requirements.iter().find(|e| e.id == r.id.as_str()) {

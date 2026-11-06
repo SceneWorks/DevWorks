@@ -415,7 +415,7 @@ fn native_inspection_keeps_full_typed_plan_source_beyond_the_json_metadata_limit
         .as_ref()
         .unwrap();
     match source {
-        devworks_core::protocol::records::ApprovalReviewedContent::FeaturePlan { plan } => {
+        devworks_core::protocol::records::ApprovalReviewedContent::FeaturePlan { plan, .. } => {
             assert_eq!(plan.requirements.0.len(), 128);
             assert_eq!(plan.requirements.0.last().unwrap().statement.0, statement);
         }

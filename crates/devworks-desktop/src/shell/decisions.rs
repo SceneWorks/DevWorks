@@ -321,7 +321,7 @@ impl Shell {
             (Slot::ApprovalInspect(_), Reply::Query(q)) => match dops::approval(q) {
                 Ok(p) => {
                     let artifact = match &p.reviewed_source {
-                        Some(ApprovalReviewedContent::FeaturePlan { plan }) => {
+                        Some(ApprovalReviewedContent::FeaturePlan { plan, .. }) => {
                             Some(plan.content.clone())
                         }
                         _ => p.artifact.clone(),
@@ -1034,7 +1034,10 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
                     ui.push_id(i, |ui| json_view(ui, &format!("Setting {}", i + 1), entry));
                 }
             }
-            ApprovalReviewedContent::FeaturePlan { plan } => {
+            ApprovalReviewedContent::FeaturePlan { plan, budget } => {
+                if let Some(budget) = budget {
+                    crate::usage_screen::budget_choice(ui, budget);
+                }
                 ui.label("Exact proposed plan");
                 json_view(ui, "Plan artifact identity", &plan.content);
                 json_view(ui, "Repositories", &plan.repository_ids);

@@ -265,10 +265,10 @@ pub static SCREENS: [Screen; 20] = [
         summary: "Attributed requests, prices, budgets and cache.",
         group: NavGroup::Bottom,
         help_topic: "usage",
-        subviews: &["Spending", "Requests", "Cache"],
+        subviews: &["Reports", "Attempts", "Prices"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending("request attribution, prices and budgets", "DW-21"),
+        pending: None,
         link: None,
     },
     Screen {

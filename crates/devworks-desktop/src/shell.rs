@@ -34,6 +34,7 @@ pub mod decisions;
 pub mod indexing;
 pub mod jobs;
 pub mod projects;
+pub mod usage;
 pub mod work;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
@@ -171,6 +172,7 @@ pub struct Shell {
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
+    pub usage: crate::usage_screen::UsageScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -315,6 +317,7 @@ impl Shell {
             projects: projects::ProjectsUi::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
+            usage: crate::usage_screen::UsageScreen::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -429,6 +432,14 @@ impl Shell {
     fn load_route(&mut self) {
         match self.route {
             Route::Chat => self.ensure_conversation_loaded(),
+            Route::Usage => {
+                self.usage.tab = self.routes.entry(Route::Usage).or_default().tab;
+                self.load_usage();
+                self.load_router_catalog();
+                if !self.projects.list.loaded {
+                    self.load_projects();
+                }
+            }
             Route::Approvals => {
                 self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
                 self.load_approvals();
@@ -1705,6 +1716,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_usage(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
             return;
         };
@@ -2714,6 +2728,9 @@ impl Shell {
             }
         }
         self.refresh_waiting_first_routes();
+        if self.route == Route::Usage && self.usage.tab == 2 && !self.usage.prices_loading {
+            self.load_prices(false);
+        }
         self.load_completion_notifications();
         if self.route == Route::Approvals
             && !self.pending(&Slot::ApprovalsList)
@@ -4049,6 +4066,7 @@ impl Shell {
                 self.knowledge_actions(actions);
             }
             Route::Approvals => self.approvals_screen(ui),
+            Route::Usage => self.usage_screen(ui),
             Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),

@@ -61,6 +61,8 @@ struct Edit {
     /// A pasted `code#state` (cleared when submitted).
     code: String,
     notice_read: bool,
+    local_free: bool,
+    local_free_changed: bool,
     open: bool,
     /// OpenRouter constraints: comma-separated model patterns, the cost tier index into
     /// [`COST_TIERS`] and the provider-routing object as JSON.
@@ -109,6 +111,7 @@ pub struct ConnectionsPanel {
     add_name: String,
     add_endpoint: String,
     add_key: String,
+    add_local_free: bool,
     new_model: NewModel,
 }
 
@@ -171,6 +174,8 @@ impl ConnectionsPanel {
             let e = self.edits.entry(r.id.as_str().to_owned()).or_default();
             if !e.open {
                 e.name = r.name.0.clone();
+                e.local_free = r.local_free.unwrap_or(false);
+                e.local_free_changed = false;
                 e.endpoint = r.endpoint.as_ref().map(|u| u.0.clone()).unwrap_or_default();
                 let o = r.open_router.as_ref();
                 e.allowed = o.map(|o| joined(&o.allowed_models.0)).unwrap_or_default();
@@ -612,6 +617,12 @@ impl ConnectionsPanel {
             };
             field(ui, shown, &format!("{} key", r.name.0), &mut e.key, true);
         }
+        let local_free = ui.checkbox(&mut e.local_free, "Local or free endpoint");
+        e.local_free_changed |= local_free.changed();
+        widgets::caption(
+            ui,
+            "Explicit cost classification for this connection; requests remain attributed.",
+        );
         let open_router = p.name == "OpenRouterChat";
         if open_router {
             ui.label(RichText::new("OpenRouter constraints").strong());
@@ -669,6 +680,9 @@ impl ConnectionsPanel {
             let mut action = json!({"kind": "Connection", "connectionId": id,
                 "expectedRevision": revision, "name": e.name.trim(), "profile": p.name,
                 "endpoint": e.endpoint.trim()});
+            if e.local_free_changed {
+                action["localFree"] = json!(e.local_free);
+            }
             if open_router {
                 match constraints_of_edit(e) {
                     Ok(c) => {
@@ -741,6 +755,11 @@ impl ConnectionsPanel {
                  never to API credits.",
             ),
         }
+        ui.checkbox(&mut self.add_local_free, "Local or free endpoint");
+        widgets::caption(
+            ui,
+            "Explicit cost classification for this connection; requests remain attributed.",
+        );
         let ready = !self.add_name.trim().is_empty() && !self.add_endpoint.trim().is_empty();
         if ui
             .add_enabled(ready, egui::Button::new(ADD_LABEL))
@@ -751,7 +770,7 @@ impl ConnectionsPanel {
             actions.push(ConnectionAction::Configure {
                 label: "Adding the connection".into(),
                 action: json!({"kind": "Connection", "name": self.add_name.trim(),
-                    "profile": p.name, "endpoint": self.add_endpoint.trim()}),
+                    "profile": p.name, "endpoint": self.add_endpoint.trim(),"localFree":self.add_local_free}),
                 key,
                 code: None,
             });

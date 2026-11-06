@@ -341,6 +341,9 @@ async fn compose(
     let use_cases = use_cases.with_web(web.clone());
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
     runtime_config.shutdown_bound = config.shutdown_bound;
+    runtime_config.price_refresh = Some(devworks_engine::prices::PriceComposition::new(Arc::new(
+        devworks_adapters::prices::OfficialPriceSource::new(http.clone()),
+    )));
     runtime_config.native_notifications = Some(Arc::new(
         crate::native_notifications::NativeOsNotifications::new(),
     ));
