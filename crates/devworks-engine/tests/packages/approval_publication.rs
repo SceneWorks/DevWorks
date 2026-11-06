@@ -280,3 +280,78 @@ fn bootstrap_skips_a_source_revoked_during_publication_and_continues() {
             .active
     );
 }
+
+#[test]
+fn bootstrap_rechecks_source_deleted_after_preparation_before_staging_any_review() {
+    let _serial = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    let gate = Arc::new(Gate::default());
+    a.artifact_files = Some(Arc::new(PublicationGate {
+        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
+        gate: gate.clone(),
+    }));
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+    let (spec, bytes, digest, _) = large_signed_bundle("a-source-delete-race");
+    let bundle = a.save(&a.agent, &bytes);
+    let source = match applied(a.domain(&a.agent,"addons.propose",json!({
+        "kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":spec.package
+    }))) {OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    let old_review = saved(&a, &source);
+    let old_source = read(&*a.store, |s| s.packages().proposal(&source.id)).unwrap();
+    let evidence: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(old_review.artifact.clone().unwrap()).unwrap();
+    let tag=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"replace-deletion-race-evidence","body":{"kind":"artifacts.tag","artifactId":evidence.artifact_id,"expectedRevision":"1","tags":["retained-old-review"]}})).unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    let healthy = Spec::new("z-after-source-delete-race", "1.0.0");
+    let (healthy_source, _, _) = propose(&a, &healthy);
+    let healthy_review = saved(&a, &healthy_source);
+    let before = domain_rows(&a);
+    gate.arm(IdKind::ArtifactVersion);
+    let _release = Release(gate.clone());
+    let service = a.app().packages().unwrap().service().clone();
+    let result = std::thread::scope(|scope| {
+        let pending = scope.spawn(move || service.sync_pending_reviews());
+        assert!(
+            gate.entered(Duration::from_secs(10)),
+            "source read preflight must precede evidence publication"
+        );
+        let reference: devworks_core::protocol::provider::ArtifactRef =
+            serde_json::from_value(bundle).unwrap();
+        let artifact = read(&*a.store, |s| {
+            s.artifacts().artifact(&reference.artifact_id)
+        })
+        .unwrap();
+        let deletion=serde_json::to_vec(&json!({"protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"delete-during-review-sync","deletion":{"kind":"DeleteVersion","artifactId":reference.artifact_id,"versionId":reference.version_id,"expectedRevision":artifact.revision.to_string(),"expectedReferenceRevision":artifact.reference_revision.to_string()}})).unwrap();
+        applied(
+            a.app()
+                .command(&a.user, "artifacts.delete", &deletion)
+                .unwrap(),
+        );
+        gate.release();
+        pending.join().unwrap()
+    });
+    assert_eq!(
+        result.unwrap(),
+        1,
+        "continue to the later eligible source after the writer preflight skips this source"
+    );
+    assert_eq!(
+        domain_rows(&a),
+        before,
+        "no partial approval supersession or unrelated domain mutation"
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().proposal(&source.id)).unwrap(),
+        old_source
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.decisions().approval(&old_review.id)).unwrap(),
+        old_review
+    );
+    assert_eq!(saved(&a, &healthy_source), healthy_review);
+}
