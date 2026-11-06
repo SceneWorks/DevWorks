@@ -68,6 +68,8 @@ pub struct PublishedTariff {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceQuote {
     pub classification: CostClassification,
+    /// Current connection/billing policy observed by quotation; admission checks it again.
+    pub connection_revision: Option<i64>,
     pub snapshot_id: Option<Id>,
     pub price_revision: Option<i64>,
     pub override_revision: Option<i64>,
