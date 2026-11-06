@@ -724,3 +724,48 @@ fn convention_max_sort_order_is_nullable_current_scoped_parent_filtered_and_incl
     })
     .unwrap();
 }
+
+#[test]
+fn explicit_empty_and_whitespace_slugs_remain_literal_scoped_identifiers() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store, WriteOptions::default(), |tx| {
+        for (key, slug) in [
+            ("empty-slug", ""),
+            ("space-slug", "   "),
+            ("nul-slug", "\0"),
+        ] {
+            let mut row = record(key, KnowledgeScope::Workspace, None);
+            row.slug = slug.into();
+            tx.conventions().create_convention(&row)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    for (key, slug) in [
+        ("empty-slug", ""),
+        ("space-slug", "   "),
+        ("nul-slug", "\0"),
+    ] {
+        let q = ConventionQuery {
+            scopes: vec![KnowledgeScope::Workspace],
+            slug: Some(slug.into()),
+            parent_id: Some(None),
+            ..Default::default()
+        };
+        let rows = read(&store, |r| r.conventions().conventions(&q, None, 10));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id(key));
+        assert_eq!(rows[0].slug, slug);
+    }
+    assert_eq!(
+        read(&store, |r| r.conventions().conventions(
+            &query(vec![KnowledgeScope::Workspace]),
+            None,
+            10
+        ))
+        .len(),
+        3,
+        "omitted slug selects the catalog; Some empty selects only the literal empty slug"
+    );
+}
