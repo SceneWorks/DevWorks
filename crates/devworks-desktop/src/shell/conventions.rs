@@ -175,6 +175,7 @@ impl Shell {
             let s = self.conventions.states.entry(scope.clone()).or_default();
             let record = s.record().cloned();
             if s.resource_loading
+                || (append && s.resource_query_snapshot.is_none())
                 || (append && s.resource_mode != 2 && s.resource_next.is_none())
                 || (s.resource_mode == 0 && record.is_none())
             {
@@ -186,7 +187,7 @@ impl Shell {
             }
             s.resource_loading = true;
             s.resource_generation = s.resource_generation.wrapping_add(1);
-            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":[]});
+            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":s.applicability});
             body["selection"] = match s.resource_mode {
                 1 => serde_json::json!({"kind":"Catalog"}),
                 2 => {
@@ -203,8 +204,22 @@ impl Shell {
                     serde_json::json!({"kind":"Attachments","conventionId":record.id,"conventionRevision":record.revision,"lifecycles":["Active","Retired","Deleted"]})
                 }
             };
-            if append && s.resource_mode != 2 {
-                body["page"]["cursor"] = serde_json::json!(s.resource_next);
+            if append {
+                body = s.resource_query_snapshot.clone().expect("captured query");
+                if s.resource_mode == 2 {
+                    if let Some(cursor) = s.resource_document_cursors.last().cloned().flatten() {
+                        body["selection"]["cursor"] = serde_json::json!(cursor);
+                    } else {
+                        body["selection"]
+                            .as_object_mut()
+                            .expect("selection")
+                            .remove("cursor");
+                    }
+                } else {
+                    body["page"]["cursor"] = serde_json::json!(s.resource_next);
+                }
+            } else {
+                s.resource_query_snapshot = Some(body.clone());
             }
             (s.resource_generation, body)
         };
@@ -252,9 +267,7 @@ impl Shell {
     pub(super) fn apply_conventions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
         match (slot, reply) {
             (Slot::ConventionsList(key, generation, append, search), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if s.list_generation != generation {
                     return None;
@@ -310,9 +323,7 @@ impl Shell {
                 }
             }
             (Slot::ConventionRead(key, generation), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if s.reader.generation != generation {
                     return None;
@@ -320,9 +331,7 @@ impl Shell {
                 s.reader.loading = false;
                 match cop::document(outcome) {
                     Ok(view) => {
-                        let Some(target) = s.reader.target.as_mut() else {
-                            return None;
-                        };
+                        let target = s.reader.target.as_mut()?;
                         if (!target.by_slug && view.convention.id.as_str() != target.id)
                             || target
                                 .revision
@@ -341,9 +350,7 @@ impl Shell {
                 }
             }
             (Slot::ConventionVersions(key, generation, append), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if generation != s.version_generation {
                     return None;
@@ -369,9 +376,7 @@ impl Shell {
                 }
             }
             (Slot::ConventionResources(key, generation, append), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 if generation != s.resource_generation {
                     return None;
@@ -426,18 +431,22 @@ impl Shell {
                 }
             }
             (Slot::ConventionParents(key, id, generation, append), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
-                let Some(d) = s.move_drafts.get_mut(&id) else {
-                    return None;
-                };
+                let d = s.move_drafts.get_mut(&id)?;
                 if generation != d.generation {
                     return None;
                 }
                 match cop::page(outcome) {
                     Ok(page) => {
+                        if append
+                            && d.scope_revision
+                                .is_some_and(|old| old != page.scope_revision.get())
+                        {
+                            s.notice=Some((Tone::Attention,"The destination listing changed. Load parents again; this move draft is kept.".into()));
+                            return None;
+                        }
+                        d.scope_revision = Some(page.scope_revision.get());
                         if !append {
                             d.choices.clear();
                         }
@@ -448,13 +457,9 @@ impl Shell {
                 }
             }
             (Slot::ConventionEditor(key, id, identity), Reply::Task(result)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
-                let Some(draft) = s.drafts.get_mut(&id).filter(|d| d.identity == identity) else {
-                    return None;
-                };
+                let draft = s.drafts.get_mut(&id).filter(|d| d.identity == identity)?;
                 draft.loading = false;
                 match result {
                     Ok(TaskOutput::Convention(cop::TaskResult::Editor {
@@ -476,9 +481,7 @@ impl Shell {
                 }
             }
             (Slot::ConventionOperation(key, id), Reply::Query(outcome)) => {
-                let Some(scope) = self.convention_scope(&key) else {
-                    return None;
-                };
+                let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
                 match cop::operation(outcome) {
                     Ok(status) if status.operation.operation_id.0.as_str() == id => {
@@ -533,6 +536,8 @@ impl Shell {
                         ));
                     }
                     Err(error) => {
+                        s.operation_statuses.remove(&id);
+                        s.operation_revisions.remove(&id);
                         s.operation_text.insert(id, error.describe());
                     }
                 }
@@ -578,13 +583,12 @@ impl Shell {
                 }
                 match ops::saved_artifact(outcome) {
                     Ok(record) => {
-                        if let Some(p) = self.conventions.pipelines.get_mut(&token) {
-                            if let Err(error) =
+                        if let Some(p) = self.conventions.pipelines.get_mut(&token)
+                            && let Err(error) =
                                 crate::conventions_transfer::apply_artifact(p, record.artifact)
-                            {
-                                self.fail_convention_pipeline(&key, &token, error);
-                                return None;
-                            }
+                        {
+                            self.fail_convention_pipeline(&key, &token, error);
+                            return None;
                         }
                         self.advance_convention_pipeline(token);
                     }
@@ -639,6 +643,7 @@ impl Shell {
             target,
             draft,
             reader_generation: state.reader.generation,
+            resource: None,
         };
         if self.command(
             Slot::ConventionCommand(key, token.clone()),
@@ -782,10 +787,10 @@ impl Shell {
         let unknown = matches!(&result, Err(Failure::Unknown));
         if !unknown && let Some(p) = self.conventions.pipelines.remove(token) {
             for stage in p.files {
-                if stage.owned {
-                    if let Some(b) = self.backend() {
-                        crate::attachments::remove_owned(&stage.path, &b.scratch_dir());
-                    }
+                if stage.owned
+                    && let Some(b) = self.backend()
+                {
+                    crate::attachments::remove_owned(&stage.path, &b.scratch_dir());
                 }
             }
         }
@@ -862,6 +867,48 @@ impl Shell {
                         }
                     }
                 }
+                if let (Some(record), Some(context)) = (&record, &submission)
+                    && let Some((upload, id, generation)) = &context.resource
+                {
+                    if *upload {
+                        if state.upload.as_ref().is_some_and(|d| {
+                            d.base.id.as_str() == id && d.generation == *generation
+                        }) {
+                            state.upload = None;
+                        }
+                    } else if state
+                        .resource_drafts
+                        .get(id)
+                        .is_some_and(|d| d.generation == *generation)
+                    {
+                        state.resource_drafts.remove(id);
+                        if state.resource_editor.as_ref() == Some(id) {
+                            state.resource_editor = None;
+                        }
+                    } else if let Some(d) = state.resource_drafts.get_mut(id) {
+                        d.base = Some(record.clone());
+                    }
+                }
+                let refresh_target = record
+                    .as_ref()
+                    .filter(|r| cv::Scope::of(&r.scope) == scope)
+                    .filter(|r| {
+                        submission
+                            .as_ref()
+                            .is_some_and(|c| c.reader_generation == state.reader.generation)
+                            && state
+                                .reader
+                                .target
+                                .as_ref()
+                                .is_some_and(|t| !t.by_slug && t.id == r.id.as_str())
+                    })
+                    .map(|r| Target {
+                        id: r.id.as_str().into(),
+                        by_slug: false,
+                        revision: Some(r.revision.get()),
+                        format: 0,
+                        section: None,
+                    });
                 state.confirm_delete = None;
                 state.list_generation = state.list_generation.wrapping_add(1);
                 state.listing = false;
@@ -869,8 +916,7 @@ impl Shell {
                     Tone::Good,
                     record.as_ref().map_or_else(
                         || {
-                            "Convention change confirmed. Refresh to inspect the current records."
-                                .into()
+                            if submission.as_ref().is_some_and(|c|c.operation=="conventions.retire"&&c.target.is_none()) {"Cancellation request recorded. Inspect the operation for its final state.".into()} else {"Convention change confirmed. Refresh to inspect the current records.".into()}
                         },
                         |r| {
                             format!(
@@ -883,6 +929,9 @@ impl Shell {
                 ));
                 if self.conventions.scope == scope {
                     self.load_conventions(false, false);
+                    if let Some(target) = refresh_target {
+                        self.read_convention(target, false);
+                    }
                 }
             }
             Err(error) => {
@@ -1163,6 +1212,7 @@ impl Shell {
             target,
             draft,
             reader_generation: self.conventions.state().map_or(0, |s| s.reader.generation),
+            resource: None,
         }
     }
     fn prepare_convention_save(&mut self) {
@@ -1430,6 +1480,17 @@ impl Shell {
         if s.busy {
             return;
         }
+        let resource_snapshot = if upload {
+            s.upload
+                .as_ref()
+                .map(|d| (true, d.base.id.as_str().to_owned(), d.generation))
+        } else {
+            s.resource_editor.as_ref().and_then(|id| {
+                s.resource_drafts
+                    .get(id)
+                    .map(|d| (false, id.clone(), d.generation))
+            })
+        };
         let (base, change, stage) = if upload {
             let Some(d) = &s.upload else {
                 return;
@@ -1478,8 +1539,9 @@ impl Shell {
             return;
         };
         let token = b.token("convention-resource");
-        let submission =
+        let mut submission =
             self.convention_submission("conventions.edit", Some(base.id.as_str().into()), None);
+        submission.resource = resource_snapshot;
         self.begin_convention_pipeline(
             token,
             Pipeline {
@@ -1498,6 +1560,13 @@ impl Shell {
             if let Some(project) = self.selected_project() {
                 self.conventions.scope = Scope::Project(project.to_owned());
             }
+            self.load_conventions(false, false);
+        }
+        if self
+            .conventions
+            .state()
+            .is_none_or(|s| !s.loaded && !s.listing && s.list_error.is_none())
+        {
             self.load_conventions(false, false);
         }
         self.conventions.projects = self
@@ -1586,6 +1655,7 @@ impl Shell {
     pub(super) fn restore_conventions_pending(&mut self, value: &serde_json::Value) {
         if let Ok(scope) = serde_json::from_value(value["scope"].clone()) {
             self.conventions.scope = scope;
+            self.conventions.initialized = true;
         }
         self.conventions.pipelines =
             serde_json::from_value(value["pipelines"].clone()).unwrap_or_default();
@@ -1593,10 +1663,12 @@ impl Shell {
             serde_json::from_value(value["submissions"].clone()).unwrap_or_default();
         for p in self.conventions.pipelines.values_mut() {
             p.submission.draft = None;
+            p.submission.resource = None;
             self.conventions.states.entry(p.scope.clone()).or_default();
         }
         for p in self.conventions.submissions.values_mut() {
             p.draft = None;
+            p.resource = None;
             self.conventions.states.entry(p.scope.clone()).or_default();
         }
         if let Some(operations) = value["operations"].as_array() {

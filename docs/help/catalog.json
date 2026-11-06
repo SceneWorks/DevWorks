@@ -767,5 +767,29 @@
       "addons.install",
       "addons.catalog"
     ]
+  },
+  {
+    "id": "conventions",
+    "title": "Conventions and reusable guidance",
+    "file": "topics/conventions.md",
+    "screenIds": [
+      "knowledge-conventions"
+    ],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "conventions.list",
+      "conventions.read",
+      "conventions.edit",
+      "conventions.version",
+      "conventions.applicability",
+      "conventions.retire",
+      "conventions.index",
+      "conventions.import",
+      "conventions.delete",
+      "conventions.move",
+      "conventions.resources",
+      "conventions.delete_resource",
+      "conventions.search"
+    ]
   }
 ]

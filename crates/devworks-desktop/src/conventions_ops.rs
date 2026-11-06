@@ -245,4 +245,6 @@ pub struct Submission {
     pub target: Option<String>,
     pub draft: Option<(u64, u64)>,
     pub reader_generation: u64,
+    #[serde(default)]
+    pub resource: Option<(bool, String, u64)>,
 }

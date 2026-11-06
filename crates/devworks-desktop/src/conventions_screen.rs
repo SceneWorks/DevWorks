@@ -11,15 +11,13 @@ use std::{
     },
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Scope {
+    #[default]
     Workspace,
     Project(String),
-}
-impl Default for Scope {
-    fn default() -> Self {
-        Self::Workspace
-    }
 }
 impl Scope {
     pub fn key(&self) -> String {
@@ -173,6 +171,7 @@ pub struct MoveDraft {
     pub parent: Option<String>,
     pub order: String,
     pub choices: Vec<ConventionRecord>,
+    pub scope_revision: Option<i64>,
     pub next: Option<String>,
     pub generation: u64,
 }
@@ -185,6 +184,7 @@ impl MoveDraft {
             parent: record.parent_id.as_ref().map(|id| id.as_str().into()),
             order: record.sort_order.0.clone(),
             choices: vec![],
+            scope_revision: None,
             next: None,
             generation: 0,
         }
@@ -226,6 +226,7 @@ pub struct ScopeState {
     pub resource_loading: bool,
     pub resource_generation: u64,
     pub resource_scope_revision: Option<i64>,
+    pub resource_query_snapshot: Option<serde_json::Value>,
     pub operation_ids: Vec<String>,
     pub operation_input: String,
     pub operation_text: BTreeMap<String, String>,
@@ -760,6 +761,7 @@ fn detail(
                 ),
             );
             if scope_picker(ui, "Move destination", &mut draft.scope, projects) {
+                draft.scope_revision = None;
                 draft.choices.clear();
                 draft.next = None;
                 draft.generation = draft.generation.wrapping_add(1);
@@ -1078,17 +1080,17 @@ fn editor(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
                     .changed();
             }
         });
-    if draft.raw_mode == 1 {
-        if source_editor(
+    if draft.raw_mode == 1
+        && source_editor(
             ui,
             &mut draft.raw,
             &mut draft.raw_offset,
             "Convention raw source",
             draft.body_complete && !draft.loading,
-        ) {
-            draft.raw_changed = true;
-            changed = true;
-        }
+        )
+    {
+        draft.raw_changed = true;
+        changed = true;
     }
     if draft.base.is_some()
         && ui
@@ -1116,6 +1118,7 @@ fn editor(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
             ),
             Tone::Attention,
         );
+        ui.label("Rebasing keeps this draft's complete opening source. Saving will replace the inspected content with that source and your edits.");
         if ui
             .add_enabled(
                 !draft.busy,
@@ -1258,6 +1261,7 @@ fn versions(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) 
     }
 }
 fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
+    let previous_mode = s.resource_mode;
     egui::ComboBox::from_label("Resource view")
         .selected_text(["Attachments", "Document catalog", "Exact root document"][s.resource_mode])
         .show_ui(ui, |ui| {
@@ -1268,6 +1272,13 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
                 ui.selectable_value(&mut s.resource_mode, index, label);
             }
         });
+    if previous_mode != s.resource_mode {
+        s.resource_generation = s.resource_generation.wrapping_add(1);
+        s.resource_loading = false;
+        s.resource_next = None;
+        s.resource_document = None;
+        s.resource_query_snapshot = None;
+    }
     if s.resource_mode == 2 {
         field(ui, "Exact root slug", &mut s.resource_root_slug);
     }
@@ -1345,6 +1356,16 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
         }
     }
     if s.resource_mode != 0 {
+        if s.resource_mode == 1
+            && ui
+                .add_enabled(
+                    online && !s.resource_loading && s.resource_next.is_some(),
+                    egui::Button::new("More document resources"),
+                )
+                .clicked()
+        {
+            a.push(Action::Resources(true));
+        }
         return;
     }
     for resource in &s.resources {
@@ -1363,7 +1384,11 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
                 ui,
                 format!(
                     "{} · {} bytes",
-                    resource.content.media_type,
+                    if resource.media_type.0.is_empty() {
+                        "Unspecified media description"
+                    } else {
+                        &resource.media_type.0
+                    },
                     resource.content.byte_length.get()
                 ),
             );
@@ -1444,7 +1469,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             if ui
                 .add_enabled(
                     !s.busy,
-                    egui::Button::new("Review current resource revision"),
+                    egui::Button::new("Keep resource draft and use listed revision"),
                 )
                 .clicked()
             {
@@ -1496,6 +1521,20 @@ fn operations(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>
             ui.label(id);
             if let Some(text) = s.operation_text.get(id) {
                 ui.label(text);
+            }
+            if let Some(status) = s.operation_statuses.get(id)
+                && let Some(convention) = &status.convention_id
+                && ui
+                    .add_enabled(online, egui::Button::new("Open current convention"))
+                    .clicked()
+            {
+                a.push(Action::Read(Target {
+                    id: convention.as_str().into(),
+                    by_slug: false,
+                    revision: None,
+                    format: 0,
+                    section: None,
+                }));
             }
             ui.horizontal_wrapped(|ui| {
                 if ui

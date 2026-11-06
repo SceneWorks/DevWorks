@@ -3776,6 +3776,13 @@ impl Shell {
                                 "code-exploration"
                             } else if self.route == Route::Settings {
                                 self.settings.help_topic()
+                            } else if self.route == Route::Knowledge
+                                && self
+                                    .routes
+                                    .get(&Route::Knowledge)
+                                    .is_some_and(|r| r.tab == 2)
+                            {
+                                "knowledge-conventions"
                             } else {
                                 self.route.screen().id
                             };

@@ -56,8 +56,10 @@ fn stage_text(
     text: &str,
     pointer: &str,
     media: &str,
+    owned: &mut Vec<PathBuf>,
 ) -> Result<StagedFile, String> {
     let (path, mut file) = scratch(b, "txt")?;
+    owned.push(path.clone());
     file.write_all(text.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|e| e.to_string())?;
@@ -74,6 +76,22 @@ pub fn prepare_edit(
     scope: Scope,
     d: Draft,
     submission: cop::Submission,
+) -> Result<Pipeline, String> {
+    let mut owned = Vec::new();
+    let result = prepare_edit_inner(b, scope, d, submission, &mut owned);
+    if result.is_err() {
+        for path in owned {
+            crate::attachments::remove_owned(&path, &b.scratch_dir());
+        }
+    }
+    result
+}
+fn prepare_edit_inner(
+    b: &dyn Backend,
+    scope: Scope,
+    d: Draft,
+    submission: cop::Submission,
+    owned: &mut Vec<PathBuf>,
 ) -> Result<Pipeline, String> {
     if !d.body_complete || d.loading {
         return Err("The full opening source must finish loading before saving.".into());
@@ -94,13 +112,25 @@ pub fn prepare_edit(
             .ok_or("The opening Markdown artifact is unavailable.")?;
         let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug,"sortOrder":order.to_string(),"parent":d.parent.as_ref().map_or_else(||json!({"kind":"Root"}),|id|json!({"kind":"Child","parentId":id}))});
         if d.markdown_changed {
-            files.push(stage_text(b, &d.markdown, "/content", "text/markdown")?);
+            files.push(stage_text(
+                b,
+                &d.markdown,
+                "/content",
+                "text/markdown",
+                owned,
+            )?);
         }
         match d.raw_mode {
             1 => {
                 if d.raw_changed || original.raw_content.is_none() {
                     body["rawContent"] = json!({"kind":"Set","content":content});
-                    files.push(stage_text(b, &d.raw, "/rawContent/content", "text/plain")?);
+                    files.push(stage_text(
+                        b,
+                        &d.raw,
+                        "/rawContent/content",
+                        "text/plain",
+                        owned,
+                    )?);
                 } else if let Some(raw) = &original.raw_content {
                     body["rawContent"] = json!({"kind":"Set","content":raw});
                 }
@@ -127,6 +157,7 @@ pub fn prepare_edit(
         let mut markdown = d.markdown.as_bytes();
         let mut raw = d.raw.as_bytes();
         let (path, mut file) = scratch(b, "json")?;
+        owned.push(path.clone());
         let result = write_editor_manifest(
             &mut file,
             EditorConvention {
