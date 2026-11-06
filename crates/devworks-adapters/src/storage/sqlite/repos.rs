@@ -501,6 +501,33 @@ fn unresolved(conn: &Connection, max: u16) -> Result<Vec<OperationRecord>, Stora
     raws.into_iter().map(|r| op_of(conn, r)).collect()
 }
 
+fn operations_for_capability(
+    conn: &Connection,
+    capability: &str,
+    states: &[OperationState],
+    after: Option<&OperationId>,
+    max: u16,
+) -> Result<Vec<OperationRecord>, StorageError> {
+    let n = limit(max)?;
+    bounded("capability", capability, 256)?;
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let states = json!(states.iter().copied().map(state_name).collect::<Vec<_>>()).to_string();
+    let mut query = stmt(
+        conn,
+        &format!(
+            "SELECT {OP_COLUMNS} FROM operations WHERE capability=?1 AND state IN(SELECT value FROM json_each(?2)) AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT ?4"
+        ),
+    )?;
+    let raws: Vec<OpRaw> = db(db(query.query_map(
+        params![capability, states, after.map(|id| id.0.as_str()), n],
+        op_row,
+    ))?
+    .collect())?;
+    raws.into_iter().map(|raw| op_of(conn, raw)).collect()
+}
+
 const QUEUE_COLUMNS: &str = "id,consumer,event_id,root_id,operation_id,priority,ready_at,state,owner_id,lease_until,generation,cancellation_epoch,attempt_count,payload_json,partition_key,event_seq,revision,last_error,claim_boot_id,cancel_requested,failed_at,awaiting_eligibility";
 /// SQL list of settled queue states (they never block a partition or the watermark).
 /// `Compacted` is a dedupe tombstone of a settled delivery.
@@ -928,6 +955,15 @@ macro_rules! read_impls {
             }
             fn unresolved(&self, limit: u16) -> Result<Vec<OperationRecord>, StorageError> {
                 unresolved(self.conn, limit)
+            }
+            fn operations_for_capability(
+                &self,
+                capability: &str,
+                states: &[OperationState],
+                after: Option<&OperationId>,
+                limit: u16,
+            ) -> Result<Vec<OperationRecord>, StorageError> {
+                operations_for_capability(self.conn, capability, states, after, limit)
             }
         }
         impl QueueRead for $t {

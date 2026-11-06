@@ -120,6 +120,7 @@ mod help;
 mod indexing;
 mod jobs;
 mod knowledge;
+mod operations;
 mod packages;
 mod projects;
 mod replies;

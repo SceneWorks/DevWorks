@@ -727,6 +727,15 @@ impl OperationRead for Unsupported {
     fn unresolved(&self, _: u16) -> Result<Vec<OperationRecord>, StorageError> {
         nope()
     }
+    fn operations_for_capability(
+        &self,
+        _: &str,
+        _: &[OperationState],
+        _: Option<&OperationId>,
+        _: u16,
+    ) -> Result<Vec<OperationRecord>, StorageError> {
+        nope()
+    }
 }
 impl OperationJournal for Unsupported {
     fn record_intent(&mut self, _: NewOperation) -> Result<OperationRecord, StorageError> {

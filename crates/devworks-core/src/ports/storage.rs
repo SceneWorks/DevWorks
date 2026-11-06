@@ -844,6 +844,16 @@ pub trait OperationRead {
     fn operation(&self, id: &OperationId) -> Result<Option<OperationRecord>, StorageError>;
     /// Non-terminal operations in stable ID order, at most `limit` (1..=500).
     fn unresolved(&self, limit: u16) -> Result<Vec<OperationRecord>, StorageError>;
+    /// Trusted recovery fact over the actual journal. Exact capability and current states are
+    /// filtered before the 1..=500 keyset page. Empty states match nothing. This read grants
+    /// no invocation authority; owners still recheck scope, lineage and effects before acting.
+    fn operations_for_capability(
+        &self,
+        capability: &str,
+        states: &[OperationState],
+        after: Option<&OperationId>,
+        limit: u16,
+    ) -> Result<Vec<OperationRecord>, StorageError>;
 }
 pub trait OperationJournal: OperationRead {
     /// Records durable intent (`IntentRecorded`, revision 1) before any effect.
