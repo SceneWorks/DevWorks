@@ -1689,6 +1689,7 @@ fn embedding_price_candidate(fx: &Fx) -> devworks_core::protocol::Id {
         let mut connection = tx.router().connection(&id("openai-connection"))?.unwrap();
         connection.id = id("embedding-price-connection");
         connection.profile = "Embedding".into();
+        connection.lifecycle = "Connected".into();
         connection.account_digest = Some(sha256_hex(b"embedding account"));
         connection.discovered = Some(vec![DiscoveredModel { id: "text-embedding-3-small".into(), context_tokens: None }]);
         tx.router().put_connection(&connection, None)?;
