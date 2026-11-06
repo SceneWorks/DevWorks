@@ -1,7 +1,7 @@
 //! Supervised body indexing over the one durable operation and native inference journals.
 use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
-    RetryPolicy,
+    ReadyFuture, RetryPolicy,
 };
 use devworks_core::{
     ports::storage::*,
@@ -36,6 +36,60 @@ fn outcome(value: Result<IndexOutcome, StorageError>) -> EffectResult {
         }
     }
 }
+enum JobLink {
+    Unrelated,
+    Pending,
+    Ready,
+    Refused,
+}
+fn job_link(
+    read: &dyn ReadSnapshot,
+    info: &StoreInfo,
+    operation: &OperationRecord,
+) -> Result<JobLink, StorageError> {
+    let Some(value) = operation
+        .payload
+        .pointer("/sourceContext/invocationContext/jobRun")
+        .filter(|v| !v.is_null())
+    else {
+        return Ok(JobLink::Unrelated);
+    };
+    let run_id: devworks_core::protocol::Id =
+        serde_json::from_value(value.clone()).map_err(|_| StorageError::ScopeDenied)?;
+    let Some(run) = read.jobs().job_run(&run_id)? else {
+        return Ok(JobLink::Refused);
+    };
+    let definition: serde_json::Value =
+        serde_json::from_str(&run.definition).map_err(|_| StorageError::ScopeDenied)?;
+    if definition["kind"] != "Native" {
+        return Ok(JobLink::Unrelated);
+    }
+    if definition["capabilityId"]
+        != serde_json::json!(devworks_core::services::jobs::capability_id(
+            "conventions.index"
+        ))
+        || operation
+            .payload
+            .pointer("/sourceContext/invocationContext/principal")
+            != Some(&serde_json::json!(info.host_actor))
+        || operation
+            .payload
+            .pointer("/sourceContext/invocationContext/kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("Host")
+        || run.boot_id != info.boot_id
+        || run.status != "Running"
+        || run.cancel_requested
+        || run.hold.is_some()
+    {
+        return Ok(JobLink::Refused);
+    }
+    Ok(match run.inner_operation_id {
+        Some(id) if id == operation.id => JobLink::Ready,
+        Some(_) => JobLink::Refused,
+        None => JobLink::Pending,
+    })
+}
 impl Effects {
     fn run(&self, operation: OperationRecord) -> EffectFuture {
         let service = self.service.clone();
@@ -50,8 +104,20 @@ impl Effects {
             let delivery = serde_json::from_value::<devworks_core::protocol::Id>(
                 operation.payload["deliveryId"].clone(),
             );
+            let owner_store = store.clone();
             let worker = tokio::task::spawn_blocking(move || {
-                service.run_index(&operation, &worker_token, None)
+                let info = owner_store.info();
+                match read_snapshot(owner_store.as_ref(), &ReadOptions::default(), |read| {
+                    job_link(read, &info, &operation)
+                })? {
+                    JobLink::Pending => Ok(IndexOutcome::Unknown(
+                        "Awaiting the actual native job's accepted child link".into(),
+                    )),
+                    JobLink::Refused => Err(StorageError::ScopeDenied),
+                    JobLink::Unrelated | JobLink::Ready => {
+                        service.run_index(&operation, &worker_token, None)
+                    }
+                }
             });
             loop {
                 if worker.is_finished() {
@@ -103,6 +169,30 @@ impl Effects {
     }
 }
 impl EffectExecutor for Effects {
+    fn ready(&self, operation: &OperationRecord) -> Option<ReadyFuture> {
+        operation
+            .payload
+            .pointer("/sourceContext/invocationContext/jobRun")
+            .filter(|v| !v.is_null())?;
+        let (store, service, operation) =
+            (self.store.clone(), self.service.clone(), operation.clone());
+        Some(Box::pin(async move {
+            while !service.is_stopped() {
+                let (current, op) = (store.clone(), operation.clone());
+                let pending = tokio::task::spawn_blocking(move || {
+                    let info = current.info();
+                    read_snapshot(current.as_ref(), &ReadOptions::default(), |read| {
+                        job_link(read, &info, &op)
+                    })
+                })
+                .await;
+                if !matches!(pending, Ok(Ok(JobLink::Pending))) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }))
+    }
     fn execute(&self, operation: OperationRecord) -> EffectFuture {
         self.run(operation)
     }

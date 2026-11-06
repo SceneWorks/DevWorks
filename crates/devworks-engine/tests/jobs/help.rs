@@ -579,3 +579,6 @@ mod service;
 
 #[path = "conventions_native.rs"]
 mod conventions;
+
+#[path = "conventions_paid.rs"]
+mod paid_conventions;
