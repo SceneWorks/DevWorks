@@ -92,7 +92,7 @@ impl EmbeddingSpacesPanel {
         ui.add_enabled_ui(idle && !self.loading,|ui| {
             field(ui,"Embedding space name",&mut self.name);
             let current=self.connection.as_ref().and_then(|(id,_)|connections.iter().find(|c|c.id.as_str()==id));
-            egui::ComboBox::from_id_salt("embedding-space-connection")
+            egui::ComboBox::from_label("Embedding connection")
                 .selected_text(current.map_or("Choose an embedding connection",|c|c.name.0.as_str()))
                 .show_ui(ui,|ui| {for c in connections.iter().filter(|c|wire(&c.profile)=="Embedding") {
                     if ui.selectable_label(self.connection.as_ref().is_some_and(|(id,_)|id==c.id.as_str()),&c.name.0).clicked() {self.connection=Some((c.id.as_str().into(),c.revision.as_str().into()));}
