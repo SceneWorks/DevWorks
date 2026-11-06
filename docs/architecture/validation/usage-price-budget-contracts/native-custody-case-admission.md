@@ -8,8 +8,9 @@ itself. The original focused case passes unchanged in5.61s on the development Ma
 The Runs binary's independent native SQLite/application fixtures did not acquire the
 existing process case budget. Its75 textual test functions now acquire the established
 two-case admission guard before fixture setup, including the physical-owner recovery
-case; platform configuration expands these to76 cases on this host. Internal tasks,
-barriers, multi-app scenarios and native child processes retain their original behavior.
+case. The Usage base has75 cases; Provider/Help composition adds a separate managed
+provider-fence case, which also acquires the case budget. Internal tasks, barriers,
+multi-app scenarios and native child processes retain their original behavior.
 
 The managed-source case retains all seven coordinator, worker, bounded shutdown,
 membership, panic and manual-custody scenarios. Every original assertion, the30-second
@@ -18,8 +19,8 @@ now report scenario, phase and elapsed time, without inference inputs or credent
 No learned inference runs: sources are recorded metadata frames and deterministic
 port fixtures, alongside the actual native process-identity qualification.
 
-All76 native Runs cases pass39.02s at default invocation, including the original
-custody case. This is development-host evidence; confidence in the resource-pressure
+All76 composed native Runs cases pass39.02s at default invocation, including the
+original custody case. The Usage base's75 cases separately pass34.16s. This is development-host evidence; confidence in the resource-pressure
 diagnosis is medium pending current-head macOS CI. Any remaining semantic failure
 still fails the original assertions and watchdogs. Strict checks, review/CI, merge
 and acceptance remain required.
