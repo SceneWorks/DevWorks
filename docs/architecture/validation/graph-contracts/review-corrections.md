@@ -31,3 +31,20 @@ The unchanged large native case passes39.58s including setup and three bounded q
 all27 native indexing cases pass77.07s, and all11 graph storage cases pass11.28s including
 masking, scope, pin, source, cancellation and pool reuse. Query budgets/deadlines and fixture
 population remain unchanged. Hosted exact-head qualification is still required.
+
+### Stream broad node pages without sorting repository payloads
+
+Broad keyset reads now stream composed visible-unit metadata in repository/unit order, then
+read each selected unit through the node primary key. The exact-ID path retains its indexed
+predicate. Both paths use one shared SQL predicate builder, the same authorized read snapshot,
+whole-unit layer masking, name/kind/trust selection, cursor order and limit+1 boundary. Read
+page size, graph budgets and request deadlines are unchanged.
+
+All 11 native graph storage cases pass (11.22 s). All 27 full-runtime indexing cases now use
+the existing bounded case admission; each of the two >20k fixtures atomically owns both
+permits. Their internal concurrency and assertions/timeouts are unchanged. In the full run,
+both large regressions pass and 26/27 cases pass (87.16 s). The existing shutdown/reopen case
+fails DataRootInUse while retaining the first boot's executor; the unchanged case passes
+alone (3.50 s). Its proposed test-only physical executor teardown is tracked as DW-129 and
+is awaiting user approval. No full-suite green claim is made. Adapter/engine all-target
+strict checks pass (4.57 s) after covering the exclusive permit entry in the helper test.

@@ -81,6 +81,7 @@ fn gaps(page: &GraphPage) -> Value {
 
 #[test]
 fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is_exhausted() {
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -236,6 +237,7 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
 
 #[test]
 fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_rescans() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -366,6 +368,7 @@ fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_
 
 #[test]
 fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member_is_indexed() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -423,6 +426,7 @@ fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member
 
 #[test]
 fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_partial() {
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
