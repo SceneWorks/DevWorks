@@ -1331,7 +1331,23 @@ fn composed_capability_changes_remove_only_orphan_auto_topics_and_keep_authored_
         .filter(|topic| topic.source_kind == "Bundled")
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(authored.len(), 57);
+    let catalog: Vec<Value> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/help/catalog.json"
+    )))
+    .unwrap();
+    let expected: std::collections::BTreeSet<_> = catalog
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap())
+        .collect();
+    assert!(expected.contains("help"));
+    assert_eq!(
+        authored
+            .iter()
+            .map(|topic| topic.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+    );
     assert!(old_topics.iter().any(|topic| {
         topic.source_kind == "Generated"
             && topic
