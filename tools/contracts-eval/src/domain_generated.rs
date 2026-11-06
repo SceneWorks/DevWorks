@@ -11571,7 +11571,7 @@ pub struct UsageCostSnapshot {
     pub subscription_equivalent: bool,
     pub incomplete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub untracked_reason: Option<Text>,
+    pub untracked_reason: Option<Content>,
     pub tariffs: Rows<PriceTariff>,
     pub monetary_complete: bool,
 }

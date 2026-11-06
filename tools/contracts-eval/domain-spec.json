@@ -4326,7 +4326,7 @@
         "override_revision": "?Revision",
         "subscription_equivalent": "bool",
         "incomplete": "bool",
-        "untracked_reason": "?Text",
+        "untracked_reason": "?Content",
         "tariffs": "Rows<PriceTariff>",
         "monetary_complete": "bool"
       }
