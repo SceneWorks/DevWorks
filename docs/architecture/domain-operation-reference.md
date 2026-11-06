@@ -3918,7 +3918,7 @@ Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverr
 | `overrideRevision` | `?Revision` |
 | `subscriptionEquivalent` | `bool` |
 | `incomplete` | `bool` |
-| `untrackedReason` | `?Text` |
+| `untrackedReason` | `?Content` |
 | `tariffs` | `Rows<PriceTariff>` |
 | `monetaryComplete` | `bool` |
 

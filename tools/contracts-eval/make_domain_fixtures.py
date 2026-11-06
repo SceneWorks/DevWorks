@@ -1090,6 +1090,12 @@ resolved=sample('UsageAttemptPage');resolved['context']['range']={'startMs':'-25
 case('dw21-negative-resolved-default-range','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':resolved}})
 price_history=sample('PriceCatalogView');price_history['overrideHistory']=[{'kind':'Set','modelId':'model-a','revision':'2','tariffs':[sample('PriceTariff')],'updatedBy':'actor-a','updatedAtMs':'100'},{'kind':'Cleared','modelId':'model-a','revision':'3','updatedBy':'actor-b','updatedAtMs':'200'}]
 case('dw21-clear-history-actor-time','operation-result.r3',{'kind':'router.price_status','value':price_history})
+# Actual BalanceSummary can join128 unknown dimensions with three128-character names each.
+reason_parts=[' '.join([(str(i)+'m').ljust(128,'m'),'c'*128,'u'*128])for i in range(128)]
+full_reason='; '.join(reason_parts)
+assert 4096<len(full_reason)<=65536
+reason_report=copy.deepcopy(POS['dw21-partial-known-cost']);reason_report['value']['page']['items'][0]['cost']['untrackedReason']=full_reason
+case('dw21-full-monetary-coverage-reason','operation-result.r3',reason_report)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
