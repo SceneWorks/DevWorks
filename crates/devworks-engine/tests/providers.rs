@@ -873,7 +873,7 @@ let f=Fx::new("Embedding",Script::aggregate(r#"{"model":"fixture-model","data":[
 #[test]
 fn native_http_fault_categories_and_entitlement_precedence_survive_into_recorded_result() {
     runtime().block_on(async{
-for (status,kind) in [(401,"Authentication"),(402,"Authentication"),(403,"Authentication"),(404,"ModelUnavailable"),(408,"Unreachable"),(429,"Cooldown"),(503,"Overloaded")] {
+for (status,kind) in [(401,"Authentication"),(402,"Provider"),(403,"Authentication"),(404,"ModelUnavailable"),(408,"Unreachable"),(429,"Cooldown"),(503,"Overloaded")] {
 let mut script=Script::aggregate(r#"{"error":{"message":"provider refused"}}"#);script.status=status;let f=Fx::new("OpenRouterChat",script,false);let result=f.produce(f.generation(vec![])).await.unwrap();assert_eq!(result.result.outcome,Some(AttemptEnd::Failed));assert!(result.result.faults.contains(&format!("{kind}:http_{status}")),"{:?}",result.result.faults);
 }
 let f=Fx::new("CodexSubscriptionResponses",Script::sse("event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"usage_not_included\",\"message\":\"plan has no model access despite rate limit wording\"}}\n\n"),false);let result=f.produce(f.generation(vec![])).await.unwrap();assert!(result.result.faults.iter().any(|s|s=="ModelUnavailable:usage_not_included"));assert!(read(f.store.as_ref(),|s|s.router().cooldowns()).is_empty());
