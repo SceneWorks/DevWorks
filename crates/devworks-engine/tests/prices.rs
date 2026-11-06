@@ -1318,3 +1318,166 @@ fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes
     assert_eq!(read(&*fx.store,|s|s.history().event(&quote_event)).unwrap().payload["sourceQuote"],source_json);
     });
 }
+
+#[test]
+fn runtime_shutdown_bounds_stalled_price_fetches_and_fences_every_late_write() {
+    runtime().block_on(within("bounded price-source shutdown", async {
+        struct Release(Arc<Gate>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+        for recovering in [false, true] {
+            let fx = Fx::new();
+            let (first_worker, first_dispatcher) = fx.dispatcher(Source::new(vec![]));
+            fx.refresh(&["openai"]);
+            deliver(&first_dispatcher).await;
+            let last_good =
+                read(&*fx.store, |s| s.usage().current_price_snapshot("openai")).unwrap();
+            first_worker.drain().await;
+            first_dispatcher.stop();
+            drop(first_dispatcher);
+            drop(first_worker);
+
+            let (_, operation) = fx.refresh(&["openai"]);
+            if recovering {
+                let gate = Gate::new();
+                let _release = Release(gate.clone());
+                let source = Arc::new(Source {
+                    outcomes: Mutex::new(VecDeque::new()),
+                    calls: AtomicUsize::new(0),
+                    gate: Some(gate.clone()),
+                });
+                let (worker, dispatcher) = fx.dispatcher(source);
+                dispatcher.recover().await.unwrap();
+                dispatcher.tick().await.unwrap();
+                gate.started.notified().await;
+                worker.stop();
+                gate.release();
+                worker.drain().await;
+                dispatcher.idle().await;
+                assert_eq!(
+                    read(&*fx.store, |s| s.operations().operation(&operation))
+                        .unwrap()
+                        .state,
+                    devworks_core::protocol::OperationState::OutcomeUnknown
+                );
+                dispatcher.stop();
+            }
+            let gate = Gate::new();
+            let source = Arc::new(Source {
+                outcomes: Mutex::new(VecDeque::new()),
+                calls: AtomicUsize::new(0),
+                gate: Some(gate.clone()),
+            });
+            let mut composed = composition(&fx.h, fx.store.clone(), source.clone());
+            composed.config.shutdown_bound = std::time::Duration::from_millis(100);
+            let app = devworks_engine::boot(composed).await.unwrap();
+            let _release = Release(gate.clone());
+            gate.started.notified().await;
+            let began = std::time::Instant::now();
+            tokio::time::timeout(std::time::Duration::from_secs(2), app.shutdown())
+                .await
+                .expect("price fetch exceeded the shutdown bound");
+            assert!(
+                began.elapsed() < std::time::Duration::from_secs(2),
+                "shutdown waited for the price source"
+            );
+            let snapshot = || {
+                read(&*fx.store, |s| {
+                    Ok((
+                        s.stamp().clone(),
+                        s.usage().price_revision()?,
+                        s.usage().current_price_snapshot("openai")?,
+                        s.usage().current_price_snapshot("anthropic")?,
+                        s.usage().price_status("openai")?,
+                        s.usage().price_status("anthropic")?,
+                        s.operations().operation(&operation)?,
+                        s.queue()
+                            .deliveries(
+                                &DeliveryFilter {
+                                    consumer: Some(refresh::CONSUMER.into()),
+                                    operation_id: None,
+                                },
+                                None,
+                                64,
+                            )?
+                            .entries,
+                    ))
+                })
+            };
+            let before = snapshot();
+            assert_eq!(before.2, Some(last_good));
+            assert_eq!(
+                before.6.as_ref().unwrap().state,
+                devworks_core::protocol::OperationState::OutcomeUnknown
+            );
+            assert!(before.4.as_ref().unwrap().refresh_pending);
+            gate.release();
+            // This graceful wait acknowledges the actual detached callback returning; it is
+            // deliberately outside Runtime.shutdown's shared deadline.
+            app.price_refreshes().unwrap().drain().await;
+            app.dispatcher().idle().await;
+            assert_eq!(
+                snapshot(),
+                before,
+                "late source changed catalog, operation or delivery after shutdown"
+            );
+            assert_eq!(app.price_refreshes().unwrap().tick().await.unwrap(), 0);
+            assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+        }
+    }));
+}
+
+#[test]
+fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdown() {
+    let h = Harness::new();
+    let store = h.open();
+    principal(&*store, "user", PrincipalKind::Human);
+    seed(&*store, &h);
+    let gate = Gate::new();
+    let source = Arc::new(Source {
+        outcomes: Mutex::new(VecDeque::new()),
+        calls: AtomicUsize::new(0),
+        gate: Some(gate.clone()),
+    });
+    let mut composed = composition(&h, store.clone(), source);
+    composed.config.shutdown_bound = std::time::Duration::from_millis(100);
+    let (dropped, after_drop) = std::sync::mpsc::channel();
+    let source_gate = gate.clone();
+    let host = std::thread::spawn(move || {
+        let rt = runtime();
+        let app = rt.block_on(devworks_engine::boot(composed)).unwrap();
+        rt.block_on(source_gate.started.notified());
+        rt.block_on(app.shutdown());
+        drop(rt);
+        dropped.send(app).unwrap();
+    });
+    let app = match after_drop.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(app) => app,
+        Err(error) => {
+            gate.release();
+            host.join().unwrap();
+            panic!("stalled source held Tokio runtime destruction: {error}");
+        }
+    };
+    host.join().unwrap();
+    let before = read(&*store, |s| {
+        Ok((
+            s.stamp().clone(),
+            s.usage().price_status("openai")?,
+            s.usage().price_status("anthropic")?,
+        ))
+    });
+    gate.release();
+    runtime().block_on(app.price_refreshes().unwrap().drain());
+    assert_eq!(
+        read(&*store, |s| Ok((
+            s.stamp().clone(),
+            s.usage().price_status("openai")?,
+            s.usage().price_status("anthropic")?
+        ))),
+        before
+    );
+}

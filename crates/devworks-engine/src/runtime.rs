@@ -1244,7 +1244,7 @@ impl Runtime {
         self.resumes.drain().await;
         let inference_shutdown = self.usage.drain_until(deadline).await;
         if let Some(worker) = &self.prices {
-            worker.drain().await;
+            worker.drain_until(deadline).await;
         }
         if let Some(worker) = &self.notifications {
             worker.drain().await;
