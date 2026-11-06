@@ -429,7 +429,7 @@ impl Decoder {
         if outcome == DecodedOutcome::Completed {
             let mut ready = Vec::new();
             let mut ids = std::collections::BTreeSet::new();
-            for (ordinal, call) in &self.calls {
+            for (ordinal, call) in &mut self.calls {
                 let parsed = serde_json::from_str::<Value>(&call.arguments)
                     .ok()
                     .filter(Value::is_object);
@@ -457,6 +457,13 @@ impl Decoder {
                         },
                     });
                     break;
+                }
+                if matches!(
+                    self.profile,
+                    EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+                ) {
+                    call.item["function"]["name"] = Value::String(call.name.clone().unwrap());
+                    call.item["function"]["arguments"] = Value::String(call.arguments.clone());
                 }
                 ready.push(DecodedToolCall {
                     native_call_id: call.id.clone().unwrap(),

@@ -51,6 +51,87 @@ unsafe impl GlobalAlloc for Allocator {
 }
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator;
+
+#[test]
+fn streamed_chat_reasoning_accumulates_with_linear_allocation_work() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    let part = format!("{}λ", "x".repeat(128));
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for field in ["reasoning", "reasoning_content", "reasoning_details"] {
+            let body = if field == "reasoning_details" {
+                serde_json::json!({field:[{"index":0,"id":"r","type":"reasoning.encrypted","text":part,"summary":part,"data":part,"signature":part,"format":"exact"}]})
+            } else {
+                serde_json::json!({field:part})
+            };
+            let wire =
+                serde_json::json!({"choices":[{"index":0,"delta":body,"finish_reason":null}]})
+                    .to_string();
+            let mut small = None;
+            for count in [256, 2_048] {
+                let (frames, allocated, _) = measured(|| {
+                    let mut decoder = Decoder::new(profile.clone());
+                    for _ in 0..count {
+                        let chunk = decoder.consume_data_event(None, &wire);
+                        assert!(
+                            !chunk
+                                .iter()
+                                .any(|f| matches!(f, DecodedFrame::Error { .. }))
+                        );
+                        assert_eq!(native(&chunk).filter(|n| n.raw_json == wire).count(), 1);
+                    }
+                    decoder.consume_data_event(
+                        None,
+                        r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+                    );
+                    decoder.consume_data_event(None, "[DONE]");
+                    decoder.finish()
+                });
+                assert!(matches!(
+                    frames.last(),
+                    Some(DecodedFrame::Terminal {
+                        outcome: DecodedOutcome::Completed,
+                        ..
+                    })
+                ));
+                let continuation = native(&frames)
+                    .find_map(|n| n.continuation.as_ref())
+                    .unwrap();
+                let expected = part.repeat(count);
+                if field == "reasoning_details" {
+                    let detail = &continuation[field][0];
+                    for key in ["text", "summary", "data", "signature"] {
+                        assert_eq!(detail[key].as_str(), Some(expected.as_str()));
+                    }
+                    assert_eq!(detail["id"], "r");
+                    assert_eq!(detail["format"], "exact");
+                } else {
+                    assert_eq!(continuation[field].as_str(), Some(expected.as_str()));
+                }
+                let wire_bytes = count * wire.len();
+                assert!(
+                    allocated < wire_bytes * 128,
+                    "quadratic prefix copies: {profile:?}/{field}/{count}: {allocated} allocated for {wire_bytes} wire bytes"
+                );
+                if let Some((bytes, allocations)) = small {
+                    assert!(
+                        (allocated as u128) * (bytes as u128)
+                            < 2 * (allocations as u128) * (wire_bytes as u128),
+                        "reasoning allocation work grows faster than input"
+                    );
+                } else {
+                    small = Some((wire_bytes, allocated));
+                }
+                eprintln!(
+                    "reasoning {profile:?}/{field}/{count}: wire={wire_bytes}, allocated={allocated}"
+                );
+            }
+        }
+    }
+}
+
 fn measured<T>(run: impl FnOnce() -> T) -> (T, usize, usize) {
     struct Stop;
     impl Drop for Stop {
@@ -70,6 +151,76 @@ fn measured<T>(run: impl FnOnce() -> T) -> (T, usize, usize) {
         ALLOCATED.load(Ordering::SeqCst),
         PEAK.load(Ordering::SeqCst).saturating_sub(before),
     )
+}
+
+#[test]
+fn streamed_chat_tool_arguments_are_assembled_once_at_completion() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    let part = format!("{}λ", "x".repeat(128));
+    let open = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call","type":"function","function":{"name":"lookup","arguments":"{\"payload\":\"","format":"native-v1"}}]},"finish_reason":null}]}).to_string();
+    let wire = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":part}}]},"finish_reason":null}]}).to_string();
+    let close = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]},"finish_reason":"tool_calls"}]}).to_string();
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut small = None;
+        for count in [256, 2_048] {
+            let (frames, allocated, _) = measured(|| {
+                let mut decoder = Decoder::new(profile.clone());
+                decoder.consume_data_event(None, &open);
+                for _ in 0..count {
+                    let frames = decoder.consume_data_event(None, &wire);
+                    assert!(!frames.iter().any(|f| matches!(
+                        f,
+                        DecodedFrame::Error { .. } | DecodedFrame::ToolCallComplete { .. }
+                    )));
+                    assert_eq!(native(&frames).filter(|n| n.raw_json == wire).count(), 1);
+                }
+                decoder.consume_data_event(None, &close);
+                decoder.consume_data_event(None, "[DONE]");
+                decoder.finish()
+            });
+            let call = frames
+                .iter()
+                .find_map(|f| match f {
+                    DecodedFrame::ToolCallComplete { call } => Some(call),
+                    _ => None,
+                })
+                .expect("one completed native call");
+            let expected = part.repeat(count);
+            assert_eq!(call.native_call_id, "call");
+            assert_eq!(call.name, "lookup");
+            assert_eq!(call.arguments["payload"].as_str(), Some(expected.as_str()));
+            assert_eq!(
+                call.native_item["function"]["arguments"].as_str(),
+                Some(call.arguments_raw.as_str())
+            );
+            assert_eq!(call.native_item["function"]["name"], "lookup");
+            assert_eq!(call.native_item["function"]["format"], "native-v1");
+            assert!(matches!(
+                frames.last(),
+                Some(DecodedFrame::Terminal {
+                    outcome: DecodedOutcome::ToolCallsReady,
+                    ..
+                })
+            ));
+            let bytes = open.len() + count * wire.len() + close.len();
+            assert!(
+                allocated < bytes * 128,
+                "quadratic tool arguments: {profile:?}/{count}: {allocated} allocated for {bytes} wire bytes"
+            );
+            if let Some((small_bytes, small_allocated)) = small {
+                assert!(
+                    (allocated as u128) * (small_bytes as u128)
+                        < 2 * (small_allocated as u128) * (bytes as u128)
+                );
+            } else {
+                small = Some((bytes, allocated));
+            }
+            eprintln!("tool arguments {profile:?}/{count}: wire={bytes}, allocated={allocated}");
+        }
+    }
 }
 
 const ITEM_FIELDS: &str = r#""type":"message", "opaque":{"amount":1.2300e+004,"integer":9007199254740993,"escaped":"\u0061"}, "content":[{"type":"output_text","text":"native text","annotations":[]}]"#;
