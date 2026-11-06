@@ -379,7 +379,7 @@ pub fn record_inference_rejection(
     basis: &crate::providers::ProviderAccessBasis,
     status: u16,
 ) -> Result<bool, StorageError> {
-    if !matches!(status, 401..=403) {
+    if !matches!(status, 401 | 403) {
         return Ok(false);
     }
     let Some(mut current) = tx.router().connection(&basis.connection_id)? else {
