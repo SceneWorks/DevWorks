@@ -339,6 +339,7 @@ pub struct Runtime {
     usage: Arc<crate::usage::UsageRuntime>,
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
     embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
+    conventions: Arc<devworks_core::services::conventions::ConventionService>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -543,6 +544,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
+    let conventions = Arc::new(
+        devworks_core::services::conventions::ConventionService::new(
+            store.clone(),
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+        ),
+    );
+    consumers.push(crate::conventions::indexing::consumer(
+        store.clone(),
+        conventions.indexing(),
+    ));
+    consumers.push(crate::conventions_import::consumer(conventions.imports()));
+    let use_cases = use_cases.with_conventions(conventions.clone());
     // A deliberately supplied native-job fixture may own DOCS. Production composes the
     // complete Help family and its consumer together; it never attaches to a foreign journal.
     let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
@@ -730,6 +745,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             service.clone(),
             clock.clone(),
         );
+        conventions
+            .indexing()
+            .set_embeddings(Some(Arc::new(executor.clone())));
         if !worker.install(executor) {
             return Err(BootError::Composition(StorageError::ScopeDenied));
         }
@@ -1011,6 +1029,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         usage,
         providers,
         embedding_probes,
+        conventions,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -1160,6 +1179,10 @@ impl Runtime {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
     /// Canonical native producers and bounded historical accounting over the same router.
+    /// The same owner serves UI/tools, durable body indexing and scheduled maintenance.
+    pub fn conventions(&self) -> &Arc<devworks_core::services::conventions::ConventionService> {
+        &self.conventions
+    }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()
     }
@@ -1561,6 +1584,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.conventions.stop();
         if let Some(probes) = &self.embedding_probes {
             probes.stop();
         }
