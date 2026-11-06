@@ -47,7 +47,11 @@ fn saved(a: &App, source: &ProposalRecord) -> StoredApproval {
         .filter(|r| r.source == ApprovalSource::Generic)
         .find_map(|r| {
             let row = read(&*a.store, |s| s.decisions().approval(&r.id)).unwrap();
-            (row.payload.pointer("/binding/proposal/id") == Some(&json!(source.id))).then_some(row)
+            (row.payload
+                .pointer("/binding/proposal/id")
+                .or_else(|| row.payload.pointer("/binding/owner/proposal/id"))
+                == Some(&json!(source.id)))
+            .then_some(row)
         })
         .expect("owner-derived saved package review")
 }

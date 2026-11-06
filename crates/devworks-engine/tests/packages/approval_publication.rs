@@ -187,3 +187,96 @@ fn evidence_publication_rechecks_revocation_tools_and_scope_in_its_commit() {
         }
     }
 }
+
+#[test]
+fn bootstrap_skips_a_source_revoked_during_publication_and_continues() {
+    let _serial = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    let gate = Arc::new(Gate::default());
+    a.artifact_files = Some(Arc::new(PublicationGate {
+        inner: NativeArtifactFiles::new(a.h.root.clone(), a.h.root.with_extension("cache")),
+        gate: gate.clone(),
+    }));
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+    let (spec, bytes, digest, _) = large_signed_bundle("a-bootstrap-race");
+    let bundle = a.save(&a.agent, &bytes);
+    let source=match applied(a.domain(&a.agent,"addons.propose",json!({"kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":spec.package}))){OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    let review = saved(&a, &source);
+    let reference: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(review.artifact.clone().unwrap()).unwrap();
+    // Force a real publication instead of the exact-evidence cache hit on this bootstrap pass.
+    let tag=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"bootstrap-replace-evidence","body":{"kind":"artifacts.tag","artifactId":reference.artifact_id,"expectedRevision":"1","tags":["retained-old-review"]}})).unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    let next = Spec::new("z-bootstrap-eligible", "1.0.0");
+    let (bytes, digest) = super::super::bundle(&next);
+    let bundle = a.save(&a.user, &bytes);
+    applied(a.domain(&a.user,"addons.propose",json!({"kind":"addons.propose","source":bundle,"manifestDigest":digest,"basePackageId":next.package})));
+    let before = domain_rows(&a);
+    let artifacts = read(&*a.store, |s| {
+        s.artifacts()
+            .list_workspace(Some(a.agent.principal()), &[], None, 500)
+    })
+    .len();
+    gate.arm(IdKind::ArtifactVersion);
+    let _release = Release(gate.clone());
+    let service = a.app().packages().unwrap().service().clone();
+    let result = std::thread::scope(|scope| {
+        let pending = scope.spawn(move || service.sync_pending_reviews());
+        assert!(
+            gate.entered(Duration::from_secs(10)),
+            "bootstrap never reached the publication commit gap"
+        );
+        let principal = read(&*a.store, |s| s.authority().principal(a.agent.principal())).unwrap();
+        let human = a.user.clone();
+        let actor = a.agent.principal().clone();
+        write(&*a.store, move |tx| {
+            devworks_core::authority::service::revoke_principal(
+                tx,
+                &human,
+                &actor,
+                principal.revision,
+            )
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+        })
+        .unwrap();
+        gate.release();
+        pending.join().unwrap()
+    });
+    assert_eq!(
+        result.unwrap(),
+        1,
+        "bootstrap must continue to the later eligible Human source"
+    );
+    assert_eq!(domain_rows(&a), before);
+    assert_eq!(
+        read(&*a.store, |s| s.artifacts().list_workspace(
+            Some(a.agent.principal()),
+            &[],
+            None,
+            500
+        ))
+        .len(),
+        artifacts
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().proposal(&source.id))
+            .unwrap()
+            .state,
+        "Pending"
+    );
+    assert!(
+        !read(&*a.store, |s| s.packages().package(&spec.package))
+            .unwrap()
+            .installed
+    );
+    assert!(
+        !read(&*a.store, |s| s.authority().principal(a.agent.principal()))
+            .unwrap()
+            .active
+    );
+}
