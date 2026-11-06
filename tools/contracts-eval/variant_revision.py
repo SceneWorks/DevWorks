@@ -38,7 +38,7 @@ def method(definition, found):
     if definition['kind'] == 'record':
         body = calls(definition['fields'], found)
     else:
-        arms = [f'Self::{v}{{..}} if revision<{revision}=>return Err("union variant predates its introduction: {v}".into()),'
+        arms = [f'Self::{v}{{..}} if revision<{revision}=>{{return Err("union variant predates its introduction: {v}".into());}},'
                 for v, revision in definition.get('introducedVariants', {}).items()]
         for variant, fields in definition['variants'].items():
             nested = {name: value for name, value in fields.items() if tokens(value) & found}
