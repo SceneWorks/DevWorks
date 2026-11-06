@@ -3934,7 +3934,8 @@
         },
         "NoEligible": {
           "reason": "Label",
-          "evidence": "?DomainFault"
+          "evidence": "?DomainFault",
+          "reused": "bool"
         }
       }
     },

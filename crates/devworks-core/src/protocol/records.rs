@@ -10301,6 +10301,7 @@ pub enum AllocationOutcome {
         reason: Label,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         evidence: Option<DomainFault>,
+        reused: bool,
     },
 }
 impl Check for AllocationOutcome {
@@ -10326,9 +10327,14 @@ impl Check for AllocationOutcome {
                 reused.check()?;
                 recovery.check()?;
             }
-            Self::NoEligible { reason, evidence } => {
+            Self::NoEligible {
+                reason,
+                evidence,
+                reused,
+            } => {
                 reason.check()?;
                 evidence.check()?;
+                reused.check()?;
             }
         }
         Ok(())
