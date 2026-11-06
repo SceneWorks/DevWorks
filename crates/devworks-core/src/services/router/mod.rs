@@ -52,6 +52,7 @@
 //! `router.configure` (the provider-connection item) and to the routing settings.
 pub mod accounting;
 pub mod connections;
+pub mod embedding_spaces;
 pub mod latest;
 pub mod select;
 
