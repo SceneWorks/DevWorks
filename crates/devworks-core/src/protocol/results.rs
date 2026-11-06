@@ -1623,6 +1623,7 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.retain_revision(revision),
             Self::RouterPriceStatus { value } => value.retain_revision(revision),
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
+            Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),

@@ -4563,7 +4563,13 @@
         "price_kind": "UsagePriceKind",
         "snapshot_id": "?Id",
         "override_revision": "?Revision",
-        "untracked_reason": "?Text"
+        "untracked_reason": "?Text",
+        "upstream_model_id": "?Text",
+        "endpoint_profile": "?EndpointKind"
+      },
+      "since": {
+        "upstream_model_id": 3,
+        "endpoint_profile": 3
       }
     },
     "UsageCostKind": {
@@ -5686,14 +5692,16 @@
       "variants": {
         "Attach": {
           "name": "Content",
-          "content": "ArtifactRef"
+          "content": "ArtifactRef",
+          "media_type": "?GraphText"
         },
         "Update": {
           "resource_id": "Id",
           "expected_revision": "Revision",
           "name": "?Content",
           "content": "?ArtifactRef",
-          "lifecycle": "?ConventionLifecycle"
+          "lifecycle": "?ConventionLifecycle",
+          "media_type": "?GraphText"
         }
       }
     },
@@ -5878,7 +5886,11 @@
         "created_at_ms": "Counter",
         "updated_at_ms": "Counter",
         "space_id": "Id",
-        "can_qualify": "bool"
+        "can_qualify": "bool",
+        "pricing_model_id": "?Id"
+      },
+      "since": {
+        "pricing_model_id": 3
       }
     },
     "EmbeddingSpacePage": {
@@ -7901,7 +7913,6 @@
         "page": "PageRequest",
         "applicability": "Items<Label>",
         "text": "Text",
-        "lifecycles": "?Items<ConventionLifecycle>",
         "top_k": "?SignedCounter"
       },
       "result": "ConventionSearchPageResult",
@@ -7909,7 +7920,6 @@
       "authority": "Scoped",
       "rules": "",
       "since": {
-        "lifecycles": 3,
         "top_k": 3
       }
     },

@@ -646,13 +646,6 @@ pub struct SearchInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
-    pub lifecycles: Option<Items<ConventionLifecycle>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "gated_member"
-    )]
     #[schemars(with = "SignedCounter", extend("x-since" = 3))]
     pub top_k: Option<SignedCounter>,
 }
@@ -662,16 +655,12 @@ impl Check for SearchInput {
         self.page.check()?;
         self.applicability.check()?;
         self.text.check()?;
-        self.lifecycles.check()?;
         self.top_k.check()?;
         Ok(())
     }
 }
 impl Revisioned for SearchInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 3 {
-            self.lifecycles = None;
-        }
         if revision < 3 {
             self.top_k = None;
         }
