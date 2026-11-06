@@ -1,0 +1,147 @@
+//! Offline Help metadata and Unicode passages from atomically published, immutable generations.
+use super::StorageError;
+use crate::protocol::{Id, OperationId};
+use serde_json::Value;
+
+/// A passage fits the protocol's `Content` bound, counted as Unicode scalar values.
+pub const MAX_HELP_PASSAGE_CHARS: u32 = 65_536;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredHelpHead {
+    /// One for the initial, unpublished sentinel; changes only when catalog content changes.
+    pub revision: i64,
+    /// Empty on the initial sentinel, before the host publishes its actual app version.
+    pub app_version: String,
+    pub registry_revision: i64,
+    /// Empty on the initial sentinel; otherwise lowercase SHA-256 of the source snapshot.
+    pub source_digest: String,
+    pub generation_id: Option<Id>,
+    /// Latest real generation operation, independent of the content revision.
+    pub generation_operation_id: Option<OperationId>,
+    pub updated_at_ms: i64,
+}
+
+/// Lightweight metadata; listing Help never loads the full guide bodies.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredHelpTopic {
+    pub generation_id: Id,
+    pub id: Id,
+    pub version: String,
+    pub title: String,
+    pub content_digest: String,
+    /// A real, committed `ArtifactRef` whose bytes are the full guide body.
+    pub content_ref: Option<Value>,
+    /// `Available`, `Missing`, `Stale` or `Unavailable`; absent bytes never gain a fake artifact.
+    pub availability: String,
+    pub reason: Option<String>,
+    /// The exact typed `HelpProvenance` snapshot produced by the owning service.
+    pub provenance: Value,
+    pub related_operations: Vec<String>,
+    pub screen_ids: Vec<String>,
+    /// `Bundled`, `Package` or `Generated`.
+    pub source_kind: String,
+    pub package_id: Option<Id>,
+    pub manifest_digest: Option<String>,
+    pub character_count: i64,
+    pub topic_revision: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredHelpDocument {
+    pub topic: StoredHelpTopic,
+    /// At most the existing package bundle byte bound; no narrower guide size is invented.
+    pub body: String,
+    /// Lowercase title and body, used for literal substring search without returning the body.
+    pub search_text: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HelpFilter {
+    pub query: Option<String>,
+    pub screen_id: Option<String>,
+    pub package_id: Option<Id>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredHelpDraft {
+    pub generation_id: Id,
+    pub operation_id: OperationId,
+}
+
+pub trait HelpRead {
+    /// Bounded host recovery inventory; public Help queries never list drafts.
+    fn help_drafts(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredHelpDraft>, StorageError>;
+    fn help_head(&self) -> Result<StoredHelpHead, StorageError>;
+    /// Published generations only, including historical generations; drafts are invisible.
+    fn help_topic(&self, generation: &Id, id: &Id)
+    -> Result<Option<StoredHelpTopic>, StorageError>;
+    /// Ascending ID keyset page, exclusive cursor; limit is `1..=MAX_PAGE`.
+    /// Query is a literal lowercase substring. No query means every topic.
+    fn help_topics(
+        &self,
+        generation: &Id,
+        filter: &HelpFilter,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError>;
+    /// A bounded Unicode scalar slice from a published guide. Offset is zero-based.
+    fn help_passage(
+        &self,
+        generation: &Id,
+        id: &Id,
+        offset: i64,
+        chars: u32,
+    ) -> Result<Option<String>, StorageError>;
+}
+
+pub trait HelpRepository: HelpRead {
+    /// Claims a real generation operation without changing the catalog content revision.
+    /// The owning service checks the previous operation's terminal state in the same unit of work.
+    fn set_help_generation_operation(
+        &mut self,
+        expected_help_revision: i64,
+        expected_registry_revision: i64,
+        operation: &OperationId,
+    ) -> Result<StoredHelpHead, StorageError>;
+    /// Stages one immutable document. Identical restaging is idempotent; a changed duplicate is
+    /// refused. Draft generations remain invisible, allowing guides to be prepared one at a time.
+    fn stage_help_document(
+        &mut self,
+        document: &StoredHelpDocument,
+    ) -> Result<StoredHelpTopic, StorageError>;
+    /// Trusted publisher/recovery metadata reads, including its staged documents.
+    fn staged_help_topic(
+        &self,
+        generation: &Id,
+        id: &Id,
+    ) -> Result<Option<StoredHelpTopic>, StorageError>;
+    fn staged_help_topics(
+        &self,
+        generation: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError>;
+    /// Removes at most `limit` documents from a draft owned by a terminal real operation. The
+    /// service retires that page's generation-owned artifacts in this same unit of work first.
+    /// Returns true once the entire draft has been removed. Published generations are refused.
+    fn discard_help_draft(
+        &mut self,
+        generation: &Id,
+        operation: &OperationId,
+        limit: u16,
+    ) -> Result<bool, StorageError>;
+    /// Verifies the complete staged generation, current registry and exact operation claim, then
+    /// atomically publishes the head. Previously published generations remain immutable/readable.
+    fn publish_help_generation(
+        &mut self,
+        expected_help_revision: i64,
+        expected_registry_revision: i64,
+        expected_operation: Option<&OperationId>,
+        head: &StoredHelpHead,
+        expected_topic_count: i64,
+    ) -> Result<StoredHelpHead, StorageError>;
+}
