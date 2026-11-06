@@ -34,6 +34,7 @@ pub mod decisions;
 pub mod indexing;
 pub mod jobs;
 pub mod projects;
+mod settings_secrets;
 pub mod usage;
 pub mod work;
 
@@ -621,6 +622,9 @@ impl Shell {
         );
     }
     pub fn load_settings(&mut self) {
+        if let Some(backend) = self.backend() {
+            self.settings.connections.secret_store = Some(backend.secret_store());
+        }
         self.settings.loading = true;
         self.query(
             Slot::SettingsRead,
@@ -2006,6 +2010,7 @@ impl Shell {
                     Ok(
                         TaskOutput::Preview { .. }
                         | TaskOutput::Prepared { .. }
+                        | TaskOutput::SettingSecret { .. }
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed,
                     ) => AttachState::Failed("unexpected reply".into()),
@@ -2067,6 +2072,7 @@ impl Shell {
                         Ok(
                             TaskOutput::Stored { .. }
                             | TaskOutput::Prepared { .. }
+                            | TaskOutput::SettingSecret { .. }
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed,
                         ) => {}
@@ -2636,6 +2642,9 @@ impl Shell {
                     },
                 ));
             }
+            (Slot::SettingsSecret(key), Reply::Task(result)) => {
+                self.setting_secret_prepared(&key, result)
+            }
             (slot, Reply::Task(Err(e))) => {
                 self.announce(format!("A request for {slot:?} failed: {e}"));
             }
@@ -2908,6 +2917,9 @@ impl Shell {
                             frame,
                         );
                     }
+                }
+                SettingsAction::StoreSecret { key, value } => {
+                    self.store_setting_secret(&key, value)
                 }
                 SettingsAction::Explain(key) => self.explain(key),
                 SettingsAction::ChooseDirectory(key) => {
