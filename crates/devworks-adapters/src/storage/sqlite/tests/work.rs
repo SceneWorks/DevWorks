@@ -3731,3 +3731,5 @@ fn repository_scope_removal_fences_only_cards_outside_the_active_plan() {
 }
 
 mod metadata;
+
+mod notifications;

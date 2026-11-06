@@ -64,7 +64,7 @@ CREATE TABLE approval_resumes (
  updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
  result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json))
 ) STRICT;
-CREATE INDEX approval_resumes_pending ON approval_resumes(state,created_at,approval_id);
+CREATE INDEX approval_resumes_pending ON approval_resumes(approval_id) WHERE state IN ('Pending','Unknown');
 CREATE TABLE notifications (
  id TEXT PRIMARY KEY,
  revision INTEGER NOT NULL CHECK(revision>0),
@@ -84,6 +84,7 @@ CREATE TABLE notifications (
  created_at INTEGER NOT NULL CHECK(created_at>=0),
  updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
  UNIQUE(user_id,source_id),
+ UNIQUE(id,user_id),
  FOREIGN KEY(root_id,project_id) REFERENCES work_items(id,project_id)
 ) STRICT;
 CREATE INDEX notifications_inbox ON notifications(user_id,created_at DESC,id DESC);
@@ -96,3 +97,20 @@ CREATE TABLE notification_audience (
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
  user_id TEXT NOT NULL REFERENCES actors
 ) STRICT;
+
+-- One stable OS delivery identity per actual recipient/card; reads, acknowledgments and OS
+-- dismissals do not change it. Submitted records mean the OS accepted a submission, not seen.
+CREATE TABLE os_notification_deliveries (
+ user_id TEXT NOT NULL REFERENCES actors,
+ notification_id TEXT NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision>0),
+ boot_id TEXT NOT NULL REFERENCES app_boots,
+ attempt INTEGER NOT NULL CHECK(attempt>0),
+ state TEXT NOT NULL CHECK(state IN ('Claimed','Submitted','Denied','Suppressed','Unavailable','Unknown')),
+ detail TEXT CHECK(detail IS NULL OR length(detail)<=4096),
+ created_at INTEGER NOT NULL CHECK(created_at>=0),
+ updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
+ PRIMARY KEY(user_id,notification_id),
+ FOREIGN KEY(notification_id,user_id) REFERENCES notifications(id,user_id)
+) STRICT;
+CREATE INDEX os_notification_inflight ON os_notification_deliveries(boot_id,user_id,notification_id) WHERE state='Claimed';

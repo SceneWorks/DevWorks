@@ -104,10 +104,10 @@ pub static SCREENS: [Screen; 20] = [
         summary: "Decisions waiting for you across every project.",
         group: NavGroup::Global,
         help_topic: "approvals",
-        subviews: &["Inbox", "History"],
+        subviews: &["Inbox", "History", "Knowledge review"],
         inner_sidebar: Some("Decision"),
         summary_strip: &[],
-        pending: pending("the all-project approval inbox and decisions", "DW-14"),
+        pending: None,
         link: None,
     },
     Screen {

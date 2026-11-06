@@ -42923,6 +42923,92 @@
       "typedValid": false
     },
     {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "dw14-typed-review-settings",
+      "normalized": {
+        "kind": "approvals.inspect",
+        "value": {
+          "contentDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "id-a",
+          "operationKind": "fixture",
+          "reviewedSource": {
+            "entries": [
+              {
+                "key": "fixture",
+                "value": {
+                  "schema": {
+                    "revision": "1",
+                    "schemaId": "fixture/object",
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  },
+                  "value": {
+                    "input": "fixture"
+                  }
+                }
+              }
+            ],
+            "kind": "Settings"
+          },
+          "revision": "1",
+          "state": "Pending",
+          "summary": "Fixture content",
+          "targetId": "id-a",
+          "targetRevision": "1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result.r3",
+      "error": null,
+      "expectedSchemaValid": true,
+      "id": "dw14-typed-review-plan",
+      "normalized": {
+        "kind": "approvals.inspect",
+        "value": {
+          "contentDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "id-a",
+          "operationKind": "fixture",
+          "reviewedSource": {
+            "kind": "FeaturePlan",
+            "plan": {
+              "acceptance": [],
+              "acceptanceTests": [],
+              "content": {
+                "artifactId": "artifact-a",
+                "byteLength": "8",
+                "mediaType": "text/plain",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "versionId": "version-a"
+              },
+              "goals": [],
+              "repositoryIds": [],
+              "requirements": []
+            }
+          },
+          "revision": "1",
+          "state": "Pending",
+          "summary": "Fixture content",
+          "targetId": "id-a",
+          "targetRevision": "1"
+        }
+      },
+      "passed": true,
+      "typedValid": true
+    },
+    {
+      "entry": "operation-result",
+      "error": "a member introduced after schema revision 1 is present",
+      "expectedSchemaValid": false,
+      "id": "dw14-typed-review-before3",
+      "normalized": null,
+      "passed": true,
+      "typedValid": false
+    },
+    {
       "entry": "domain-request.r3",
       "error": null,
       "expectedSchemaValid": true,

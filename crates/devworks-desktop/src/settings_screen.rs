@@ -63,6 +63,7 @@ pub enum SettingsAction {
     OpenAddOns,
     /// Scheduled jobs (schedules and their controls, JOB-01).
     OpenJobs,
+    OpenNotifications,
     /// The provider-connections topic was opened (load connections and the catalog).
     OpenConnections,
     Connection(ConnectionAction),
@@ -390,6 +391,10 @@ impl SettingsScreen {
             if matches!(self.category, None | Some(Category::General))
                 && self.query.trim().is_empty()
             {
+                ui.heading("Notifications");
+                if widgets::secondary_button(ui, "Notification preferences").clicked() {
+                    actions.push(SettingsAction::OpenNotifications);
+                }
                 general(ui);
             }
             if self.category == Some(Category::Tools) {

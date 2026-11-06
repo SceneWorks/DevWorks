@@ -141,7 +141,42 @@ pub struct NotificationPosition {
     pub id: Id,
 }
 
+/// OS submission evidence, independent from read/ack revisions and approval authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredOsNotificationDelivery {
+    pub user_id: ActorId,
+    pub notification_id: Id,
+    pub revision: i64,
+    pub boot_id: Id,
+    pub attempt: i64,
+    pub state: String,
+    pub detail: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OsNotificationDeliveryFence {
+    pub revision: i64,
+    pub boot_id: Id,
+    pub attempt: i64,
+}
+impl StoredOsNotificationDelivery {
+    pub fn fence(&self) -> OsNotificationDeliveryFence {
+        OsNotificationDeliveryFence {
+            revision: self.revision,
+            boot_id: self.boot_id.clone(),
+            attempt: self.attempt,
+        }
+    }
+}
+
 pub trait DecisionRead {
+    fn os_notification_delivery(
+        &self,
+        user: &ActorId,
+        notification: &Id,
+    ) -> Result<Option<StoredOsNotificationDelivery>, StorageError>;
     /// The host-bound canonical Human audience (at most one); never every historical actor.
     fn notification_users(&self) -> Result<Vec<ActorId>, StorageError>;
     /// Newest first by timestamp, ID and source; exclusive cursor; limit 1..=MAX_PAGE.
@@ -160,6 +195,7 @@ pub trait DecisionRead {
     fn approval_resume(&self, approval: &Id) -> Result<Option<StoredApprovalResume>, StorageError>;
     fn pending_approval_resumes(
         &self,
+        after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredApprovalResume>, StorageError>;
     fn notification(
@@ -180,6 +216,24 @@ pub trait DecisionRead {
     ) -> Result<Vec<StoredNotification>, StorageError>;
 }
 pub trait DecisionRepository: DecisionRead {
+    /// Claims only an eligible notification of the current host-bound Human audience.
+    fn claim_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        expected_revision: Option<i64>,
+        retry: bool,
+    ) -> Result<StoredOsNotificationDelivery, StorageError>;
+    fn settle_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        fence: &OsNotificationDeliveryFence,
+        state: &str,
+        detail: Option<&str>,
+    ) -> Result<StoredOsNotificationDelivery, StorageError>;
+    /// Prior-boot in-flight submissions become Unknown; they are never automatically resent.
+    fn recover_os_notification_deliveries(&mut self) -> Result<u64, StorageError>;
     /// Host composition binds the actual local UI identity; no tool operation exposes this.
     fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError>;
     /// Immutable content/binding; a Pending row may take one terminal decision at revision+1.

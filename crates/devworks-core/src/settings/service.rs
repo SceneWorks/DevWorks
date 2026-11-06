@@ -601,6 +601,14 @@ fn stage(
             "contentDigest": record.body["contentDigest"],
         }),
     )?;
+    crate::services::notifications::notify_approval(
+        tx,
+        crate::ports::storage::ApprovalSource::Settings,
+        &record.id,
+        current.scope.project_id(),
+        "Review settings changes",
+        "A proposed settings revision requires your review.",
+    )?;
     Ok(record)
 }
 

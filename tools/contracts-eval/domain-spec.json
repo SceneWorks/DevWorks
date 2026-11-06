@@ -4013,7 +4013,8 @@
         "rationale": "?Content",
         "resume_status": "?Label",
         "resumed_operation_id": "?OperationId",
-        "operation_preview": "?SavedOperationPreview"
+        "operation_preview": "?SavedOperationPreview",
+        "reviewed_source": "?ApprovalReviewedContent"
       },
       "earlierName": "ProposalRecord",
       "earlierBefore": 3,
@@ -4028,7 +4029,8 @@
         "rationale": 3,
         "resume_status": 3,
         "resumed_operation_id": 3,
-        "operation_preview": 3
+        "operation_preview": 3,
+        "reviewed_source": 3
       }
     },
     "SavedOperationPreview": {
@@ -4100,6 +4102,17 @@
         "url": "?Url",
         "artifact": "?ArtifactRef",
         "project_id": "?ProjectId"
+      }
+    },
+    "ApprovalReviewedContent": {
+      "kind": "union",
+      "variants": {
+        "Settings": {
+          "entries": "Items<SettingAssignment>"
+        },
+        "FeaturePlan": {
+          "plan": "PlanDraft"
+        }
       }
     }
   },
@@ -6373,7 +6386,7 @@
       "result": "ApprovalViewRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Revision 3 inspect returns exact typed reviewedSource for source-owned settings/feature plans, including legal content larger than the DynamicJson metadata limit. List rows omit reviewedSource. reviewedContent remains bounded metadata; never silently truncate or substitute a digest for human-readable reviewed source."
     },
     "approvals.propose": {
       "operation": "approvals.propose",

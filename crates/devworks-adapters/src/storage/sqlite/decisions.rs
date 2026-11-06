@@ -95,7 +95,8 @@ fn limit(n: u16) -> Result<i64, StorageError> {
     }
 }
 fn bounded(s: &str, max: usize, empty: bool) -> Result<(), StorageError> {
-    if s.len() > max || (!empty && s.trim().is_empty()) {
+    let count = s.chars().count();
+    if count > max || s.contains('\0') || (!empty && count == 0) {
         Err(invalid("decision text is empty or exceeds its bound"))
     } else {
         Ok(())
@@ -308,7 +309,7 @@ fn notification_list(
     n: u16,
 ) -> Result<Vec<StoredNotification>, StorageError> {
     let n = limit(n)?;
-    if f.categories.len() > 32 {
+    if f.categories.len() > 128 {
         return Err(invalid("too many notification categories"));
     }
     let mut sql = String::from("SELECT * FROM notifications WHERE user_id=?");
@@ -333,7 +334,7 @@ fn notification_list(
             vec!["?"; f.categories.len()].join(",")
         ));
         for category in &f.categories {
-            bounded(category, 128, false)?;
+            bounded(category, 256, false)?;
             p.push(Sql::Text(category.clone()));
         }
     }
@@ -347,6 +348,7 @@ fn notification_list(
     rows(conn, &sql, params_from_iter(p), notification)
 }
 macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
+    fn os_notification_delivery(&self,user:&ActorId,notification:&Id)->Result<Option<StoredOsNotificationDelivery>,StorageError>{super::notification_delivery::read(self.conn,user,notification)}
     fn notification_users(&self)->Result<Vec<ActorId>,StorageError>{
         let mut statement=db(self.conn.prepare_cached("SELECT a.id FROM notification_audience n JOIN actors a ON a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'"))?;
         let values=db(db(statement.query_map([],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
@@ -356,7 +358,7 @@ macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
     fn approval(&self,id:&Id)->Result<Option<StoredApproval>,StorageError>{one_approval(self.conn,id)}
     fn human_decision(&self,s:ApprovalSource,id:&Id)->Result<Option<StoredHumanDecision>,StorageError>{Ok(rows(self.conn,"SELECT * FROM human_decisions WHERE source=?1 AND proposal_id=?2",params![s.as_str(),id.as_str()],audit)?.into_iter().next())}
     fn approval_resume(&self,id:&Id)->Result<Option<StoredApprovalResume>,StorageError>{one_resume(self.conn,id)}
-    fn pending_approval_resumes(&self,n:u16)->Result<Vec<StoredApprovalResume>,StorageError>{rows(self.conn,"SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') ORDER BY created_at,approval_id LIMIT ?1",[limit(n)?],resume)}
+    fn pending_approval_resumes(&self,after:Option<&Id>,n:u16)->Result<Vec<StoredApprovalResume>,StorageError>{rows(self.conn,"SELECT * FROM approval_resumes WHERE state IN ('Pending','Unknown') AND approval_id>?1 ORDER BY approval_id LIMIT ?2",params![after.map_or("",Id::as_str),limit(n)?],resume)}
     fn notification(&self,user:&ActorId,id:&Id)->Result<Option<StoredNotification>,StorageError>{one_notification(self.conn,user,id)}
     fn notification_by_source(&self,user:&ActorId,source:&str)->Result<Option<StoredNotification>,StorageError>{Ok(rows(self.conn,"SELECT * FROM notifications WHERE user_id=?1 AND source_id=?2",params![user.0.as_str(),source],notification)?.into_iter().next())}
     fn notifications(&self,f:&NotificationFilter,a:Option<&NotificationPosition>,n:u16)->Result<Vec<StoredNotification>,StorageError>{notification_list(self.conn,f,a,n)}
@@ -365,6 +367,28 @@ decision_reads!(Snapshot<'_>);
 decision_reads!(Unit<'_>);
 
 impl DecisionRepository for Unit<'_> {
+    fn claim_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        expected: Option<i64>,
+        retry: bool,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        super::notification_delivery::claim(self, user, notification, expected, retry)
+    }
+    fn settle_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        fence: &OsNotificationDeliveryFence,
+        state: &str,
+        detail: Option<&str>,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        super::notification_delivery::settle(self, user, notification, fence, state, detail)
+    }
+    fn recover_os_notification_deliveries(&mut self) -> Result<u64, StorageError> {
+        super::notification_delivery::recover(self)
+    }
     fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError> {
         actor(self.conn, user, PrincipalKind::Human)?;
         db(self.conn.execute("INSERT INTO notification_audience(singleton,user_id) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET user_id=excluded.user_id",[user.0.as_str()]))?;
@@ -388,7 +412,7 @@ impl DecisionRepository for Unit<'_> {
         sha(&a.content_digest)?;
         sha(&a.scope_digest)?;
         actor(self.conn, &a.author, a.author_kind)?;
-        let payload = encoded(&a.payload, MAX_DECISION_JSON_BYTES, true)?;
+        let payload = encoded(&a.payload, usize::MAX, true)?;
         let artifact = a
             .artifact
             .as_ref()
@@ -472,7 +496,7 @@ impl DecisionRepository for Unit<'_> {
         if let Some(r) = &a.rationale {
             bounded(r, 65_536, true)?;
         }
-        let snapshot = encoded(&a.reviewed_snapshot, MAX_DECISION_JSON_BYTES, true)?;
+        let snapshot = encoded(&a.reviewed_snapshot, usize::MAX, true)?;
         if self.human_decision(a.source, &a.proposal_id)?.is_some() {
             return Err(StorageError::Duplicate {
                 kind: "human_decision",
@@ -490,7 +514,8 @@ impl DecisionRepository for Unit<'_> {
                 "SELECT scope_key,revision,state,decided_by,decided_at FROM decision_approvals WHERE id=?1"
             }
         };
-        let source: Option<(String, i64, String, Option<String>, Option<i64>)> = db(self
+        type DecidedSource = (String, i64, String, Option<String>, Option<i64>);
+        let source: Option<DecidedSource> = db(self
             .conn
             .query_row(sql, [a.proposal_id.as_str()], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -512,6 +537,17 @@ impl DecisionRepository for Unit<'_> {
             return Err(invalid(
                 "human audit must match the committed source decision and reviewed revision",
             ));
+        }
+        if a.source == ApprovalSource::Generic {
+            let proposal = one_approval(self.conn, &a.proposal_id)?
+                .ok_or_else(|| corrupt("decision source disappeared"))?;
+            if proposal.content_digest != a.content_digest
+                || proposal.scope_digest != a.scope_digest
+            {
+                return Err(invalid(
+                    "human audit digests must match its immutable generic proposal",
+                ));
+            }
         }
         let scope = ConfigScope::from_key(&scope)
             .ok_or_else(|| corrupt("invalid approval source scope"))?;
@@ -542,7 +578,7 @@ impl DecisionRepository for Unit<'_> {
         let result = r
             .result
             .as_ref()
-            .map(|v| encoded(v, MAX_DECISION_JSON_BYTES, false))
+            .map(|v| encoded(v, usize::MAX, false))
             .transpose()?;
         let a = one_approval(self.conn, &r.approval_id)?.ok_or_else(|| StorageError::NotFound {
             kind: "approval",
@@ -634,12 +670,12 @@ impl DecisionRepository for Unit<'_> {
         actor(self.conn, &n.user_id, PrincipalKind::Human)?;
         bounded(&n.title, 256, false)?;
         bounded(&n.body, 65_536, true)?;
-        bounded(&n.category, 128, false)?;
+        bounded(&n.category, 256, false)?;
         bounded(&n.source_id, 512, false)?;
         if !n.links.is_array() || n.links.as_array().is_some_and(|v| v.len() > 128) {
             return Err(invalid("notification links must be a bounded array"));
         }
-        let links = encoded(&n.links, MAX_DECISION_JSON_BYTES, false)?;
+        let links = encoded(&n.links, usize::MAX, false)?;
         if let Some(root) = &n.root_id {
             let project: Option<String> = db(self
                 .conn

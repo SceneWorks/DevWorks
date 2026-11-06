@@ -708,6 +708,24 @@ impl Backend for DesktopBackend {
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
     }
+    fn human_decision(&self, frame: &[u8]) -> CommandOutcome {
+        self.host
+            .runtime
+            .record_human_decision(&self.host.ctx, frame)
+    }
+    fn set_application_focus(&self, focused: Option<bool>) {
+        self.host.runtime.set_notification_focus(focused);
+    }
+    fn os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        self.host.runtime.notification_permission()
+    }
+    fn request_os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        self.host.runtime.request_notification_permission()
+    }
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String> {
         self.host
             .sources

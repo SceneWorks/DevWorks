@@ -611,6 +611,44 @@
         }
       ]
     },
+    "ApprovalReviewedContent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "$ref": "#/$defs/List_SettingAssignment_0_128"
+            },
+            "kind": {
+              "const": "Settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "FeaturePlan",
+              "type": "string"
+            },
+            "plan": {
+              "$ref": "#/$defs/PlanDraft"
+            }
+          },
+          "required": [
+            "kind",
+            "plan"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalState": {
       "enum": [
         "Pending",
@@ -673,6 +711,10 @@
         },
         "reviewedContent": {
           "$ref": "#/$defs/BoundedUntrustedJson",
+          "x-since": 3
+        },
+        "reviewedSource": {
+          "$ref": "#/$defs/ApprovalReviewedContent",
           "x-since": 3
         },
         "revision": {
@@ -6759,6 +6801,14 @@
         "$ref": "#/$defs/SessionRecord"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_SettingAssignment_0_128": {
+      "items": {
+        "$ref": "#/$defs/SettingAssignment"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },

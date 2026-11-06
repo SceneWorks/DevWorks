@@ -1,5 +1,6 @@
 //! Native Git use cases. All process work is prepared outside store snapshots; the answer
 //! rechecks repository/worktree ownership against the snapshot the gateway returns.
+mod approval;
 mod commands;
 pub mod context;
 pub mod github;

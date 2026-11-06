@@ -110,6 +110,7 @@ mod artifacts;
 mod authority;
 mod browser;
 mod connections;
+mod decisions;
 mod diagnostics;
 mod evals;
 mod git;

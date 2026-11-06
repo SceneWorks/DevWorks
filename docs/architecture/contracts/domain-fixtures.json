@@ -10192,6 +10192,27 @@
     "schemaValid": true
   },
   {
+    "id": "dw14-typed-review-settings",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"approvals.inspect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\",\"reviewedSource\":{\"kind\":\"Settings\",\"entries\":[{\"key\":\"fixture\",\"value\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw14-typed-review-plan",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"approvals.inspect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\",\"reviewedSource\":{\"kind\":\"FeaturePlan\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw14-typed-review-before3",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"approvals.inspect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\",\"reviewedSource\":{\"kind\":\"FeaturePlan\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]}}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "dw13-r3-admission-features.get-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"features.get\",\"workId\":\"id-a\",\"detailLevel\":\"Summary\"},\"schemaRevision\":3}",

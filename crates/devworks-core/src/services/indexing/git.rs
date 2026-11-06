@@ -906,6 +906,134 @@ impl Git<'_> {
         )?;
         parse_name_status(&out)
     }
+    /// Exact bounded tracked/index/untracked commit contents, including symlink target text.
+    /// Patches are captured twice; a changing source is never presented as one stable review.
+    /// No temporary index, staging, object write or source-file publication occurs here.
+    pub fn commit_manifest(&self, dir: &Path, base: &str) -> Result<serde_json::Value, GitFault> {
+        let first = self.capture_commit_manifest(dir, base, false)?;
+        if self.capture_commit_manifest(dir, base, false)? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    /// The exact index about to be committed. Matching the reviewed worktree manifest after
+    /// `add --all` catches a content/filter/index race before the commit is admitted.
+    pub fn staged_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+    ) -> Result<serde_json::Value, GitFault> {
+        let first = self.capture_commit_manifest(dir, base, true)?;
+        if self.capture_commit_manifest(dir, base, true)? != first {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(first)
+    }
+    fn capture_commit_manifest(
+        &self,
+        dir: &Path,
+        base: &str,
+        staged: bool,
+    ) -> Result<serde_json::Value, GitFault> {
+        if !oid_ok(base) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        const BOUND: usize = 16 * 1024 * 1024;
+        let before = self.revision_observation(dir)?;
+        let mut args = vec!["diff"];
+        if staged {
+            args.push("--cached");
+        }
+        args.extend([
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            base,
+            "--",
+        ]);
+        let changed = self.run(dir, &args, MAX_LISTING_BYTES)?;
+        let mut paths = std::collections::BTreeMap::new();
+        for raw in changed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            let path =
+                path_of(raw).ok_or_else(|| GitFault::Malformed("tracked approval path".into()))?;
+            paths.insert(path, false);
+        }
+        if !staged {
+            let untracked = self.run(
+                dir,
+                &["ls-files", "-z", "--others", "--exclude-standard"],
+                MAX_LISTING_BYTES,
+            )?;
+            for raw in untracked.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                let path = path_of(raw)
+                    .ok_or_else(|| GitFault::Malformed("untracked approval path".into()))?;
+                paths.insert(path, true);
+            }
+        }
+        let mut files = Vec::new();
+        let mut total = 0usize;
+        for (path, untracked) in paths {
+            let bytes = if untracked {
+                self.runner.run_difference(
+                    self.ctx,
+                    self.spec(
+                        dir,
+                        &[
+                            "diff",
+                            "--no-index",
+                            "--no-color",
+                            "--no-ext-diff",
+                            "--no-textconv",
+                            "--binary",
+                            "--no-renames",
+                            "--",
+                            "/dev/null",
+                            &path,
+                        ],
+                        None,
+                    ),
+                    HelperLimits {
+                        deadline: self.deadline,
+                        max_stdout: BOUND,
+                    },
+                    self.stop,
+                )?
+            } else {
+                let mut args = vec!["diff"];
+                if staged {
+                    args.push("--cached");
+                }
+                args.extend([
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--binary",
+                    "--no-renames",
+                    base,
+                    "--",
+                    &path,
+                ]);
+                self.run(dir, &args, BOUND)?
+            };
+            total = total.saturating_add(bytes.len());
+            if total > BOUND {
+                return Err(GitFault::Helper(HelperFault::OutputTooLarge));
+            }
+            files.push(
+                serde_json::json!({"path":path,"patch":String::from_utf8_lossy(&bytes),
+                "sha256":crate::fingerprint::sha256_hex(&bytes),"byteLength":bytes.len()}),
+            );
+        }
+        let after = self.revision_observation(dir)?;
+        if before.head != after.head || before.branch != after.branch {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(serde_json::json!({"head":before.head,"branch":before.branch,"files":files}))
+    }
+
     /// Staged and unstaged changes of a worktree against `base` (its `HEAD`, or the empty tree
     /// on an unborn branch), plus indexable untracked files (ignored files excluded).
     pub fn local_changes(

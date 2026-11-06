@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod files;
 pub mod http;
 pub mod indexing;
+pub mod os_notifications;
 pub mod packages;
 pub mod process;
 pub mod retrieval;

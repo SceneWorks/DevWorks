@@ -90,6 +90,32 @@ pub trait HelperRunner: Send + Sync {
         ))
     }
 
+    /// A read-only Git no-index binary diff uses exit 1 to report a difference. Unsupported
+    /// adapters refuse rather than discard evidence or silently treat another program as Git.
+    fn run_difference(
+        &self,
+        _ctx: &InvocationContext,
+        _spec: ProcessSpec,
+        _limits: HelperLimits,
+        _stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, HelperFault> {
+        Err(HelperFault::Refused(
+            "bounded Git difference reads are unsupported".into(),
+        ))
+    }
+    fn run_recorded_difference(
+        &self,
+        _ctx: &InvocationContext,
+        _spec: ProcessSpec,
+        _limits: HelperLimits,
+        _stop: &(dyn Fn() -> bool + Sync),
+        _operation: &OperationId,
+    ) -> Result<Vec<u8>, HelperFault> {
+        Err(HelperFault::Refused(
+            "journaled Git difference reads are unsupported".into(),
+        ))
+    }
+
     /// Runs `spec` (its output is captured) for `ctx`, returning stdout once it exits 0.
     fn run(
         &self,
@@ -155,7 +181,7 @@ impl HelperRunner for SupervisedHelpers {
         limits: HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, HelperFault> {
-        self.run_owned(ctx, spec, limits, stop, None, false)
+        self.run_owned(ctx, spec, limits, stop, None, false, false)
     }
 
     fn run_recorded(
@@ -174,8 +200,51 @@ impl HelperRunner for SupervisedHelpers {
             stop,
             Some(operation.clone()),
             approved_hold,
+            false,
         )
     }
+    fn run_difference(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, HelperFault> {
+        difference_command(&spec)?;
+        self.run_owned(ctx, spec, limits, stop, None, false, true)
+    }
+    fn run_recorded_difference(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &OperationId,
+    ) -> Result<Vec<u8>, HelperFault> {
+        difference_command(&spec)?;
+        self.run_owned(
+            ctx,
+            spec,
+            limits,
+            stop,
+            Some(operation.clone()),
+            false,
+            true,
+        )
+    }
+}
+fn difference_command(spec: &ProcessSpec) -> Result<(), HelperFault> {
+    if spec.args.first().is_none_or(|s| s != "diff")
+        || !spec.args.iter().any(|s| s == "--no-index")
+        || !spec.args.iter().any(|s| s == "--binary")
+        || !spec.args.iter().any(|s| s == "--no-ext-diff")
+        || !spec.args.iter().any(|s| s == "--no-textconv")
+    {
+        return Err(HelperFault::Refused(
+            "difference reads require a hardened Git no-index binary diff".into(),
+        ));
+    }
+    Ok(())
 }
 impl SupervisedHelpers {
     fn run_owned(
@@ -186,6 +255,7 @@ impl SupervisedHelpers {
         stop: &(dyn Fn() -> bool + Sync),
         operation: Option<OperationId>,
         approved_hold: bool,
+        difference: bool,
     ) -> Result<Vec<u8>, HelperFault> {
         if stop() {
             return Err(HelperFault::Cancelled);
@@ -260,7 +330,7 @@ impl SupervisedHelpers {
         if over {
             return Err(HelperFault::OutputTooLarge);
         }
-        if exit != Some(0) {
+        if exit != Some(0) && !(difference && exit == Some(1)) {
             let text = String::from_utf8_lossy(&stderr);
             let text: String = Redactor::new()
                 .redact_text(text.trim())
@@ -298,6 +368,30 @@ impl HelperRunner for RecordedHelpers<'_> {
     ) -> Result<Vec<u8>, HelperFault> {
         self.inner
             .run_recorded(ctx, spec, limits, stop, self.operation, false)
+    }
+    fn run_difference(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, HelperFault> {
+        self.inner
+            .run_recorded_difference(ctx, spec, limits, stop, self.operation)
+    }
+    fn run_recorded_difference(
+        &self,
+        ctx: &InvocationContext,
+        spec: ProcessSpec,
+        limits: HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &OperationId,
+    ) -> Result<Vec<u8>, HelperFault> {
+        if operation != self.operation {
+            return Err(HelperFault::Refused("Git helper operation changed".into()));
+        }
+        self.inner
+            .run_recorded_difference(ctx, spec, limits, stop, operation)
     }
     fn run_recorded(
         &self,

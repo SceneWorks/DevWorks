@@ -30,6 +30,28 @@ pub trait Backend: Send + Sync {
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome;
     /// Admits a command frame for `operation` with the host-bound user context.
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome;
+    /// Trusted native user interaction only. Generic commands never select this ingress.
+    fn human_decision(&self, _frame: &[u8]) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "trusted native human decision ingress".into(),
+        ))
+    }
+    /// Native window focus is host input, not an agent-controlled command argument.
+    fn set_application_focus(&self, _focused: Option<bool>) {}
+    /// Cached permission only; never opens an OS prompt on the frame loop.
+    fn os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        devworks_core::ports::os_notifications::OsNotificationPermission::Unavailable(
+            "Native notifications are unavailable".into(),
+        )
+    }
+    /// Called off the frame loop only after an explicit native user action.
+    fn request_os_notification_permission(
+        &self,
+    ) -> devworks_core::ports::os_notifications::OsNotificationPermission {
+        self.os_notification_permission()
+    }
     /// Mints a workspace upload ticket for a file the user picked, dropped or pasted (user
     /// ingress only; the artifact service resolves and verifies it at `artifacts.save`).
     fn mint_workspace_upload(&self, file: &Path) -> Result<Id, String>;
@@ -124,6 +146,18 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    ApprovalsList,
+    ApprovalInspect(String),
+    ApprovalContent(String),
+    ApprovalDecision(String),
+    ReviewQueue,
+    NotificationsList,
+    CompletionList,
+    NotificationRead(String),
+    NotificationChange(String),
+    NotificationSettings,
+    NotificationSettingsSave,
+    OsNotificationPermission,
     SettingsRead,
     SettingsValidate,
     SettingsHealth,
@@ -297,6 +331,7 @@ pub enum Slot {
 
 /// A finished request.
 pub enum Reply {
+    OsNotificationPermission(devworks_core::ports::os_notifications::OsNotificationPermission),
     Query(QueryOutcome),
     Command(CommandOutcome),
     /// A request that ran several steps (attachment storage) or local work (preview decoding).
@@ -340,14 +375,35 @@ pub fn is_unknown(outcome: &CommandOutcome) -> bool {
 /// recorded receipt of a command that committed, and decides one that did not, so a
 /// resubmission never duplicates an effect. A fresh request key is never used for a retry.
 pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> CommandOutcome {
-    let mut outcome = backend.command(operation, frame);
+    resolve_dispatched(backend, CommandDispatch::Generic, operation, frame)
+}
+
+fn resolve_dispatched(
+    backend: &dyn Backend,
+    dispatch: CommandDispatch,
+    operation: &str,
+    frame: &[u8],
+) -> CommandOutcome {
+    let invoke = || match dispatch {
+        CommandDispatch::Generic => backend.command(operation, frame),
+        CommandDispatch::HumanDecision => backend.human_decision(frame),
+    };
+    let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
         if !is_unknown(&outcome) {
             break;
         }
-        outcome = backend.command(operation, frame);
+        outcome = invoke();
     }
     outcome
+}
+
+/// The host ingress chosen by the native interaction, retained with exact retry frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CommandDispatch {
+    #[default]
+    Generic,
+    HumanDecision,
 }
 
 struct Pending {
@@ -356,11 +412,16 @@ struct Pending {
     label: String,
     started: Instant,
     /// A command's operation and exact frame, kept until its outcome is known.
-    command: Option<(&'static str, Vec<u8>)>,
+    command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
 }
 
 /// The commands the shell admits (an [`Unresolved`] restored from memory names one of them).
 pub const COMMANDS: &[&str] = &[
+    "approvals.record_human_decision",
+    "approvals.propose",
+    "notifications.mark_read",
+    "notifications.acknowledge",
+    "notifications.settings",
     "sessions.start",
     "sessions.append_message",
     "settings.save_revision",
@@ -440,6 +501,7 @@ pub struct Unresolved {
     pub label: String,
     operation: &'static str,
     frame: Vec<u8>,
+    pub dispatch: CommandDispatch,
 }
 impl Unresolved {
     pub fn operation(&self) -> &'static str {
@@ -450,12 +512,27 @@ impl Unresolved {
     }
     /// One kept across a restart; `None` for an operation the shell does not admit.
     pub fn restored(slot: Slot, label: String, operation: &str, frame: Vec<u8>) -> Option<Self> {
+        Self::restored_dispatch(slot, label, operation, frame, CommandDispatch::Generic)
+    }
+    pub fn restored_dispatch(
+        slot: Slot,
+        label: String,
+        operation: &str,
+        frame: Vec<u8>,
+        dispatch: CommandDispatch,
+    ) -> Option<Self> {
         let operation = COMMANDS.iter().copied().find(|c| *c == operation)?;
+        if dispatch == CommandDispatch::HumanDecision
+            && operation != "approvals.record_human_decision"
+        {
+            return None;
+        }
         Some(Self {
             slot,
             label,
             operation,
             frame,
+            dispatch,
         })
     }
 }
@@ -608,7 +685,7 @@ impl Client {
         slot: Slot,
         label: &str,
         job: Job,
-        command: Option<(&'static str, Vec<u8>)>,
+        command: Option<(&'static str, Vec<u8>, CommandDispatch)>,
     ) -> Option<u64> {
         if !self.open {
             return None;
@@ -673,15 +750,43 @@ impl Client {
         operation: &'static str,
         frame: Vec<u8>,
     ) -> bool {
+        self.dispatched_command(slot, label, operation, frame, CommandDispatch::Generic)
+    }
+
+    /// Called only by the native approval decision controls, never generic command dispatch.
+    pub fn human_decision(&mut self, slot: Slot, label: &str, frame: Vec<u8>) -> bool {
+        self.dispatched_command(
+            slot,
+            label,
+            "approvals.record_human_decision",
+            frame,
+            CommandDispatch::HumanDecision,
+        )
+    }
+
+    fn dispatched_command(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+        dispatch: CommandDispatch,
+    ) -> bool {
         // A slot holding an unresolved command keeps it until `resubmit_unresolved` settles
         // that exact frame: a new request would replace it, and could commit a second time.
         if self.unresolved.iter().any(|u| u.slot == slot) {
             return false;
         }
         let kept = frame.clone();
-        let job: Job = Box::new(move |b| Reply::Command(resolve_command(b, operation, &frame)));
+        let job: Job =
+            Box::new(move |b| Reply::Command(resolve_dispatched(b, dispatch, operation, &frame)));
         if self
-            .submit(slot.clone(), label, job, Some((operation, kept.clone())))
+            .submit(
+                slot.clone(),
+                label,
+                job,
+                Some((operation, kept.clone(), dispatch)),
+            )
             .is_some()
         {
             self.unresolved.retain(|u| u.slot != slot);
@@ -693,6 +798,7 @@ impl Client {
                 label: label.to_owned(),
                 operation,
                 frame: kept,
+                dispatch,
             });
         }
         false
@@ -714,7 +820,7 @@ impl Client {
     pub fn unconfirmed(&self) -> Vec<Unresolved> {
         let mut out = self.unresolved.clone();
         for p in self.pending.iter().rev() {
-            if let Some((operation, frame)) = &p.command
+            if let Some((operation, frame, dispatch)) = &p.command
                 && !out.iter().any(|u| u.slot == p.slot)
             {
                 out.push(Unresolved {
@@ -722,6 +828,7 @@ impl Client {
                     label: p.label.clone(),
                     operation,
                     frame: frame.clone(),
+                    dispatch: *dispatch,
                 });
             }
         }
@@ -731,8 +838,19 @@ impl Client {
     /// Resubmits every unresolved command with its identical frame.
     pub fn resubmit_unresolved(&mut self) {
         for u in std::mem::take(&mut self.unresolved) {
-            self.command(u.slot, &u.label, u.operation, u.frame);
+            self.dispatched_command(u.slot, &u.label, u.operation, u.frame, u.dispatch);
         }
+    }
+
+    /// Explicit native permission interaction, off the GUI frame loop.
+    pub fn request_notification_permission(&mut self) -> bool {
+        self.submit(
+            Slot::OsNotificationPermission,
+            "Requesting native notification permission",
+            Box::new(|b| Reply::OsNotificationPermission(b.request_os_notification_permission())),
+            None,
+        )
+        .is_some()
     }
 
     /// Runs a multi-step task (for example: mint a ticket, hash the file, save the artifact).
@@ -756,7 +874,7 @@ impl Client {
             let p = self.pending.remove(at);
             // Unknown, or no definite outcome at all (no worker ran it): kept unresolved.
             let decided = matches!(&reply, Reply::Command(outcome) if !is_unknown(outcome));
-            if let Some((operation, frame)) = &p.command
+            if let Some((operation, frame, dispatch)) = &p.command
                 && !decided
             {
                 self.unresolved.push(Unresolved {
@@ -764,6 +882,7 @@ impl Client {
                     label: p.label.clone(),
                     operation,
                     frame: frame.clone(),
+                    dispatch: *dispatch,
                 });
             }
             // Superseded by a newer request for the same slot: drop the stale reply.
@@ -912,5 +1031,100 @@ mod tests {
                 "{op} is sent by the shell but would be dropped at relaunch"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod human_dispatch_tests {
+    use super::*;
+    use devworks_core::gateway::GatewayFailure;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct NoHuman {
+        generic: AtomicUsize,
+    }
+    impl Backend for NoHuman {
+        fn query(&self, op: &str, _: &[u8]) -> QueryOutcome {
+            Err(GatewayFailure::NoUseCase(op.into()))
+        }
+        fn command(&self, op: &str, _: &[u8]) -> CommandOutcome {
+            self.generic.fetch_add(1, Ordering::SeqCst);
+            Err(GatewayFailure::NoUseCase(op.into()))
+        }
+        fn mint_workspace_upload(&self, _: &Path) -> Result<Id, String> {
+            Err("unavailable".into())
+        }
+        fn mint_project_upload(
+            &self,
+            _: &devworks_core::protocol::ProjectId,
+            _: &Path,
+        ) -> Result<Id, String> {
+            Err("unavailable".into())
+        }
+        fn keep_awake_health(&self) -> Health {
+            Health::Available
+        }
+        fn hints(&self) -> Option<watch::Receiver<u64>> {
+            None
+        }
+        fn set_waker(&self, _: Waker) {}
+        fn token(&self, prefix: &str) -> String {
+            prefix.into()
+        }
+        fn scratch_dir(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn read_stream(&self, _: &Id, _: u64) -> Result<Vec<u8>, String> {
+            Err("unavailable".into())
+        }
+    }
+    #[test]
+    fn unsupported_human_ingress_never_falls_back_to_generic_commands() {
+        let b = NoHuman::default();
+        assert!(matches!(
+            resolve_dispatched(
+                &b,
+                CommandDispatch::HumanDecision,
+                "approvals.record_human_decision",
+                b"exact"
+            ),
+            Err(GatewayFailure::NoUseCase(_))
+        ));
+        assert_eq!(b.generic.load(Ordering::SeqCst), 0);
+    }
+    #[test]
+    fn restart_keeps_the_explicit_dispatch_and_never_upgrades_old_generic_frames() {
+        let legacy = Unresolved::restored(
+            Slot::ApprovalDecision("p".into()),
+            "old".into(),
+            "approvals.record_human_decision",
+            b"original".to_vec(),
+        )
+        .unwrap();
+        assert_eq!(legacy.dispatch, CommandDispatch::Generic);
+        let native = Unresolved::restored_dispatch(
+            Slot::ApprovalDecision("p".into()),
+            "native".into(),
+            "approvals.record_human_decision",
+            b"original".to_vec(),
+            CommandDispatch::HumanDecision,
+        )
+        .unwrap();
+        assert_eq!(native.dispatch, CommandDispatch::HumanDecision);
+        assert_eq!(native.frame(), b"original");
+        assert!(
+            Unresolved::restored_dispatch(
+                Slot::SettingsSave,
+                "invalid".into(),
+                "settings.save_revision",
+                vec![],
+                CommandDispatch::HumanDecision
+            )
+            .is_none()
+        );
+        let stored = serde_json::json!({"slot":"SettingsSave","label":"old","operation":"settings.save_revision","frame":[1,2]});
+        let old: crate::memory::PendingCommand = serde_json::from_value(stored).unwrap();
+        assert_eq!(old.dispatch, CommandDispatch::Generic);
     }
 }

@@ -10,7 +10,7 @@
 //! No card is ever fabricated here: with no feed connected the overlay is empty.
 use crate::theme;
 use eframe::egui::{self, Align2, Order, RichText};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletionCard {
@@ -38,6 +38,7 @@ pub struct Completions {
     cards: Vec<CompletionCard>,
     seen: BTreeSet<String>,
     dismissed: Vec<String>,
+    status: BTreeMap<String, String>,
     pub expanded: bool,
     /// The newest card not yet announced to assistive technology.
     announce: Option<String>,
@@ -53,13 +54,32 @@ impl Completions {
         self.cards.insert(0, card);
         true
     }
+    /// Replace only after the complete server feed has loaded. Order is server newest-first;
+    /// failed/unknown acknowledgments remain visible. No client timer dismisses a card.
+    pub fn reconcile(&mut self, mut cards: Vec<CompletionCard>) {
+        let mut identities = BTreeSet::new();
+        cards.retain(|card| identities.insert(card.id.clone()));
+        self.status.retain(|id, _| identities.contains(id));
+        for card in cards.iter().rev() {
+            if self.seen.insert(card.id.clone()) {
+                self.announce = Some(format!("{}: {}", card.kind, card.title));
+            }
+        }
+        self.cards = cards;
+    }
+    pub fn set_status(&mut self, id: &str, status: Option<String>) {
+        if let Some(status) = status {
+            self.status.insert(id.into(), status);
+        } else {
+            self.status.remove(id);
+        }
+    }
     pub fn cards(&self) -> &[CompletionCard] {
         &self.cards
     }
-    /// Removes exactly that card and queues its acknowledgment.
+    /// Queues exactly one acknowledgment. The authoritative feed removes it after success.
     pub fn dismiss(&mut self, id: &str) {
-        if let Some(i) = self.cards.iter().position(|c| c.id == id) {
-            self.cards.remove(i);
+        if self.cards.iter().any(|c| c.id == id) && !self.dismissed.iter().any(|d| d == id) {
             self.dismissed.push(id.to_owned());
         }
     }
@@ -83,47 +103,60 @@ impl Completions {
             .order(Order::Foreground)
             .anchor(Align2::CENTER_TOP, egui::vec2(0.0, top))
             .show(ctx, |ui| {
-                ui.set_width(480.0);
-                for card in self.cards.iter().take(shown) {
-                    egui::Frame::new()
-                        .fill(theme::GREEN_BG)
-                        .stroke(egui::Stroke::new(1.0, theme::GREEN))
-                        .corner_radius(theme::radius())
-                        .inner_margin(theme::margin(14, 10))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&card.project).small().color(theme::MUTED));
-                                ui.label(
-                                    RichText::new(format!("{} · {}", card.kind, card.at))
-                                        .small()
-                                        .color(theme::MUTED),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let label = format!("Dismiss {}", card.title);
-                                        let r = ui.small_button("×").on_hover_text(&label);
-                                        r.widget_info(|| {
-                                            egui::WidgetInfo::labeled(
-                                                egui::Role::Button,
-                                                true,
-                                                label.clone(),
-                                            )
-                                        });
-                                        if r.clicked() {
-                                            actions.push(CardAction::Dismiss(card.id.clone()));
-                                        }
-                                    },
-                                );
-                            });
-                            ui.label(RichText::new(&card.title).strong());
-                            if ui.link(format!("View {}", card.link)).clicked() {
-                                actions.push(CardAction::Open(card.id.clone()));
-                            }
-                        });
-                    ui.add_space(4.0);
-                }
+                ui.set_width(480.0_f32.min((ctx.content_rect().width() - 32.0).max(180.0)));
+                egui::ScrollArea::vertical()
+                    .id_salt("completion-stack-scroll")
+                    .max_height((ctx.content_rect().height() - top - 100.0).max(100.0))
+                    .show(ui, |ui| {
+                        for card in self.cards.iter().take(shown) {
+                            egui::Frame::new()
+                                .fill(theme::GREEN_BG)
+                                .stroke(egui::Stroke::new(1.0, theme::GREEN))
+                                .corner_radius(theme::radius())
+                                .inner_margin(theme::margin(14, 10))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(&card.project)
+                                                .small()
+                                                .color(theme::MUTED),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!("{} · {}", card.kind, card.at))
+                                                .small()
+                                                .color(theme::MUTED),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let label = format!("Dismiss {}", card.title);
+                                                let r = ui.small_button("×").on_hover_text(&label);
+                                                r.widget_info(|| {
+                                                    egui::WidgetInfo::labeled(
+                                                        egui::Role::Button,
+                                                        true,
+                                                        label.clone(),
+                                                    )
+                                                });
+                                                if r.clicked() {
+                                                    actions
+                                                        .push(CardAction::Dismiss(card.id.clone()));
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.label(RichText::new(&card.title).strong());
+                                    if let Some(status) = self.status.get(&card.id) {
+                                        ui.label(status);
+                                    }
+                                    if ui.link(format!("View {}", card.link)).clicked() {
+                                        actions.push(CardAction::Open(card.id.clone()));
+                                    }
+                                });
+                            ui.add_space(4.0);
+                        }
+                    });
                 let more = self.cards.len().saturating_sub(1);
                 if more > 0 {
                     let text = if self.expanded {
@@ -174,8 +207,18 @@ mod tests {
             ["b", "a"]
         );
         c.dismiss("b");
-        assert_eq!(c.cards().len(), 1);
+        assert_eq!(
+            c.cards().len(),
+            2,
+            "dismissal waits for durable acknowledgment"
+        );
         assert_eq!(c.take_dismissed(), ["b"]);
+        c.reconcile(vec![card("a"), card("a")]);
+        assert_eq!(
+            c.cards().len(),
+            1,
+            "feed reconciliation also deduplicates identities"
+        );
         assert!(
             !c.push(card("b")),
             "a dismissed card does not come back from a replayed event"

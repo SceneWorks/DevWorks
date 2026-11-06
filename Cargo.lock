@@ -948,6 +948,7 @@ dependencies = [
 name = "devworks-desktop"
 version = "0.1.0"
 dependencies = [
+ "block2 0.5.1",
  "devworks-adapters",
  "devworks-core",
  "devworks-engine",
@@ -957,12 +958,17 @@ dependencies = [
  "image",
  "jiff",
  "libc",
+ "objc2 0.5.3",
+ "objc2-foundation 0.2.2",
+ "objc2-user-notifications",
  "rfd",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tokio",
+ "windows",
+ "zbus",
 ]
 
 [[package]]

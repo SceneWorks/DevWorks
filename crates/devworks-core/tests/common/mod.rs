@@ -2778,6 +2778,13 @@ impl EvalRepository for Unsupported {
 }
 
 impl DecisionRead for Unsupported {
+    fn os_notification_delivery(
+        &self,
+        _: &ActorId,
+        _: &Id,
+    ) -> Result<Option<StoredOsNotificationDelivery>, StorageError> {
+        nope()
+    }
     fn notification_users(&self) -> Result<Vec<ActorId>, StorageError> {
         nope()
     }
@@ -2802,7 +2809,11 @@ impl DecisionRead for Unsupported {
     fn approval_resume(&self, _: &Id) -> Result<Option<StoredApprovalResume>, StorageError> {
         nope()
     }
-    fn pending_approval_resumes(&self, _: u16) -> Result<Vec<StoredApprovalResume>, StorageError> {
+    fn pending_approval_resumes(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredApprovalResume>, StorageError> {
         nope()
     }
     fn notification(
@@ -2829,6 +2840,28 @@ impl DecisionRead for Unsupported {
     }
 }
 impl DecisionRepository for Unsupported {
+    fn claim_os_notification_delivery(
+        &mut self,
+        _: &ActorId,
+        _: &Id,
+        _: Option<i64>,
+        _: bool,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        nope()
+    }
+    fn settle_os_notification_delivery(
+        &mut self,
+        _: &ActorId,
+        _: &Id,
+        _: &OsNotificationDeliveryFence,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        nope()
+    }
+    fn recover_os_notification_deliveries(&mut self) -> Result<u64, StorageError> {
+        nope()
+    }
     fn bind_notification_user(&mut self, _: &ActorId) -> Result<(), StorageError> {
         nope()
     }

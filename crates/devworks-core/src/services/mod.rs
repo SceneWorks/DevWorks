@@ -5,6 +5,7 @@
 //! the same validation, authority, receipts and implementation (ARCH-02). An operation with no
 //! registered use case is reported as [`GatewayFailure::NoUseCase`] before any store access, so
 //! nothing unimplemented is advertised or recorded.
+pub mod approvals;
 pub mod artifacts;
 pub mod browser;
 pub mod cursor;
@@ -15,6 +16,7 @@ pub mod history;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
+pub mod notifications;
 pub mod packages;
 pub mod power;
 pub mod process;
@@ -72,6 +74,13 @@ impl UseCases {
     pub fn with_evals(mut self, service: Arc<evals::EvalService>) -> Self {
         for operation in evals::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_approvals(mut self, service: Arc<approvals::ApprovalService>) -> Self {
+        for op in approvals::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
     }
@@ -271,6 +280,13 @@ impl UseCases {
 
     pub fn with_work(mut self, service: Arc<work::WorkService>) -> Self {
         for op in work::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_notifications(mut self, service: Arc<notifications::NotificationService>) -> Self {
+        for op in notifications::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
