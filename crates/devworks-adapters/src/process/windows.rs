@@ -19,10 +19,11 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -129,11 +130,19 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     // SAFETY: an unnamed job with default security; the handle is owned by `Owned`.
     let job = Owned(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) });
     if job.0.is_null() {
-        return Err(ProcessError::Ownership(last_error("create the job")));
+        return Err(if spec.no_child_processes {
+            ProcessError::EnforcementUnavailable(last_error("create the job"))
+        } else {
+            ProcessError::Ownership(last_error("create the job"))
+        });
     }
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     // Kill on close and no breakaway: every descendant stays in the job and dies with it.
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if spec.no_child_processes {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    }
     // SAFETY: a correctly sized extended limit structure for this information class.
     let ok = unsafe {
         SetInformationJobObject(
@@ -144,7 +153,11 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
         )
     };
     if ok == 0 {
-        return Err(ProcessError::Ownership(last_error("configure the job")));
+        return Err(if spec.no_child_processes {
+            ProcessError::EnforcementUnavailable(last_error("configure the job"))
+        } else {
+            ProcessError::Ownership(last_error("configure the job"))
+        });
     }
     let mut cmd = Command::new(&spec.program);
     cmd.args(&spec.args);
@@ -202,21 +215,29 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
     super::feed_stdin(&mut child, spec);
     let process = child.as_raw_handle() as HANDLE;
     let pid = child.id();
-    let fail = |child: &mut Child, e: String| {
-        // The child never ran: terminate it rather than leave it suspended and unowned.
+    let fail = |child: &mut Child, e: String, enforcement: bool| {
+        // Refuse failed job setup before resume; also collect a failed resume safely.
         let _ = child.kill();
         let _ = child.wait();
-        Err(ProcessError::Ownership(e))
+        Err(if enforcement {
+            ProcessError::EnforcementUnavailable(e)
+        } else {
+            ProcessError::Ownership(e)
+        })
     };
     // SAFETY: assigning our own suspended child to our job.
     if unsafe { AssignProcessToJobObject(job.0, process) } == 0 {
-        return fail(&mut child, last_error("assign the child to its job"));
+        return fail(
+            &mut child,
+            last_error("assign the child to its job"),
+            spec.no_child_processes,
+        );
     }
     let birth = creation_time(process).unwrap_or_else(|| "unavailable".into());
     if let Err(e) = resume(pid) {
         // SAFETY: the job only holds this child.
         unsafe { TerminateJobObject(job.0, 1) };
-        return fail(&mut child, e);
+        return fail(&mut child, e, false);
     }
     let input = child
         .stdin

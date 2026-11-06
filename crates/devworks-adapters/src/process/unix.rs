@@ -17,8 +17,145 @@ const LINGERING: &str = "the recorded root is gone but members of its process gr
 /// How many times a forced stop re-signals a group that still has live members.
 const KILL_ROUNDS: usize = 25;
 
+fn unprivileged_child_policy() -> std::io::Result<()> {
+    // SAFETY: credential queries have no side effects or allocation.
+    if unsafe { libc::getuid() == 0 || libc::geteuid() == 0 } {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    #[cfg(target_os = "macos")]
+    // SAFETY: read-only query also refuses saved/set-id credential contexts.
+    if unsafe { libc::issetugid() } != 0 {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let (mut real, mut effective, mut saved) = (0, 0, 0);
+        // SAFETY: pointers refer to initialized uid_t records on this thread's stack.
+        if unsafe { libc::getresuid(&mut real, &mut effective, &mut saved) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if real == 0 || effective == 0 || saved == 0 {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+        }
+        // Linux capability ABI v3 has two 32-bit words. Exempt capabilities must not be
+        // effective or regainable from the permitted set. The child repeats this check.
+        #[repr(C)]
+        struct Header {
+            version: u32,
+            pid: i32,
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy, Default)]
+        struct Data {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+        let mut header = Header {
+            version: 0x2008_0522,
+            pid: 0,
+        };
+        let mut data = [Data::default(); 2];
+        // SAFETY: SYS_capget receives correctly sized initialized ABI records for this thread.
+        if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        const EXEMPT: u32 = (1 << 21) | (1 << 24); // CAP_SYS_ADMIN / CAP_SYS_RESOURCE
+        if (data[0].effective | data[0].permitted) & EXEMPT != 0 {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+        }
+    }
+    Ok(())
+}
+
+fn establish_child_policy() -> std::io::Result<()> {
+    unprivileged_child_policy()?;
+    #[cfg(target_os = "linux")]
+    // SAFETY: this child-only syscall prevents exec from gaining setuid/file capabilities.
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: only this forked child is changed, with a correctly sized resource record.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &limit) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut observed = limit;
+    // SAFETY: the record is writable and initialized.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut observed) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if observed.rlim_cur != 0 || observed.rlim_max != 0 {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    Ok(())
+}
+
+fn policy_program(spec: &ProcessSpec) -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let cwd = spec.cwd.clone().map_or_else(std::env::current_dir, Ok)?;
+    let input = std::path::Path::new(&spec.program);
+    let path = if input.is_absolute() {
+        input.to_path_buf()
+    } else if input.components().count() > 1 {
+        cwd.join(input)
+    } else {
+        let configured = spec
+            .env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| std::ffi::OsString::from(value));
+        let path = configured
+            .or_else(|| {
+                (!spec.clear_env)
+                    .then(|| std::env::var_os("PATH"))
+                    .flatten()
+            })
+            .unwrap_or_else(|| "/usr/bin:/bin".into());
+        std::env::split_paths(&path)
+            .map(|base| {
+                if base.is_absolute() {
+                    base.join(input)
+                } else {
+                    cwd.join(base).join(input)
+                }
+            })
+            .find(|path| {
+                std::fs::metadata(path)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?
+    }
+    .canonicalize()?;
+    let metadata = std::fs::metadata(&path)?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o6000 != 0 {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    Ok(path)
+}
+
 pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessError> {
-    let mut cmd = Command::new(&spec.program);
+    if spec.no_child_processes {
+        unprivileged_child_policy()
+            .map_err(|e| ProcessError::EnforcementUnavailable(e.to_string()))?;
+    }
+    let program = if spec.no_child_processes {
+        policy_program(spec).map_err(|e| ProcessError::EnforcementUnavailable(e.to_string()))?
+    } else {
+        std::path::PathBuf::from(&spec.program)
+    };
+    let mut cmd = Command::new(program);
+    if spec.no_child_processes {
+        // SAFETY: the child hook uses only credential/resource kernel calls and initialized
+        // stack records; no locks, heap allocation or parent resource limits are changed.
+        unsafe {
+            cmd.pre_exec(establish_child_policy);
+        }
+    }
     cmd.args(&spec.args);
     if spec.clear_env {
         cmd.env_clear();
@@ -73,7 +210,13 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             Box::new(std::fs::File::from(hr)) as Box<dyn Read + Send>,
         )
     });
-    let mut child = spawned.map_err(|e| ProcessError::Spawn(e.to_string()))?;
+    let mut child = spawned.map_err(|e| {
+        if spec.no_child_processes {
+            ProcessError::EnforcementUnavailable(e.to_string())
+        } else {
+            ProcessError::Spawn(e.to_string())
+        }
+    })?;
     super::feed_stdin(&mut child, spec);
     let pid = child.id();
     let birth = start_time(pid as i32, true).unwrap_or_else(|| UNAVAILABLE.into());
