@@ -24,6 +24,7 @@ pub mod resources;
 pub mod router;
 pub mod runs;
 pub mod sessions;
+pub mod usage;
 pub mod web;
 pub mod work;
 
