@@ -26,6 +26,11 @@ fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_
     h.state_mut().navigate(Route::Usage);
     settle(&mut h);
     press(&mut h, "Prices");
+    // Hold the real writer admission slot before the explicit first read. Native owners may
+    // remain queued; WAL readers continue against the same committed event snapshot.
+    let _writer = WriterHold::new(engine.host().runtime().store().clone());
+    press(&mut h, "Apply price catalog filters");
+
     let before_rows = h.state().usage.prices.as_ref().unwrap().items.0.len();
     assert!(before_rows < 105 && h.state().usage.prices.as_ref().unwrap().has_more);
     h.get_by_role_and_label(Role::Button, "Load more price rows")
@@ -139,5 +144,64 @@ impl Backend for Hinted {
     }
     fn read_stream(&self, id: &devworks_core::protocol::Id, n: u64) -> Result<Vec<u8>, String> {
         self.inner.read_stream(id, n)
+    }
+}
+
+/// An owned no-op transaction controls this fixture's no-event premise. It never completes a
+/// native producer or manufactures a reply; all first/continuation reads still use the gateway.
+struct WriterHold {
+    release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    cancel: devworks_core::ports::storage::Cancellation,
+    worker:
+        Option<std::thread::JoinHandle<Result<(), devworks_core::ports::storage::StorageError>>>,
+}
+impl WriterHold {
+    fn new(store: std::sync::Arc<dyn devworks_core::ports::storage::ApplicationStore>) -> Self {
+        use devworks_core::ports::storage::{Cancellation, StorageError, WriteOptions, run_write};
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let (entered, admitted) = std::sync::mpsc::sync_channel(1);
+        let cancel = Cancellation::new();
+        let options = WriteOptions {
+            cancellation: Some(cancel.clone()),
+            ..Default::default()
+        };
+        let gate = release.clone();
+        let worker = std::thread::spawn(move || {
+            run_write(&*store, options, move |_| {
+                entered.send(()).map_err(|_| StorageError::Cancelled)?;
+                let mut open = gate.0.lock().unwrap_or_else(|p| p.into_inner());
+                while !*open {
+                    open = gate.1.wait(open).unwrap_or_else(|p| p.into_inner());
+                }
+                Ok(())
+            })
+        });
+        let hold = Self {
+            release,
+            cancel,
+            worker: Some(worker),
+        };
+        admitted
+            .recv_timeout(SETTLE_BOUND)
+            .expect("the real writer slot is admitted");
+        hold
+    }
+}
+impl Drop for WriterHold {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        *self.release.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        self.release.1.notify_one();
+        let result = self.worker.take().expect("owned writer worker").join();
+        if !std::thread::panicking() {
+            assert!(
+                matches!(
+                    result,
+                    Ok(Ok(())) | Ok(Err(devworks_core::ports::storage::StorageError::Cancelled))
+                ),
+                "writer control finishes: {result:?}"
+            );
+        }
     }
 }
