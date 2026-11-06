@@ -94,6 +94,25 @@
       "check": "Existing migration exact bytes",
       "count": 33,
       "result": "passed"
+    },
+    {
+      "check": "Final source after exact Help/Conventions gate integration: workspace all-target Clippy, fmt, zero-drift regeneration",
+      "result": "passed",
+      "seconds": 9.99
+    },
+    {
+      "check": "Integrated Conventions native jobs with dedicated exact-source cancellation gate",
+      "passed": 5,
+      "failed": 0,
+      "seconds": 24.06,
+      "source": "47869da6"
+    },
+    {
+      "check": "Parent final exact-owned-publication Help suite",
+      "passed": 18,
+      "failed": 0,
+      "seconds": 48.6,
+      "source": "7be2bb1e + 7e9cf2b4"
     }
   ],
   "fidelity": [
@@ -107,7 +126,7 @@
   "limits": [
     "Recorded vectors and scripted transports only; no learned inference or real OS credential access in these native tests.",
     "Live-provider or model performance is not established.",
-    "Parent Help cancellation fixture final qualification is still an integration gate; this file does not claim that parent is accepted.",
     "No merge or CodeGraph acceptance is claimed by this local evidence."
-  ]
+  ],
+  "deliverySourceCommit": "bf3c22076cafa480ab6efc8d827bdc583959864b"
 }
