@@ -783,3 +783,80 @@ fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estima
             .any(|e| e.kind == "InferenceUsageObserved" && e.delta_micro_usd == Some(-25))
     );
 }
+
+#[test]
+fn legacy_gateway_keeps_full_stored_dates_including_maximum_timestamp() {
+    for timestamp in [T0, i64::MAX] {
+        let mut f = NativeFx::new();
+        f.fx.h.clock.0.store(timestamp, Ordering::SeqCst);
+        let attempt = f.admitted();
+        let mut frame = observation("fully-known", 1, Some(123), Some("0.000030"));
+        frame.quantities.cached_read_tokens = Some(0);
+        frame.quantities.cache_write_tokens = Some(0);
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        f.host()
+            .drive(attempt.attempt_id, src, Cancellation::new())
+            .unwrap();
+        if timestamp == T0 {
+            f.fx.h.clock.0.store(T0 + 60 * 86_400_000, Ordering::SeqCst);
+        }
+        loop {
+            if f.fx
+                .write(|tx| devworks_core::services::usage::ingest::bootstrap_page(tx, 64))
+                .complete
+            {
+                break;
+            }
+        }
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        match result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"s1","page":{"limit":10}}),
+            Some(1),
+        )) {
+            OperationResult::RouterUsage {
+                value: devworks_core::protocol::records::RouterUsageResult::Legacy(report),
+            } => {
+                assert_eq!(report.items.0.len(), 1);
+                assert_eq!(report.items.0[0].input_tokens.get(), 123);
+                assert_eq!(report.total_tracked_usd.0, "0.000030");
+            }
+            other => panic!("{other:?}"),
+        }
+        let illegal = f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"s1","page":{"limit":10},"startMs":"-62135596800001","endMs":"0"}),
+            Some(3),
+        );
+        assert_eq!(query_fault(illegal).code, DomainErrorCode::InvalidArgument);
+        if timestamp == T0 {
+            match result(f.fx.query_at(
+                &f.fx.user(),
+                "router.usage",
+                json!({"sessionId":"s1","page":{"limit":10},"startMs":"-1","endMs":"0"}),
+                Some(3),
+            )) {
+                OperationResult::RouterUsage {
+                    value:
+                        devworks_core::protocol::records::RouterUsageResult::Current(
+                            devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                        ),
+                } => assert!(page.items.0.is_empty()),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+}

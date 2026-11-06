@@ -17,7 +17,7 @@ use crate::{
         CorrelationId, DomainErrorCode, DomainFault, Revision,
         records::{
             PriceOrigin, RouterUsageResult, UsageCostKind, UsageItem, UsagePriceKind,
-            UsageQueryResult, UsageReport, UsageReportKind,
+            UsageQueryResult, UsageReport,
         },
         results::OperationResult,
         support::{BoundedList, Money},
@@ -114,15 +114,14 @@ impl QueryHandler for UsageService {
                     .fault(correlation),
             );
         };
-        let mut input = input.clone();
-        if query.schema_revision().0 < 3 {
-            // The original query has no time filter. Preserve its full selection instead of
-            // applying the new report UI's thirty-day default to an old client.
-            input.report_kind = Some(UsageReportKind::Attempts);
-            input.start_ms = Some(crate::protocol::Counter::new(0).expect("zero"));
-            input.end_ms = Some(crate::protocol::Counter::new(i64::MAX).expect("positive"));
-        }
-        let answered = reports::query(read, ctx, &input, self.clock.now_ms().get())
+        // Revision one has no time selection; the shared report pipeline preserves its
+        // complete stored selection without applying revision three's public date range.
+        let selected = if query.schema_revision().0 >= 3 {
+            reports::query(read, ctx, input, self.clock.now_ms().get())
+        } else {
+            reports::query_legacy_attempts(read, ctx, input, self.clock.now_ms().get())
+        };
+        let answered = selected
             .and_then(|report| {
                 if query.schema_revision().0 >= 3 {
                     Ok(RouterUsageResult::Current(report))
