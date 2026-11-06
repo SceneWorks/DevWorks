@@ -55,6 +55,55 @@ impl ConventionSourceLease {
             .map_err(|_| ExactReadRefusal::Unreadable)
     }
 
+    pub fn read_range_controlled(
+        &self,
+        offset: u64,
+        max: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, ExactReadRefusal> {
+        let result = self.files.read_range_controlled(
+            &self.version.blob_digest,
+            &self.version.blob_generation,
+            self.version
+                .byte_count
+                .try_into()
+                .map_err(|_| ExactReadRefusal::Unreadable)?,
+            offset,
+            max,
+            stopped,
+        );
+        if stopped() {
+            return Err(ExactReadRefusal::Storage(
+                crate::ports::storage::StorageError::Cancelled,
+            ));
+        }
+        result.map_err(|_| ExactReadRefusal::Unreadable)
+    }
+    pub fn open_controlled(
+        self,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Box<dyn Read + Send>, ExactReadRefusal> {
+        let result = self.files.open_controlled(
+            &self.version.blob_digest,
+            &self.version.blob_generation,
+            self.version
+                .byte_count
+                .try_into()
+                .map_err(|_| ExactReadRefusal::Unreadable)?,
+            stopped,
+        );
+        if stopped() {
+            return Err(ExactReadRefusal::Storage(
+                crate::ports::storage::StorageError::Cancelled,
+            ));
+        }
+        let bytes = result.map_err(|_| ExactReadRefusal::Unreadable)?;
+        Ok(Box::new(Reader {
+            bytes,
+            _hold: self.hold,
+        }))
+    }
+
     /// Call outside every SQL snapshot/transaction. The managed file adapter verifies the
     /// complete immutable generation on the same handle it returns.
     pub fn open(self) -> Result<Box<dyn Read + Send>, ExactReadRefusal> {
