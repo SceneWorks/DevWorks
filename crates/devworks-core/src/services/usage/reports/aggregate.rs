@@ -36,7 +36,10 @@ fn round_even(sum: i64, n: i64) -> SResult<i64> {
     let remain = sum % n;
     plus(
         whole,
-        i64::from(remain > n / 2 && remain * 2 > n || remain * 2 == n && whole % 2 != 0),
+        i64::from(
+            i128::from(remain) * 2 > i128::from(n)
+                || i128::from(remain) * 2 == i128::from(n) && whole % 2 != 0,
+        ),
     )
 }
 fn average(rows: &[&Fact]) -> SResult<Option<i64>> {
@@ -90,7 +93,7 @@ fn series(
             Some(value) => out.push(UsageReportRow::SeriesPoint {
                 key: BoundedText(key.into()),
                 label: BoundedText(label.into()),
-                bucket_start_ms: count(*bucket)?,
+                bucket_start_ms: crate::protocol::support::SignedCounter(bucket.to_string()),
                 value: count(value)?,
             }),
             None => gaps.add("report-metric-unavailable"),
@@ -103,11 +106,10 @@ fn breakdown(
     q: &Query,
     buckets: &[i64],
     rows: &[&Fact],
-    dimension: &str,
-    tokens: bool,
-    include_total: bool,
+    shape: (&str, bool, bool),
     gaps: &mut Gaps,
 ) -> SResult<()> {
+    let (dimension, tokens, include_total) = shape;
     let mut groups: BTreeMap<String, Vec<&Fact>> = BTreeMap::new();
     for row in rows {
         groups
@@ -140,7 +142,10 @@ fn breakdown(
                 value: count(value)?,
             });
         }
-        let series_key = format!("breakdown:{dimension}:{key}");
+        let series_key = format!(
+            "breakdown:{dimension}:{}",
+            &crate::fingerprint::sha256_hex(key.as_bytes())[..40]
+        );
         let mut groups: BTreeMap<i64, Vec<&Fact>> = BTreeMap::new();
         for row in rows {
             groups
@@ -164,7 +169,7 @@ fn breakdown(
     }
     Ok(())
 }
-fn activity<'a>(facts: &[&'a Fact], q: &Query) -> Vec<&'a Fact> {
+pub(super) fn activity(facts: &[&Fact], q: &Query) -> Vec<Fact> {
     let mut requests: BTreeMap<&str, &Fact> = BTreeMap::new();
     for f in facts.iter().copied().filter(|f| f.activity) {
         if let Some(key) = f.request.as_deref() {
@@ -176,7 +181,15 @@ fn activity<'a>(facts: &[&'a Fact], q: &Query) -> Vec<&'a Fact> {
             }
         }
     }
-    requests.into_values().filter(|f| q.matches(f)).collect()
+    requests
+        .into_values()
+        .filter(|f| q.matches(f) && f.activity_time.is_some_and(|at| q.in_range(at)))
+        .map(|f| {
+            let mut f = f.clone();
+            f.time = f.activity_time.expect("filtered");
+            f
+        })
+        .collect()
 }
 pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec<UsageReportRow>> {
     let mcp = matches!(q.kind, UsageReportKind::McpUsage);
@@ -188,10 +201,10 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
     let eligible = facts
         .iter()
         .copied()
-        .filter(|f| q.matches(f))
+        .filter(|f| q.in_range(f.time) && q.matches(f))
         .collect::<Vec<_>>();
     let unknown_path = eligible.iter().any(|f| {
-        f.path == Path::Other
+        f.path == Path::Unknown
             && f.legacy
                 .as_ref()
                 .is_none_or(|o| o.source_kind != "ToolInvocation")
@@ -209,7 +222,8 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
         .copied()
         .filter(|f| f.path == required)
         .collect::<Vec<_>>();
-    let runs = activity(&run_source, q);
+    let run_values = activity(&run_source, q);
+    let runs = run_values.iter().collect::<Vec<_>>();
     let mut mcp_rows = Vec::new();
     if mcp {
         for f in eligible.iter().copied().filter(|f| f.mcp) {
@@ -315,23 +329,23 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
                 series(&mut out, q, &buckets, &runs, key, label, gaps)?;
             }
             for dim in ["user", "provider", "model"] {
-                breakdown(&mut out, q, &buckets, &usage, dim, true, true, gaps)?;
+                breakdown(&mut out, q, &buckets, &usage, (dim, true, true), gaps)?;
             }
-            breakdown(&mut out, q, &buckets, &runs, "status", false, false, gaps)?;
+            breakdown(&mut out, q, &buckets, &runs, ("status", false, false), gaps)?;
         }
         UsageReportKind::AssistantActivity => {
             for dim in ["status", "user", "provider", "model"] {
-                breakdown(&mut out, q, &buckets, &runs, dim, false, true, gaps)?;
+                breakdown(&mut out, q, &buckets, &runs, (dim, false, true), gaps)?;
             }
         }
         UsageReportKind::McpUsage => {
             for dim in ["tool", "user", "status"] {
-                breakdown(&mut out, q, &buckets, &mcp_refs, dim, false, true, gaps)?;
+                breakdown(&mut out, q, &buckets, &mcp_refs, (dim, false, true), gaps)?;
             }
         }
         _ => {
             for dim in ["user", "provider", "model"] {
-                breakdown(&mut out, q, &buckets, &usage, dim, true, true, gaps)?;
+                breakdown(&mut out, q, &buckets, &usage, (dim, true, true), gaps)?;
             }
         }
     }

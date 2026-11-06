@@ -2,11 +2,7 @@
 //! in bounded source pages before output paging; missing identity/meters are never invented.
 mod aggregate;
 mod calendar;
-use super::{
-    accounting,
-    meter::InputSemantics,
-    money::{CostAccumulator, Rounding},
-};
+use super::{accounting, meter::InputSemantics};
 use crate::context::InvocationContext;
 use crate::operations::router::UsageInput;
 use crate::ports::storage::*;
@@ -77,11 +73,13 @@ enum Path {
     Review,
     Analysis,
     Other,
+    Unknown,
 }
 #[derive(Clone)]
 struct Fact {
     key: String,
     time: i64,
+    activity_time: Option<i64>,
     request: Option<String>,
     chat: Option<String>,
     user: Option<String>,
@@ -118,6 +116,7 @@ struct Query {
     interval: Interval,
     project: Option<crate::protocol::ProjectId>,
     root: Option<Id>,
+    root_is_feature: bool,
     session: Option<Id>,
     job: Option<Id>,
     kind: UsageReportKind,
@@ -129,6 +128,11 @@ impl Query {
         i: &UsageInput,
         now: i64,
     ) -> SResult<Self> {
+        if ctx.store_id() != &read.stamp().store_id
+            || ctx.restore_epoch().get() != read.stamp().restore_epoch
+        {
+            return Err(StorageError::ScopeDenied.into());
+        }
         let kind = i.report_kind.clone().unwrap_or(UsageReportKind::Attempts);
         let end = i.end_ms.as_ref().map_or(now, Counter::get);
         let start = i
@@ -195,10 +199,10 @@ impl Query {
                 return Err(StorageError::ScopeDenied.into());
             }
         }
-        if let Some(p) = &project {
-            if read.projects().project(p)?.is_none() {
-                return Err(invalid("usage_project"));
-            }
+        if let Some(p) = &project
+            && read.projects().project(p)?.is_none()
+        {
+            return Err(invalid("usage_project"));
         }
         let filters = matches!(kind, UsageReportKind::Filters);
         let mcp = matches!(kind, UsageReportKind::McpUsage);
@@ -245,10 +249,20 @@ impl Query {
             interval,
             project,
             root: i.root_id.as_ref().map(|r| r.0.clone()),
+            root_is_feature: i
+                .root_id
+                .as_ref()
+                .map(|r| read.work().work(&r.0))
+                .transpose()?
+                .flatten()
+                .is_some_and(|w| w.is_feature()),
             session: i.session_id.clone(),
             job: i.job_run_id.clone(),
             kind,
         })
+    }
+    fn in_range(&self, time: i64) -> bool {
+        time >= self.context.range.start_ms.get() && time < self.context.range.end_ms.get()
     }
     fn matches(&self, f: &Fact) -> bool {
         let a = &self.context.applied_filters;
@@ -299,7 +313,8 @@ fn path(value: Option<&str>) -> Path {
         Some("Assistant") => Path::Assistant,
         Some("CodeReview") => Path::Review,
         Some("RepositoryAnalysis") => Path::Analysis,
-        _ => Path::Other,
+        Some("Other" | "Mcp") => Path::Other,
+        _ => Path::Unknown,
     }
 }
 fn recorded_path(
@@ -309,68 +324,11 @@ fn recorded_path(
     Ok(read
         .operations()
         .operation(operation)?
-        .map_or(Path::Other, |op| {
+        .map_or(Path::Unknown, |op| {
             path(op.payload["reportCategory"].as_str())
         }))
 }
 
-fn cache_amount(
-    snapshot: &accounting::AdmittedSnapshot,
-    quantity: Option<i64>,
-    kind: &str,
-) -> SResult<Option<i64>> {
-    let Some(quantity) = quantity else {
-        return Ok(None);
-    };
-    if snapshot.quote.classification == crate::ports::usage::CostClassification::LocalFree {
-        return Ok(Some(0));
-    }
-    if snapshot.quote.currency != "USD" {
-        return Ok(None);
-    }
-    if quantity == 0 {
-        return Ok(Some(0));
-    }
-    let tariffs = snapshot
-        .quote
-        .tariffs
-        .iter()
-        .filter(|t| {
-            t.charge_kind == kind
-                && t.unit == "Tokens"
-                && t.modality == "Text"
-                && (kind != "CacheWrite"
-                    || t.cache_ttl_seconds.map(|n| n * 1000) == snapshot.pricing.cache_write_ttl_ms)
-        })
-        .collect::<Vec<_>>();
-    let mut cost = CostAccumulator::default();
-    if tariffs.len() == 1 {
-        cost.measure(quantity, &tariffs[0].amount_usd, tariffs[0].units)
-            .map_err(|_| invalid("usage_cost"))?; // convert exact units below
-    } else {
-        let rate = snapshot.quote.rates.as_ref().and_then(|r| {
-            if kind == "CacheRead" {
-                r.cache_read_usd_per_million.as_deref()
-            } else {
-                if r.cache_writes.len() == 1
-                    && r.cache_writes[0].ttl_ms == snapshot.pricing.cache_write_ttl_ms
-                {
-                    Some(r.cache_writes[0].usd_per_million.as_str())
-                } else if r.cache_writes.is_empty() {
-                    r.cache_write_usd_per_million.as_deref()
-                } else {
-                    None
-                }
-            }
-        });
-        let Some(rate) = rate else { return Ok(None) };
-        cost.tokens(quantity, rate)
-            .map_err(|_| invalid("usage_cost"))?;
-    }
-    cost.micro_usd(Rounding::Nearest)
-        .map(Some)
-        .map_err(|_| invalid("usage_cost"))
-}
 fn tariff_json(t: &crate::ports::usage::PublishedTariff) -> Value {
     json!({"upstreamModelId":t.upstream_model_id,"serviceTier":t.service_tier,"contextLowerExclusive":optional(t.context_lower_exclusive),"contextUpperInclusive":optional(t.context_upper_inclusive),"modality":t.modality,"chargeKind":t.charge_kind,"cacheTtlSeconds":optional(t.cache_ttl_seconds),"unit":t.unit,"units":t.units.to_string(),"amountUsd":t.amount_usd,"region":t.region,"endpointProfile":t.endpoint_profile})
 }
@@ -401,6 +359,9 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
         .transpose()?
         .unwrap_or_default();
     let q = &summary.meter.quantities;
+    let (cache_read_cost, cache_write_cost) =
+        super::pricing::cache_estimates(&admitted.quote, q, &admitted.pricing)
+            .map_err(|_| invalid("usage_cache_cost"))?;
     let mut normalized_quantities = q.clone();
     if !admitted.pricing.cache_read_possible {
         normalized_quantities.cached_read_tokens = Some(0);
@@ -411,6 +372,12 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
     let input = normalized_quantities
         .total_input(admitted.pricing.input_semantics)
         .map_err(|_| invalid("usage_meter"))?;
+    if input
+        .zip(q.output_tokens)
+        .is_some_and(|(a, b)| a.checked_add(b).is_none())
+    {
+        return Err(invalid("usage_overflow"));
+    }
     let uncached = normalized_quantities
         .uncached_input(admitted.pricing.input_semantics)
         .map_err(|_| invalid("usage_meter"))?;
@@ -428,7 +395,7 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
     let classification = b.map_or("Unknown", |b| b.classification.as_str());
     let mut row = json!({"id":a.attempt_id,"requestId":a.request_id,"attemptId":a.attempt_id,"attemptNumber":a.attempt_number.to_string(),"sourceKind":"InferenceAttempt","sourceId":a.attempt_id,"actorId":a.actor_id,"projectId":a.project_id,"featureId":a.feature_id,"workId":a.work_id,"assignmentId":a.assignment_id,"sessionId":a.session_id,"jobRunId":a.job_run_id,"operationId":a.operation_id});
     row.as_object_mut().expect("object").extend(json!({"purpose":a.purpose,"role":a.role,"providerId":provider,"connectionId":a.connection_id,"modelId":a.catalog_model_id,"resolvedModelId":a.provider_model_id,"startedAtMs":a.created_at_ms.to_string(),"finishedAtMs":optional(summary.finished_at_ms),"state":a.state}).as_object().expect("object").clone());
-    row.as_object_mut().expect("object").extend(json!({"inputTokens":optional(input),"uncachedInputTokens":optional(uncached),"outputTokens":optional(q.output_tokens),"cacheReadTokens":optional(q.cached_read_tokens),"cacheWriteTokens":optional(q.cache_write_tokens),"cacheReadMicroUsd":optional(cache_amount(&admitted,q.cached_read_tokens,"CacheRead")?),"cacheWriteMicroUsd":optional(cache_amount(&admitted,q.cache_write_tokens,"CacheWrite")?),"inputSemantics":if admitted.pricing.input_semantics==InputSemantics::Inclusive{"Inclusive"}else{"Disjoint"},"unknownTail":b.is_some_and(|b|b.unknown_tail),"reasoningTokens":optional(q.reasoning_tokens),"connectionRevision":optional(admitted.quote.connection_revision)}).as_object().expect("object").clone());
+    row.as_object_mut().expect("object").extend(json!({"inputTokens":optional(input),"uncachedInputTokens":optional(uncached),"outputTokens":optional(q.output_tokens),"cacheReadTokens":optional(q.cached_read_tokens),"cacheWriteTokens":optional(q.cache_write_tokens),"cacheReadMicroUsd":optional(cache_read_cost),"cacheWriteMicroUsd":optional(cache_write_cost),"inputSemantics":if admitted.pricing.input_semantics==InputSemantics::Inclusive{"Inclusive"}else{"Disjoint"},"unknownTail":b.is_some_and(|b|b.unknown_tail),"reasoningTokens":optional(q.reasoning_tokens),"connectionRevision":optional(admitted.quote.connection_revision)}).as_object().expect("object").clone());
     row["cost"] = cost(
         classification,
         b.and_then(|b| b.priced_micro_usd),
@@ -444,15 +411,27 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
     Ok(Fact {
         key: format!("Attempt:{}", a.attempt_id.as_str()),
         time: a.created_at_ms,
+        activity_time: read
+            .router()
+            .route_request(&a.request_id)?
+            .map(|r| r.created_at_ms),
         request: Some(a.request_id.as_str().into()),
         chat: a.session_id.map(|s| s.as_str().into()),
         user: Some(a.actor_id.0.as_str().into()),
         provider: Some(provider),
-        model: Some(a.catalog_model_id.as_str().into()),
+        model: a
+            .provider_model_id
+            .clone()
+            .or_else(|| Some(a.catalog_model_id.as_str().into())),
         tool: None,
         purpose: Some(a.purpose.clone()),
         path: recorded_path(read, &a.operation_id)?,
-        status: summary.outcome.or(Some(a.state)),
+        status: read
+            .operations()
+            .operation(&a.operation_id)?
+            .map(|op| operation_status(op.state))
+            .or(summary.outcome)
+            .or(Some(a.state)),
         duration: None,
         mcp: false,
         activity: true,
@@ -463,6 +442,19 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
         balance,
         legacy: None,
     })
+}
+fn operation_status(state: crate::protocol::OperationState) -> String {
+    use crate::protocol::OperationState;
+    match state {
+        OperationState::ObservedComplete => "completed".into(),
+        OperationState::Failed => "failed".into(),
+        OperationState::CancelledBeforeDispatch => "cancelled".into(),
+        other => serde_json::to_value(other)
+            .expect("enum")
+            .as_str()
+            .expect("enum")
+            .into(),
+    }
 }
 fn string(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_owned)
@@ -492,6 +484,12 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
     let user = string(&o.payload, "actorId");
     let input = number(v, "inputTokens");
     let output = number(v, "outputTokens");
+    if input
+        .zip(output)
+        .is_some_and(|(a, b)| a.checked_add(b).is_none())
+    {
+        return Err(invalid("usage_overflow"));
+    }
     let mut state = string(&o.payload, "state");
     let mut report_path = path(o.payload["reportCategory"].as_str());
     if let Some(id) = string(&o.payload, "operationId") {
@@ -499,13 +497,7 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
             Id::new(id).map_err(|_| invalid("usage_source_operation"))?,
         );
         if let Some(operation) = read.operations().operation(&op)? {
-            state = Some(
-                serde_json::to_value(operation.state)
-                    .map_err(|e| corrupt(&e.to_string()))?
-                    .as_str()
-                    .ok_or_else(|| corrupt("operation state"))?
-                    .into(),
-            );
+            state = Some(operation_status(operation.state));
             report_path = path(operation.payload["reportCategory"].as_str());
         }
     }
@@ -519,31 +511,10 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
         && o.attempt_id.is_none()
     {
         let reference = source_id(&o.source_kind, &o.source_id);
-        let Some(request) = o.request_id.as_ref() else {
+        let request = o.request_id.as_ref();
+        if request.is_none() {
             gaps.add("legacy-request-identity-unrecorded");
-            return Ok(Fact {
-                key,
-                time: o.recorded_at_ms,
-                request: None,
-                chat: o.session_id.as_ref().map(|s| s.as_str().into()),
-                user,
-                provider: None,
-                model,
-                tool,
-                purpose,
-                path: report_path,
-                status: state,
-                duration: None,
-                mcp,
-                activity: false,
-                attempt_number: 0,
-                input,
-                output,
-                record: None,
-                balance: None,
-                legacy: Some(o),
-            });
-        };
+        }
         let (kind, origin) = match o.classification.as_str() {
             "ReportedCharge" => ("Reported", "ProviderReported"),
             "ConfiguredEstimate" => ("Estimated", "UserConfigured"),
@@ -567,6 +538,7 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
     Ok(Fact {
         key,
         time: o.recorded_at_ms,
+        activity_time: activity.then_some(o.recorded_at_ms),
         request: o.request_id.as_ref().map(|s| s.as_str().into()),
         chat: o.session_id.as_ref().map(|s| s.as_str().into()),
         user,
@@ -590,10 +562,16 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
 fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<Fact>> {
     let mut facts = Vec::new();
     let mut after = None;
+    let activity_view = matches!(
+        q.kind,
+        UsageReportKind::AssistantUsage
+            | UsageReportKind::AssistantActivity
+            | UsageReportKind::Filters
+    );
     let filter = UsageAttemptFilter {
         project_id: q.project.clone(),
-        start_ms: Some(q.context.range.start_ms.get()),
-        end_ms: Some(q.context.range.end_ms.get()),
+        start_ms: (!activity_view).then(|| q.context.range.start_ms.get()),
+        end_ms: (!activity_view).then(|| q.context.range.end_ms.get()),
         ..Default::default()
     };
     loop {
@@ -611,7 +589,16 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
                 a.session_id.as_ref(),
                 a.job_run_id.as_ref(),
             ) {
-                facts.push(attempt(read, a, &mut Gaps::default())?);
+                let logical_time = if activity_view {
+                    read.router()
+                        .route_request(&a.request_id)?
+                        .map(|r| r.created_at_ms)
+                } else {
+                    None
+                };
+                if q.in_range(a.created_at_ms) || logical_time.is_some_and(|at| q.in_range(at)) {
+                    facts.push(attempt(read, a, &mut Gaps::default())?);
+                }
             }
         }
         if !full {
@@ -630,8 +617,17 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
         let full = rows.len() == 500;
         for o in rows {
             after = Some(o.cursor());
-            if o.attempt_id.is_some() {
+            if o.attempt_id.is_some()
+                && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
+            {
                 continue;
+            }
+            if q.root_is_feature
+                && o.feature_id.is_none()
+                && o.work_id.as_ref() != q.root.as_ref()
+                && matches!(o.source_kind.as_str(), "SessionUsage" | "JobUsage")
+            {
+                gaps.add("historical-feature-ownership-unrecorded");
             }
             if q.ownership(
                 o.project_id.as_ref(),
@@ -641,7 +637,18 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
                 o.session_id.as_ref(),
                 o.job_run_id.as_ref(),
             ) {
-                facts.push(origin(read, o, gaps)?);
+                let mut source_gaps = Gaps::default();
+                let fact = origin(read, o, &mut source_gaps)?;
+                for gap in source_gaps.0 {
+                    if gap == "tool-transport-unrecorded" {
+                        if matches!(q.kind, UsageReportKind::McpUsage | UsageReportKind::Filters) {
+                            gaps.add(&gap);
+                        }
+                    } else if matches!(q.kind, UsageReportKind::Attempts) {
+                        gaps.add(&gap);
+                    }
+                }
+                facts.push(fact);
             }
         }
         if !full {
@@ -750,9 +757,28 @@ fn page<T: Clone + Serialize>(
     if start > rows.len() {
         return Err(StorageError::CursorExpired.into());
     }
-    let end = start
-        .saturating_add(i.page.limit.get() as usize)
-        .min(rows.len());
+    let mut end = start;
+    let mut bytes = context
+        .len()
+        .checked_add(16 * 1024)
+        .ok_or_else(|| invalid("usage_response_size"))?;
+    if bytes >= crate::framing::MAX_FRAME_BYTES {
+        return Err(invalid("usage_context_exceeds_response_bound"));
+    }
+    while end < rows.len() && end - start < (i.page.limit.get() as usize) {
+        let size = serde_json::to_vec(&rows[end])
+            .map_err(|e| corrupt(&e.to_string()))?
+            .len()
+            + 1;
+        if bytes.saturating_add(size) > crate::framing::MAX_FRAME_BYTES {
+            if end == start {
+                return Err(invalid("usage_row_exceeds_response_bound"));
+            }
+            break;
+        }
+        bytes += size;
+        end += 1;
+    }
     let more = end < rows.len();
     Ok((
         rows[start..end].to_vec(),
@@ -787,7 +813,21 @@ pub fn query(
     let q = Query::new(read, ctx, &resolved, now_ms)?;
     let mut gaps = Gaps::default();
     let facts = collect(read, &q, &mut gaps)?;
-    let selected = facts.iter().filter(|f| q.matches(f)).collect::<Vec<_>>();
+    if !matches!(q.kind, UsageReportKind::McpUsage)
+        && facts.iter().any(|f| {
+            (q.in_range(f.time) || f.activity_time.is_some_and(|t| q.in_range(t)))
+                && q.matches(f)
+                && f.record
+                    .as_ref()
+                    .is_some_and(|r| r.resolved_model_id.is_none())
+        })
+    {
+        gaps.add("actual-served-model-unrecorded");
+    }
+    let selected = facts
+        .iter()
+        .filter(|f| q.in_range(f.time) && q.matches(f))
+        .collect::<Vec<_>>();
     match q.kind {
         UsageReportKind::Attempts => {
             let totals = totals(&selected, &mut gaps)?;
@@ -811,8 +851,18 @@ pub fn query(
         }
         UsageReportKind::Filters => {
             let mut options = Vec::new();
+            let activity_source = facts
+                .iter()
+                .filter(|f| f.path == Path::Assistant)
+                .collect::<Vec<_>>();
+            let activity = aggregate::activity(&activity_source, &q);
+            let filter_facts = facts
+                .iter()
+                .filter(|f| q.in_range(f.time))
+                .chain(activity.iter())
+                .collect::<Vec<_>>();
             for dimension in ["user", "provider", "model", "tool"] {
-                let mut values = facts
+                let mut values = filter_facts
                     .iter()
                     .filter(|f| dimension != "tool" || f.mcp)
                     .filter_map(|f| normalized(f.dimension(dimension)))

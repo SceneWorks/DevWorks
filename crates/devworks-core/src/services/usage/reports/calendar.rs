@@ -51,9 +51,6 @@ impl Interval {
             .map_err(|_| invalid("usage_range"))?
             .timestamp()
             .as_millisecond();
-        if out < 0 {
-            return Err(invalid("usage_range_before_supported_epoch"));
-        }
         Ok(out)
     }
     pub fn next(self, ms: i64) -> SResult<i64> {
