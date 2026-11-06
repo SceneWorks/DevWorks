@@ -6,8 +6,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self): self.handle_git()
     def log_message(self, *_): pass
     def handle_git(self):
+        # Bound each response explicitly: GnuTLS rejects an EOF-delimited TLS body
+        # when this minimal fixture closes without a close_notify exchange.
         if self.headers.get('Authorization') != 'Basic '+base64.b64encode(b'fixture:fixture-auth-secret').decode():
-            self.send_response(401); self.send_header('WWW-Authenticate','Basic realm="fixture"'); self.end_headers(); return
+            self.send_response(401); self.send_header('WWW-Authenticate','Basic realm="fixture"'); self.send_header('Content-Length','0'); self.end_headers(); return
         path, _, query=self.path.partition('?')
         length=int(self.headers.get('Content-Length','0'))
         body=self.rfile.read(length)
@@ -25,6 +27,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else: values.append((key,value.strip()))
         self.send_response(status)
         for key,value in values: self.send_header(key,value)
+        if not any(key.lower() == 'content-length' for key,_ in values):
+            self.send_header('Content-Length',str(len(payload)))
         self.end_headers();self.wfile.write(payload)
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
 context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(sys.argv[2],sys.argv[3])
