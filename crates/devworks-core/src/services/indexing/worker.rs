@@ -408,18 +408,16 @@ pub(crate) fn rows_of(
                     }
                     _ => node_id(target_repository, unit, kind, qualified_name, 0),
                 };
-                (
-                    id.clone(),
-                    id,
-                    {
-                        let mut payload=json!({
-                            "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
-                            "targetUnit":unit, "targetQualifiedName":qualified_name,
-                        });
-                        if let Some(name)=target_name {payload["targetName"]=json!(name);}
-                        payload
-                    },
-                )
+                (id.clone(), id, {
+                    let mut payload = json!({
+                        "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
+                        "targetUnit":unit, "targetQualifiedName":qualified_name,
+                    });
+                    if let Some(name) = target_name {
+                        payload["targetName"] = json!(name);
+                    }
+                    payload
+                })
             }
         };
         payload["confidence"] = json!((f64::from(e.confidence) * 100.0).round() / 100.0);

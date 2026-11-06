@@ -407,7 +407,7 @@ fn refresh_overlay(
     let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":key,"command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":source_revision.to_string()}});
     let CommandReply::Recorded { receipt, .. } = app
         .command(
-            &ctx,
+            ctx,
             "indexing.refresh_overlay",
             frame.to_string().as_bytes(),
         )

@@ -139,11 +139,17 @@ pub(super) fn edges(
                 continue;
             };
             let original = raw.clone();
-            if view.layers.len() > 1 {
+            if view.layers.len() > 1
+                && raw
+                    .edge
+                    .payload
+                    .get("targetRepositoryId")
+                    .is_none_or(|id| id.as_str() == Some(raw.repository_id.as_str()))
+            {
                 // The shared index linker retains language/receiver/import ambiguity rules.
                 let unit_key = raw.edge.unit_key.clone();
                 let linked = super::linking::link(
-                    read.indexing(),
+                    read,
                     view,
                     sessions
                         .entry(view.view.view_id.as_str().to_owned())
@@ -216,14 +222,22 @@ pub(super) fn edges(
                     if packages.is_none() {
                         packages = Some(super::packages::Packages::load(read, scope, budget)?);
                     }
-                    packages.as_ref().expect("loaded packages").link(read, scope, edge, budget)?
-                } else { None }
-            } else { None };
+                    packages
+                        .as_ref()
+                        .expect("loaded packages")
+                        .link(read, scope, edge, budget)?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             if !visit(linked, budget)? {
                 return Ok(());
             }
             if let Some(derived) = derived
-                && !visit(Ok(derived), budget)? {
+                && !visit(Ok(derived), budget)?
+            {
                 return Ok(());
             }
         }

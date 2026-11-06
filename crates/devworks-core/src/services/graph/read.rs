@@ -18,14 +18,12 @@ pub(super) struct Metadata<'a> {
     pub read: &'a dyn ReadSnapshot,
     pub context: &'a InvocationContext,
     pub scope: &'a DataScope,
-    pub now_ms: i64,
     pub stamp: ReadStamp,
     pub position: Position,
     pub limit: usize,
     pub next: RefCell<Option<Position>>,
     pub budget: RefCell<Budget>,
     pub encoded_bytes: Cell<usize>,
-    pub cursors: Option<&'a super::cursor::Cursors>,
 }
 
 impl Metadata<'_> {
@@ -95,11 +93,6 @@ impl Metadata<'_> {
             .set(self.encoded_bytes.get().saturating_add(size));
         Ok(true)
     }
-    pub fn cursor(&self, position: &Position) -> Result<String, Failure> {
-        self.cursors
-            .ok_or(StorageError::CursorExpired)?
-            .encode(position)
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -107,6 +100,7 @@ impl Metadata<'_> {
 pub(super) struct Position {
     pub offset: usize,
     pub property: Option<properties::Position>,
+    pub edge_property: Option<properties::Position>,
     pub source_byte: Option<usize>,
     pub drilldown: Option<DrilldownPosition>,
 }
@@ -408,8 +402,4 @@ impl<'a> Reader<'a> {
         }
         Ok(out)
     }
-}
-
-pub(super) fn optional_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
 }

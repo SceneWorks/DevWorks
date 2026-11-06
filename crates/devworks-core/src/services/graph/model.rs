@@ -264,40 +264,47 @@ pub(super) fn node(
     Ok((projected, properties.next))
 }
 
-pub(super) fn edge(raw: &scan::Edge) -> Result<CodeEdge, Failure> {
-    let properties = properties::page(&raw.raw.edge.payload["properties"], None)
+pub(super) fn edge_page(
+    raw: &scan::Edge,
+    position: Option<&properties::Position>,
+) -> Result<(CodeEdge, Option<properties::Position>), Failure> {
+    let properties = properties::page(&raw.raw.edge.payload["properties"], position)
         .map_err(|_| Refusal::new(DomainErrorCode::ViewUnavailable, "graph_properties", None))?;
     let payload = &raw.raw.edge.payload;
-    Ok(CodeEdge {
-        edge_id: wire(json!(raw.raw.edge.edge_id))?,
-        source_id: wire(json!(raw.source.node_id))?,
-        target_id: wire(json!(raw.target.node_id))?,
-        source_repository_id: raw.source.repository_id.clone(),
-        target_repository_id: raw.target.repository_id.clone(),
-        producing_unit: Some(GraphUnitKey(raw.raw.edge.unit_key.clone())),
-        edge_kind: wire(json!(raw.raw.edge.kind))?,
-        resolution: payload
-            .get("resolution")
-            .filter(|v| v.is_string())
-            .cloned()
-            .map(wire)
-            .transpose()?,
-        confidence: payload
-            .get("confidence")
-            .filter(|v| v.is_number())
-            .cloned()
-            .map(wire)
-            .transpose()?,
-        confidence_band: payload
-            .get("confidenceBand")
-            .or_else(|| payload["properties"].get("confidence_band"))
-            .filter(|v| v.is_string())
-            .cloned()
-            .map(wire)
-            .transpose()?,
-        properties: properties.items,
-        properties_complete: properties.next.is_none(),
-        source_unit_key: GraphUnitKey(raw.source.unit_key.clone()),
-        target_unit_key: GraphUnitKey(raw.target.unit_key.clone()),
-    })
+    let next = properties.next;
+    Ok((
+        CodeEdge {
+            edge_id: wire(json!(raw.raw.edge.edge_id))?,
+            source_id: wire(json!(raw.source.node_id))?,
+            target_id: wire(json!(raw.target.node_id))?,
+            source_repository_id: raw.source.repository_id.clone(),
+            target_repository_id: raw.target.repository_id.clone(),
+            producing_unit: Some(GraphUnitKey(raw.raw.edge.unit_key.clone())),
+            edge_kind: wire(json!(raw.raw.edge.kind))?,
+            resolution: payload
+                .get("resolution")
+                .filter(|v| v.is_string())
+                .cloned()
+                .map(wire)
+                .transpose()?,
+            confidence: payload
+                .get("confidence")
+                .filter(|v| v.is_number())
+                .cloned()
+                .map(wire)
+                .transpose()?,
+            confidence_band: payload
+                .get("confidenceBand")
+                .or_else(|| payload["properties"].get("confidence_band"))
+                .filter(|v| v.is_string())
+                .cloned()
+                .map(wire)
+                .transpose()?,
+            properties: properties.items,
+            properties_complete: next.is_none(),
+            source_unit_key: GraphUnitKey(raw.source.unit_key.clone()),
+            target_unit_key: GraphUnitKey(raw.target.unit_key.clone()),
+        },
+        next,
+    ))
 }
