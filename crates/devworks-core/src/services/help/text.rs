@@ -377,7 +377,7 @@ mod tests {
     fn incomplete_or_cancelled_full_search_never_reports_a_successful_negative() {
         let body = vec![b'x'; CHUNK * 3];
         let mut calls = 0;
-        assert_eq!(
+        assert!(matches!(
             contains(
                 "",
                 &mut body.as_slice(),
@@ -389,9 +389,9 @@ mod tests {
                 }
             ),
             Err(StorageError::Cancelled)
-        );
+        ));
         assert_eq!(calls, 2);
-        assert_eq!(
+        assert!(matches!(
             contains(
                 "",
                 &mut &body[..CHUNK],
@@ -400,7 +400,7 @@ mod tests {
                 &mut || false
             ),
             Err(StorageError::ViewUnavailable)
-        );
+        ));
         assert!(
             !contains(
                 "",
