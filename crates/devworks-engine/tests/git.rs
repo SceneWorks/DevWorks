@@ -366,12 +366,38 @@ fn native_task_lifecycle_with_create(
     reviewed_case: Option<ReviewedCommitCase>,
     reviewed_create: Option<worktree_hooks::CreateCase>,
 ) {
+    native_task_lifecycle_transport(with_pr, reviewed_case, reviewed_create, false, false, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_push_isolates_late_repository_transport_configuration_and_preserves_trusted_auth() {
+    native_task_lifecycle_transport(false, None, None, true, false, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_local_push_trusts_only_the_exact_approved_server_and_never_its_client_hooks() {
+    native_task_lifecycle_transport(false, None, None, true, true, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_https_push_preserves_trusted_credential_helpers_and_isolates_repository_helpers() {
+    native_task_lifecycle_transport(false, None, None, true, false, true);
+}
+fn native_task_lifecycle_transport(
+    with_pr: bool,
+    reviewed_case: Option<ReviewedCommitCase>,
+    reviewed_create: Option<worktree_hooks::CreateCase>,
+    push_case: bool,
+    local_case: bool,
+    https_case: bool,
+) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
     use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let store = h.open();
+    let push_state = push_case.then(|| Arc::new(push_transport::State::new(&h.root, https_case)));
     let source = h.root.join("source");
     let owned = h.root.join("worktrees");
     std::fs::create_dir_all(&source).unwrap();
@@ -406,8 +432,16 @@ fn native_task_lifecycle_with_create(
     git(&source, &["commit", "-m", "base"]);
     let head = git(&source, &["rev-parse", "HEAD"]);
     let remote = h.root.join("remote.git");
-    let remote_url = remote.to_string_lossy().into_owned();
-    git(&source, &["init", "--bare", &remote_url]);
+    let local_remote_url = remote.to_string_lossy().into_owned();
+    git(&source, &["init", "--bare", &local_remote_url]);
+    let remote_url = if let Some(url) = push_state.as_ref().and_then(|state| state.https_url()) {
+        url
+    } else if push_state.is_some() && !local_case {
+        format!("ssh://git@fixture{}", remote.display())
+    } else {
+        local_remote_url
+    };
+    git(&remote, &["config", "http.receivepack", "true"]);
     git(&source, &["remote", "add", "origin", &remote_url]);
     std::fs::write(source.join("a.txt"), "user change\n").unwrap();
     let path = source.to_string_lossy().into_owned();
@@ -471,6 +505,7 @@ fn native_task_lifecycle_with_create(
         store.clone(),
         Arc::new(ReviewedProcessHost {
             case: reviewed_case,
+            push: push_state.clone(),
             injected: std::sync::atomic::AtomicBool::new(false),
         }),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
@@ -482,6 +517,7 @@ fn native_task_lifecycle_with_create(
             fs: filesystem.clone(),
         },
         reviewed_case,
+        push_state.clone(),
     ));
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
@@ -509,6 +545,9 @@ fn native_task_lifecycle_with_create(
         h.ids.clone(),
         h.clock(),
         GitConfig {
+            transport: Some(Arc::new(
+                devworks_adapters::git_transport::NativeGitTransportFiles,
+            )),
             roots: vec![RegisteredGitRoot {
                 id: id("owned-root"),
                 path: std::fs::canonicalize(&owned).unwrap(),
@@ -523,21 +562,11 @@ fn native_task_lifecycle_with_create(
             ..GitConfig::default()
         },
     ));
-    let info = store.info();
-    let ctx = HostIngress::new(&*store)
-        .context(
-            info.host_actor,
-            PrincipalKind::Host,
-            id("invoke"),
-            id("git-test"),
-            Counter::new(info.restore_epoch).unwrap(),
-            Revision::new(1).unwrap(),
-        )
-        .with_lineage(
-            Some(ProjectId(id("project"))),
-            Some(RootId(id("task"))),
-            None,
-        );
+    let ctx = principal(&*store, "git-human", PrincipalKind::Human).with_lineage(
+        Some(ProjectId(id("project"))),
+        Some(RootId(id("task"))),
+        None,
+    );
     let authority = HostAuthority {
         store: &*store,
         clock: &*h.clock,
@@ -1094,6 +1123,20 @@ fn native_task_lifecycle_with_create(
             Some(RootId(id("task"))),
             None,
         );
+    if let Some(state) = &push_state {
+        push_transport::exercise(push_transport::Fixture {
+            h: &h,
+            store: store.clone(),
+            service: service.clone(),
+            gateway: &gateway,
+            agent: &agent,
+            tree: &current,
+            remote: &remote,
+            state,
+        });
+        assert!(processes.owned().is_empty());
+        return;
+    }
     git(tree_path, &["commit", "--amend", "-m", "Rebased task"]);
     let rebased = git(tree_path, &["rev-parse", "HEAD"]);
     assert_ne!(rebased, new_head);
@@ -1118,21 +1161,14 @@ fn native_task_lifecycle_with_create(
     forbidden["requestKey"] = serde_json::json!("default-ref-force");
     forbidden["command"]["expectedHead"]["hex"] = serde_json::json!(another);
     forbidden["command"]["expectedRemote"]["hex"] = serde_json::json!(rebased);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            forbidden.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &forbidden,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(matches!(result, EffectOutcome::Failed(_)), "{result:?}");
@@ -1149,21 +1185,14 @@ fn native_task_lifecycle_with_create(
     let mut alias = forbidden;
     alias["requestKey"] = serde_json::json!("symbolic-main-force");
     alias["command"]["expectedRemote"]["hex"] = serde_json::json!(main_before);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            alias.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &alias,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(
@@ -1243,6 +1272,7 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
 /// The requested process policy still runs through the real native adapter and kernel.
 struct ReviewedProcessHost {
     case: Option<ReviewedCommitCase>,
+    push: Option<Arc<push_transport::State>>,
     injected: std::sync::atomic::AtomicBool,
 }
 impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
@@ -1250,7 +1280,11 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         NativeProcessHost.platform()
     }
     fn environment(&self) -> Vec<(String, String)> {
-        NativeProcessHost.environment()
+        let mut environment = NativeProcessHost.environment();
+        if let Some(state) = &self.push {
+            state.environment(&mut environment);
+        }
+        environment
     }
     fn probe(
         &self,
@@ -1271,6 +1305,14 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         Box<dyn devworks_core::ports::process::ProcessTree>,
         devworks_core::ports::process::ProcessError,
     > {
+        if let Some(state) = &self.push {
+            state.before_spawn(spec);
+            if state.refuse_postcondition(spec) {
+                return Err(devworks_core::ports::process::ProcessError::Spawn(
+                    "controlled lost push observation".into(),
+                ));
+            }
+        }
         if matches!(self.case, Some(ReviewedCommitCase::UnavailablePolicy))
             && spec.no_child_processes
             && spec.args == ["--version"]
@@ -1379,7 +1421,11 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
 
 /// Lose the successful commit reply before the Git owner can checkpoint it. All native
 /// processes still run through the real supervisor; recovery must observe, never replay.
-struct CommitReplyLost(SupervisedHelpers, Option<ReviewedCommitCase>);
+struct CommitReplyLost(
+    SupervisedHelpers,
+    Option<ReviewedCommitCase>,
+    Option<Arc<push_transport::State>>,
+);
 impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
     fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
         self.0.filesystem()
@@ -1394,6 +1440,9 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         limits: devworks_core::services::indexing::helper::HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, false);
+        }
         self.0.run(ctx, spec, limits, stop)
     }
     fn run_difference(
@@ -1425,6 +1474,9 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         operation: &devworks_core::protocol::OperationId,
         approved_hold: bool,
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        if let Some(state) = &self.2 {
+            state.assert_recorded(&spec, true);
+        }
         let commit = spec.args.first().is_some_and(|arg| arg == "commit");
         let directory = spec.cwd.clone();
         let reply = self
@@ -1465,3 +1517,6 @@ mod approvals;
 
 #[path = "git/worktree_hooks.rs"]
 mod worktree_hooks;
+
+#[path = "git/push_transport.rs"]
+mod push_transport;
