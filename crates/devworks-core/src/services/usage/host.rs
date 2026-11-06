@@ -32,6 +32,20 @@ impl AccountingWriteFence {
             .unwrap_or_else(|p| p.into_inner())
             .remove(id);
     }
+    /// Trusted host publication preparation may stage bounded local artifacts under this fence.
+    /// Never call a provider, network transport or package process inside this closure.
+    pub fn publication<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let closed = self.closed.read().unwrap_or_else(|p| p.into_inner());
+        if *closed {
+            return Err(StorageError::Cancelled);
+        }
+        let result = work();
+        drop(closed);
+        result
+    }
     fn admit<F>(&self, store: &dyn ApplicationStore, work: F) -> Result<Admission, StorageError>
     where
         F: FnOnce(&mut dyn WriteTransaction) -> Result<Admission, StorageError> + Send + 'static,
@@ -71,6 +85,16 @@ impl AccountingWriteFence {
 /// transport work/callbacks have ceased, including when `start` or `next` failed.
 pub trait OwnedInferenceSource: Send {
     fn start(&mut self, attempt: &StoredInferenceAttempt) -> Result<(), StorageError>;
+    fn start_cancellable(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        cancellation: &Cancellation,
+    ) -> Result<(), StorageError> {
+        if cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        self.start(attempt)
+    }
     fn next(&mut self, cancellation: &Cancellation)
     -> Result<Option<InferenceFrame>, StorageError>;
     fn close(&mut self) -> Result<(), StorageError>;
@@ -78,7 +102,26 @@ pub trait OwnedInferenceSource: Send {
 #[derive(Clone, Debug)]
 pub enum InferenceFrame {
     Usage(Observation),
+    Output(crate::providers::decode::DecodedFrame),
     Terminal(AttemptEnd),
+}
+/// Trusted native result owner. The transport emits data only; this separate host sink stages
+/// local artifacts and commits through the SAME fence as accounting. Provider callbacks never
+/// run inside a writer or while the sink holds a publication fence.
+pub trait OwnedInferenceSink: Send {
+    fn accept(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        frame: crate::providers::decode::DecodedFrame,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError>;
+    /// Called only after physical source closure, including an interrupted/error tail.
+    fn finish(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        outcome: AttemptEnd,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError>;
 }
 #[derive(Clone, Debug)]
 pub enum DriveOutcome {
@@ -173,7 +216,16 @@ impl AttemptHost {
     pub fn drive(
         &self,
         id: Id,
+        source: Box<dyn OwnedInferenceSource>,
+        cancellation: Cancellation,
+    ) -> Result<DriveOutcome, StorageError> {
+        self.drive_with_sink(id, source, None, cancellation)
+    }
+    pub fn drive_with_sink(
+        &self,
+        id: Id,
         mut source: Box<dyn OwnedInferenceSource>,
+        mut sink: Option<Box<dyn OwnedInferenceSink>>,
         cancellation: Cancellation,
     ) -> Result<DriveOutcome, StorageError> {
         if cancellation.is_cancelled() {
@@ -206,7 +258,7 @@ impl AttemptHost {
         };
         let bound = accounting::snapshot(&attempt)?;
         let mut outcome = AttemptEnd::UnknownTail;
-        let mut failure = source.start(&attempt).err();
+        let mut failure = source.start_cancellable(&attempt, &cancellation).err();
         if failure.is_none() {
             loop {
                 match self.interrupted(&attempt) {
@@ -228,6 +280,19 @@ impl AttemptHost {
                         if let Err(error) = self
                             .write(move |tx| accounting::observe(tx, &control, &id, &observation))
                         {
+                            failure = Some(error);
+                            cancellation.cancel();
+                            break;
+                        }
+                    }
+                    Ok(Some(InferenceFrame::Output(frame))) => {
+                        let result = match sink.as_mut() {
+                            Some(sink) => sink.accept(&attempt, frame, &self.fence),
+                            None => Err(StorageError::InvalidRecord(
+                                "provider output has no trusted sink".into(),
+                            )),
+                        };
+                        if let Err(error) = result {
                             failure = Some(error);
                             cancellation.cancel();
                             break;
@@ -259,6 +324,16 @@ impl AttemptHost {
                 )
             });
             return Err(error);
+        }
+        if cancellation.is_cancelled() && outcome == AttemptEnd::UnknownTail {
+            outcome = AttemptEnd::Cancelled;
+        }
+        if let Some(sink) = sink.as_mut()
+            && let Err(error) = sink.finish(&attempt, outcome, &self.fence)
+        {
+            // Publication failure cannot erase usage or claim a successful result.
+            outcome = AttemptEnd::UnknownTail;
+            failure = Some(error);
         }
         let proof = LocalQuiescence {
             attempt_id: id,

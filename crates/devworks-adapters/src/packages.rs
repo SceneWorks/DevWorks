@@ -408,6 +408,7 @@ impl PackageInspector for BundleInspector {
                     kind: kind(c).into(),
                     required: c.meta().required,
                     contract_digest: canonical_digest(&v)?,
+                    descriptor: Some(v),
                     languages: match c {
                         Contribution::Semantic { languages, .. } => {
                             languages.iter().map(|l| l.as_str().to_owned()).collect()
@@ -470,6 +471,16 @@ impl PackageInspector for BundleInspector {
                 .collect(),
             access: access_set,
             contributions,
+            schema_assets: manifest
+                .schema_assets
+                .iter()
+                .map(|a| {
+                    Ok(devworks_core::ports::packages::InspectedSchemaAsset {
+                        reference: to_value(&a.reference)?,
+                        path: a.path.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, InspectError>>()?,
             state_schema: to_value(&manifest.state_schema)?,
             configuration_schema: to_value(&manifest.configuration_schema)?,
             limits: InspectedLimits {

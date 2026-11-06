@@ -234,3 +234,5 @@ pub use runtime::{
 };
 
 pub mod prices;
+
+pub mod providers;

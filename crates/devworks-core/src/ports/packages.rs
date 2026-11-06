@@ -74,6 +74,9 @@ pub struct InspectedContribution {
     pub required: bool,
     /// SHA-256 of the canonical contribution descriptor (any contract change changes it).
     pub contract_digest: String,
+    /// Original verified descriptor; absent only on older compact inspections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<Value>,
     /// Languages of a semantic contribution.
     pub languages: Vec<String>,
 }
@@ -86,6 +89,14 @@ pub struct InspectedLimits {
     pub queue_capacity: u16,
     pub max_memory_bytes: i64,
     pub stream_credit_bytes: u32,
+}
+
+/// A manifest-bound schema document in the verified installed files.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectedSchemaAsset {
+    pub reference: Value,
+    pub path: String,
 }
 
 /// The verified facts of one bundle. Everything here was checked by the inspector; nothing
@@ -115,6 +126,8 @@ pub struct Inspection {
     /// `ui`. Compared as sets, never by display label.
     pub access: Vec<String>,
     pub contributions: Vec<InspectedContribution>,
+    #[serde(default)]
+    pub schema_assets: Vec<InspectedSchemaAsset>,
     /// The state schema reference (wire `SchemaRef` JSON).
     pub state_schema: Value,
     /// The configuration schema reference (wire `SchemaRef` JSON).

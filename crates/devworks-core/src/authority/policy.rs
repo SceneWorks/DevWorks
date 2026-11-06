@@ -348,37 +348,25 @@ pub fn evaluate(
     evaluate_with_owned_task(ctx, binding, policy, request, protected_branches, false)
 }
 
-pub(crate) fn evaluate_with_owned_task(
+/// Whether a CURRENT registered tool may be presented to this invocation. This grants no
+/// execution authority: target/effect refinements and exact grants still require full admission.
+pub fn registered_tool_visibility(
     ctx: &InvocationContext,
     binding: Option<&PrincipalBinding>,
     policy: &EffectivePolicy,
-    request: &AuthorityRequest<'_>,
-    protected_branches: &[String],
-    owned_task_force: bool,
+    descriptor: &crate::registry::OperationDescriptor,
+    selected: &crate::registry::ModeBinding,
+    effect: EffectClass,
 ) -> Verdict {
     let kind = ctx.principal_kind();
-    let op = request.descriptor.name;
+    let op = descriptor.name;
     let fam = family(op);
-    let class = request.binding.authority;
-    let command = request.binding.mode == Mode::Command;
-
-    // Mandatory for every principal, including the user and the host.
-    if let Some(target) = force_push_target(request.input)
-        && protected_ref(target, protected_branches)
-    {
-        return Verdict::Deny(DenialReason::ProtectedBranch);
-    }
+    let class = selected.authority;
+    let command = selected.mode == Mode::Command;
 
     match kind {
         PrincipalKind::Human => return Verdict::Allow,
         PrincipalKind::Host => {
-            if force_push_target(request.input).is_some() {
-                return Verdict::NeedsGrant {
-                    kind: GrantKind::Operation,
-                    exact: true,
-                    reason: DenialReason::ApprovalRequired,
-                };
-            }
             return if matches!(
                 class,
                 AuthorityClass::HumanConfiguration
@@ -429,7 +417,7 @@ pub(crate) fn evaluate_with_owned_task(
     }
     let read_only_role = role.is_some_and(AgentRole::read_only);
     if read_only_role {
-        if command || request.effect != EffectClass::ReadOnly {
+        if command || effect != EffectClass::ReadOnly {
             return Verdict::Deny(DenialReason::ReadOnlyRole);
         }
         if UNVERIFIED_READ_FAMILIES.contains(&fam) {
@@ -451,13 +439,60 @@ pub(crate) fn evaluate_with_owned_task(
         }
     }
     // An unsupported stored profile fails closed for reads and commands alike.
-    let Some(profile) = policy.profile else {
+    let Some(_) = policy.profile else {
         return Verdict::Deny(DenialReason::UnsupportedProfile);
     };
     if !command {
         return Verdict::Allow;
     }
 
+    Verdict::Allow
+}
+
+pub(crate) fn evaluate_with_owned_task(
+    ctx: &InvocationContext,
+    binding: Option<&PrincipalBinding>,
+    policy: &EffectivePolicy,
+    request: &AuthorityRequest<'_>,
+    protected_branches: &[String],
+    owned_task_force: bool,
+) -> Verdict {
+    let kind = ctx.principal_kind();
+    let op = request.descriptor.name;
+    let class = request.binding.authority;
+    // Mandatory for every principal, including the user and the host.
+    if let Some(target) = force_push_target(request.input)
+        && protected_ref(target, protected_branches)
+    {
+        return Verdict::Deny(DenialReason::ProtectedBranch);
+    }
+
+    if kind == PrincipalKind::Host && force_push_target(request.input).is_some() {
+        return Verdict::NeedsGrant {
+            kind: GrantKind::Operation,
+            exact: true,
+            reason: DenialReason::ApprovalRequired,
+        };
+    }
+    let visible = registered_tool_visibility(
+        ctx,
+        binding,
+        policy,
+        request.descriptor,
+        request.binding,
+        request.effect,
+    );
+    if !matches!(visible, Verdict::Allow) {
+        return visible;
+    }
+    if matches!(kind, PrincipalKind::Human | PrincipalKind::Host)
+        || request.binding.mode != Mode::Command
+    {
+        return Verdict::Allow;
+    }
+    let profile = policy
+        .profile
+        .expect("tool visibility checked supported profile");
     // Commands from here on.
     if matches!(kind, PrincipalKind::Package | PrincipalKind::McpClient)
         && class == AuthorityClass::Configuration

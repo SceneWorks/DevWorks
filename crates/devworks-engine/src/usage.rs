@@ -8,7 +8,10 @@ use devworks_core::services::{
     router::InferenceRouter,
     runs::ControlService,
     usage::{
-        host::{self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSource},
+        host::{
+            self, AccountingWriteFence, AttemptHost, DriveOutcome, OwnedInferenceSink,
+            OwnedInferenceSource,
+        },
         ingest,
     },
 };
@@ -177,6 +180,18 @@ impl UsageRuntime {
         request: devworks_core::services::usage::accounting::AttemptRequest,
         source: Box<dyn OwnedInferenceSource>,
     ) -> Result<DriveOutcome, StorageError> {
+        self.produce_with_sink(context, logical, category, request, source, None)
+            .await
+    }
+    pub async fn produce_with_sink(
+        self: &Arc<Self>,
+        context: devworks_core::context::InvocationContext,
+        logical: devworks_core::services::router::RequestAdmission,
+        category: devworks_core::services::router::accounting::ReportCategory,
+        request: devworks_core::services::usage::accounting::AttemptRequest,
+        source: Box<dyn OwnedInferenceSource>,
+        sink: Option<Box<dyn OwnedInferenceSink>>,
+    ) -> Result<DriveOutcome, StorageError> {
         let host = self.host.clone().ok_or_else(|| {
             StorageError::unavailable(
                 Unavailable::UnsupportedRuntime,
@@ -235,7 +250,7 @@ impl UsageRuntime {
                 runtime: runtime.clone(),
                 id: attempt.attempt_id.clone(),
             };
-            host.drive(attempt.attempt_id, source, cancellation)
+            host.drive_with_sink(attempt.attempt_id, source, sink, cancellation)
         })
         .await
         .unwrap_or_else(|_| {
