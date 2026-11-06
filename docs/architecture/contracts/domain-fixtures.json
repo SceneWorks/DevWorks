@@ -10021,14 +10021,14 @@
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":{\"rootId\":\"root-a\",\"purpose\":\"Planning\",\"kind\":\"roots.start\"}}},\"schemaRevision\":3}",
     "typedValid": false,
-    "schemaValid": true
+    "schemaValid": false
   },
   {
     "id": "dw14-saved-body-scalar",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"approvals.propose\",\"scope\":{\"kind\":\"Workspace\"},\"operationKind\":\"fixture\",\"target\":{\"id\":\"id-a\",\"revision\":\"1\"},\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\",\"payload\":{\"kind\":\"SavedOperation\",\"schemaRevision\":\"3\",\"input\":\"not a closed object\"}},\"schemaRevision\":3}",
     "typedValid": false,
-    "schemaValid": true
+    "schemaValid": false
   },
   {
     "id": "dw14-saved-zero-revision",

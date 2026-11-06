@@ -592,7 +592,7 @@
           "additionalProperties": false,
           "properties": {
             "input": {
-              "$ref": "#/$defs/BoundedUntrustedJson"
+              "$ref": "#/$defs/SavedCommandInput"
             },
             "kind": {
               "const": "SavedOperation",
@@ -11885,6 +11885,15 @@
         "Retired"
       ],
       "type": "string"
+    },
+    "SavedCommandInput": {
+      "description": "Closed selected-operation argument object, bounded by the existing 1MiB/100-container frame ceiling; no aggregate DynamicJson node limit. The actual selected admission rechecks operation schema, inner JSON bounds and authority. Outer proposal framing remains unchanged.",
+      "not": {
+        "required": [
+          "kind"
+        ]
+      },
+      "type": "object"
     },
     "SavedOperationPreview": {
       "additionalProperties": false,
