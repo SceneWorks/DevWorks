@@ -605,7 +605,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 packages.as_ref().map(|p| p.service.clone()),
                 Some(jobs.clone()),
             )
-            .with_control(runs.service.clone()),
+            .with_control(runs.service.clone())
+            .with_evidence(store.clone(), artifacts.clone()),
         )),
     );
     let use_cases = use_cases
