@@ -149,6 +149,15 @@ mod tests {
         let first = AttemptId(id("first"));
         let next = AttemptId(id("next"));
         live.text(&session, &first, 7, "visible").unwrap();
+        assert!(
+            live.text(&session, &first, 7, &"x".repeat(MAX_TEXT_BYTES))
+                .is_err()
+        );
+        assert_eq!(
+            live.snapshot(&session).unwrap().text,
+            "visible",
+            "capacity refusal preserves the accepted partial preview"
+        );
         assert!(live.text(&session, &next, 7, "foreign").is_err());
         assert!(live.text(&session, &first, 8, "foreign epoch").is_err());
         assert_eq!(live.snapshot(&session).unwrap().text, "visible");

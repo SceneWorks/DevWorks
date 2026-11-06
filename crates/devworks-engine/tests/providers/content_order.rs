@@ -542,3 +542,29 @@ fn failed_canonical_append_and_changed_epoch_hide_owned_preview() {
         }
     });
 }
+
+#[test]
+fn chat_native_unit_and_tool_group_reserve_their_first_observed_positions() {
+    runtime().block_on(async {
+        for profile in ["CompatibleChat","OpenRouterChat"] {
+            let frames=[
+                json!({"choices":[{"index":0,"delta":{"content":"before"},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{"reasoning_content":"actual native unit"},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{"content":"between"},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"actual-call","type":"function","function":{"name":"list_sessions","arguments":"{}"}}]},"finish_reason":null}]}),
+                json!({"choices":[{"index":0,"delta":{"content":"after"},"finish_reason":"tool_calls"}]}),
+            ];
+            let mut wire: String=frames.iter().map(|v|format!("data: {v}\n\n")).collect();wire.push_str("data: [DONE]\n\n");
+            let f=Fx::new(profile,Script::sse(&wire),false);
+            let tool=f.driver.schemas().builtin("sessions.list",devworks_core::registry::Mode::Query,devworks_core::registry::SchemaRevision(1),"list_sessions").unwrap();
+            assert_eq!(f.produce(f.generation(vec![tool])).await.unwrap().result.outcome,Some(AttemptEnd::ToolCallsReady));
+            let rows=f.transcript();
+            assert_eq!(rows.iter().map(|r|r.kind.as_str()).collect::<Vec<_>>(),["AssistantAttempt","NativeItem","AssistantAttempt","ToolCallRecorded","AssistantAttempt"]);
+            assert_eq!(rows.iter().filter_map(|r|r.body["visibleText"].as_str()).collect::<Vec<_>>(),["before","between","after"]);
+            let native:ArtifactRef=serde_json::from_value(rows[1].body["artifact"].clone()).unwrap();
+            let (bytes,_)=f.artifacts.read_exact(f.store.as_ref(),&f.context,&native,65536).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap()["reasoning_content"],"actual native unit");
+            assert_eq!(rows[3].body["toolCall"]["call"]["nativeCallId"],"actual-call");
+        }
+    });
+}

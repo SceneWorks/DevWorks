@@ -21,7 +21,8 @@ pub enum DecodedFrame {
     },
     TextDelta {
         block_index: u64,
-        /// Native sub-block position within an output item (Responses content_index).
+        /// Responses native content_index, or Chat's private text-run reservation. This
+        /// assembly position never changes a provider-native call ID or ordinal.
         content_index: u64,
         text: String,
     },
@@ -96,6 +97,8 @@ pub enum NativeReplay {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeObservation {
     pub ordinal: Option<u64>,
+    /// Host-private assembly reservation; never a manufactured native item/call identity.
+    pub content_position: Option<u64>,
     pub kind: String,
     pub value: Value,
     pub raw_json: String,
@@ -109,6 +112,7 @@ pub struct DecodedToolCall {
     pub native_call_id: String,
     pub native_item_id: Option<String>,
     pub ordinal: u64,
+    pub content_position: Option<u64>,
     pub name: String,
     pub arguments_raw: String,
     pub arguments: Value,
@@ -168,6 +172,10 @@ pub struct Decoder {
     think_tags: think_tags::ThinkTagFilter,
     tagged_reasoning: String,
     explicit_reasoning: bool,
+    chat_next_position: u64,
+    chat_text_position: Option<u64>,
+    chat_native_position: Option<u64>,
+    chat_tool_position: Option<u64>,
 }
 
 impl Decoder {
@@ -197,6 +205,10 @@ impl Decoder {
             think_tags: Default::default(),
             tagged_reasoning: String::new(),
             explicit_reasoning: false,
+            chat_next_position: 0,
+            chat_text_position: None,
+            chat_native_position: None,
+            chat_tool_position: None,
         }
     }
     /// Bind the requested embedding dimension before consuming any response bytes.
@@ -338,10 +350,13 @@ impl Decoder {
         ) {
             let (thinking, text) = self.think_tags.flush();
             self.tagged_reasoning.push_str(&thinking);
+            if !thinking.is_empty() {
+                self.chat_native_slot();
+            }
             if !text.is_empty() {
                 out.push(DecodedFrame::TextDelta {
                     block_index: 0,
-                    content_index: 0,
+                    content_index: self.chat_text_slot(),
                     text,
                 });
             }
@@ -366,6 +381,11 @@ impl Decoder {
             out.push(DecodedFrame::Native {
                 observation: NativeObservation {
                     ordinal: Some(*ordinal),
+                    content_position: if kind == "chat_reasoning" {
+                        self.chat_native_position
+                    } else {
+                        None
+                    },
                     kind: kind.clone(),
                     raw_json: value.to_string(),
                     value: value.clone(),
@@ -442,6 +462,7 @@ impl Decoder {
                     native_call_id: call.id.clone().unwrap(),
                     native_item_id: call.item_id.clone(),
                     ordinal: *ordinal,
+                    content_position: self.chat_tool_position,
                     name: call.name.clone().unwrap(),
                     arguments_raw: call.arguments.clone(),
                     arguments: parsed.unwrap(),
@@ -505,6 +526,7 @@ impl Decoder {
         out.push(DecodedFrame::Native {
             observation: NativeObservation {
                 ordinal,
+                content_position: None,
                 kind: kind.into(),
                 value: value.clone(),
                 raw_json: raw.into(),
@@ -582,10 +604,37 @@ impl Decoder {
                 .insert((ordinal, kind.into()), value.clone());
         }
     }
+    fn chat_slot(&mut self) -> u64 {
+        let slot = self.chat_next_position;
+        self.chat_next_position += 1;
+        slot
+    }
+    fn chat_native_slot(&mut self) {
+        if self.chat_native_position.is_none() {
+            self.chat_native_position = Some(self.chat_slot());
+            self.chat_text_position = None;
+        }
+    }
+    fn chat_text_slot(&mut self) -> u64 {
+        if let Some(slot) = self.chat_text_position {
+            return slot;
+        }
+        let slot = self.chat_slot();
+        self.chat_text_position = Some(slot);
+        slot
+    }
     fn call(&mut self, index: u64, out: &mut Vec<DecodedFrame>) -> Option<&mut Call> {
         if !self.calls.contains_key(&index) && self.calls.len() >= self.limits.tool_calls {
             self.error(DecodeErrorKind::LimitExceeded, "tool_calls", out);
             return None;
+        }
+        if matches!(
+            self.profile,
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+        ) && self.chat_tool_position.is_none()
+        {
+            self.chat_tool_position = Some(self.chat_slot());
+            self.chat_text_position = None;
         }
         Some(self.calls.entry(index).or_default())
     }

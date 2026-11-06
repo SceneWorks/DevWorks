@@ -176,8 +176,9 @@ impl ProviderSink {
             self.prepared.profile,
             EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
         ) {
-            // Chat exposes a single reasoning object, then assistant content and native calls.
-            (kind, if kind == 2 { ordinal } else { part })
+            // Chat's single native reasoning unit/call group reserves its first observed
+            // position. Native call ordinals remain independent within the call group.
+            (part, if kind == 2 { ordinal } else { 0 })
         } else {
             (ordinal, part)
         }
@@ -327,7 +328,7 @@ impl ProviderSink {
             ArtifactKind::Evidence,
             fence,
         )?;
-        let position = self.position(call.ordinal, 0, 2);
+        let position = self.position(call.ordinal, call.content_position.unwrap_or(0), 2);
         self.stage_content(
             position,
             ProviderBody::ToolCallComplete {
@@ -580,7 +581,7 @@ impl OwnedInferenceSink for ProviderSink {
                         observation
                             .ordinal
                             .ok_or_else(|| invalid("native content position"))?,
-                        0,
+                        observation.content_position.unwrap_or(0),
                         0,
                     );
                     self.stage_content(
