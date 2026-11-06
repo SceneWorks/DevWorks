@@ -115,6 +115,7 @@ zbus = "=5.19.0"
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     # Windows Credential Manager (CredWriteW/CredReadW/CredDeleteW/CredEnumerateW) for the
     # SecretStore adapter (DW-18).
     "Win32_Security_Credentials",

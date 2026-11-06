@@ -597,6 +597,22 @@ impl Git<'_> {
         self.line(dir, &["show-ref", "--verify", "--hash", reference])
     }
 
+    /// Local-only configuration inventory for the host-owned transport boundary. Values may
+    /// contain credentials: callers must never publish them as approval or journal evidence.
+    pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {
+        self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--show-scope",
+                "--show-origin",
+                "--list",
+            ],
+            1024 * 1024,
+        )
+    }
+
     /// All push destinations of the named remote. The Git service requires exactly one and
     /// binds it to the journal; execution uses the resolved URL rather than re-reading a name.
     pub fn push_urls(&self, dir: &Path, remote: &str) -> Result<Vec<String>, GitFault> {

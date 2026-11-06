@@ -428,6 +428,11 @@ fn the_retention_settings_bound_the_log() {
     drop(store);
     let (composition, parts) = compose(&h, Vec::new());
     let app = rt.block_on(boot(composition)).expect("boot");
+    // The boot monitor prunes once before sleeping; finish that pass before
+    // seeding records whose removals this test attributes to its explicit calls.
+    rt.block_on(until("initial diagnostics monitor pass", || {
+        parts.diagnostics.monitor().write_probe.is_some()
+    }));
     let svc = parts.diagnostics.clone();
     write(&**app.store(), move |tx| {
         for i in 0..1_005 {

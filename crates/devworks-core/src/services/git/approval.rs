@@ -239,7 +239,14 @@ impl GitService {
             scope: ConfigScope::Project(work.project_id),
             target_id,
             target_revision,
-            summary: format!("Review {} for {}", request.descriptor.name, repository.name),
+            summary: if native["destinationServer"]["kind"] == "LocalGitServer" {
+                format!(
+                    "Review {} for {}: trust this exact local destination server; its hooks may run. The source client uses isolated host authentication.",
+                    request.descriptor.name, repository.name
+                )
+            } else {
+                format!("Review {} for {}", request.descriptor.name, repository.name)
+            },
             reviewed: json!({"input":request.normalized,"repository":repository_value(&repository),"worktree":tree,
                 "currentHead":physical.head,"currentBranch":physical.branch,"dirty":physical.dirty,"native":native,"commitManifest":contents,"artifact":commit_evidence,"commitEvidence":commit_evidence}),
             binding,
