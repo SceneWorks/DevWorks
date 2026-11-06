@@ -10843,6 +10843,13 @@
     "schemaValid": false
   },
   {
+    "id": "dw52-null-revision-alongside-current",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"help.topic_for_screen\",\"screenId\":\"id-a\",\"current\":true,\"page\":{\"limit\":20},\"capabilityRevision\":null},\"schemaRevision\":3}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "dw52-screen-current-before3",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"help.topic_for_screen\",\"screenId\":\"id-a\",\"current\":true,\"page\":{\"limit\":20}},\"schemaRevision\":1}",

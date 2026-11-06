@@ -82,7 +82,11 @@ impl Revisioned for ReadInput {
 #[schemars(extend("oneOf" = [{"required": ["screenId", "capabilityRevision"]}, {"required": ["screenId", "current"], "x-since": 3}]))]
 pub struct TopicForScreenInput {
     pub screen_id: Id,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "Revision")]
     pub capability_revision: Option<Revision>,
     #[serde(

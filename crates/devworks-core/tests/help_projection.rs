@@ -87,3 +87,22 @@ fn full_unicode_passage_is_bounded_and_continuation_is_explicit() {
     wire["passage"]["text"] = json!("λ".repeat(65537));
     assert!(serde_json::from_value::<HelpReadResult>(wire).is_err());
 }
+
+#[test]
+fn screen_selector_null_cannot_disappear_during_actual_admission() {
+    use devworks_core::admission::{self, Selection};
+    use devworks_core::registry::Mode;
+    let selection = Selection {
+        operation: "help.topic_for_screen",
+        mode: Mode::Query,
+    };
+    let mut frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"help-query","schemaRevision":3,"body":{"kind":"help.topic_for_screen","screenId":"workspace","current":true}});
+    assert!(admission::decode(selection, frame.to_string().as_bytes()).is_ok());
+    frame["body"]["capabilityRevision"] = Value::Null;
+    assert!(admission::decode(selection, frame.to_string().as_bytes()).is_err());
+    frame["body"]["capabilityRevision"] = json!("1");
+    assert!(admission::decode(selection, frame.to_string().as_bytes()).is_err());
+    frame["body"].as_object_mut().unwrap().remove("current");
+    frame["schemaRevision"] = json!(1);
+    assert!(admission::decode(selection, frame.to_string().as_bytes()).is_ok());
+}

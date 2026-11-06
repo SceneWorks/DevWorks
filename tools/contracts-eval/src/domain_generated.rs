@@ -12651,7 +12651,11 @@ pub enum DomainQuery {
     #[serde(rename = "history.tool_usage")]
     #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "page"]}, {"required": ["kind", "projectId", "page"], "x-since": 2}, {"required": ["kind", "workspace", "page"], "x-since": 2}]))]
     HistoryToolUsage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "RootId")]
         root_id: Option<RootId>,
         #[serde(
@@ -12679,7 +12683,11 @@ pub enum DomainQuery {
     #[serde(rename = "indexing.status")]
     #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId"]}, {"required": ["kind", "overlayId"], "x-since": 2}]))]
     IndexingStatus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "Id")]
         repository_id: Option<Id>,
         #[serde(
@@ -13463,7 +13471,11 @@ pub enum DomainQuery {
     #[schemars(extend("oneOf" = [{"required": ["kind", "screenId", "capabilityRevision"]}, {"required": ["kind", "screenId", "current"], "x-since": 3}]))]
     HelpTopicForScreen {
         screen_id: Id,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "Revision")]
         capability_revision: Option<Revision>,
         #[serde(
@@ -15313,7 +15325,11 @@ pub enum DomainCommand {
     FeaturesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_work_ids: Option<NonEmpty<Id>>,
         #[serde(
@@ -15329,7 +15345,11 @@ pub enum DomainCommand {
     IssuesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_work_ids: Option<NonEmpty<Id>>,
         #[serde(
@@ -15805,7 +15825,11 @@ pub enum DomainCommand {
     #[schemars(extend("oneOf" = [{"required": ["kind", "scope", "sourceId", "expectedScopeRevision", "previewDigest"]}, {"required": ["kind", "scope", "expectedScopeRevision", "previewDigest", "sourceLabel"], "x-since": 3}]))]
     KnowledgeDeleteBySource {
         scope: DataScope,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "Id")]
         source_id: Option<Id>,
         expected_scope_revision: Revision,
@@ -16325,7 +16349,11 @@ pub enum DomainCommand {
     RouterPriceOverride {
         model_id: Id,
         expected_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "PriceInput")]
         price: Option<PriceInput>,
         #[serde(
@@ -16638,7 +16666,11 @@ pub enum DomainCommand {
         feature_id: Option<RootId>,
         expected_queue_revision: Revision,
         priority: i32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_task_ids: Option<NonEmpty<Id>>,
         #[serde(

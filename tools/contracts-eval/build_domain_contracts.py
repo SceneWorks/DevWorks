@@ -20,7 +20,8 @@ def fields(fs,indent='    ',since=None,one=(),schema=None):
   extra=''.join(f', {literal(k)} = {literal(v)}' for k,v in schema.get(n,{}).items())
   if since and n in since:lines += [indent+'#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]',indent+f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]']
   elif t.startswith('?'):
-   lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
+   reader=', deserialize_with = "gated_member"' if n in one else ''
+   lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none"'+reader+')]')
    if n in one:lines.append(indent+f'#[schemars(with = "{rust(t[1:])}")]')
   lines.append(indent+f'pub {n}: {rust(t)},')
  return '\n'.join(lines)

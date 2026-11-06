@@ -105,7 +105,11 @@ impl Revisioned for RetireViewInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(extend("oneOf" = [{"required": ["repositoryId"]}, {"required": ["overlayId"], "x-since": 2}]))]
 pub struct StatusInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "Id")]
     pub repository_id: Option<Id>,
     #[serde(

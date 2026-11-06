@@ -1123,6 +1123,7 @@ frame=request('help.topic_for_screen','Query');frame['schemaRevision']=3;frame['
 case('dw52-current-screen-bootstrap','domain-request.r3',frame)
 mutate('dw52-screen-both-selectors','dw52-current-screen-bootstrap',['body','capabilityRevision'],'1',False,False)
 mutate('dw52-screen-current-false','dw52-current-screen-bootstrap',['body','current'],False,False,False)
+mutate('dw52-null-revision-alongside-current','dw52-current-screen-bootstrap',['body','capabilityRevision'],None,False,False)
 mutate('dw52-screen-current-before3','dw52-current-screen-bootstrap',['schemaRevision'],1,False,False,entry='domain-request')
 mutate('dw52-passage-limit-bound','dw52-read-passage-cursor',['body','maxChars'],'65537',False,True)
 mutate('dw52-passage-limit-zero','dw52-read-passage-cursor',['body','maxChars'],'0',False,False)

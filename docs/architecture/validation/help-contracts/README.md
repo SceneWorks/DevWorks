@@ -33,3 +33,6 @@ python3 -m unittest discover -s tools/core-codegen -p 'test_*.py'
 cargo test --locked -p devworks-core --test help_projection --test recorded_fixtures --test registry --test schema_revisions
 cargo fmt --all --check
 ```
+
+
+The final [strict-choice delta](strict-choice-delta-results.json) adds one source-derived counterexample: `current:true` together with an explicitly null `capabilityRevision`. The former optional reader erased null and accepted this schema-invalid request. Exactly-one members now use the existing non-null reader; ordinary nullable optional fields are unchanged. A fifth production Help test exercises the actual admission path. All 25 production core tests (5 Help, 7 recorded fixtures, 5 registry and 8 schema revisions), 11 generator tests and strict core Clippy pass after this change. The current set is 1,939 messages (1,610 domain, 386 negative); every typed regression passes. All 67 schema documents are byte-identical to the full 1,938-message checkpoint, so its schema/model and reader evidence is reused with the new case checked directly. All 56 legacy hashes remain exact.

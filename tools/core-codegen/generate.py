@@ -131,7 +131,8 @@ def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
                          'deserialize_with = "gated_member")]')
             lines.append(indent + f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]')
         elif t.startswith('?'):
-            lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none")]')
+            reader = ', deserialize_with = "gated_member"' if n in one else ''
+            lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none"' + reader + ')]')
             if n in one:
                 lines.append(indent + f'#[schemars(with = "{rust(t[1:])}")]')
         lines.append(indent + ('pub ' if pub else '') + f'{n}: {rust(t)},')

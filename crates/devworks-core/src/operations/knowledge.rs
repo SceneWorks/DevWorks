@@ -348,7 +348,11 @@ impl Revisioned for DiagnosticsInput {
 #[schemars(extend("oneOf" = [{"required": ["scope", "sourceId", "expectedScopeRevision", "previewDigest"]}, {"required": ["scope", "expectedScopeRevision", "previewDigest", "sourceLabel"], "x-since": 3}]))]
 pub struct DeleteBySourceInput {
     pub scope: DataScope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "Id")]
     pub source_id: Option<Id>,
     pub expected_scope_revision: Revision,
