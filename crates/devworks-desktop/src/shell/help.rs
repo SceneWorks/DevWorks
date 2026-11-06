@@ -156,9 +156,13 @@ impl Shell {
                         self.help.notice =
                             (!matches!(page.availability, HelpAvailability::Available)).then(
                                 || {
-                                    page.reason.as_ref().map_or_else(
-                                        || format!("Documentation: {:?}", page.availability),
-                                        |reason| reason.0.clone(),
+                                    format!(
+                                        "Documentation {:?}: {}",
+                                        page.availability,
+                                        page.reason.as_ref().map_or(
+                                            "No local documentation is available.",
+                                            |reason| reason.0.as_str()
+                                        )
                                     )
                                 },
                             );
@@ -198,12 +202,35 @@ impl Shell {
                         });
                         self.help_snapshot(page.snapshot);
                         self.help.error = None;
+                        // Initial publication can finish after the first empty catalog reply.
+                        // Adopt the owner's first results, while preserving any existing page
+                        // or inspected version when later generations change the catalog.
+                        let initial = self.help.topics.is_empty() && !page.items.0.is_empty();
+                        if initial {
+                            self.help.notice = None;
+                            self.help.topics = page.items.0;
+                            self.help.next_cursor = page.next_cursor.map(|cursor| cursor.0);
+                            self.help.loaded = true;
+                            if matches!(self.help.scope, HelpScope::Screen(_))
+                                && self.help.selected.is_none()
+                                && let Some(topic) = self.help.topics.first()
+                            {
+                                self.select_help_topic(
+                                    topic.id.as_str().to_owned(),
+                                    topic.version.0.clone(),
+                                );
+                            }
+                        }
                         if !matches!(page.availability, HelpAvailability::Available) {
-                            self.help.notice = Some(page.reason.map_or_else(
-                                || format!("Documentation: {:?}", page.availability),
-                                |reason| reason.0,
+                            self.help.notice = Some(format!(
+                                "Documentation {:?}: {}",
+                                page.availability,
+                                page.reason.map_or_else(
+                                    || "No local documentation is available.".into(),
+                                    |reason| reason.0
+                                )
                             ));
-                        } else if changed {
+                        } else if changed && !initial {
                             self.help.notice = Some("Local documentation changed. Refresh Help for current search results; inspected topics keep their exact version references.".into());
                         }
                         if changed && self.help.selected.is_some() && !self.help.reading {
