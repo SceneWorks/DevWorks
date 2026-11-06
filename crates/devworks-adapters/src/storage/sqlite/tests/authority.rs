@@ -2261,6 +2261,9 @@ impl WriteTransaction for Lying<'_> {
     fn help(&mut self) -> &mut dyn HelpRepository {
         self.inner.help()
     }
+    fn github(&mut self) -> &mut dyn GithubRepository {
+        self.inner.github()
+    }
     fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
         self.inner.router()
     }

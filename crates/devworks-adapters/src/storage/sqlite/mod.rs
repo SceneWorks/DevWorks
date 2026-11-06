@@ -33,6 +33,7 @@ mod decisions;
 mod diagnostics;
 mod evals;
 mod git;
+mod github;
 mod graph;
 mod handoff;
 mod help;
