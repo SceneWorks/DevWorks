@@ -649,3 +649,23 @@ fn the_child_environment_overlays_and_substitutes_like_the_shell() {
         "C:/Users/a\\repo"
     );
 }
+
+#[test]
+fn exact_git_executable_discovery_does_not_admit_relocation_or_extra_commands() {
+    for option in ["--version", "--exec-path"] {
+        assert!(matches!(
+            assess_command(&argv(&["git", option]), Some("/work")),
+            ShellAssessment::NoRecognizedDestruction { .. }
+        ));
+    }
+    for args in [
+        argv(&["git", "--exec-path=/unreviewed"]),
+        argv(&["git", "--exec-path", "commit"]),
+        argv(&["git", "--version", "commit"]),
+    ] {
+        assert!(matches!(
+            assess_command(&args, Some("/work")),
+            ShellAssessment::NeedsInput(_)
+        ));
+    }
+}

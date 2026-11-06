@@ -1,0 +1,63 @@
+{
+  "item": "DW-114",
+  "base": "bda0a6e443648660bb1c2620c345f4c73e7aed90",
+  "caller_checkpoint": "cd2ba4804c11e8b172d6da79803d5240a4872441",
+  "environment": {
+    "os": "macOS 27.0.1",
+    "build": "26A434",
+    "architecture": "arm64",
+    "uid": 501,
+    "git": "git version 2.54.0 (Apple Git-157)",
+    "exec_path": "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core"
+  },
+  "source_sha256": {
+    "crates/devworks-core/src/services/approvals/service.rs": "f75a2b271d6cd2f52c29090490a13fa67353d984ea48e45448a4e694f439c717",
+    "crates/devworks-core/src/services/indexing/git.rs": "1f6d6c6c20e2294efa0a741a2aeb4714cf6f6650e3eb1941a9aa8685a83f2399",
+    "crates/devworks-core/src/services/git/mod.rs": "bca55ae70aba2c84111e21949c1d44699f13ebf21acf091303a17e8c05dd7a2a",
+    "crates/devworks-core/src/authority/shell.rs": "2f306e25fe96d082cae0914c997e62197807f9ed501df8b703c0322367740080",
+    "crates/devworks-core/tests/authority.rs": "03442e6a35ed9bd6cf62b8dd54d5956bf8eb377241f2a3693f6073dd371dde87",
+    "crates/devworks-engine/tests/git.rs": "5ba368d98252b8a78cf02deb2efaeaf7a4874dc197620b7f8c35fef84064fc4b",
+    "crates/devworks-engine/tests/git/approvals.rs": "df12d7dac978a0410a7c9845ab9169e05cd0ee8314333047e085068efcf046cd"
+  },
+  "checks": [
+    {
+      "command": "cargo test --locked -p devworks-core --lib reviewed_git_keeps",
+      "passed": 1
+    },
+    {
+      "command": "cargo test --locked -p devworks-core --test authority exact_git_executable_discovery",
+      "passed": 1
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test git reviewed_commit_ -- --test-threads=1 --nocapture",
+      "passed": 5,
+      "failed": 0,
+      "duration_seconds": 68.33,
+      "guarded_late_hook_marker": false,
+      "unguarded_late_hook_control_marker": true
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test approvals -- --test-threads=1",
+      "passed": 8,
+      "failed": 0,
+      "duration_seconds": 9.35
+    },
+    {
+      "command": "cargo clippy --locked -p devworks-core --lib -p devworks-engine --test git -- -D warnings",
+      "result": "passed"
+    }
+  ],
+  "initial_full_git_run": {
+    "passed": 12,
+    "failed": 1,
+    "repaired_case": "reviewed_commit_policy_unavailable_refuses_before_proposal",
+    "final_focused_case_passed": true
+  },
+  "limits": [
+    "Actual kernel execution qualified locally only on unprivileged macOS arm64.",
+    "Windows executable path derivation tested portably; no local Windows or Linux kernel execution claimed.",
+    "No-child policy does not confine filesystem, network, or in-place exec.",
+    "Controlled unsupported-policy injection verifies preproposal service behavior, not privileged OS adapter behavior."
+  ],
+  "confidence": "high for exercised macOS caller integration; other platforms require native CI"
+}
