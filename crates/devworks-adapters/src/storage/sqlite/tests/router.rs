@@ -2263,3 +2263,6 @@ fn a_cooling_retained_pin_remains_recoverable_after_latest_loses_its_effort() {
         assert_eq!(fx.cursor("High"), turns);
     }
 }
+
+#[path = "router_usage.rs"]
+mod accounting_tests;

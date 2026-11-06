@@ -480,7 +480,9 @@ pub(crate) fn admit_attempt(
         connection_id: request.query.connection_id.clone(),
         endpoint_profile: request.query.endpoint_profile.clone(),
         access_mode,
-        provider_model_id: request.query.provider_model_id.clone(),
+        // Configured/quoted upstream is retained in AdmittedSnapshot. Only a response
+        // observation can establish which model the provider actually served.
+        provider_model_id: None,
         pricing_snapshot: encoded(&admitted)?,
         state: "Admitted".into(),
         revision: 1,
