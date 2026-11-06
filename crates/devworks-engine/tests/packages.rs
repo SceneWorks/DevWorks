@@ -2473,12 +2473,13 @@ fn a_quiescent_retry_announces_its_publication_before_admission_reopens() {
     a.until("retry-pack", "the staged update activates", |r| {
         r.version.0 == "1.1.0"
     });
-    // The host's own activation advanced the admission epoch like a command's settlement.
-    assert!(host.publications() > announced);
     a.ready("retry-pack");
     let h = a
         .invoke("retry-pack", "state", InvocationKind::Ordinary)
         .unwrap();
+    // A committed registry can be read while its admission barrier is still held. The
+    // publication epoch must have advanced before this new-generation admission succeeds.
+    assert!(host.publications() > announced);
     assert!(matches!(
         finished(h.wait(Duration::from_secs(10))),
         InvocationOutcome::Completed { .. }
