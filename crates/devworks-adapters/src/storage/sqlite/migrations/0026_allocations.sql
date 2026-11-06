@@ -24,7 +24,8 @@ CREATE TABLE allocation_claims (
  FOREIGN KEY(work_id,project_id) REFERENCES work_items(id,project_id),
  FOREIGN KEY(root_id,project_id) REFERENCES work_items(id,project_id),
  FOREIGN KEY(parent_feature_id,project_id) REFERENCES work_items(id,project_id),
- UNIQUE(ingress_namespace,invocation_id)
+ UNIQUE(ingress_namespace,invocation_id),
+ UNIQUE(id,project_id)
 ) STRICT;
 CREATE INDEX allocation_claims_project ON allocation_claims(project_id,id);
 CREATE INDEX allocation_claims_work ON allocation_claims(work_id,fence);
@@ -43,12 +44,15 @@ CREATE TRIGGER allocation_claims_membership AFTER UPDATE OF parent_feature_id ON
 
 -- Explicit allocation keys persist complete responses even when no item was eligible.
 CREATE TABLE allocation_replays (
+ project_id TEXT NOT NULL REFERENCES projects,
  key TEXT PRIMARY KEY CHECK(length(key)=64 AND key NOT GLOB '*[^0-9a-f]*'),
  intent_digest TEXT NOT NULL CHECK(length(intent_digest)=64 AND intent_digest NOT GLOB '*[^0-9a-f]*'),
  result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json)='object' AND length(CAST(result_json AS BLOB))<=1048576),
- claim_id TEXT REFERENCES allocation_claims
+ claim_id TEXT,
+ FOREIGN KEY(claim_id,project_id) REFERENCES allocation_claims(id,project_id)
 ) STRICT;
 CREATE TRIGGER allocation_replays_immutable_update BEFORE UPDATE ON allocation_replays
  BEGIN SELECT RAISE(ABORT,'allocation replays are immutable'); END;
+CREATE INDEX allocation_replays_project ON allocation_replays(project_id,key);
 CREATE TRIGGER allocation_replays_immutable_delete BEFORE DELETE ON allocation_replays
  BEGIN SELECT RAISE(ABORT,'allocation replays are immutable'); END;

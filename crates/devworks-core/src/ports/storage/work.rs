@@ -181,6 +181,7 @@ pub const MAX_ALLOCATION_REPLAY_BYTES: usize = 1_048_576;
 /// The service hashes the caller/session/ingress/project/key scope and validates intent replay.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredAllocationReplay {
+    pub project_id: ProjectId,
     pub key: String,
     pub intent_digest: String,
     pub result: Value,

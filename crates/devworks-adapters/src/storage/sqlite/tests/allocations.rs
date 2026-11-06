@@ -144,7 +144,7 @@ fn migration_26_is_checksummed_and_closes_unaware_writers_without_rebuilding() {
 }
 
 #[test]
-fn concurrent_claims_have_one_project_owner_and_durable_invocation_identity() {
+fn concurrent_distinct_reservations_have_durable_invocation_identity() {
     let h = Harness::new();
     let s = Arc::new(seeded(&h));
     let barrier = Arc::new(Barrier::new(3));
@@ -165,19 +165,19 @@ fn concurrent_claims_have_one_project_owner_and_durable_invocation_identity() {
         .into_iter()
         .map(|handle| handle.join().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 2);
     assert_eq!(
         results
             .iter()
             .filter(|r| matches!(r, Err(StorageError::Duplicate { .. })))
             .count(),
-        1
+        0
     );
     let saved = read_snapshot(s.as_ref(), &ReadOptions::default(), |r| {
         r.work().allocation_claims(&project(), None, 500)
     })
     .unwrap();
-    assert_eq!(saved.len(), 1);
+    assert_eq!(saved.len(), 2);
     let saved = saved[0].clone();
     assert!(matches!(
         insert(&s, saved.clone()),
@@ -378,7 +378,7 @@ fn workflow_rename_order_and_occupied_removal_share_the_write_transaction() {
 
 fn activate(s: &SqliteStore, root: &str) -> StoredActivation {
     let activation = StoredActivation {
-        id: id("execution"),
+        id: id(&format!("execution-{root}")),
         root_id: RootId(id(root)),
         boot_id: s.info().boot_id.unwrap(),
         generation: 1,
@@ -488,10 +488,8 @@ fn yielding_keeps_project_slot_until_stopped_then_allows_prerequisite_allocation
     yielding.state = "Yielding".into();
     yielding.revision = 3;
     update(&s, yielding, 2).unwrap();
-    assert!(matches!(
-        insert(&s, claim(&s, "prerequisite", "issue", false)),
-        Err(StorageError::Duplicate { .. })
-    ));
+    // Reserving another root is distinct from transferring its execution slot.
+    insert(&s, claim(&s, "prerequisite", "issue", false)).unwrap();
     let mut yielded = get(&s, "claim");
     yielded.state = "Yielded".into();
     yielded.revision = 4;
@@ -508,10 +506,9 @@ fn yielding_keeps_project_slot_until_stopped_then_allows_prerequisite_allocation
     })
     .unwrap();
     update(&s, yielded, 3).unwrap();
-    insert(&s, claim(&s, "prerequisite", "issue", false)).unwrap();
     assert_eq!(
         get(&s, "claim").execution_id,
-        Some(id("execution")),
+        Some(id("execution-feature")),
         "yield retains coordinator lineage"
     );
 }
@@ -545,4 +542,367 @@ fn ownership_transfer_fences_the_previous_actor_and_immutable_request_identity()
         update(&s, changed, 2),
         Err(StorageError::InvalidRecord(_))
     ));
+}
+
+#[test]
+fn simultaneous_reservations_of_the_same_work_have_one_owner() {
+    let h = Harness::new();
+    let s = Arc::new(seeded(&h));
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = ["one", "two"]
+        .into_iter()
+        .map(|name| {
+            let c = claim(&s, name, "issue", false);
+            let s = s.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                insert(&s, c)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(StorageError::Duplicate { .. })))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn multiple_reserved_roots_cannot_transfer_two_project_execution_slots() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    insert(&s, claim(&s, "feature-claim", "feature", true)).unwrap();
+    insert(&s, claim(&s, "issue-claim", "issue", false)).unwrap();
+    let mut first_execution = activate(&s, "feature");
+    let second_execution = activate(&s, "issue");
+    let mut first = get(&s, "feature-claim");
+    first.state = "Transferred".into();
+    first.execution_id = Some(first_execution.id.clone());
+    first.revision = 2;
+    update(&s, first, 1).unwrap();
+    let mut second = get(&s, "issue-claim");
+    second.state = "Transferred".into();
+    second.execution_id = Some(second_execution.id.clone());
+    second.revision = 2;
+    assert!(matches!(
+        update(&s, second.clone(), 1),
+        Err(StorageError::Duplicate { .. })
+    ));
+    assert_eq!(get(&s, "issue-claim").state, "Active");
+    first_execution.phase = ActivationPhase::Stopped;
+    first_execution.outcome = Some(ActivationOutcome::Prevented);
+    first_execution.stopped_at_ms = Some(T0);
+    first_execution.revision = 2;
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.runs().update_activation(&first_execution, 1)
+    })
+    .unwrap();
+    let mut release = get(&s, "feature-claim");
+    release.state = "Released".into();
+    release.revision = 3;
+    update(&s, release, 2).unwrap();
+    update(&s, second, 1).unwrap();
+}
+
+#[test]
+fn completed_child_claim_releases_while_feature_coordinator_remains_live() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let activation = activate(&s, "feature");
+    insert(&s, claim(&s, "child", "task-a", false)).unwrap();
+    let mut transferred = get(&s, "child");
+    transferred.state = "Transferred".into();
+    transferred.execution_id = Some(activation.id.clone());
+    transferred.revision = 2;
+    update(&s, transferred, 1).unwrap();
+    let actor = s.info().host_actor;
+    let execution = activation.id.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("worker-session"),
+            conversation_id: id("worker-conversation"),
+            agent_id: actor.clone(),
+            project_id: Some(project()),
+            root_id: Some(RootId(id("feature"))),
+            title: "Worker".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor,
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.runs().insert_assignment(&StoredAssignment {
+            id: devworks_core::protocol::AssignmentId(id("worker-assignment")),
+            root_id: RootId(id("feature")),
+            work_id: RootId(id("task-a")),
+            parent_id: None,
+            session_id: id("worker-session"),
+            execution_id: Some(execution),
+            state: AssignmentState::Active,
+            generation: 1,
+            slot_held: true,
+            revision: 1,
+            checkpoint: None,
+            scope_key: None,
+            scope_digest: None,
+            plan_revision: None,
+            instruction_revision: 0,
+            created_at_ms: T0,
+        })
+    })
+    .unwrap();
+    let mut release = get(&s, "child");
+    release.state = "Released".into();
+    release.revision = 3;
+    assert!(matches!(
+        update(&s, release.clone(), 2),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut assignment = tx
+            .runs()
+            .assignment(&devworks_core::protocol::AssignmentId(id(
+                "worker-assignment",
+            )))?
+            .unwrap();
+        assignment.state = AssignmentState::Completed;
+        assignment.slot_held = false;
+        assignment.revision = 2;
+        tx.runs().update_assignment(&assignment, 1)
+    })
+    .unwrap();
+    update(&s, release, 2).unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(
+            r.runs()
+                .live_activation(&RootId(id("feature")))?
+                .unwrap()
+                .id,
+            activation.id
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn replay(key: char, claim: Option<&str>) -> StoredAllocationReplay {
+    StoredAllocationReplay {
+        project_id: project(),
+        key: key.to_string().repeat(64),
+        intent_digest: "b".repeat(64),
+        result: json!({"selection":if claim.is_some(){"Claimed"}else{"NoEligible"},"reasons":["Blocked"]}),
+        claim_id: claim.map(id),
+    }
+}
+fn insert_replay(s: &SqliteStore, row: StoredAllocationReplay) -> Result<(), StorageError> {
+    run_write(s, WriteOptions::default(), move |tx| {
+        tx.work().insert_allocation_replay(&row)
+    })
+}
+
+#[test]
+fn explicit_key_replays_preserve_no_eligible_and_claim_results_across_reopen() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let empty = replay('a', None);
+    insert_replay(&s, empty.clone()).unwrap();
+    insert(&s, claim(&s, "claim", "issue", false)).unwrap();
+    let selected = replay('c', Some("claim"));
+    insert_replay(&s, selected.clone()).unwrap();
+    let mut overwrite = empty.clone();
+    overwrite.result = json!({"changed":true});
+    assert!(matches!(
+        insert_replay(&s, overwrite),
+        Err(StorageError::Duplicate { .. })
+    ));
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(r.work().allocation_replay(&empty.key)?, Some(empty.clone()));
+        assert_eq!(
+            r.work().allocation_replay(&selected.key)?,
+            Some(selected.clone())
+        );
+        Ok(())
+    })
+    .unwrap();
+    s.with_writer_connection(|c| {
+        assert!(
+            c.execute("UPDATE allocation_replays SET result_json='{}'", [])
+                .is_err()
+        );
+        assert!(c.execute("DELETE FROM allocation_replays", []).is_err());
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        insert_replay(&s, replay('d', Some("absent"))),
+        Err(StorageError::NotFound { .. })
+    ));
+    let mut invalid = replay('e', None);
+    invalid.intent_digest = "invalid".into();
+    assert!(matches!(
+        insert_replay(&s, invalid),
+        Err(StorageError::InvalidRecord(_))
+    ));
+    let mut oversized = replay('f', None);
+    oversized.result = json!({"data":"x".repeat(MAX_ALLOCATION_REPLAY_BYTES)});
+    assert!(matches!(
+        insert_replay(&s, oversized),
+        Err(StorageError::InvalidRecord(_))
+    ));
+}
+
+#[test]
+fn explicit_key_first_response_wins_concurrently_and_rolls_back_with_its_claim() {
+    let h = Harness::new();
+    let s = Arc::new(seeded(&h));
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = [1, 2]
+        .into_iter()
+        .map(|number| {
+            let s = s.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut result = replay('a', None);
+                result.result = json!({"winner":number});
+                barrier.wait();
+                insert_replay(&s, result)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(StorageError::Duplicate { .. })))
+            .count(),
+        1
+    );
+    let c = claim(&s, "rolled-back", "issue", false);
+    let outcome = run_write(s.as_ref(), WriteOptions::default(), move |tx| {
+        tx.work().insert_allocation_claim(&c)?;
+        tx.work()
+            .insert_allocation_replay(&replay('b', Some("rolled-back")))?;
+        Err::<(), _>(StorageError::Cancelled)
+    });
+    assert!(matches!(outcome, Err(StorageError::Cancelled)));
+    read_snapshot(s.as_ref(), &ReadOptions::default(), |r| {
+        assert!(r.work().allocation_claim(&id("rolled-back"))?.is_none());
+        assert!(r.work().allocation_replay(&"b".repeat(64))?.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn replay_project_ownership_rejects_cross_project_claims() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    insert(&s, claim(&s, "claim", "issue", false)).unwrap();
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut other = tx.projects().project(&project())?.unwrap();
+        other.id = ProjectId(id("other-project"));
+        tx.projects().insert_project(&other)
+    })
+    .unwrap();
+    let mut cross = replay('a', Some("claim"));
+    cross.project_id = ProjectId(id("other-project"));
+    assert!(matches!(
+        insert_replay(&s, cross),
+        Err(StorageError::ScopeDenied)
+    ));
+    let mut empty = replay('b', None);
+    empty.project_id = ProjectId(id("other-project"));
+    insert_replay(&s, empty.clone()).unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert_eq!(
+            r.work().allocation_replay(&empty.key)?.unwrap().project_id,
+            empty.project_id
+        );
+        Ok(())
+    })
+    .unwrap();
+    s.with_writer_connection(|c|{
+        assert!(c.execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json,claim_id) VALUES('other-project',?1,?2,'{}','claim')",rusqlite::params!["c".repeat(64),"b".repeat(64)]).is_err());Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn archive_and_deleted_tombstone_preserve_allocation_and_replay_records() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let c = claim(&s, "claim", "issue", false);
+    insert(&s, c.clone()).unwrap();
+    let empty = replay('a', None);
+    let selected = replay('b', Some("claim"));
+    insert_replay(&s, empty.clone()).unwrap();
+    insert_replay(&s, selected.clone()).unwrap();
+    let repository = StoredRepository {
+        id: id("repository"),
+        location: "/tmp/devworks-allocation-source".into(),
+        name: "Source".into(),
+        remote_url: Some("https://example.com/source.git".into()),
+        primary: true,
+        lifecycle: "Active".into(),
+        languages: vec![],
+        revision: 1,
+        registered_at_ms: T0,
+    };
+    let saved = repository.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.projects().insert_repository(&saved)
+    })
+    .unwrap();
+    for (lifecycle, expected) in [("Archived", 1), ("Deleted", 2)] {
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let mut p = tx.projects().project(&project())?.unwrap();
+            p.lifecycle = lifecycle.into();
+            p.revision = expected + 1;
+            p.archived_at_ms = Some(T0);
+            p.archive_epoch = 1;
+            if lifecycle == "Deleted" {
+                p.deleted_at_ms = Some(T0);
+            }
+            tx.projects().update_project(&p, expected)
+        })
+        .unwrap();
+        read_snapshot(&s, &ReadOptions::default(), |r| {
+            assert_eq!(r.work().allocation_claim(&id("claim"))?, Some(c.clone()));
+            assert_eq!(r.work().allocation_replay(&empty.key)?, Some(empty.clone()));
+            assert_eq!(
+                r.work().allocation_replay(&selected.key)?,
+                Some(selected.clone())
+            );
+            assert_eq!(
+                r.projects().repository(&id("repository"))?,
+                Some(repository.clone())
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+    // An ordinary project tombstone is not the manifest-reviewed permanent purge.
+    s.with_writer_connection(|c| {
+        assert!(c.execute("DELETE FROM allocation_replays", []).is_err());
+        Ok(())
+    })
+    .unwrap();
 }

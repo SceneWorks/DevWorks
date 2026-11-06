@@ -669,4 +669,4 @@ pub const MIGRATION_0025_SHA256: &str =
 
 /// Recorded checksum of migration 26.
 pub const MIGRATION_0026_SHA256: &str =
-    "e963df1dffde09c354620e35444e875b373f14d8f0cadd2d657906e3f898aac1";
+    "11c429872a1895385d75fd449994beb9bda95ccaf4e920dea63b944da3e2d478";

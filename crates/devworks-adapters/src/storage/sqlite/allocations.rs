@@ -402,15 +402,16 @@ pub(super) fn replay(
     if !sha256(key) {
         return Err(invalid("allocation replay key is lowercase SHA-256"));
     }
-    let row: Option<(String, String, Option<String>)> = db(conn
+    let row: Option<(String, String, Option<String>, String)> = db(conn
         .query_row(
-            "SELECT intent_digest,result_json,claim_id FROM allocation_replays WHERE key=?1",
+            "SELECT intent_digest,result_json,claim_id,project_id FROM allocation_replays WHERE key=?1",
             [key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional())?;
-    row.map(|(intent_digest, result, claim_id)| {
+    row.map(|(intent_digest, result, claim_id, project)| {
         Ok(StoredAllocationReplay {
+            project_id: ProjectId(id(project)?),
             key: key.into(),
             intent_digest,
             claim_id: claim_id.map(id).transpose()?,
@@ -442,13 +443,14 @@ pub(super) fn insert_replay(
         });
     }
     if let Some(claim) = &r.claim_id {
-        if one(unit.conn, claim)?.is_none() {
-            return Err(StorageError::NotFound {
-                kind: "allocation_claim",
-                id: claim.as_str().into(),
-            });
+        let claim = one(unit.conn, claim)?.ok_or_else(|| StorageError::NotFound {
+            kind: "allocation_claim",
+            id: claim.as_str().into(),
+        })?;
+        if claim.project_id != r.project_id {
+            return Err(StorageError::ScopeDenied);
         }
     }
-    db(unit.conn.execute("INSERT INTO allocation_replays(key,intent_digest,result_json,claim_id) VALUES(?1,?2,?3,?4)",params![r.key,r.intent_digest,result,r.claim_id.as_ref().map(Id::as_str)]))?;
+    db(unit.conn.execute("INSERT INTO allocation_replays(key,intent_digest,result_json,claim_id,project_id) VALUES(?1,?2,?3,?4,?5)",params![r.key,r.intent_digest,result,r.claim_id.as_ref().map(Id::as_str),r.project_id.0.as_str()]))?;
     Ok(())
 }
