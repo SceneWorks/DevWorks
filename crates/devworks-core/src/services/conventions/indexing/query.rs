@@ -137,7 +137,6 @@ impl IndexService {
             &ReadOptions {
                 cancellation: env.cancellation.cloned(),
                 deadline_ms: env.deadline_ms,
-                ..Default::default()
             },
             |read| Ok(self.search_snapshot(read, ctx, query, input)),
         )??;

@@ -146,8 +146,15 @@ impl ConventionService {
         env.read(|read| {
             Ok((|| {
                 let scoped = access::scope(read, ctx, request.scope, false)?;
-                let row = if after || id.is_none() {
-                    read.conventions()
+                let row = match (after, id) {
+                    (false, Some(id)) => read.conventions().convention_resource(
+                        &request.owner.id,
+                        id,
+                        Some(request.owner.revision),
+                        &scoped.readable,
+                    )?,
+                    _ => read
+                        .conventions()
                         .convention_resources(
                             &ConventionResourceQuery {
                                 scopes: scoped.readable,
@@ -159,14 +166,7 @@ impl ConventionService {
                             1,
                         )?
                         .into_iter()
-                        .next()
-                } else {
-                    read.conventions().convention_resource(
-                        &request.owner.id,
-                        id.expect("provided"),
-                        Some(request.owner.revision),
-                        &scoped.readable,
-                    )?
+                        .next(),
                 };
                 row.map(|row| {
                     Ok::<_, Failure>(Resource {

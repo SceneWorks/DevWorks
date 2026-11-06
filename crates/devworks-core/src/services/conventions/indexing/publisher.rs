@@ -659,7 +659,6 @@ impl IndexService {
                 &ReadOptions {
                     cancellation: Some(run.cancel.clone()),
                     deadline_ms: run.deadline,
-                    ..Default::default()
                 },
                 |read| {
                     let scope = access::scope(read, ctx, Some(&run.job.scope), false)
@@ -731,7 +730,6 @@ impl IndexService {
             &ReadOptions {
                 cancellation: Some(cancellation.clone()),
                 deadline_ms,
-                ..Default::default()
             },
             |read| {
                 completed_headers(read.conventions(), &actual, &job, &mut || {
@@ -766,7 +764,6 @@ impl IndexService {
                 &ReadOptions {
                     cancellation: Some(cancellation.clone()),
                     deadline_ms,
-                    ..Default::default()
                 },
                 |read| {
                     read.conventions().convention_index_generations(
