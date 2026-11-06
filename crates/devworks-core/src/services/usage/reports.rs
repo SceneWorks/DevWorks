@@ -872,11 +872,25 @@ fn cursor_range(cursor: &str) -> Result<(i64, i64, &str), StorageError> {
     let inner = parts.next().ok_or(StorageError::CursorExpired)?;
     Ok((start, end, inner))
 }
+trait RowSource<T>: Serialize {
+    fn len(&self) -> usize;
+    fn row(&self, index: usize) -> SResult<T>;
+}
+impl<T: Clone + Serialize> RowSource<T> for Vec<T> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn row(&self, index: usize) -> SResult<T> {
+        self.get(index)
+            .cloned()
+            .ok_or_else(|| StorageError::CursorExpired.into())
+    }
+}
 fn page<T: Clone + Serialize>(
     ctx: &InvocationContext,
     i: &UsageInput,
     q: &Query,
-    rows: Vec<T>,
+    rows: impl RowSource<T>,
 ) -> SResult<(Vec<T>, Option<Cursor>, bool)> {
     let context = serde_json::to_string(&q.context).map_err(|e| corrupt(&e.to_string()))?;
     let source = crate::fingerprint::sha256_hex(
@@ -922,7 +936,7 @@ fn page<T: Clone + Serialize>(
         return Err(invalid("usage_context_exceeds_response_bound"));
     }
     while end < rows.len() && end - start < (i.page.limit.get() as usize) {
-        let size = serde_json::to_vec(&rows[end])
+        let size = serde_json::to_vec(&rows.row(end)?)
             .map_err(|e| corrupt(&e.to_string()))?
             .len()
             + 1;
@@ -937,7 +951,9 @@ fn page<T: Clone + Serialize>(
     }
     let more = end < rows.len();
     Ok((
-        rows[start..end].to_vec(),
+        (start..end)
+            .map(|index| rows.row(index))
+            .collect::<SResult<Vec<_>>>()?,
         more.then(|| {
             BoundedText(format!(
                 "usage1.{}.{}.{}",
@@ -1007,8 +1023,12 @@ fn query_with_mode(
                 .filter_map(|f| f.record.clone().map(|r| (&f.key, r)))
                 .collect::<Vec<_>>();
             rows.sort_by(|a, b| a.0.cmp(b.0));
-            let (items, next_cursor, has_more) =
-                page(ctx, input, &q, rows.into_iter().map(|(_, r)| r).collect())?;
+            let (items, next_cursor, has_more) = page(
+                ctx,
+                input,
+                &q,
+                rows.into_iter().map(|(_, r)| r).collect::<Vec<_>>(),
+            )?;
             Ok(UsageQueryResult::Attempts {
                 page: UsageAttemptPage {
                     context: q.context,
