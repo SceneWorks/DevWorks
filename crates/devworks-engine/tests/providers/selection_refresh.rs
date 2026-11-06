@@ -72,7 +72,7 @@ fn dispatch(f: &Fx, operation: &OperationId) -> OperationRecord {
     })
     .unwrap()
 }
-fn clear(f: &Fx, index: Arc<IndexService>, ctx: &InvocationContext) -> OperationId {
+pub(super) fn clear(f: &Fx, index: Arc<IndexService>, ctx: &InvocationContext) -> OperationId {
     let owner = Arc::new(EmbeddingSpaceService::new(f.store.clone()));
     assert!(owner.install_selection_indexer(Arc::downgrade(&index)));
     let gateway = Gateway {

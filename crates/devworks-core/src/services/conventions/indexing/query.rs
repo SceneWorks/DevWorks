@@ -161,6 +161,12 @@ impl IndexService {
         }) {
             return Err(StorageError::CursorExpired.into());
         }
+        let origin = EmbeddingOrigin::Query {
+            query_id: query_id.clone(),
+            fingerprint: snapshot.fingerprint.clone(),
+            scope_digest: snapshot.witness.clone(),
+        };
+        self.validate_query_custody(ctx, &origin, &snapshot.configuration.source_digest)?;
         let mut prepared = PreparedSearch {
             witness: snapshot.witness.clone(),
             query_id: query_id.clone(),
@@ -233,11 +239,6 @@ impl IndexService {
                     tx.conventions().put_convention_embedding_space(&selected)
                 },
             )?;
-            let origin = EmbeddingOrigin::Query {
-                query_id,
-                fingerprint: snapshot.fingerprint,
-                scope_digest: snapshot.witness,
-            };
             let preparation = InputPreparation {
                 context: ctx,
                 origin: &origin,
