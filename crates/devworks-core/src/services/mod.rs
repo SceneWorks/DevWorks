@@ -19,6 +19,7 @@ pub mod knowledge;
 pub mod notifications;
 pub mod packages;
 pub mod power;
+pub mod prices;
 pub mod process;
 pub mod projects;
 pub mod queue;

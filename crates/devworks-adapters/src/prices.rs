@@ -230,6 +230,21 @@ fn complete_anthropic_rates(
         {
             let mut rate = cache.clone();
             rate.service_tier = selected.service_tier.clone();
+            if tariffs.iter().any(|existing| {
+                existing.upstream_model_id == rate.upstream_model_id
+                    && existing.service_tier == rate.service_tier
+                    && existing.context_lower_exclusive == rate.context_lower_exclusive
+                    && existing.context_upper_inclusive == rate.context_upper_inclusive
+                    && existing.modality == rate.modality
+                    && existing.charge_kind == rate.charge_kind
+                    && existing.cache_ttl_seconds == rate.cache_ttl_seconds
+                    && existing.region == rate.region
+                    && existing.endpoint_profile == rate.endpoint_profile
+                    && existing.unit == rate.unit
+                    && existing.units == rate.units
+            }) {
+                continue;
+            }
             rate.amount_usd =
                 scale_rate(&cache.amount_usd, &selected.amount_usd, &base.amount_usd)?;
             tariffs.push(rate);
@@ -465,6 +480,9 @@ pub fn parse_catalog(
     let mut tariffs: Vec<_> = rates.into_values().collect();
     if provider == OfficialPriceProvider::Anthropic {
         complete_anthropic_rates(text, &mut tariffs)?;
+    }
+    if tariffs.len() > MAX_RATES {
+        return Err(changed("too many tariff rows after declared modifiers"));
     }
     Ok(FetchedPriceCatalog {
         provider,

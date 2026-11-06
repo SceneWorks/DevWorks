@@ -988,6 +988,7 @@ impl ConnectionService {
             access_expires_at_ms: c.access_expires_at_ms.map(counter),
             sign_in,
             enabled: Some(c.enabled),
+            local_free: Some(c.local_free),
             open_router: constraints_of(c),
         })
     }
@@ -1877,6 +1878,7 @@ impl ConnectionService {
                 credential_ref,
                 enabled,
                 open_router,
+                local_free,
             } => self.configure_connection(
                 tx,
                 &actor,
@@ -1888,6 +1890,7 @@ impl ConnectionService {
                     endpoint: &endpoint.0,
                     credential_ref: credential_ref.as_ref(),
                     enabled: *enabled,
+                    local_free: *local_free,
                     open_router: open_router.as_ref(),
                 },
             ),
@@ -2074,6 +2077,9 @@ impl ConnectionService {
         if let Some(enabled) = e.enabled {
             next.enabled = enabled;
         }
+        if let Some(local_free) = e.local_free {
+            next.local_free = local_free;
+        }
         if let Some(o) = constraints {
             next.open_router = o;
         } else if p.name != "OpenRouterChat" {
@@ -2118,6 +2124,7 @@ impl ConnectionService {
                 && c.endpoint == next.endpoint
                 && c.credential_ref == next.credential_ref
                 && c.enabled == next.enabled
+                && c.local_free == next.local_free
                 && c.open_router == next.open_router;
             if same {
                 return Ok(unchanged(&c.id, c.revision));
@@ -2750,6 +2757,8 @@ struct ConnectionEdit<'a> {
     credential_ref: Option<&'a Id>,
     /// `None` keeps the stored value.
     enabled: Option<bool>,
+    /// Explicit user billing policy; omission preserves the stored declaration.
+    local_free: Option<bool>,
     /// `None` keeps the stored constraints.
     open_router: Option<&'a OpenRouterConstraints>,
 }
