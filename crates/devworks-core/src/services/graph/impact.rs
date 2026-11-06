@@ -89,7 +89,7 @@ pub(super) fn node_impact(
             }
         }
     }
-    build(reader, starts, depth.clamp(1, 5), None, selection)
+    build(reader, starts, depth.clamp(1, 5), None, Some(selection))
 }
 
 pub(super) fn file_impact(
@@ -117,10 +117,7 @@ pub(super) fn file_impact(
         starts,
         depth.clamp(1, 5),
         Some((repository, path)),
-        &CodeNodeSelection::Name {
-            name: model::wire(json!(path))?,
-            repository_id: Some(repository.clone()),
-        },
+        None,
     )
 }
 
@@ -241,7 +238,7 @@ fn build(
     starts: Vec<GraphNode>,
     depth: u16,
     file: Option<(&Id, &str)>,
-    selection: &CodeNodeSelection,
+    selection: Option<&CodeNodeSelection>,
 ) -> Result<GraphResult, Failure> {
     let edges = reader.raw_edges()?;
     if !edges.unmapped.is_empty() {
@@ -633,7 +630,7 @@ fn unmapped_count(
     edges: &[scan::Unmapped],
     reached: &BTreeMap<Key, Reached>,
     file: Option<(&Id, &str)>,
-    selection: &CodeNodeSelection,
+    selection: Option<&CodeNodeSelection>,
 ) -> u64 {
     if !reader.budget.retain(reached.len().saturating_mul(256)) {
         return 0;
@@ -687,10 +684,10 @@ fn unmapped_count(
         let same_file = edge.edge.payload["targetUnit"]
             .as_str()
             .is_some_and(|path| files.contains(&(target_repo, path)));
-        let name = if let CodeNodeSelection::Name {
+        let name = if let Some(CodeNodeSelection::Name {
             name,
             repository_id,
-        } = selection
+        }) = selection
         {
             repository_id
                 .as_ref()
