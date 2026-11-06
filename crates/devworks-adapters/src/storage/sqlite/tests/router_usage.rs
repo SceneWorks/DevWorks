@@ -1964,3 +1964,70 @@ fn non_official_quote_paths_ignore_unrelated_official_publications() {
         );
     }
 }
+
+#[test]
+fn accepted_raw_reported_costs_remain_readable_without_fabricating_paid_spend() {
+    for amount in ["0.0000000000001".to_owned(), "9".repeat(128)] {
+        let mut f = NativeFx::new();
+        let attempt = f.admitted();
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(observation("raw-amount", 1, Some(1), Some(&amount))),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let outcome = f
+            .host()
+            .drive(attempt.attempt_id, src, Cancellation::new())
+            .unwrap();
+        let DriveOutcome::Settled(balance) = outcome else {
+            panic!("{outcome:?}")
+        };
+        assert_eq!(balance.priced_micro_usd, None);
+        assert!(!balance.monetary_complete);
+        assert_eq!(
+            accounting::summary(&balance)
+                .unwrap()
+                .reported_cost
+                .unwrap()
+                .amount,
+            amount
+        );
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        for kind in [
+            "Attempts",
+            "AssistantUsage",
+            "AssistantActivity",
+            "McpUsage",
+            "CodeReviewUsage",
+            "RepositoryAnalysisUsage",
+            "Filters",
+        ] {
+            let value = serde_json::to_value(result(f.fx.query_at(
+                &f.fx.user(),
+                "router.usage",
+                json!({
+                    "sessionId":"s1","reportKind":kind,"startMs":(T0-1).to_string(),
+                    "endMs":(T0+1).to_string(),"page":{"limit":100}
+                }),
+                Some(3),
+            )))
+            .unwrap();
+            if kind == "Attempts" {
+                let page = &value["value"]["page"];
+                let cost = &page["items"][0]["cost"];
+                assert_eq!(cost["originalAmount"], amount);
+                assert_eq!(cost["monetaryComplete"], false);
+                assert!(cost.get("amountMicroUsd").is_none());
+                assert_eq!(page["totals"]["reportedMicroUsd"], "0");
+                assert_eq!(page["totals"]["trackedMicroUsd"], "0");
+            }
+        }
+    }
+}

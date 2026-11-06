@@ -1475,34 +1475,10 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
         calls: AtomicUsize::new(0),
         gate: Some(gate.clone()),
     });
-    let setup_receipts = read(&*fx.store, |s| {
-        Ok(s.queue()
-            .deliveries(
-                &DeliveryFilter {
-                    consumer: Some("receipt_replies".into()),
-                    operation_id: None,
-                },
-                None,
-                64,
-            )?
-            .entries)
-    });
-    assert_eq!(
-        setup_receipts.len(),
-        2,
-        "the fixture created two refresh command receipts"
-    );
-    let receipt_ids = setup_receipts
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
-    let command_ids = setup_receipts
-        .iter()
-        .map(|entry| entry.payload["commandId"].as_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
     let mut composed = composition(&fx.h, fx.store.clone(), source.clone());
     let receipt_starts = Arc::new(AtomicUsize::new(0));
     let receipt_gate = Gate::new();
+    receipt_gate.release();
     let _release_receipts = Release(receipt_gate.clone());
     composed.artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(GatedFiles {
@@ -1522,6 +1498,93 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     let app = devworks_engine::boot(composed).await.unwrap();
     let _release = Release(gate.clone());
     gate.started.notified().await;
+    // Settle the real independent boot producers before controlling receipt publication.
+    // Blocking every artifact at boot also blocks Help, so that would test its shutdown tail.
+    let accounting = app.accounting().watch();
+    let help_registered = app
+        .jobs()
+        .catalog()
+        .capabilities()
+        .iter()
+        .any(|c| c.operation == "help.generate_capability_docs");
+    loop {
+        let ready = read(&*fx.store, |s| {
+            let help = s.queue().status("help_docs")?;
+            let receipts = s.queue().status("receipt_replies")?;
+            assert_eq!(help.failed, 0, "startup Help failed: {help:?}");
+            Ok(s.usage().usage_bootstrap()?.phase == "Complete"
+                && (!help_registered
+                    || (help.completed > 0
+                        && help.ready == 0
+                        && help.claimed == 0
+                        && help.reconciling == 0))
+                && receipts.ready == 0
+                && receipts.claimed == 0
+                && receipts.reconciling == 0)
+        });
+        let accounted = accounting.borrow().as_ref().is_some_and(|pass| {
+            pass.as_ref()
+                .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
+        });
+        if ready && accounted {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let existing = read(&*fx.store, |s| {
+        Ok(s.queue()
+            .deliveries(
+                &DeliveryFilter {
+                    consumer: Some("receipt_replies".into()),
+                    operation_id: None,
+                },
+                None,
+                64,
+            )?
+            .entries)
+    })
+    .into_iter()
+    .map(|e| e.id)
+    .collect::<Vec<_>>();
+    *receipt_gate.open.lock().unwrap() = false;
+    receipt_starts.store(0, Ordering::SeqCst);
+    for _ in 0..2 {
+        let revision = read(&*fx.store, |s| {
+            s.usage().price_override_revision(&id("priced-model"))
+        });
+        let raw = fx.frame("router.price_override", 3, "Command",
+            json!({"modelId":"priced-model","expectedRevision":revision.to_string(),"change":{"kind":"Clear"}}));
+        applied(fx.command(
+            &fx.user,
+            "router.price_override",
+            &raw,
+            WriteOptions::default(),
+        ));
+    }
+    let setup_receipts = read(&*fx.store, |s| {
+        Ok(s.queue()
+            .deliveries(
+                &DeliveryFilter {
+                    consumer: Some("receipt_replies".into()),
+                    operation_id: None,
+                },
+                None,
+                64,
+            )?
+            .entries)
+    })
+    .into_iter()
+    .filter(|e| !existing.contains(&e.id))
+    .collect::<Vec<_>>();
+    assert_eq!(setup_receipts.len(), 2, "two controlled command receipts");
+    let receipt_ids = setup_receipts
+        .iter()
+        .map(|e| e.id.clone())
+        .collect::<Vec<_>>();
+    let command_ids = setup_receipts
+        .iter()
+        .map(|e| e.payload["commandId"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
     while receipt_starts.load(Ordering::SeqCst) < receipt_ids.len() {
         receipt_gate.started.notified().await;
     }
@@ -1582,7 +1645,16 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
             s.history()
                 .page(&EventFilter::All, before.0.committed_sequence, 500)
         });
-        assert_eq!(events.events.len(), command_ids.len());
+        assert_eq!(
+            events.events.len(),
+            command_ids.len(),
+            "observed event identities: {:?}",
+            events
+                .events
+                .iter()
+                .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id))
+                .collect::<Vec<_>>()
+        );
         assert!(!events.has_more);
         assert!(
             events
@@ -1619,6 +1691,20 @@ async fn price_shutdown_case(recovering: bool, receipt_race_control: bool) {
     app.price_refreshes().unwrap().drain().await;
     app.dispatcher().idle().await;
     let after = snapshot();
+    if after != before {
+        let events = read(&*fx.store, |s| {
+            s.history()
+                .page(&EventFilter::All, before.0.committed_sequence, 32)
+        });
+        eprintln!(
+            "shutdown delta event identities: {:?}",
+            events
+                .events
+                .iter()
+                .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id))
+                .collect::<Vec<_>>()
+        );
+    }
     assert_eq!(
         after, before,
         "late source changed catalog, operation or delivery after shutdown"

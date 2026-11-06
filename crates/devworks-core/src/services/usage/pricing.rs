@@ -171,7 +171,7 @@ fn measured_rates<'a>(
         .iter()
         .filter(|r| {
             r.unit == quantity.unit
-                && r.modality == quantity.modality
+                && (r.modality == "Any" || r.modality == quantity.modality)
                 && r.charge_kind == quantity.charge_kind
         })
         .collect::<Vec<_>>();
@@ -372,7 +372,7 @@ pub fn estimate(
         }
         if !quantities.additional.iter().any(|q| {
             q.unit == tariff.unit
-                && q.modality == tariff.modality
+                && (tariff.modality == "Any" || q.modality == tariff.modality)
                 && q.charge_kind == tariff.charge_kind
         }) {
             let reason = format!(
@@ -583,7 +583,7 @@ pub fn reservation(
         }
         if !unit_headroom.iter().any(|q| {
             q.unit == tariff.unit
-                && q.modality == tariff.modality
+                && (tariff.modality == "Any" || q.modality == tariff.modality)
                 && q.charge_kind == tariff.charge_kind
         }) {
             let reason = format!(
@@ -768,6 +768,54 @@ mod tests {
         );
     }
     #[test]
+    fn any_modality_dimensional_rates_settle_and_reserve_without_hiding_overlap() {
+        let mut priced = quote(None);
+        let mut tariff = token_tariff("Runtime", "Any", "0.000002", 1, None);
+        tariff.unit = "Second".into();
+        priced.tariffs = vec![tariff.clone()];
+        let units = vec![MeasuredQuantity {
+            modality: "Audio".into(),
+            charge_kind: "Runtime".into(),
+            unit: "Second".into(),
+            cache_write_ttl_ms: None,
+            quantity: 30,
+        }];
+        let quantities = Quantities {
+            additional: units.clone(),
+            ..Default::default()
+        };
+        for estimate in [
+            estimate(&priced, &quantities, &plain_context()).unwrap(),
+            reservation(&priced, 0, 0, &plain_context(), &units).unwrap(),
+        ] {
+            assert_eq!(estimate.tracked_micro_usd, Some(60));
+            assert!(
+                estimate.monetary_complete,
+                "{:?}",
+                estimate.unknown_components
+            );
+        }
+        assert!(
+            !estimate(&priced, &Quantities::default(), &plain_context())
+                .unwrap()
+                .monetary_complete
+        );
+        assert!(
+            !reservation(&priced, 0, 0, &plain_context(), &[])
+                .unwrap()
+                .monetary_complete
+        );
+        tariff.modality = "Audio".into();
+        priced.tariffs.push(tariff);
+        for estimate in [
+            estimate(&priced, &quantities, &plain_context()).unwrap(),
+            reservation(&priced, 0, 0, &plain_context(), &units).unwrap(),
+        ] {
+            assert!(!estimate.monetary_complete);
+            assert_ne!(estimate.tracked_micro_usd, Some(60));
+        }
+    }
+    #[test]
     fn reservation_uses_the_highest_write_rate_without_a_cache_hit_discount() {
         let quote = quote(Some(UsageRates {
             input_usd_per_million: Some("2".into()),
@@ -911,11 +959,17 @@ mod tests {
             1_000_000_033,
             1_000_000_087,
         ]) {
-            priced.tariffs.push(serde_json::from_value(json!({"upstream_model_id":"priced","service_tier":"Standard","context_lower_exclusive":null,"context_upper_inclusive":null,"modality":modality,"charge_kind":"Runtime","cache_ttl_seconds":null,"unit":"Second","units":units,"amount_usd":"1","region":null,"endpoint_profile":null})).unwrap());
+            priced.tariffs.push(serde_json::from_value(json!({"upstream_model_id":"priced","service_tier":"Standard","context_lower_exclusive":null,"context_upper_inclusive":null,"modality":modality,"charge_kind":"Runtime","cache_ttl_seconds":null,"unit":if modality == "Any" {"Request"} else {"Second"},"units":units,"amount_usd":"1","region":null,"endpoint_profile":null})).unwrap());
             quantities.additional.push(MeasuredQuantity {
                 modality: modality.into(),
                 charge_kind: "Runtime".into(),
-                unit: "Second".into(),
+                // Any overlaps specific modalities; keep this arithmetic fixture unambiguous.
+                unit: if modality == "Any" {
+                    "Request"
+                } else {
+                    "Second"
+                }
+                .into(),
                 cache_write_ttl_ms: None,
                 quantity: 1_000_000_000,
             });

@@ -20462,7 +20462,7 @@
         "originalAmount": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Money"
+              "$ref": "#/$defs/Text1To256"
             },
             {
               "type": "null"
