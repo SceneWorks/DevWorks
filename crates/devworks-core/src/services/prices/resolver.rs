@@ -1,12 +1,46 @@
-use crate::ports::storage::{ReadSnapshot, StorageError};
+use crate::ports::storage::{ReadSnapshot, StorageError, StoredConnection};
 use crate::ports::usage::{
-    CacheWriteRate, CostClassification, PriceQuery, PriceQuote, PriceResolver, PublishedTariff,
-    UsageRates,
+    CacheWriteRate, CostClassification, OfficialPriceProvider, PriceQuery, PriceQuote,
+    PriceResolver, PublishedTariff, UsageRates,
 };
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CatalogPriceResolver;
+
+/// Official price-source identity is distinct from the configured billing transport. A
+/// compatible protocol at an arbitrary proxy does not establish that proxy's prices.
+pub fn official_price_source<'a>(
+    connection: &StoredConnection,
+    upstream: &'a str,
+) -> Option<(OfficialPriceProvider, &'a str)> {
+    if connection.local_free {
+        return None;
+    }
+    let is_origin = |host: &str| {
+        url::Url::parse(&connection.endpoint).is_ok_and(|u| {
+            u.scheme() == "https"
+                && u.host_str() == Some(host)
+                && u.port_or_known_default() == Some(443)
+        })
+    };
+    match connection.profile.as_str() {
+        "CodexSubscriptionResponses" => Some((OfficialPriceProvider::OpenAi, upstream)),
+        "ClaudeSubscriptionMessages" => Some((OfficialPriceProvider::Anthropic, upstream)),
+        "OpenAiResponses" | "CompatibleChat" | "Embedding" if is_origin("api.openai.com") => {
+            Some((OfficialPriceProvider::OpenAi, upstream))
+        }
+        "AnthropicMessages" if is_origin("api.anthropic.com") => {
+            Some((OfficialPriceProvider::Anthropic, upstream))
+        }
+        "OpenRouterChat" if is_origin("openrouter.ai") => match upstream.split_once('/') {
+            Some(("openai", model)) => Some((OfficialPriceProvider::OpenAi, model)),
+            Some(("anthropic", model)) => Some((OfficialPriceProvider::Anthropic, model)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 impl PriceResolver for CatalogPriceResolver {
     fn quote(
@@ -55,60 +89,55 @@ impl PriceResolver for CatalogPriceResolver {
             return Ok(quote);
         };
         let configured = read.usage().price_override(&query.catalog_model_id)?;
-        let (source, classification) =
-            if let Some(override_) = configured.filter(|v| v.mode == "Set") {
-                (
-                    override_.tariffs,
-                    if subscription {
-                        CostClassification::SubscriptionApiEquivalent
-                    } else {
-                        CostClassification::ConfiguredEstimate
-                    },
-                )
-            } else {
-                let (provider, canonical) = match connection.profile.as_str() {
-                    "OpenAiResponses" | "CodexSubscriptionResponses" => ("openai", upstream),
-                    "AnthropicMessages" | "ClaudeSubscriptionMessages" => ("anthropic", upstream),
-                    "OpenRouterChat" => match upstream.split_once('/') {
-                        Some(("openai", model)) => ("openai", model),
-                        Some(("anthropic", model)) => ("anthropic", model),
-                        _ => {
-                            quote.untracked_reason =
-                                Some("awaiting_reported_or_configured_cost".into());
-                            return Ok(quote);
-                        }
-                    },
-                    _ => {
-                        quote.untracked_reason = Some("custom_price_not_configured".into());
-                        return Ok(quote);
-                    }
-                };
-                let Some(snapshot) = read.usage().current_price_snapshot(provider)? else {
-                    quote.untracked_reason = Some("official_catalog_unavailable".into());
-                    return Ok(quote);
-                };
-                quote.snapshot_id = Some(snapshot.id);
-                quote.price_revision = Some(snapshot.revision);
-                let mut source = snapshot.tariffs;
-                // An explicit OpenRouter provider namespace identifies the requested upstream. It
-                // does not make OpenRouter's reported charge equal to an official API estimate.
-                if canonical != upstream {
-                    for row in &mut source {
-                        if row.upstream_model_id == canonical {
-                            row.upstream_model_id = upstream.into();
-                        }
-                    }
-                }
-                let class = if matches!(
-                    connection.profile.as_str(),
-                    "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
-                ) {
+        let (source, classification) = if let Some(override_) =
+            configured.filter(|v| v.mode == "Set")
+        {
+            (
+                override_.tariffs,
+                if subscription {
                     CostClassification::SubscriptionApiEquivalent
                 } else {
-                    CostClassification::OfficialEstimate
-                };
-                (source, class)
+                    CostClassification::ConfiguredEstimate
+                },
+            )
+        } else {
+            let Some((provider, canonical)) = official_price_source(&connection, upstream) else {
+                quote.untracked_reason = Some(
+                    if connection.profile == "OpenRouterChat" {
+                        "awaiting_reported_or_configured_cost"
+                    } else {
+                        "custom_price_not_configured"
+                    }
+                    .into(),
+                );
+                return Ok(quote);
             };
+            let Some(snapshot) = read.usage().current_price_snapshot(provider.id())? else {
+                quote.untracked_reason = Some("official_catalog_unavailable".into());
+                return Ok(quote);
+            };
+            quote.snapshot_id = Some(snapshot.id);
+            quote.price_revision = Some(snapshot.revision);
+            let mut source = snapshot.tariffs;
+            // An explicit OpenRouter provider namespace identifies the requested upstream. It
+            // does not make OpenRouter's reported charge equal to an official API estimate.
+            if canonical != upstream {
+                for row in &mut source {
+                    if row.upstream_model_id == canonical {
+                        row.upstream_model_id = upstream.into();
+                    }
+                }
+            }
+            let class = if matches!(
+                connection.profile.as_str(),
+                "CodexSubscriptionResponses" | "ClaudeSubscriptionMessages"
+            ) {
+                CostClassification::SubscriptionApiEquivalent
+            } else {
+                CostClassification::OfficialEstimate
+            };
+            (source, class)
+        };
         let (tariffs, reason) = applicable(&source, query, upstream);
         if tariffs.is_empty() {
             quote.untracked_reason = Some(reason.into());
@@ -252,6 +281,80 @@ mod tests {
             region: None,
             endpoint_profile: Some("OpenAiResponses".into()),
         }
+    }
+    fn connection(profile: &str, endpoint: &str) -> StoredConnection {
+        StoredConnection {
+            id: Id::new("connection-1").unwrap(),
+            name: "Test".into(),
+            profile: profile.into(),
+            endpoint: endpoint.into(),
+            enabled: true,
+            local_free: false,
+            open_router: None,
+            credential_ref: None,
+            credential_revision: 0,
+            credential_epoch: None,
+            lifecycle: "Disconnected".into(),
+            state_reason: None,
+            account_digest: None,
+            access_expires_at_ms: None,
+            risk: None,
+            discovered: None,
+            discovered_at_ms: None,
+            healthy: None,
+            checked_at_ms: None,
+            revision: 1,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        }
+    }
+    #[test]
+    fn official_source_uses_actual_origin_without_declaring_a_proxy_free() {
+        let proxy = connection("OpenAiResponses", "https://proxy.example/v1");
+        assert!(official_price_source(&proxy, "unit-model").is_none());
+        for endpoint in [
+            "https://api.openai.com.evil.example/v1",
+            "http://api.openai.com/v1",
+            "https://api.openai.com:8443/v1",
+        ] {
+            assert!(
+                official_price_source(&connection("OpenAiResponses", endpoint), "unit-model")
+                    .is_none()
+            );
+        }
+        let direct_embedding = connection("Embedding", "https://api.openai.com/v1");
+        assert_eq!(
+            official_price_source(&direct_embedding, "text-embedding-3-small"),
+            Some((OfficialPriceProvider::OpenAi, "text-embedding-3-small"))
+        );
+        let mut local = direct_embedding;
+        local.local_free = true;
+        assert!(official_price_source(&local, "text-embedding-3-small").is_none());
+    }
+    #[test]
+    fn namespaces_describe_price_sources_only_at_the_declared_transport() {
+        let openrouter = connection("OpenRouterChat", "https://openrouter.ai/api/v1");
+        assert_eq!(
+            official_price_source(&openrouter, "anthropic/claude-unit"),
+            Some((OfficialPriceProvider::Anthropic, "claude-unit"))
+        );
+        assert!(official_price_source(&openrouter, "openrouter/auto").is_none());
+        assert!(
+            official_price_source(
+                &connection("OpenRouterChat", "https://proxy.example"),
+                "anthropic/claude-unit"
+            )
+            .is_none()
+        );
+        // The subscription profile explicitly requests an API-equivalent estimate, not the
+        // endpoint's asserted subscription charge. Availability/accepted risk is a router gate.
+        assert_eq!(
+            official_price_source(
+                &connection("ClaudeSubscriptionMessages", "https://api.anthropic.com"),
+                "claude-unit"
+            ),
+            Some((OfficialPriceProvider::Anthropic, "claude-unit"))
+        );
     }
     #[test]
     fn context_region_and_profile_never_silently_fall_back_to_a_cheaper_tariff() {
