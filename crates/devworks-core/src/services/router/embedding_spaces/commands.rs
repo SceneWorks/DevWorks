@@ -373,7 +373,14 @@ impl EmbeddingSpaceService {
         selected: &StoredEmbeddingSelection,
     ) -> Result<(), StorageError> {
         let id = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent{id,actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,aggregate_kind:"embedding_selection".into(),aggregate_id:"embedding_selection".into(),aggregate_revision:selected.revision,kind:"EmbeddingSelectionChanged".into(),payload:json!({"candidateId":selected.candidate_id,"spaceId":selected.space_id,"selectionRevision":selected.revision,"scope":{"kind":"Workspace"},"sourceContext":crate::services::approvals::save_source_context(ctx)})})?;
+        tx.history().append(NewEvent{id:id.clone(),actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,aggregate_kind:"embedding_selection".into(),aggregate_id:"embedding_selection".into(),aggregate_revision:selected.revision,kind:"EmbeddingSelectionChanged".into(),payload:json!({"candidateId":selected.candidate_id,"spaceId":selected.space_id,"selectionRevision":selected.revision,"scope":{"kind":"Workspace"},"sourceContext":crate::services::approvals::save_source_context(ctx)})})?;
+        if let Some(indexer) = self
+            .selection_indexer
+            .get()
+            .and_then(|indexer| indexer.upgrade())
+        {
+            indexer.record_selection_change(tx, ctx, &id, selected.revision)?;
+        }
         Ok(())
     }
 }

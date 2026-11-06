@@ -577,13 +577,19 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     };
     // Install metadata and the durable consumer together. Transport is installed later, after
     // the complete capability/schema registry exists, and before delivery can start.
-    let embedding_spaces = use_cases.connection_service().map(|_| {
-        Arc::new(
+    let embedding_spaces = if use_cases.connection_service().is_some() {
+        let service = Arc::new(
             devworks_core::services::router::embedding_spaces::EmbeddingSpaceService::new(
                 store.clone(),
             ),
-        )
-    });
+        );
+        if !service.install_selection_indexer(Arc::downgrade(&conventions.indexing())) {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        Some(service)
+    } else {
+        None
+    };
     let embedding_probes = embedding_spaces.as_ref().map(|service| {
         let worker = crate::conventions::probes::ProbeRuntime::new(service.clone());
         consumers.push(worker.consumer());

@@ -6,8 +6,8 @@ use super::{
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::*;
 use crate::protocol::OperationState;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 pub const EFFECT_CONSUMER: &str = "embedding_qualification";
 pub const PROBE_KIND: &str = "EmbeddingQualificationV1";
@@ -17,18 +17,33 @@ pub const PROBE_TEXT: &str = "DevWorks embedding space qualification.";
 pub struct EmbeddingSpaceService {
     pub(super) store: Arc<dyn ApplicationStore>,
     qualification_available: AtomicBool,
+    pub(super) selection_indexer:
+        OnceLock<Weak<crate::services::conventions::indexing::IndexService>>,
 }
 impl EmbeddingSpaceService {
     pub fn new(store: Arc<dyn ApplicationStore>) -> Self {
         Self {
             store,
             qualification_available: AtomicBool::new(false),
+            selection_indexer: OnceLock::new(),
         }
+    }
+    /// The actual Conventions owner is optional and weak: this does not create an index,
+    /// acquire authority or keep the provider/runtime/store alive through a service cycle.
+    pub fn install_selection_indexer(
+        &self,
+        indexer: Weak<crate::services::conventions::indexing::IndexService>,
+    ) -> bool {
+        self.selection_indexer.set(indexer).is_ok()
     }
     /// Native composition calls this only after installing the real accounted executor and
     /// queue consumer. It enables an attempt, never creates a qualification or a selected route.
     pub fn enable_native_qualification(&self) {
         self.qualification_available.store(true, Ordering::Release);
+    }
+    /// Shutdown removes availability without changing retained qualification or selection facts.
+    pub fn disable_native_qualification(&self) {
+        self.qualification_available.store(false, Ordering::Release);
     }
     pub fn qualification_available(&self) -> bool {
         self.qualification_available.load(Ordering::Acquire)

@@ -39,6 +39,7 @@ impl ProbeRuntime {
         self.executor.set(executor).is_ok()
     }
     pub fn stop(&self) {
+        self.service.disable_native_qualification();
         self.stopped.store(true, Ordering::Release);
         if let Some(executor) = self.executor.get() {
             executor.stop();
