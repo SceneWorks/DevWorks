@@ -38,8 +38,16 @@
       "an_impossible_legacy_allocation_projection_rolls_back_handler_writes_and_receipts",
       "a_successful_legacy_allocation_receipt_keeps_its_exact_wire_shape_on_replay"
     ],
-    "status": "Added; early integrated source had four known old allocator constructor type mismatches, so execution awaits the final allocator integration",
-    "passedClaimed": false
+    "status": "passed",
+    "passedClaimed": true,
+    "passed": 2,
+    "snapshot": "83e96f5ede52c626b44f31320a06577d9081ed46",
+    "command": "cargo test --locked -p devworks-core --test gateway allocation_",
+    "execution": "Detached exact assembled snapshot; existing transaction harness; no constructor stubs or service edits",
+    "priorAttempt": {
+      "snapshot": "5f8e5d1d1c729d42e1db383f1c35b8ab9c67cf18",
+      "status": "Added; early integrated source had four known old allocator constructor type mismatches, so execution awaits the final allocator integration"
+    }
   },
   "optionalStandaloneProbeStrictClippy": {
     "status": "failed",
@@ -149,5 +157,11 @@
     ],
     "pageErrors": [],
     "passed": true
+  },
+  "assembledSnapshotRechecks": {
+    "snapshot": "83e96f5ede52c626b44f31320a06577d9081ed46",
+    "generatorTestsPassed": 9,
+    "regenerationDrift": false,
+    "legacySchemasByteIdentical": 56
   }
 }
