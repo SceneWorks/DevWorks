@@ -643,7 +643,10 @@ pub(super) fn controls(
     let claims: Vec<_> = work
         .allocation_claims
         .values()
-        .filter(|c| c.project_id.as_ref().map(|p| p.0.as_str()) == Some(project.as_str()))
+        .filter(|c| {
+            c.project_id.as_ref().map(|p| p.0.as_str()) == Some(project.as_str())
+                || c.id.as_str() == work.inspect_claim_id
+        })
         .cloned()
         .collect();
     for claim in claims {
@@ -653,7 +656,9 @@ pub(super) fn controls(
                 .freshest(claim.work_id.as_str())
                 .map(|w| w.title.0)
                 .unwrap_or_else(|| claim.work_id.as_str().into());
-            ui.label(RichText::new(format!("Selected: {name}")).strong());
+            let same_project = claim.project_id.as_ref().map(|p| p.0.as_str()) == Some(project.as_str());
+            ui.label(RichText::new(format!("{}: {name}",if same_project { "Selected" } else { "Inspected claim" })).strong());
+            if !same_project { widgets::caption(ui,format!("Project {} · explicit claim lookup; your current project is unchanged.",claim.project_id.as_ref().map_or("unknown",|p|p.0.as_str()))); }
             widgets::caption(
                 ui,
                 format!(

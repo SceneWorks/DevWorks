@@ -262,6 +262,35 @@ fn empty_queue_is_truthful_and_a_manual_claim_never_starts_execution() {
         record.attempts.0.is_empty(),
         "selection did not start a run"
     );
+    let other = project(&*b, "Another project");
+    h.state_mut().select_project(Some(other.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    h.query_by_label("Inspect another claim")
+        .unwrap()
+        .click_accesskit();
+    settle(&mut h);
+    input(&mut h, "Claim ID", claim.id.as_str());
+    press(&mut h, "Inspect claim");
+    assert_eq!(
+        h.state().work.of.as_deref(),
+        Some(other.as_str()),
+        "inspection does not switch the active project"
+    );
+    assert!(
+        !h.state()
+            .work
+            .allocation_inspect_errors
+            .contains_key(claim.id.as_str())
+    );
+    assert!(
+        h.query_by_role_and_label(
+            Role::Button,
+            &format!("Release claim {}", claim.id.as_str())
+        )
+        .is_some(),
+        "an explicit claim lookup must show its result even from another project"
+    );
     press(&mut h, &format!("Inspect claim {}", claim.id.as_str()));
     press(&mut h, &format!("Release claim {}", claim.id.as_str()));
     assert!(matches!(
