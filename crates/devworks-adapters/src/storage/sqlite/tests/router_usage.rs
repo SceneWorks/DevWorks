@@ -1177,3 +1177,81 @@ fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff(
         }
     }
 }
+
+#[test]
+fn confirmed_cancelled_activity_uses_last_source_outcome_without_masking_later_retries() {
+    fn activity(f: &NativeFx) -> Value {
+        let value=result(f.fx.query_at(&f.fx.user(),"router.usage",json!({"sessionId":"s1","reportKind":"AssistantActivity","startMs":(T0-1).to_string(),"endMs":(T0+1).to_string(),"page":{"limit":100}}),Some(3)));
+        serde_json::to_value(value).unwrap()
+    }
+    fn metric(value: &Value, key: &str) -> i64 {
+        let rows = value["value"]["report"]["items"].as_array().unwrap();
+        rows.iter()
+            .find(|r| r["kind"] == "Total" && r["key"] == key)
+            .unwrap()["value"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    for later in [None, Some(AttemptEnd::Failed), Some(AttemptEnd::Completed)] {
+        let mut f = NativeFx::new();
+        let first = f.admitted();
+        let (src, _) = source(vec![InferenceFrame::Terminal(AttemptEnd::Cancelled)], false);
+        f.host()
+            .drive(first.attempt_id, src, Cancellation::new())
+            .unwrap();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = activity(&f);
+        assert_eq!(metric(&report, "cancelledRuns"), 1);
+        assert_eq!(metric(&report, "failedRuns"), 0);
+        assert!(
+            report["value"]["report"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["dimension"] == "status" && r["label"] == "cancelled"),
+            "{report}"
+        );
+        let operation = first.operation_id;
+        // Seed a recorded retry intent; this report fixture does not add a new retry policy
+        // to terminal operations. Admission/dispatch of the subsequent source remains real.
+        f.fx.store
+            .with_writer_connection(move |conn| {
+                super::super::super::conn::db(conn.execute(
+                    "UPDATE operations SET state='RetryPending',revision=revision+1 WHERE id=?1",
+                    [operation.0.as_str()],
+                ))
+                .map(|_| ())
+            })
+            .unwrap();
+        f.request.admission_key = id("retry-admission");
+        let second = f.admitted();
+        assert_eq!(second.attempt_number, 2);
+        if let Some(end) = later {
+            let (src, _) = source(vec![InferenceFrame::Terminal(end)], false);
+            f.host()
+                .drive(second.attempt_id, src, Cancellation::new())
+                .unwrap();
+        } else {
+            let router = f.fx.router.clone();
+            let control = f.control.clone();
+            f.fx.write(move |tx| router.mark_attempt_dispatched(tx, &control, &second.attempt_id));
+        }
+        let report = activity(&f);
+        assert_eq!(metric(&report, "cancelledRuns"), 0);
+        assert_eq!(
+            metric(&report, "failedRuns"),
+            i64::from(later == Some(AttemptEnd::Failed))
+        );
+        assert_eq!(
+            metric(&report, "completedRuns"),
+            i64::from(later == Some(AttemptEnd::Completed))
+        );
+    }
+}
