@@ -30,6 +30,11 @@ fn indexed_architecture_overview_and_dependencies_preserve_exact_facts_and_unkno
     let repo = src.join("analysis");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/lib.rs"),"pub fn leaf() {}\npub fn a(){leaf();}\npub fn b(){leaf();}\npub fn c(){leaf();}\npub fn d(){leaf();}\n").unwrap();
+    std::fs::write(
+        repo.join("README.md"),
+        "# Exact captured README\n\nThis survives source removal.\n",
+    )
+    .unwrap();
     git(&repo, &["init", "-q"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "analysis"]);
@@ -118,6 +123,16 @@ fn indexed_architecture_overview_and_dependencies_preserve_exact_facts_and_unkno
         result["value"]["result"]["value"]["graphTotals"]["edgeCount"],
         counts.edges.to_string()
     );
+    let row = &result["value"]["result"]["value"]["repositories"][0];
+    assert_eq!(row["readmeSource"]["path"], "README.md");
+    assert_eq!(row["readmeSource"]["snapshot"]["repositoryId"], json!(rid));
+    assert!(
+        result["value"]["view"]["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|view| view["snapshot"] == row["readmeSource"]["snapshot"])
+    );
     let result = graph(
         &app,
         &ctx,
@@ -163,5 +178,127 @@ fn declared_schema_and_metadata_overview_do_not_invent_empty_graph_measurements(
     assert!(value.get("graphTotals").is_none());
     assert_eq!(value["dependencies"], json!([]));
     assert_eq!(value["internalModules"], json!([]));
+    executor.block_on(app.shutdown());
+}
+
+/// A captured, sealed index payload models an already recorded analysis producer. This
+/// qualifies the read projection on real SQLite, not a producer or model execution.
+fn captured_modules(store: &Arc<dyn ApplicationStore>) {
+    write(&**store, |tx| {
+        let repository=id("recorded-repository");let generation=id("recorded-generation");let view=id("recorded-view");
+        tx.projects().insert_repository(&StoredRepository{id:repository.clone(),location:"/captured/recorded".into(),name:"Recorded".into(),remote_url:None,primary:true,lifecycle:ACTIVE.into(),languages:vec!["csharp".into()],revision:1,registered_at_ms:1})?;
+        tx.indexing().insert_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_STAGING.into(),source_digest:"a".repeat(40),watermark:0,manifest:json!({})})?;
+        let key="Recorded.csproj";
+        let endpoints:Vec<_>=(0..650).map(|i|json!({"route":format!("/recorded/{i}"),"httpMethod":"GET","description":"Actual recorded fixture endpoint"})).collect();
+        let recorded=json!({"summary":"Recorded source summary","confidence":"high","endpoints":endpoints,"services":[],"externalDependencies":[],"databaseTables":[],"updatedAtMs":"17","modelUsed":"recorded-producer","programTotals":{"endpointCount":"999","serviceCount":"2","tableCount":"3"}});
+        let mut nodes=vec![StoredNode{unit_key:key.into(),node_id:"module-recorded".into(),kind:"DotnetProject".into(),name:"Recorded".into(),payload:json!({"properties":{"dotnet_project":"Recorded","analysis":recorded}})}];
+        for i in 0..601{nodes.push(StoredNode{unit_key:key.into(),node_id:format!("route-{i}"),kind:"Route".into(),name:format!("route-{i}"),payload:json!({"properties":{"dotnet_project":"Recorded"}})});}
+        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:key.into(),content_digest:"opaque-recorded-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&nodes,&[])?;
+        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"Other.csproj".into(),content_digest:"opaque-other-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[StoredNode{unit_key:"Other.csproj".into(),node_id:"module-other".into(),kind:"DotnetProject".into(),name:"Other".into(),payload:json!({"properties":{"dotnet_project":"Other"}})}],&[])?;
+        tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:2,manifest:json!({})})?;
+        tx.indexing().insert_view(&StoredView{view_id:view.clone(),repository_id:repository.clone(),view_digest:devworks_core::fingerprint::sha256_hex(b"recorded-view"),baseline_id:generation,branch_id:None,worktree_id:None,coverage:json!({"state":"Complete","commit":"a".repeat(40),"sourceRevision":1})})?;
+        tx.indexing().publish(&repository,&view,0)?;
+        tx.projects().publish_index_view(&StoredIndexView{view_id:view,repository_id:repository,source_revision:"a".repeat(40),coverage:"Complete".into(),published_at_ms:1})?;
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn recorded_modules_page_full_semantic_arrays_and_indexed_drilldowns_without_fabricating_provenance()
+ {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    captured_modules(&store);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    let base = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"recorded-modules","scope":{"kind":"Workspace"},"view":{"kind":"Exact","viewIds":["recorded-view"]},"query":{"kind":"Overview","repositoryId":"recorded-repository"},"limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}});
+    let invoke = |frame: &Value| match app
+        .query(&ctx, "code.architecture", frame.to_string().as_bytes())
+        .unwrap()
+    {
+        DomainQueryReply::Result { result, .. } => serde_json::to_value(result).unwrap(),
+        DomainQueryReply::Rejected { fault, .. } => panic!("{fault:?}"),
+    };
+    let mut limited = base.clone();
+    limited["limits"]["maxVisited"] = json!(1);
+    let limited_result = invoke(&limited);
+    assert_eq!(limited_result["value"]["completion"], "WorkLimit");
+    assert!(
+        limited_result["value"]["result"]["value"]
+            .get("packageCount")
+            .is_none()
+    );
+    assert_eq!(
+        limited_result["value"]["result"]["value"]["packages"],
+        json!([])
+    );
+    let mut frame = base.clone();
+    let mut routes = std::collections::BTreeSet::new();
+    let mut refs = std::collections::BTreeSet::new();
+    let mut drill = None;
+    let mut saw_unrecorded = false;
+    for page_index in 0..30 {
+        let result = invoke(&frame);
+        let page = &result["value"];
+        for module in page["result"]["value"]["internalModules"]
+            .as_array()
+            .unwrap()
+        {
+            if module["module"]["moduleName"] == "Other" {
+                assert_eq!(module["state"], "NotAnalyzed");
+                assert!(module.get("recorded").is_none());
+                saw_unrecorded = true;
+                continue;
+            }
+            assert_eq!(module["state"], "Recorded");
+            assert_eq!(module["recorded"]["summary"], "Recorded source summary");
+            assert_eq!(module["recorded"]["updatedAtMs"], "17");
+            assert_eq!(module["recorded"]["programTotals"]["endpointCount"], "999");
+            for field in ["sourceHash", "sourceRevision", "sourceViewId"] {
+                assert!(module["recorded"].get(field).is_none());
+            }
+            assert_eq!(module["endpoints"]["count"], "601");
+            for row in module["recorded"]["endpoints"].as_array().unwrap() {
+                routes.insert(row["route"].as_str().unwrap().to_owned());
+            }
+            for row in module["endpoints"]["nodes"].as_array().unwrap() {
+                refs.insert(row["nodeId"].as_str().unwrap().to_owned());
+            }
+            if drill.is_none() {
+                drill = module["endpoints"]
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+        }
+        match page.get("nextCursor").and_then(Value::as_str) {
+            Some(cursor) => {
+                assert_eq!(page["completion"], "ResultLimit");
+                frame["cursor"] = json!(cursor);
+            }
+            None => break,
+        }
+        assert!(page_index < 29, "continuation failed to advance");
+    }
+    assert_eq!(routes.len(), 650);
+    assert_eq!(refs.len(), 601);
+    assert!(saw_unrecorded);
+    let mut nested = base;
+    nested["cursor"] = json!(drill.expect("actual authenticated nested cursor"));
+    let result = invoke(&nested);
+    let modules = result["value"]["result"]["value"]["internalModules"]
+        .as_array()
+        .unwrap();
+    assert_eq!(modules.len(), 1);
+    assert!(
+        !modules[0]["endpoints"]["nodes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(modules[0]["endpoints"]["nodes"].as_array().unwrap().len() <= 100);
     executor.block_on(app.shutdown());
 }
