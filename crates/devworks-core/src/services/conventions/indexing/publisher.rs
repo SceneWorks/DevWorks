@@ -124,12 +124,15 @@ fn current(
                 .conventions()
                 .convention(convention_id, None, &scoped.readable)?;
             if !captured.zip(latest).is_some_and(|(captured, latest)| {
-                captured.lifecycle == "Active"
-                    && latest.lifecycle == captured.lifecycle
-                    && latest.scope == captured.scope
-                    && latest.title == captured.title
-                    && captured.content_ref.is_some()
-                    && latest.content_ref == captured.content_ref
+                // Exact snapshots retain the existing no-op behavior for an already
+                // inactive source. Only Active sources may bridge metadata revisions.
+                latest.revision == captured.revision
+                    || (captured.lifecycle == "Active"
+                        && latest.lifecycle == captured.lifecycle
+                        && latest.scope == captured.scope
+                        && latest.title == captured.title
+                        && captured.content_ref.is_some()
+                        && latest.content_ref == captured.content_ref)
             }) {
                 return Err(invalid("convention source changed"));
             }
