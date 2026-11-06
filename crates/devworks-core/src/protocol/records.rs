@@ -12237,10 +12237,10 @@ impl Check for CodeNodeSelection {
 
 impl Revisioned for CodeNodeSelection {
     fn retain_revision(&mut self, revision: u32) {
-        if let Self::Name { repository_id, .. } = self {
-            if revision < 3 {
-                *repository_id = None;
-            }
+        if let Self::Name { repository_id, .. } = self
+            && revision < 3
+        {
+            *repository_id = None;
         }
     }
 }
@@ -13822,10 +13822,34 @@ pub struct CodeRustSemantic {
     )]
     #[schemars(with = "Content", extend("x-since" = 3))]
     pub manifest: Option<Content>,
-    pub group_count: Counter,
-    pub semantic_groups: Counter,
-    pub fallback_groups: Counter,
-    pub skipped_groups: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub group_count: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub semantic_groups: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub fallback_groups: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub skipped_groups: Option<Counter>,
     pub tree_sitter_groups: Rows<CodeSemanticGroup>,
 }
 impl Check for CodeRustSemantic {
@@ -13849,6 +13873,18 @@ impl Revisioned for CodeRustSemantic {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.manifest = None;
+        }
+        if revision < 3 {
+            self.group_count = None;
+        }
+        if revision < 3 {
+            self.semantic_groups = None;
+        }
+        if revision < 3 {
+            self.fallback_groups = None;
+        }
+        if revision < 3 {
+            self.skipped_groups = None;
         }
         self.tree_sitter_groups.retain_revision(revision);
     }

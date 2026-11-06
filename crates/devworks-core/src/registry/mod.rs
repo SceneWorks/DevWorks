@@ -245,6 +245,7 @@ fn strip(v: &mut Value, revision: u32) {
             if pruned {
                 m.insert(PRUNED.into(), Value::Bool(true));
             }
+            m.remove("x-until");
             m.values_mut().for_each(|x| strip(x, revision));
         }
         Value::Array(a) => a.iter_mut().for_each(|x| strip(x, revision)),

@@ -234,7 +234,7 @@ pub enum Direction {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphQuery {
-#[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"], "x-until": 3}, {"required": ["kind", "text", "nodeKinds"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["text"]}, {"required": ["nodeKinds"]}]}, "x-since": 3}]))]
 Search {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "String", length(min = 1, max = 8192))]
@@ -253,7 +253,7 @@ repository_id: Option<Id>,
 },
 Schema,
 Node { node_id: Id },
-#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"], "x-until": 3}, {"required": ["kind", "nodeId", "maxLines"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}, {"required": ["maxLines"]}]}, "x-since": 3}]))]
 Source {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -274,7 +274,7 @@ edge_kinds: Vec<Id>,
 #[schemars(range(min = 0, max = 128))]
 max_depth: u16,
 },
-#[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"], "x-until": 3}, {"required": ["kind", "fromId", "toId", "maxDepth"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["fromId"]}, {"required": ["toId"]}, {"required": ["maxDepth"]}]}, "x-since": 3}]))]
 Path {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -289,7 +289,7 @@ max_depth: Option<u16>,
 #[schemars(with = "CodeCallSelection", extend("x-since" = 3))]
 selection: Option<CodeCallSelection>,
 },
-#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
 NodeImpact {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -301,7 +301,7 @@ selection: Option<CodeImpactSelection>,
 
 
 
-#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
 FileImpact {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -313,7 +313,7 @@ unit_key: Option<Id>,
 #[schemars(with = "CodeFileSelection", extend("x-since" = 3))]
 selection: Option<CodeFileSelection>,
 },
-#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
 NodesByFile {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -326,7 +326,7 @@ unit_key: Option<Id>,
 selection: Option<CodeFileSelection>,
 },
 RepositoryDependencies { repository_id: Id },
-#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
 Consumers {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -335,7 +335,7 @@ node_id: Option<Id>,
 #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
 selection: Option<CodeNodeSelection>,
 },
-#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
 Publishers {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -344,7 +344,7 @@ node_id: Option<Id>,
 #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
 selection: Option<CodeNodeSelection>,
 },
-#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
 DataLineage {
 #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
 #[schemars(with = "Id")]
@@ -1477,20 +1477,25 @@ pub struct EdgeView {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphResult {
+    #[schemars(extend("x-until" = 3))]
     Nodes {
         nodes: Vec<NodeView>,
     },
+    #[schemars(extend("x-until" = 3))]
     Graph {
         nodes: Vec<NodeView>,
         edges: Vec<EdgeView>,
     },
+    #[schemars(extend("x-until" = 3))]
     Source {
         citation: Citation,
         text: String,
     },
+    #[schemars(extend("x-until" = 3))]
     Schema {
         schema: ArtifactRef,
     },
+    #[schemars(extend("x-until" = 3))]
     ScopeStatus {
         coverage: Coverage,
     },
