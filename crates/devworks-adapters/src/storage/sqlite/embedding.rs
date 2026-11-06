@@ -151,6 +151,7 @@ fn next(q: &mut StoredEmbeddingQualification, now: i64) -> Result<(), StorageErr
     Ok(())
 }
 macro_rules! reads { ($t:ty) => { impl EmbeddingRead for $t {
+    fn embedding_inventory_revision(&self)->Result<i64,StorageError>{db(self.conn.query_row("SELECT revision FROM router_embedding_inventory WHERE singleton=1",[],|r|r.get(0)))}
     fn embedding_candidate(&self,id:&Id)->Result<Option<StoredEmbeddingCandidate>,StorageError>{candidate(self.conn,id)}
     fn embedding_candidates(&self,after:Option<&Id>,limit:u16)->Result<Vec<StoredEmbeddingCandidate>,StorageError>{
         if limit==0 || limit>MAX_PAGE{return Err(invalid("embedding page limit must be 1..=MAX_PAGE"));}

@@ -100,6 +100,9 @@ pub struct StoredEmbeddingSelection {
 }
 
 pub trait EmbeddingRead {
+    /// Bounded durable change fence for inventory cursors, including status dependencies that
+    /// can change without a history append. Independent of the selection/candidate revisions.
+    fn embedding_inventory_revision(&self) -> Result<i64, StorageError>;
     fn embedding_candidate(
         &self,
         id: &Id,

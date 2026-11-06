@@ -32,3 +32,55 @@ CREATE INDEX router_embedding_probe_request ON router_embedding_qualifications(
     json_extract(body_json,'$.probe.requestId'),operation_id) WHERE operation_id IS NOT NULL;
 CREATE INDEX router_embedding_probe_admission ON router_embedding_qualifications(
     json_extract(body_json,'$.probe.admissionKey'),operation_id) WHERE operation_id IS NOT NULL;
+
+-- A query cursor cannot use history sequence alone: journal status and original authority can
+-- change without appending history. These indexed dependency lookups never materialize the
+-- candidate population in Rust. The counter is a change fence, not a count or model identity.
+CREATE TABLE router_embedding_inventory (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision INTEGER NOT NULL CHECK(revision>0)
+) STRICT;
+INSERT INTO router_embedding_inventory(singleton,revision) VALUES(1,1);
+CREATE INDEX router_embedding_candidate_connection ON router_embedding_candidates(
+    json_extract(body_json,'$.connectionId'));
+CREATE INDEX router_embedding_resultArtifact_artifactId ON router_embedding_qualifications(json_extract(body_json,'$.evidence.resultArtifact.artifactId'));
+CREATE INDEX router_embedding_resultArtifact_versionId ON router_embedding_qualifications(json_extract(body_json,'$.evidence.resultArtifact.versionId'));
+CREATE INDEX router_embedding_resultArtifact_sha256 ON router_embedding_qualifications(json_extract(body_json,'$.evidence.resultArtifact.sha256'));
+CREATE INDEX router_embedding_vectorArtifact_artifactId ON router_embedding_qualifications(json_extract(body_json,'$.evidence.vectorArtifact.artifactId'));
+CREATE INDEX router_embedding_vectorArtifact_versionId ON router_embedding_qualifications(json_extract(body_json,'$.evidence.vectorArtifact.versionId'));
+CREATE INDEX router_embedding_vectorArtifact_sha256 ON router_embedding_qualifications(json_extract(body_json,'$.evidence.vectorArtifact.sha256'));
+CREATE TRIGGER router_embedding_candidates_inventory_insert AFTER INSERT ON router_embedding_candidates
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_qualifications_inventory_insert AFTER INSERT ON router_embedding_qualifications
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_selection_inventory_insert AFTER INSERT ON router_embedding_selection
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_connection_insert AFTER INSERT ON router_connections
+WHEN EXISTS(SELECT 1 FROM router_embedding_candidates WHERE json_extract(body_json,'$.connectionId')=NEW.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_connection_update AFTER UPDATE ON router_connections
+WHEN EXISTS(SELECT 1 FROM router_embedding_candidates WHERE json_extract(body_json,'$.connectionId')=NEW.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_connection_delete AFTER DELETE ON router_connections
+WHEN EXISTS(SELECT 1 FROM router_embedding_candidates WHERE json_extract(body_json,'$.connectionId')=OLD.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_operation_update AFTER UPDATE ON operations
+WHEN EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id=NEW.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_artifacts_update AFTER UPDATE ON artifacts
+WHEN EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.resultArtifact.artifactId')=NEW.id) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.vectorArtifact.artifactId')=NEW.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_artifact_versions_update AFTER UPDATE ON artifact_versions
+WHEN EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.resultArtifact.versionId')=NEW.id) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.vectorArtifact.versionId')=NEW.id)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_blobs_update AFTER UPDATE ON blobs
+WHEN EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.resultArtifact.sha256')=NEW.digest) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE json_extract(body_json,'$.evidence.vectorArtifact.sha256')=NEW.digest)
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_principal_insert AFTER INSERT ON principal_authority
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_principal_update AFTER UPDATE ON principal_authority
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_principal_delete AFTER DELETE ON principal_authority
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;
+CREATE TRIGGER router_embedding_configuration_insert AFTER INSERT ON configuration_revisions
+BEGIN UPDATE router_embedding_inventory SET revision=revision+1 WHERE singleton=1; END;

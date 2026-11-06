@@ -933,3 +933,124 @@ fn durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation
         0
     );
 }
+
+fn inventory_stamp(s: &SqliteStore) -> (i64, i64) {
+    read_snapshot(s, &ReadOptions::default(), |r| {
+        Ok((
+            r.router().embedding_inventory_revision()?,
+            r.stamp().committed_sequence,
+        ))
+    })
+    .unwrap()
+}
+#[test]
+fn inventory_fence_tracks_non_history_status_and_original_policy_changes() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let first = inventory_stamp(&s);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut c = connection();
+        c.id = id("unrelated");
+        tx.router().put_connection(&c, None)?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        inventory_stamp(&s),
+        first,
+        "unrelated connection does not invalidate candidate pages"
+    );
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-connection"))?
+            .unwrap();
+        c.name = "Changed source metadata".into();
+        tx.router().put_connection(&c, Some(1))?;
+        Ok(())
+    })
+    .unwrap();
+    let renamed = inventory_stamp(&s);
+    assert!(renamed.0 > first.0);
+    assert_eq!(renamed.1, first.1);
+    // A separate store keeps the probe at its original captured connection revision.
+    drop(s);
+    drop(h);
+    let h = Harness::new();
+    let s = seeded(&h);
+    let fence = start(&s);
+    let before = inventory_stamp(&s);
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.operations().transition(
+            &OperationId(id("qualification-operation")),
+            3,
+            Some(&fence),
+            OperationState::OutcomeUnknown,
+            None,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let unknown = inventory_stamp(&s);
+    assert!(unknown.0 > before.0);
+    assert_eq!(
+        unknown.1, before.1,
+        "journal-only status changes need their own fence"
+    );
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "cursor-proof",
+            1,
+            1,
+            json!({"enabled":false}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let policy = inventory_stamp(&s);
+    assert!(policy.0 > unknown.0);
+    assert_eq!(policy.1, unknown.1);
+}
+#[test]
+fn inventory_fence_tracks_exact_retained_artifact_metadata() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let fence = start(&s);
+    let evidence = native_facts(&s);
+    stage(&s, fence, evidence.clone());
+    let before = inventory_stamp(&s);
+    let result = evidence.result_artifact.version_id.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.artifacts().tombstone_version(&result, T0)
+    })
+    .unwrap();
+    let deleted = inventory_stamp(&s);
+    assert!(deleted.0 > before.0);
+    assert_eq!(deleted.1, before.1);
+    let digest = evidence.vector_artifact.sha256.as_str().to_owned();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.artifacts().set_blob_state(
+            &digest,
+            BlobState::Present,
+            BlobState::UnlinkPending,
+            None,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let blob = inventory_stamp(&s);
+    assert!(blob.0 > deleted.0);
+    assert_eq!(blob.1, deleted.1);
+    let artifact = evidence.vector_artifact.artifact_id.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let mut a = tx.artifacts().artifact(&artifact)?.unwrap();
+        a.reference_revision += 1;
+        tx.artifacts().update_artifact(&a)?;
+        Ok(())
+    })
+    .unwrap();
+    let linked = inventory_stamp(&s);
+    assert!(linked.0 > blob.0);
+    assert_eq!(linked.1, blob.1);
+}

@@ -753,4 +753,4 @@ pub const MIGRATION_0032_SHA256: &str =
 
 /// Immutable shipped DW-119 migration prefix.
 pub const MIGRATION_0033_SHA256: &str =
-    "dac49ad0877ea02a187b3a4aca9181b850afff10b26d7dc28e5057df7e494db2";
+    "d9859b23d2d5c6d076959787e7a3b78d82eb59f51d0a43b6c550b940b61a8547";

@@ -1712,6 +1712,9 @@ impl JobRepository for Unsupported {
     }
 }
 impl EmbeddingRead for Unsupported {
+    fn embedding_inventory_revision(&self) -> Result<i64, StorageError> {
+        nope()
+    }
     fn embedding_candidate(
         &self,
         _: &Id,
