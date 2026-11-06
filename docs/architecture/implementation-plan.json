@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "3bfdf2cb890be627a977d1b73ec9e323799a6c191becce3133e1364bbec432bb",
-    "devworks-capability-catalog.json": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
+    "implementation-slices.json": "64ef39f050faf5d4655cbb1646e7be5b1cc3b829eaa88e98ba7f287a057c1c71",
+    "devworks-capability-catalog.json": "605c2b629d94df4257fe563b03b8fe80d440a5492c03ae7fbba902570d4fbe2a",
     "devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407",
     "codegraph-capability-inventory.json": "0e02242ba9d9156b329b729b7f769d1c25bcefdabe2a8b4a821ab5771cd8944e",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "8f90d40748f6fa5713fa020b01a607543bcecf32f0838f7b8e0d6ac91f565664",
+    "contracts/family-coverage.json": "7a208230e00d8f4480a12ddd7aa3114e5bb0a7beb74dde412a0aa86d269d675a",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
     "slices": 78,
     "operationFamilies": 49,
-    "operations": 357,
+    "operations": 359,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 357,
+    "inputSchemaCandidates": 359,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -1220,12 +1220,12 @@
         "work",
         "controls"
       ],
-      "acceptance": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause. Expose app-wide Approvals directly below Chat with project filtering under UI-14. Implement NOTIFY-05 verified feature/issue completion cards as a top-center floating newest-first stack on every page, persistent until explicit individual dismissal across navigation/restart, expandable with work links and retained history. Prevent duplicates, layout shifts, focus theft and essential-control obstruction; reading/opening is not dismissal and grants no decision/resume authority.",
+      "acceptance": "Approval proposals bind contents/target/revision, only host human interaction mints decisions, and approval wakeups re-admit saved operations without clearing pauses. Notifications and acknowledgment never resolve their linked decisions. Native OS denial retains in-app access. Feature-plan approval atomically promotes the exact pending draft with active scope/acceptance and history. Stale approval/edit races preserve the original plan; rejection leaves it approved. Approval never clears a pause. Expose app-wide Approvals directly below Chat with project filtering under UI-14. Implement NOTIFY-05 verified feature/issue completion cards as a top-center floating newest-first stack on every page, persistent until explicit individual dismissal across navigation/restart, expandable with work links and retained history. Prevent duplicates, layout shifts, focus theft and essential-control obstruction; reading/opening is not dismissal and grants no decision/resume authority. Schema-3 source-bound settings/feature-plan/finding-risk/saved-operation proposals retain immutable reviewed snapshots; saved operations use real registered admission and owner preflight with original actor provenance and private host human evidence. Knowledge review candidates are informational only: adopted KNOW-03/05 excludes autonomous acknowledgment and rule-approval authority. Explicit read/unread is separate from durable per-card acknowledgment; no duplicate dismissal operation.",
       "gates": [
         "G04",
         "G10"
       ],
-      "status": "Planned; implementation not authorized or started",
+      "status": "Native implementation in progress; acceptance tracked by DW-14",
       "readinessAcceptance": "Generic plan approval or notification acknowledgment cannot close readiness findings. Finding-specific human risk acceptance binds the finding/scope/revision and rationale, preserves history and still requires actual prerequisites, enforced permissions and required verification; stale decisions cannot clear changed findings or make incomplete work complete.",
       "dependsOn": [
         "DW-005",
@@ -1237,10 +1237,12 @@
         "approvals.inspect",
         "approvals.propose",
         "approvals.record_human_decision",
+        "approvals.review_queue",
         "notifications.list",
         "notifications.read",
         "notifications.acknowledge",
-        "notifications.settings"
+        "notifications.settings",
+        "notifications.mark_read"
       ],
       "primaryRequirements": [
         "NOTIFY-01",
@@ -15321,7 +15323,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<ProposalRecord>",
+      "resultValueType": "Page<ApprovalViewRecord>",
       "requestModes": [
         "Query"
       ],
@@ -15335,7 +15337,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ProposalRecord",
+      "resultValueType": "ApprovalViewRecord",
       "requestModes": [
         "Query"
       ],
@@ -15349,7 +15351,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ProposalRecord",
+      "resultValueType": "ApprovalViewRecord",
       "requestModes": [
         "Command"
       ],
@@ -15363,9 +15365,23 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "ProposalRecord",
+      "resultValueType": "ApprovalViewRecord",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "approvals.review_queue",
+      "family": "approvals",
+      "serviceOwner": "ApprovalService",
+      "primarySlice": "approvals",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "KnowledgeReviewPage",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
@@ -15422,6 +15438,20 @@
       "resultValueType": "NotificationSettingsRecord",
       "requestModes": [
         "Query",
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "notifications.mark_read",
+      "family": "notifications",
+      "serviceOwner": "NotificationService",
+      "primarySlice": "approvals",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "NotificationRecord",
+      "requestModes": [
         "Command"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"

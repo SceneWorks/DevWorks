@@ -1,0 +1,183 @@
+{
+  "date": "2026-11-05",
+  "scope": "DW-14 contracts/docs/ownership only; no inference or integrated service/UI acceptance",
+  "baseCommit": "8ca8138",
+  "counts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 359,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 359,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "operationModeBindings": 364,
+  "operationModeRevisionBindings": 541,
+  "legacySchemasByteIdentical": 56,
+  "generatorTests": {
+    "passed": 10
+  },
+  "schemaFixtures": 1838,
+  "domainFixtures": 1509,
+  "negativeDomainFixtures": 344,
+  "contractChecksPassed": true,
+  "nativeCoreChecks": {
+    "status": "awaiting assembled DW-14 service constructors",
+    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures"
+  },
+  "word": {
+    "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
+    "unchangedApprovedBlob": true,
+    "renderingClaim": "Existing approved QA reused; no new render or layout change"
+  },
+  "sourceSha256": {
+    "docs/architecture/implementation-slices.json": "64ef39f050faf5d4655cbb1646e7be5b1cc3b829eaa88e98ba7f287a057c1c71",
+    "docs/architecture/implementation-plan.json": "333faf305ab38cd0af9e4e3150c9bef610d7d291cb376352544a0e7f8c683c53",
+    "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
+    "docs/architecture/contracts/family-coverage.json": "7a208230e00d8f4480a12ddd7aa3114e5bb0a7beb74dde412a0aa86d269d675a"
+  },
+  "planningReaders": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/latest-model-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "domainReaders": {
+    "scope": "DW14 changed domain readers; document QA only",
+    "readers": [
+      {
+        "stem": "domain-operation-contracts",
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "localLinksChecked": 13
+      },
+      {
+        "stem": "domain-operation-reference",
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "qualifiedOperationRows": 359,
+        "localLinksChecked": 28
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "retainedProjectionTests": {
+    "passed": 3,
+    "source": "tools/contracts-eval/tests/allocation_projection.rs"
+  }
+}

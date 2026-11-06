@@ -76,6 +76,90 @@
       ],
       "type": "object"
     },
+    "ApprovalContent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "$ref": "#/$defs/List_SettingAssignment_1_128"
+            },
+            "kind": {
+              "const": "Settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "FeaturePlan",
+              "type": "string"
+            },
+            "proposalId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "proposalId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assessmentRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "featureId": {
+              "$ref": "#/$defs/Id"
+            },
+            "findingId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "FindingRisk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "featureId",
+            "findingId",
+            "assessmentRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/BoundedUntrustedJson"
+            },
+            "kind": {
+              "const": "SavedOperation",
+              "type": "string"
+            },
+            "schemaRevision": {
+              "$ref": "#/$defs/PositiveCounter"
+            }
+          },
+          "required": [
+            "kind",
+            "schemaRevision",
+            "input"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalState": {
       "enum": [
         "Pending",
@@ -4197,6 +4281,10 @@
             "operationKind": {
               "$ref": "#/$defs/Text1To256"
             },
+            "payload": {
+              "$ref": "#/$defs/ApprovalContent",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -6395,6 +6483,32 @@
             "suite"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "notifications.mark_read",
+              "type": "string"
+            },
+            "notificationId": {
+              "$ref": "#/$defs/Id"
+            },
+            "read": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "notificationId",
+            "expectedRevision",
+            "read"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },
@@ -8305,12 +8419,24 @@
         {
           "additionalProperties": false,
           "properties": {
+            "categories": {
+              "$ref": "#/$defs/List_Text1To256_0_128",
+              "x-since": 3
+            },
+            "completionOnly": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "kind": {
               "const": "notifications.list",
               "type": "string"
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
+            },
+            "read": {
+              "type": "boolean",
+              "x-since": 3
             },
             "scope": {
               "$ref": "#/$defs/DataScope"
@@ -10016,6 +10142,34 @@
           "required": [
             "kind",
             "projectId"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "approvals.review_queue",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "page"
           ],
           "type": "object",
           "x-since": 3

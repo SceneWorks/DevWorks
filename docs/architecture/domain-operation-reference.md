@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 357 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 359 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -377,10 +377,11 @@ All 357 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `approvals.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`state`: `?ApprovalState` | `Page<ProposalRecord>` |
-| `approvals.inspect` | **Query**<br>`proposalId`: `Id` | `ProposalRecord` |
-| `approvals.propose` | **Command**<br>`scope`: `DataScope`<br>`operationKind`: `Label`<br>`target`: `RevisionedRef`<br>`contentDigest`: `Digest`<br>`summary`: `Content`<br>`artifact`: `?ArtifactRef` | `ProposalRecord` |
-| `approvals.record_human_decision` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`contentDigest`: `Digest`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content` | `ProposalRecord` |
+| `approvals.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`state`: `?ApprovalState`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<ApprovalViewRecord>` |
+| `approvals.inspect` | **Query**<br>`proposalId`: `Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ApprovalViewRecord` |
+| `approvals.propose` | **Command**<br>`scope`: `DataScope`<br>`operationKind`: `Label`<br>`target`: `RevisionedRef`<br>`contentDigest`: `Digest`<br>`summary`: `Content`<br>`artifact`: `?ArtifactRef`<br>`payload`: `?ApprovalContent`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ApprovalViewRecord` |
+| `approvals.record_human_decision` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`contentDigest`: `Digest`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ApprovalViewRecord` |
+| `approvals.review_queue` | **Query**<br>`projectId`: `?ProjectId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `KnowledgeReviewPage` |
 
 ### Notifications
 
@@ -388,10 +389,11 @@ All 357 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `notifications.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool` | `Page<NotificationRecord>` |
-| `notifications.read` | **Query**<br>`notificationId`: `Id` | `NotificationRecord` |
-| `notifications.acknowledge` | **Command**<br>`notificationId`: `Id`<br>`expectedRevision`: `Revision` | `NotificationRecord` |
+| `notifications.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool`<br>`categories`: `?Items<Label>`<br>`read`: `?bool`<br>`completionOnly`: `?bool`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<NotificationRecord>` |
+| `notifications.read` | **Query**<br>`notificationId`: `Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `NotificationRecord` |
+| `notifications.acknowledge` | **Command**<br>`notificationId`: `Id`<br>`expectedRevision`: `Revision`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `NotificationRecord` |
 | `notifications.settings` | **Query**<br>No caller fields<br><br>**Command**<br>`expectedRevision`: `Revision`<br>`config`: `NotificationConfig` | `NotificationSettingsRecord` |
+| `notifications.mark_read` | **Command**<br>`notificationId`: `Id`<br>`expectedRevision`: `Revision`<br>`read`: `bool`<br><br>**Schema revisions** 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `NotificationRecord` |
 
 ### Git
 
@@ -1556,6 +1558,12 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `rootId` | `?RootId` |
 | `acknowledged` | `bool` |
 | `createdAtMs` | `Counter` |
+| `category` | `?Label` · *revision 3+* |
+| `projectId` | `?ProjectId` · *revision 3+* |
+| `read` | `?bool` · *revision 3+* |
+| `sourceId` | `?Id` · *revision 3+* |
+| `links` | `?Items<NotificationLink>` · *revision 3+* |
+| `requiresInput` | `?bool` · *revision 3+* |
 
 ### NotificationConfig
 
@@ -3662,6 +3670,87 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | --- | --- |
 | `featureId` | `Id` |
 | `requirementIds` | `Items<Id>` |
+
+### ApprovalViewRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `contentDigest` | `Digest` |
+| `state` | `ApprovalState` |
+| `operationKind` | `Label` |
+| `targetId` | `Id` |
+| `targetRevision` | `Revision` |
+| `summary` | `Content` |
+| `artifact` | `?ArtifactRef` |
+| `scope` | `?DataScope` · *revision 3+* |
+| `payload` | `?ApprovalContent` · *revision 3+* |
+| `stale` | `?bool` · *revision 3+* |
+| `requestedBy` | `?ActorId` · *revision 3+* |
+| `createdAtMs` | `?Counter` · *revision 3+* |
+| `scopeDigest` | `?Digest` · *revision 3+* |
+| `reviewedContent` | `?DynamicJson` · *revision 3+* |
+| `rationale` | `?Content` · *revision 3+* |
+| `resumeStatus` | `?Label` · *revision 3+* |
+| `resumedOperationId` | `?OperationId` · *revision 3+* |
+| `operationPreview` | `?SavedOperationPreview` · *revision 3+* |
+
+### SavedOperationPreview
+
+| Field | Type |
+| --- | --- |
+| `effect` | `Label` |
+| `targetIds` | `Items<Id>` |
+| `projectIds` | `Items<ProjectId>` |
+| `requestDigest` | `Digest` |
+
+### ApprovalContent
+
+| Kind | Fields |
+| --- | --- |
+| `Settings` | `entries`: `NonEmpty<SettingAssignment>` |
+| `FeaturePlan` | `proposalId`: `Id` |
+| `FindingRisk` | `featureId`: `Id`<br>`findingId`: `Id`<br>`assessmentRevision`: `Revision` |
+| `SavedOperation` | `schemaRevision`: `PositiveCounter`<br>`input`: `DynamicJson` |
+
+### KnowledgeReviewKind
+
+`Challenge`, `ProposedRule`, `Contradiction`.
+
+### KnowledgeReviewItem
+
+| Field | Type |
+| --- | --- |
+| `kind` | `KnowledgeReviewKind` |
+| `entry` | `KnowledgeClaim` |
+| `other` | `?KnowledgeClaim` |
+| `priority` | `Label` |
+| `recurrence` | `Counter` |
+| `sinceMs` | `Counter` |
+| `challenges` | `Rows<LessonChallenge>` |
+| `moreChallenges` | `?Counter` |
+| `author` | `?ActorId` |
+| `otherAuthor` | `?ActorId` |
+| `informational` | `bool` |
+
+### KnowledgeReviewPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<KnowledgeReviewItem>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+
+### NotificationLink
+
+| Field | Type |
+| --- | --- |
+| `kind` | `Label` |
+| `targetId` | `?Id` |
+| `url` | `?Url` |
+| `artifact` | `?ArtifactRef` |
+| `projectId` | `?ProjectId` |
 
 ## Machine sources
 

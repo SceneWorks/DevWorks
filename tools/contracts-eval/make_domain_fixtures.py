@@ -916,6 +916,54 @@ case('dw13-reject-current-in-old-receipt','domain-command-reply',current_receipt
 transfer=sample('WorkRecord');transfer.update(kind='Task',parentId='feature-b',inheritsRequirementIds=['E2'],previousInheritance={'featureId':'feature-a','requirementIds':['E1']})
 case('dw13-origin-qualified-inheritance','operation-result.r3',{'kind':'tasks.get','value':transfer})
 case('dw13-reject-previous-inheritance-before3','operation-result.r2',{'kind':'tasks.get','value':transfer},False,False)
+# DW14 typed immutable approvals, informational review, and explicit notification mutations.
+for variant,payload in [
+ ('settings',{'kind':'Settings','entries':[sample('SettingAssignment')]}),
+ ('feature-plan',{'kind':'FeaturePlan','proposalId':'plan-a'}),
+ ('finding-risk',{'kind':'FindingRisk','featureId':'feature-a','findingId':'finding-a','assessmentRevision':'7'}),
+ ('saved-operation',{'kind':'SavedOperation','schemaRevision':'3','input':{'rootId':'root-a','purpose':'Planning'}}),
+]:
+ frame=request('approvals.propose','Command');frame['schemaRevision']=3;frame['body']['payload']=payload
+ case('dw14-propose-'+variant,'domain-request.r3',frame)
+ mutate('dw14-payload-before3-'+variant,'dw14-propose-'+variant,['schemaRevision'],1,entry='domain-request')
+for key in ['human','humanWitness','approvalToken','resumeGrant','originalActorId']:
+ frame=request('approvals.record_human_decision','Command');frame['schemaRevision']=3;frame['body'][key]=True if key=='human' else 'forged'
+ case('dw14-reject-authority-'+key,'domain-request.r3',frame,False,False)
+mutate('dw14-saved-invalid-revision','dw14-propose-saved-operation',['body','payload','schemaRevision'],'65536',False,True)
+mutate('dw14-saved-body-kind','dw14-propose-saved-operation',['body','payload','input','kind'],'roots.start',False,True)
+mutate('dw14-saved-body-scalar','dw14-propose-saved-operation',['body','payload','input'],'not a closed object',False,True)
+mutate('dw14-saved-zero-revision','dw14-propose-saved-operation',['body','payload','schemaRevision'],'0')
+approval=sample('ApprovalViewRecord');approval.update(scope={'kind':'Project','projectId':'project-a'},payload={'kind':'FindingRisk','featureId':'feature-a','findingId':'finding-a','assessmentRevision':'7'},stale=False,requestedBy='actor-a',createdAtMs='100',scopeDigest='b'*64,reviewedContent={'findingId':'finding-a','assessmentRevision':'7'},rationale='Exact reviewed finding and scope',resumeStatus='NotApplicable',operationPreview={'effect':'Local','targetIds':['finding-a'],'projectIds':['project-a'],'requestDigest':'c'*64})
+case('dw14-approval-view','operation-result.r3',{'kind':'approvals.inspect','value':approval})
+case('dw14-view-before3','operation-result',{'kind':'approvals.inspect','value':approval},False,False)
+case('dw14-view-does-not-contaminate-feature-owner','operation-result.r3',{'kind':'features.request_plan_approval','value':approval},False,False)
+notice=sample('NotificationRecord');notice.update(category='Completion',projectId='project-a',read=False,sourceId='completion-feature-a-7',links=[{'kind':'Feature','targetId':'feature-a','projectId':'project-a'}],requiresInput=False)
+case('dw14-completion-notification','operation-result.r3',{'kind':'notifications.read','value':notice})
+case('dw14-notification-metadata-before3','operation-result',{'kind':'notifications.read','value':notice},False,False)
+frame=request('notifications.list','Query');frame['schemaRevision']=3;frame['body'].update(categories=['Completion'],read=False,completionOnly=True)
+case('dw14-completion-stack-filter','domain-request.r3',frame)
+mutate('dw14-filter-before3','dw14-completion-stack-filter',['schemaRevision'],1,entry='domain-request')
+for state in [True,False]:
+ frame=request('notifications.mark_read','Command');frame['body']['read']=state
+ case('dw14-explicit-'+('read'if state else'unread'),'domain-request.r3',frame)
+mutate('dw14-mark-read-is-command','input-notifications.mark_read-Command',['mode'],'Query')
+mutate('dw14-detail-has-no-write-flag','input-notifications.read-Query',['body','read'],True)
+mutate('dw14-ack-has-no-decision','input-notifications.acknowledge-Command',['body','decision'],'Approve')
+for name in ['approvals.review_queue','notifications.mark_read']:
+ mode=OPS[name]['mode'];frame=request(name,mode);frame['schemaRevision']=1
+ case('dw14-no-legacy-'+name,'domain-request',frame,False,False)
+for kind in ['Challenge','ProposedRule','Contradiction']:
+ item=sample('KnowledgeReviewItem');item.update(kind=kind,priority='Highest',recurrence='3',sinceMs='100',informational=True,author='actor-a')
+ if kind=='Contradiction':item.update(other=sample('KnowledgeClaim'),otherAuthor='actor-b')
+ if kind=='Challenge':item.update(challenges=[sample('LessonChallenge')],moreChallenges='2')
+ case('dw14-review-'+kind,'operation-result.r3',{'kind':'approvals.review_queue','value':{'items':[item],'hasMore':False}})
+mutate('dw14-review-cannot-authorize','dw14-review-Challenge',['value','items',0,'informational'],False,False,True)
+mutate('dw14-review-challenge-bound','dw14-review-Challenge',['value','items',0,'challenges'],[sample('LessonChallenge')for _ in range(4)],False,True)
+mutate('dw14-review-continuation','dw14-review-Challenge',['value','hasMore'],True,False,True)
+frame=request('approvals.review_queue','Query');frame['body']['page']['limit']=50
+case('dw14-review-max-limit','domain-request.r3',frame)
+mutate('dw14-review-limit-51','dw14-review-max-limit',['body','page','limit'],51,False,True)
+
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue

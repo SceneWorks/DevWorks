@@ -24,6 +24,19 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
     if matches!(name, "WorkRecord" | "TaskPatch" | "IssuePatch" | "TaskPlanEntry" | "FeaturePatch" | "FeaturePlanDraft") { work_metadata(v)?; }
     if name == "WorkRecord" { require(v["kind"] != "Feature" || !present(v, "taskType"), "feature cannot have a card type")?; }
+    if name == "KnowledgeReviewItem" {
+        require(v["informational"] == true, "Knowledge review candidates are informational")?;
+        require(v["challenges"].as_array().is_none_or(|items| items.len() <= 3), "review shows at most three open challenges")?;
+    }
+    if name == "KnowledgeReviewPage" {
+        require(v["hasMore"] == present(v, "nextCursor"), "review page continuation mismatch")?;
+        require(v["items"].as_array().is_none_or(|items| items.len() <= 50), "review page limit is fifty")?;
+    }
+    if name == "ApprovalViewRecord" && v["payload"]["kind"] == "SavedOperation" {
+        let v = &v["payload"];
+        require(v["schemaRevision"].as_str().and_then(|n| n.parse::<u16>().ok()).is_some(), "saved operation schema revision exceeds supported range")?;
+        require(v["input"].is_object() && v["input"].get("kind").is_none(), "saved operation input is the closed argument object without operation kind")?;
+    }
     eval_record(name, v)?;
     match name {
         "ClaimDraft" => require(
@@ -175,6 +188,14 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "approvals.propose" && v["payload"]["kind"] == "SavedOperation" {
+        let saved = &v["payload"];
+        require(saved["schemaRevision"].as_str().and_then(|n| n.parse::<u16>().ok()).is_some(), "saved operation schema revision exceeds supported range")?;
+        require(saved["input"].is_object() && saved["input"].get("kind").is_none(), "saved operation input is the closed argument object without operation kind")?;
+    }
+    if op == "approvals.review_queue" {
+        require(v["page"]["limit"].as_u64().is_none_or(|limit| limit <= 50), "review queue limit is fifty")?;
+    }
     if matches!(op, "tasks.create" | "issues.create") { work_metadata(v)?; }
     if op == "features.create" && v["creation"]["kind"] == "Single" { work_metadata(&v["creation"])?; }
     for k in [

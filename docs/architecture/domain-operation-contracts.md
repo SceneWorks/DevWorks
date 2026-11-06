@@ -1,12 +1,20 @@
 # Operation schemas and domain contracts
 
-Current baseline 1.1 adds [incoming MCP server contracts](mcp-server-contracts.html) and four typed internal administration operations. The current register has 352 operations in 48 families; historical counts below describe their original checkpoints. New MCP transport/authentication/client behavior remains DW-063/064 implementation acceptance.
+Current baseline 1.1 adds [incoming MCP server contracts](mcp-server-contracts.html) and four typed internal administration operations. The current register has 359 operations in 49 families; historical counts below describe their original checkpoints. New MCP transport/authentication/client behavior remains DW-063/064 implementation acceptance.
 
 2 November 2026 · Architecture candidate `1.0-draft.1` · All catalog inputs and result tags assigned. This closes the unbound operation-schema planning gap; it is not a public SDK freeze or production acceptance.
 
 All **347 operations in 47 families** now have concrete input candidates and operation-specific result tags. The 58 earlier bindings remain; 289 new operations contribute 294 request variants because five names support both a read and a mutation. The [coverage register](contracts/family-coverage.json) records each selected operation, allowed modes, payload/result schema, authority, effect and recovery rules. The [schema manifest](contracts/manifest.json) contains 44 schemas. The [field reference](domain-operation-reference.html) lists every operation and domain type.
 
 Confidence is high in the machine-checked wire coverage, selected-mode boundaries and recorded pure invariants. Confidence remains medium in production conformance until actual services, authority/SDK/provider adapters and target platforms pass their assigned gates. Requirements remain 208 Confirmed and 137 Proposed. No additional product choice was needed.
+
+## Approval and notification revision 3
+
+DW-14 adds exact source-bound `ApprovalContent`: immutable settings entries, an existing feature-plan proposal reference, a finding/assessment revision, or a saved registered operation and schema revision. The approval-only `ApprovalViewRecord` preserves the original settings/work-owned `ProposalRecord` and folds back to that exact name below revision 3. Optional review metadata exposes immutable reviewed content, stale state, requester, scope digest and actual admission-derived preview; it never exposes host witness, original authority context or internal resume grants. A saved operation carries only its closed argument body. The service uses registered admission and current owner preflight; a human decision cannot waive disabled/read-only capabilities, enforced permissions, required prerequisites or verification. Original agent attribution remains original, with the actual human decision recorded separately.
+
+`approvals.review_queue` is a revision-3-only query returning a dedicated bounded `KnowledgeReviewPage`. Under adopted KNOW-03/05, challenged entries, proposed-rule candidates and contradiction pairs are informational links to existing Knowledge actions; no autonomous acknowledgment or rule-approval authority is introduced. Source-derived priority ranks Prompt/RelayedPrompt highest and Review/RelayedReview high, followed by recurrence descending, oldest first and entry ID. The interactive page defaults to 20, is limited to 50, scans at most 500 candidates per kind and shows at most three open challenges with an explicit remaining count. Unsupported future producers are not advertised.
+
+Notification detail remains a pure query. Revision-3 `notifications.mark_read` explicitly changes per-recipient read state; the existing `notifications.acknowledge` explicitly dismisses one persistent completion card while retaining history. Neither mutation resolves a linked decision or resumes work. Completion records use category `Completion`, stable newest-first ordering and source identity for deduplication, with typed work links and independent read/acknowledgment state. Schema metadata and fixtures do not establish native OS, ingress or UI behavior; [contract qualification](validation/approval-notification-contracts/README.md) records the narrower evidence.
 
 ## Selected operation and request mode
 
