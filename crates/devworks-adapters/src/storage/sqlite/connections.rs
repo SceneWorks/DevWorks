@@ -234,6 +234,19 @@ pub(super) fn connections(
     rows.into_iter().map(connection_of).collect()
 }
 
+pub(super) fn connection_account_revision(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<i64>, StorageError> {
+    db(conn
+        .query_row(
+            "SELECT account_revision FROM provider_connection_identities WHERE id=?1",
+            [id.as_str()],
+            |r| r.get(0),
+        )
+        .optional())
+}
+
 fn validate_connection(c: &StoredConnection) -> Result<(), StorageError> {
     if !PROFILES.contains(&c.profile.as_str()) {
         return Err(invalid("unknown endpoint profile"));
@@ -295,9 +308,17 @@ pub(super) fn put_connection(
     {
         return Err(invalid("a credential revision never goes back"));
     }
+    let previous_identity = connection_account_revision(conn, &c.id)?;
     match &current {
-        None if c.account_revision != 1 => {
-            return Err(invalid("a new account identity starts at revision one"));
+        None if previous_identity.unwrap_or(0).checked_add(1) != Some(c.account_revision) => {
+            return Err(invalid(
+                "a new account identity must advance the retained generation by one",
+            ));
+        }
+        Some(prev) if previous_identity != Some(prev.account_revision) => {
+            return Err(corrupt(
+                "connection account identity generation differs from its retained generation",
+            ));
         }
         Some(prev)
             if c.account_revision != prev.account_revision
@@ -366,6 +387,11 @@ pub(super) fn put_connection(
             c.local_free,
             c.account_revision,
         ],
+    ))?;
+    db(conn.execute(
+        "INSERT INTO provider_connection_identities(id,account_revision) VALUES(?1,?2) \
+         ON CONFLICT(id) DO UPDATE SET account_revision=excluded.account_revision",
+        params![c.id.as_str(), c.account_revision],
     ))?;
     connection(conn, &c.id)?.ok_or_else(|| corrupt("connection vanished inside its transaction"))
 }
