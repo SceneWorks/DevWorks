@@ -211,6 +211,19 @@ impl QueryHandler for GraphService {
                 }
                 requested = Some(ViewSelection::Pinned { pin_id });
             }
+            let current_worktree = if requested.is_none() {
+                match self.current_worktree(ctx, deadline, env.cancellation) {
+                    Err(Failure::Refused(reason))
+                        if reason.code == DomainErrorCode::ViewUnavailable
+                            && matches!(request.query, GraphQuery::ScopeStatus) =>
+                    {
+                        None
+                    }
+                    other => other?,
+                }
+            } else {
+                None
+            };
             let selected = match lease::select(
                 lease::Host {
                     store: &self.store,
@@ -225,6 +238,7 @@ impl QueryHandler for GraphService {
                     deadline_ms: Some(deadline),
                     cancellation: env.cancellation.cloned(),
                 },
+                current_worktree.as_ref(),
             ) {
                 Ok(selected) => {
                     if request.cursor.is_some() {
@@ -268,7 +282,8 @@ impl QueryHandler for GraphService {
                     if r.code == DomainErrorCode::ViewUnavailable
                         && request.current == Some(true)
                         && metadata_query(&request.query)
-                        && ctx.worktree().is_none() =>
+                        && (ctx.worktree().is_none()
+                            || matches!(request.query, GraphQuery::ScopeStatus)) =>
                 {
                     None
                 }
@@ -369,12 +384,51 @@ impl QueryHandler for GraphService {
     }
 }
 impl GraphService {
+    fn current_worktree(
+        &self,
+        ctx: &InvocationContext,
+        deadline: i64,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Option<Id>, Failure> {
+        let Some(bound) = ctx.worktree() else {
+            return Ok(None);
+        };
+        let env = self
+            .indexing
+            .as_ref()
+            .ok_or_else(|| scope::unavailable(Some(bound.id().clone())))?;
+        let record = read_snapshot(
+            &*self.store,
+            &ReadOptions {
+                deadline_ms: Some(deadline),
+                cancellation: cancellation.cloned(),
+            },
+            |read| Ok(scope::owned(read, ctx)),
+        )??
+        .ok_or_else(|| scope::unavailable(Some(bound.id().clone())))?;
+        // The two ID namespaces differ. Resolve only this host-owned path, outside any SQL
+        // snapshot; never use a caller-supplied path or guess the published baseline.
+        let canonical = env
+            .source
+            .canonical_dir(std::path::Path::new(&record.path))
+            .map_err(|_| scope::unavailable(Some(bound.id().clone())))?;
+        let location = crate::services::indexing::paths::native_location(
+            &canonical.display().to_string(),
+            cfg!(windows),
+        );
+        Ok(Some(crate::services::indexing::discover::worktree_id(
+            &record.repository_id,
+            &location,
+        )))
+    }
+
     fn answer(
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
         read: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, Failure> {
+        scope::owned(read, ctx)?;
         let prepared = query
             .prepared::<ReadPrepared>()
             .ok_or_else(|| scope::unavailable(None))?;
@@ -427,6 +481,7 @@ impl GraphService {
             context: ctx,
             scope: &request.scope,
             stamp: stamp.clone(),
+            selection: selected.map(|selection| &selection.pin),
             position: position.clone(),
             limit: request.limits.max_results as usize,
             next: RefCell::new(None),
@@ -503,7 +558,7 @@ impl GraphService {
             .unwrap_or_default();
         let partial = !gaps.is_empty() || !missing.is_empty();
         let unavailable = selected.is_none();
-        let coverage = coverage(
+        let mut coverage = coverage(
             &gaps,
             if unavailable {
                 CoverageState::Unavailable
@@ -513,6 +568,12 @@ impl GraphService {
                 CoverageState::Complete
             },
         );
+        if missing
+            .iter()
+            .any(|missing| missing.reason == "ScopeEnumerationIncomplete")
+        {
+            coverage.more_gaps = true;
+        }
         let unavailable_repositories = missing
             .iter()
             .map(|m| model::wire(json!({"repositoryId":m.repository_id,"reason":m.reason})))
@@ -689,15 +750,51 @@ impl GraphService {
         current: bool,
     ) -> Result<GraphResult, Failure> {
         let mut repositories = Vec::new();
-        metadata.repositories(|row|{if let Some(env)=&self.indexing{let status=crate::services::indexing::status::status(env,metadata.read,metadata.context,&row.id,3,None)?;let value=serde_json::to_value(status).map_err(|_|scope::unavailable(None))?;let record:CodeRepositoryStatus=model::wire(json!({"repositoryId":row.id,"freshness":value["freshness"],"languages":value["languages"],"semanticPacks":value["semanticPacks"],"overlays":value["overlays"]}))?;if repositories.len()>=metadata.limit||!metadata.retain_wire(&record)?{*metadata.next.borrow_mut()=Some(Position{offset:repositories.len(),..Default::default()});return Ok(false);}repositories.push(record);}Ok(true)})?;
+        let mut position = 0;
+        metadata.repositories(|row| {
+            let index = position;
+            position += 1;
+            if index < metadata.position.offset {
+                return Ok(true);
+            }
+            if let Some(env) = &self.indexing {
+                let status = crate::services::indexing::status::status(
+                    env,
+                    metadata.read,
+                    metadata.context,
+                    &row.id,
+                    3,
+                    None,
+                )?;
+                let value = serde_json::to_value(status).map_err(|_| scope::unavailable(None))?;
+                let record: CodeRepositoryStatus = model::wire(json!({
+                    "repositoryId":row.id,"freshness":value["freshness"],
+                    "languages":value["languages"],"semanticPacks":value["semanticPacks"],
+                    "overlays":value["overlays"]
+                }))?;
+                if repositories.len() >= metadata.limit || !metadata.retain_wire(&record)? {
+                    *metadata.next.borrow_mut() = Some(Position {
+                        offset: index,
+                        ..Default::default()
+                    });
+                    return Ok(false);
+                }
+                repositories.push(record);
+            }
+            Ok(true)
+        })?;
         if let Some(reader) = &mut reader {
             reader.budget.absorb_usage(&metadata.budget.borrow());
             reader.next = metadata.next.borrow().clone();
         }
-        let available = reader.is_some();
-        let mut value = json!({"stamp":metadata.stamp,"coverage":coverage(&[],if available{CoverageState::Complete}else{CoverageState::Unavailable}),"current":current,"repositories":repositories});
+        let available = reader.is_some() && self.indexing.is_some();
+        let mut value = json!({"stamp":metadata.stamp,"coverage":coverage(&[],if available{CoverageState::Complete}else{CoverageState::Unavailable}),"current":current&&available,"repositories":repositories});
         if !available {
-            value["unavailableReason"] = json!("NotIndexed");
+            value["unavailableReason"] = json!(if self.indexing.is_none() {
+                "IndexerUnavailable"
+            } else {
+                "GraphViewUnavailable"
+            });
         }
         Ok(GraphResult::ScopeDetails {
             value: model::wire(value)?,
@@ -1147,11 +1244,24 @@ fn bound_cursors(
     if let Some(selected) = selected {
         canonical["selection"] = json!(selected.pin.intent_digest);
         let mut registrations = Vec::new();
-        for view in &selected.pin.scope.views {
+        for repository_id in selected
+            .pin
+            .scope
+            .views
+            .iter()
+            .map(|view| &view.repository_id)
+            .chain(
+                selected
+                    .pin
+                    .unavailable_repositories
+                    .iter()
+                    .map(|missing| &missing.repository_id),
+            )
+        {
             let repository = read
                 .projects()
-                .repository(&view.repository_id)?
-                .ok_or_else(|| scope::unavailable(Some(view.repository_id.clone())))?;
+                .repository(repository_id)?
+                .ok_or_else(|| scope::unavailable(Some(repository_id.clone())))?;
             registrations.push(json!({"id":repository.id,"revision":repository.revision,"name":repository.name,"remote":repository.remote_url}));
         }
         canonical["registrations"] = json!(registrations);

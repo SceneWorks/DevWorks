@@ -50,6 +50,13 @@ pub(super) fn detail(
         reader.next = None;
     }
     let edges = reader.raw_edges()?;
+    let unmapped = super::unmapped::count(
+        reader,
+        &edges.unmapped,
+        &[dataset::identity(&target)],
+        None,
+        &[],
+    )?;
     let key = dataset::node_key(&target);
     let incident: Vec<_> = edges
         .linked
@@ -111,7 +118,7 @@ pub(super) fn detail(
     }
     Ok(GraphResult::NodeDetail {
         value: model::wire(
-            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&reader.selected.pin.unavailable_repositories.is_empty()}),
+            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
         )?,
     })
 }
@@ -169,8 +176,8 @@ pub(super) fn by_file(
     } else {
         None
     };
-    let low = rows.iter().filter(|n| dataset::low_node(n)).count();
     let nodes = reader.page_nodes(&rows)?;
+    let low = model::low_nodes(&nodes);
     Ok(GraphResult::CodeNodes {
         value: CodeNodesResult {
             nodes: crate::protocol::support::BoundedList(nodes),
@@ -291,7 +298,7 @@ pub(super) fn traverse(
         }
     }
     let kinds: Vec<_> = kinds.iter().map(|k| k.as_str()).collect();
-    let (steps, _) = walk(
+    let (steps, all) = walk(
         reader,
         Walk {
             starts: &seeds,
@@ -300,9 +307,19 @@ pub(super) fn traverse(
             depth,
         },
     )?;
-    graph_steps(reader, &steps)
+    let identities: Vec<_> = seeds
+        .iter()
+        .map(dataset::identity)
+        .chain(steps.iter().map(|step| step.identity.clone()))
+        .collect();
+    let unmapped = super::unmapped::count(reader, &all.unmapped, &identities, None, &kinds)?;
+    graph_steps(reader, &steps, unmapped)
 }
-fn graph_steps(reader: &mut Reader<'_>, steps: &[Step]) -> Result<GraphResult, Failure> {
+fn graph_steps(
+    reader: &mut Reader<'_>,
+    steps: &[Step],
+    unmapped: Option<u64>,
+) -> Result<GraphResult, Failure> {
     let mut nodes = BTreeMap::<Key, CodeNode>::new();
     let mut edges = Vec::new();
     let mut seen = BTreeSet::new();
@@ -352,14 +369,13 @@ fn graph_steps(reader: &mut Reader<'_>, steps: &[Step]) -> Result<GraphResult, F
             break;
         }
     }
-    let low = edges
-        .iter()
-        .filter(|e| e.confidence.as_ref().is_some_and(|c| c.get() < 0.5))
-        .count();
+    let low = model::low_nodes(nodes.values());
+    let mut value = json!({"nodes":nodes.into_values().collect::<Vec<_>>(),"edges":edges,"lowConfidenceCount":low.to_string()});
+    if let Some(count) = unmapped {
+        value["unmappedInboundEdges"] = json!(count.to_string());
+    }
     Ok(GraphResult::CodeGraph {
-        value: model::wire(
-            json!({"nodes":nodes.into_values().collect::<Vec<_>>(),"edges":edges,"lowConfidenceCount":low.to_string()}),
-        )?,
+        value: model::wire(value)?,
     })
 }
 
@@ -375,7 +391,7 @@ pub(super) fn calls(
         CodeTraceDirection::Outbound => Direction::Forward,
         CodeTraceDirection::Both => Direction::Both,
     };
-    let (steps, _) = walk(
+    let (steps, all) = walk(
         reader,
         Walk {
             starts: &starts,
@@ -384,23 +400,30 @@ pub(super) fn calls(
             depth: selection.depth.get() as u16,
         },
     )?;
-    let entries = entries(reader, &steps)?;
-    let low = entries
+    let identities: Vec<_> = starts
         .iter()
-        .filter(|e| {
-            e.node
-                .confidence
-                .as_ref()
-                .is_some_and(|v| v.0.eq_ignore_ascii_case("low"))
-        })
-        .count();
+        .map(dataset::identity)
+        .chain(steps.iter().map(|step| step.identity.clone()))
+        .collect();
+    let unmapped = super::unmapped::count(
+        reader,
+        &all.unmapped,
+        &identities,
+        Some(&selection.target),
+        &["CALLS", "HTTP_CALLS"],
+    )?;
+    let entries = entries(reader, &steps)?;
     let start = starts
         .first()
         .map(|n| reader.node(n, None).map(|n| n.0))
         .transpose()?;
+    let low = model::low_nodes(entries.iter().map(|entry| &entry.node).chain(start.iter()));
     let mut value = json!({"entries":entries,"lowConfidenceCount":low.to_string()});
     if let Some(start) = start {
         value["start"] = json!(start);
+    }
+    if let Some(count) = unmapped {
+        value["unmappedInboundEdges"] = json!(count.to_string());
     }
     Ok(GraphResult::CallTrace {
         value: model::wire(value)?,
@@ -429,7 +452,7 @@ pub(super) fn shortest(
         },
     )?;
     let Some(target) = target else {
-        return graph_steps(reader, &[]);
+        return graph_steps(reader, &[], None);
     };
     let mut cursor = dataset::node_key(&target);
     let mut path = Vec::new();
@@ -456,7 +479,7 @@ pub(super) fn shortest(
         }
     }
     path.reverse();
-    graph_steps(reader, &path)
+    graph_steps(reader, &path, None)
 }
 
 pub(super) fn related(
@@ -472,6 +495,13 @@ pub(super) fn related(
     } else {
         &["CONSUMES", "CALLS", "HTTP_CALLS", "USES_TYPE", "HANDLES"][..]
     };
+    let unmapped = super::unmapped::count(
+        reader,
+        &edges.unmapped,
+        &super::unmapped::identities(&starts),
+        Some(selection),
+        kinds,
+    )?;
     let mut rows = Vec::new();
     let mut seen = BTreeSet::new();
     for edge in &edges.linked {
@@ -493,7 +523,7 @@ pub(super) fn related(
             break;
         }
         let item = model::wire(
-            json!({"node":reader.node(node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_edge(edge)}),
+            json!({"node":reader.node(node,None)?.0,"edgeKind":edge.raw.edge.kind,"lowConfidence":dataset::low_node(node)}),
         )?;
         if !reader.retain_wire(&item)? {
             reader.next = Some(Position {
@@ -508,8 +538,12 @@ pub(super) fn related(
         .iter()
         .filter(|r: &&CodeRelatedNode| r.low_confidence)
         .count();
+    let mut value = json!({"nodes":result,"lowConfidenceCount":low.to_string()});
+    if let Some(count) = unmapped {
+        value["unmappedInboundEdges"] = json!(count.to_string());
+    }
     Ok(GraphResult::Related {
-        value: model::wire(json!({"nodes":result,"lowConfidenceCount":low.to_string()}))?,
+        value: model::wire(value)?,
     })
 }
 
@@ -539,6 +573,18 @@ pub(super) fn lineage(
             depth: 4,
         },
     )?;
+    let identities: Vec<_> = starts
+        .iter()
+        .map(dataset::identity)
+        .chain(
+            inbound
+                .iter()
+                .chain(&outbound)
+                .map(|step| step.identity.clone()),
+        )
+        .collect();
+    let unmapped =
+        super::unmapped::count(reader, &all.unmapped, &identities, Some(selection), kinds)?;
     let cross: Vec<_> = all
         .linked
         .iter()
@@ -619,14 +665,23 @@ pub(super) fn lineage(
             }
         }
     }
-    let low = inbound
-        .iter()
-        .chain(&outbound)
-        .filter(|s| dataset::low_edge(&s.edge))
-        .count();
-    let mut value = json!({"modelName":starts.first().map(|n|n.node.name.as_str()).unwrap_or(""),"producers":producers,"consumers":consumers,"crossRepository":links,"relatedNodes":related.into_values().collect::<Vec<_>>(),"lowConfidenceCount":low.to_string()});
-    if let Some(start) = starts.first() {
-        value["model"] = json!(reader.node(start, None)?.0);
+    let model_node = starts
+        .first()
+        .map(|node| reader.node(node, None).map(|value| value.0))
+        .transpose()?;
+    let low = model::low_nodes(
+        producers
+            .iter()
+            .chain(&consumers)
+            .map(|entry| &entry.node)
+            .chain(model_node.iter()),
+    );
+    let mut value = json!({"modelName":starts.first().map(|n|n.node.name.as_str()).unwrap_or_else(||match selection{CodeNodeSelection::Name{name,..}=>name.0.as_str(),_=>""}),"producers":producers,"consumers":consumers,"crossRepository":links,"relatedNodes":related.into_values().collect::<Vec<_>>(),"lowConfidenceCount":low.to_string()});
+    if let Some(count) = unmapped {
+        value["unmappedInboundEdges"] = json!(count.to_string());
+    }
+    if let Some(model) = model_node {
+        value["model"] = json!(model);
     }
     Ok(GraphResult::Lineage {
         value: model::wire(value)?,

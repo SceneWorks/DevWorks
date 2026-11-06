@@ -19,6 +19,7 @@ pub(super) struct Metadata<'a> {
     pub context: &'a InvocationContext,
     pub scope: &'a DataScope,
     pub stamp: ReadStamp,
+    pub selection: Option<&'a StoredGraphReadPin>,
     pub position: Position,
     pub limit: usize,
     pub next: RefCell<Option<Position>>,
@@ -33,6 +34,35 @@ impl Metadata<'_> {
         &self,
         mut visit: impl FnMut(StoredRepository) -> Result<bool, Failure>,
     ) -> Result<(), Failure> {
+        if let Some(pin) = self.selection {
+            let mut members: Vec<_> = pin
+                .scope
+                .views
+                .iter()
+                .map(|view| &view.repository_id)
+                .chain(
+                    pin.unavailable_repositories
+                        .iter()
+                        .map(|missing| &missing.repository_id),
+                )
+                .collect();
+            members.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            for id in members {
+                if !self.budget.borrow_mut().visit() {
+                    return Ok(());
+                }
+                super::scope::authorize(self.read, self.context, self.scope, id)?;
+                let repository = self
+                    .read
+                    .projects()
+                    .repository(id)?
+                    .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
+                if !visit(repository)? {
+                    break;
+                }
+            }
+            return Ok(());
+        }
         let project = match self.scope {
             DataScope::Project { project_id } => {
                 crate::services::projects::visible_project(
@@ -317,9 +347,8 @@ impl<'a> Reader<'a> {
             )
             .into());
         }
-        if rows.is_empty()
-            && (self.budget.exhausted.is_some()
-                || !self.selected.pin.unavailable_repositories.is_empty())
+        if self.budget.exhausted.is_some()
+            || (rows.is_empty() && !self.selected.pin.unavailable_repositories.is_empty())
         {
             return Err(Refusal::new(
                 DomainErrorCode::ViewUnavailable,

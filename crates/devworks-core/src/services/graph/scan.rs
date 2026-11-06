@@ -88,7 +88,66 @@ pub(super) fn endpoint(
         });
         Ok(true)
     })?;
-    Ok(if ambiguous { None } else { found })
+    Ok(if ambiguous || budget.exhausted.is_some() {
+        None
+    } else {
+        found
+    })
+}
+
+fn qualified_endpoint(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    repository: &crate::protocol::Id,
+    payload: &serde_json::Value,
+    budget: &mut Budget,
+) -> Result<Option<GraphNodeIdentity>, Failure> {
+    let local = GraphScope {
+        views: scope
+            .views
+            .iter()
+            .filter(|view| &view.repository_id == repository)
+            .cloned()
+            .collect(),
+    };
+    if local.views.is_empty() {
+        return Ok(None);
+    }
+    let Some(qualified) = payload["targetQualifiedName"].as_str() else {
+        return Ok(None);
+    };
+    if payload
+        .get("targetKind")
+        .is_some_and(|kind| !kind.is_string())
+    {
+        return Ok(None);
+    }
+    let filter = GraphNodeFilter {
+        unit_key: payload["targetUnit"].as_str().map(str::to_owned),
+        kinds: payload["targetKind"]
+            .as_str()
+            .map(|kind| vec![kind.to_owned()])
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    let mut found = None;
+    let mut ambiguous = false;
+    nodes(read, &local, &filter, budget, |candidate, _| {
+        if candidate.node.payload["qualifiedName"].as_str() != Some(qualified) {
+            return Ok(true);
+        }
+        if found.is_some() {
+            ambiguous = true;
+            return Ok(false);
+        }
+        found = Some(super::dataset::identity(&candidate));
+        Ok(true)
+    })?;
+    Ok(if ambiguous || budget.exhausted.is_some() {
+        None
+    } else {
+        found
+    })
 }
 
 #[derive(Clone)]
@@ -116,6 +175,9 @@ pub(super) fn edges(
 ) -> Result<(), Failure> {
     let mut after = None;
     let mut packages = None;
+    let mut declared = std::collections::BTreeSet::new();
+    let mut pinned = Vec::new();
+    let mut derived_seen = std::collections::BTreeSet::new();
     let mut sessions =
         std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
     loop {
@@ -199,16 +261,22 @@ pub(super) fn edges(
                 &raw.edge.source_node_id,
                 budget,
             )?;
-            let target = endpoint(
-                read,
-                scope,
-                &target_repo,
-                payload
-                    .get("targetUnit")
-                    .and_then(serde_json::Value::as_str),
-                &raw.edge.target_node_id,
-                budget,
-            )?;
+            let target = if target_repo != raw.repository_id
+                && payload.get("targetQualifiedName").is_some()
+            {
+                qualified_endpoint(read, scope, &target_repo, payload, budget)?
+            } else {
+                endpoint(
+                    read,
+                    scope,
+                    &target_repo,
+                    payload
+                        .get("targetUnit")
+                        .and_then(serde_json::Value::as_str),
+                    &raw.edge.target_node_id,
+                    budget,
+                )?
+            };
             let linked = match (source, target) {
                 (Some(source), Some(target)) => Ok(Edge {
                     raw,
@@ -235,14 +303,68 @@ pub(super) fn edges(
             if !visit(linked, budget)? {
                 return Ok(());
             }
-            if let Some(derived) = derived
-                && !visit(Ok(derived), budget)?
-            {
-                return Ok(());
+            if let Some(derived) = derived {
+                let identity = (
+                    super::dataset::key(&derived.source),
+                    super::dataset::key(&derived.target),
+                );
+                if derived_seen.contains(&identity) {
+                    continue;
+                }
+                if !budget.retain(
+                    identity.0.0.len()
+                        + identity.0.1.len()
+                        + identity.0.2.len()
+                        + identity.1.0.len()
+                        + identity.1.1.len()
+                        + identity.1.2.len()
+                        + 128,
+                ) {
+                    return Ok(());
+                }
+                derived_seen.insert(identity);
+                let props = &derived.raw.edge.payload["properties"];
+                if props["ecosystem"].as_str() == Some("swiftpm") {
+                    let key = (
+                        derived.source.repository_id.as_str().to_owned(),
+                        super::dataset::key(&derived.target),
+                    );
+                    if props["dependency_kind"].as_str() == Some("pinned") {
+                        if !budget.retain(
+                            std::mem::size_of::<Edge>()
+                                + derived.raw.edge.payload.to_string().len()
+                                + derived.source.unit_key.len()
+                                + derived.target.unit_key.len()
+                                + derived.source.node_id.len()
+                                + derived.target.node_id.len(),
+                        ) {
+                            return Ok(());
+                        }
+                        pinned.push((key, derived));
+                        continue;
+                    }
+                    if !budget
+                        .retain(key.0.len() + key.1.0.len() + key.1.1.len() + key.1.2.len() + 64)
+                    {
+                        return Ok(());
+                    }
+                    declared.insert(key);
+                }
+                if !visit(Ok(derived), budget)? {
+                    return Ok(());
+                }
             }
         }
         if !more {
-            return Ok(());
+            break;
         }
     }
+    // A pin is a fallback logical dependency only when no selected declaration links it.
+    // A cut scan returns above, so unseen declarations can never be treated as absent.
+    for (key, edge) in pinned {
+        if !declared.contains(&key) && !visit(Ok(edge), budget)? {
+            break;
+        }
+    }
+    Ok(())
 }

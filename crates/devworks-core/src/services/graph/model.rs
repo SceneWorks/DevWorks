@@ -242,11 +242,21 @@ pub(super) fn node(
             .or_else(|| optional("analysis_confidence"))
             .map(wire)
             .transpose()?,
-        confidence: optional("confidence").map(wire).transpose()?,
-        extraction_source: raw.node.payload["provenance"]
-            .get("extractor")
-            .filter(|v| v.is_string())
+        confidence: raw.node.payload["properties"]
+            .get("confidence")
+            .filter(|value| !value.is_null())
             .cloned()
+            .or_else(|| optional("confidence"))
+            .map(wire)
+            .transpose()?,
+        extraction_source: optional("extractionSource")
+            .or_else(|| optional("extraction_source"))
+            .or_else(|| {
+                raw.node.payload["provenance"]
+                    .get("extractor")
+                    .filter(|v| v.is_string())
+                    .cloned()
+            })
             .map(wire)
             .transpose()?,
         fallback_reason: optional("fallbackReason")
@@ -307,4 +317,37 @@ pub(super) fn edge_page(
         },
         next,
     ))
+}
+
+/// The retained answer metric counts distinct returned fallback nodes, not uncertain edges
+/// or a model's independent analysis confidence.
+pub(super) fn low_nodes<'a>(nodes: impl IntoIterator<Item = &'a CodeNode>) -> usize {
+    let mut identities = std::collections::BTreeSet::new();
+    nodes
+        .into_iter()
+        .filter(|node| {
+            node.confidence
+                .as_ref()
+                .is_some_and(|confidence| confidence.0.eq_ignore_ascii_case("low"))
+                && identities.insert((
+                    node.repository_id.as_str(),
+                    node.unit_key.0.as_str(),
+                    node.node_id.as_str(),
+                ))
+        })
+        .count()
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::*;
+    #[test]
+    fn repeated_fallback_nodes_count_once_and_analysis_confidence_is_independent() {
+        let node = |id: &str, confidence: &str, analysis: &str| -> CodeNode {
+            wire(json!({"nodeId":id,"repositoryId":"repository","viewId":"view","unitKey":"src/lib.rs","nodeKind":"Function","name":id,"qualifiedName":id,"properties":[],"propertiesComplete":true,"doNotTrust":false,"confidence":confidence,"analysisConfidence":analysis,"trustRevision":"1","viewDigest":"a".repeat(64),"contentIdentity":"captured-unit"})).unwrap()
+        };
+        let fallback = node("fallback", "low", "high");
+        let analyzed = node("analyzed", "high", "low");
+        assert_eq!(low_nodes([&fallback, &fallback, &analyzed]), 1);
+    }
 }

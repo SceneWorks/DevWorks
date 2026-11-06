@@ -96,40 +96,9 @@ pub(super) fn edges(
 }
 
 pub(super) fn low_node(node: &GraphNode) -> bool {
-    [
-        "confidence",
-        "analysisConfidence",
-        "confidenceBand",
-        "analysis_confidence",
-        "confidence_band",
-    ]
-    .iter()
-    .any(|key| {
-        node.node
-            .payload
-            .get(*key)
-            .or_else(|| node.node.payload["properties"].get(*key))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|v| v.eq_ignore_ascii_case("low"))
-    })
-}
-
-pub(super) fn low_edge(edge: &scan::Edge) -> bool {
-    confidence_band(&edge.raw).is_some_and(|v| v.eq_ignore_ascii_case("low"))
-        || edge
-            .raw
-            .edge
-            .payload
-            .get("confidence")
-            .and_then(serde_json::Value::as_f64)
-            .is_some_and(|v| v < 0.5)
-}
-
-pub(super) fn confidence_band(edge: &GraphEdge) -> Option<&str> {
-    let payload = &edge.edge.payload;
-    payload
-        .get("confidenceBand")
-        .or_else(|| payload.get("confidence_band"))
-        .or_else(|| payload["properties"].get("confidence_band"))
+    node.node.payload["properties"]
+        .get("confidence")
+        .or_else(|| node.node.payload.get("confidence"))
         .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("low"))
 }

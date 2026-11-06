@@ -411,7 +411,7 @@ pub(crate) fn rows_of(
                 (id.clone(), id, {
                     let mut payload = json!({
                         "resolution":e.resolution.as_str(), "targetRepositoryId":repository_id,
-                        "targetUnit":unit, "targetQualifiedName":qualified_name,
+                        "targetUnit":unit, "targetQualifiedName":qualified_name,"targetKind":kind,
                     });
                     if let Some(name) = target_name {
                         payload["targetName"] = json!(name);
