@@ -21,6 +21,8 @@ pub enum DecodedFrame {
     },
     TextDelta {
         block_index: u64,
+        /// Native sub-block position within an output item (Responses content_index).
+        content_index: u64,
         text: String,
     },
     ToolCallComplete {
@@ -339,6 +341,7 @@ impl Decoder {
             if !text.is_empty() {
                 out.push(DecodedFrame::TextDelta {
                     block_index: 0,
+                    content_index: 0,
                     text,
                 });
             }
@@ -450,6 +453,16 @@ impl Decoder {
                     out.push(DecodedFrame::ToolCallComplete { call });
                 }
                 outcome = DecodedOutcome::ToolCallsReady;
+            }
+        }
+        if !matches!(
+            outcome,
+            DecodedOutcome::Completed | DecodedOutcome::ToolCallsReady
+        ) {
+            for frame in &mut out {
+                if let DecodedFrame::Native { observation } = frame {
+                    observation.continuation = None;
+                }
             }
         }
         out.push(DecodedFrame::Terminal { outcome, reason });

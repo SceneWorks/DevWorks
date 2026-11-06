@@ -38,6 +38,7 @@ impl Decoder {
                         self.seen_text.insert((i, c));
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
+                            content_index: c,
                             text: text.into(),
                         });
                     }
@@ -182,6 +183,7 @@ impl Decoder {
                                     if self.seen_text.insert((i, c as u64)) {
                                         out.push(DecodedFrame::TextDelta {
                                             block_index: i,
+                                            content_index: c as u64,
                                             text: text.into(),
                                         });
                                     }

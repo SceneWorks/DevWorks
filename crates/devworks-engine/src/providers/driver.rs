@@ -82,6 +82,7 @@ pub struct NativeProviders {
     usage: Arc<UsageRuntime>,
     schemas: Arc<RegisteredSchemas>,
     composition: ProviderComposition,
+    live: Arc<super::live::LiveTurns>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -281,6 +282,7 @@ impl NativeProviders {
             usage,
             schemas,
             composition,
+            live: Arc::new(super::live::LiveTurns::default()),
         })
     }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
@@ -290,6 +292,11 @@ impl NativeProviders {
     }
     pub fn embedding_registrations(&self) -> &[EmbeddingRegistration] {
         &self.composition.embedding_spaces
+    }
+    /// Trusted native UI read only. The host must authorize the session under its current
+    /// user context before serving this preview; generic gateway/tools cannot publish it.
+    pub fn text_preview(&self, session: &Id) -> Option<super::live::LiveTurn> {
+        self.live.snapshot(session)
     }
     pub fn schemas(&self) -> &Arc<RegisteredSchemas> {
         &self.schemas
@@ -851,14 +858,17 @@ impl LazySink {
                 }
                 _ => None,
             };
-            self.inner = Some(ProviderSink::new(
-                self.owner.store.clone(),
-                self.owner.artifacts.clone(),
-                self.context.clone(),
-                prepared,
-                embedding,
-                self.result.clone(),
-            ));
+            self.inner = Some(
+                ProviderSink::new(
+                    self.owner.store.clone(),
+                    self.owner.artifacts.clone(),
+                    self.context.clone(),
+                    prepared,
+                    embedding,
+                    self.result.clone(),
+                )
+                .with_live(self.owner.live.clone()),
+            );
         }
         Ok(self.inner.as_mut())
     }

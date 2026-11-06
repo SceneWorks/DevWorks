@@ -300,6 +300,7 @@ impl Decoder {
         if !text.is_empty() {
             out.push(DecodedFrame::TextDelta {
                 block_index: index,
+                content_index: 0,
                 text,
             });
         }

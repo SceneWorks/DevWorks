@@ -105,6 +105,7 @@ impl Decoder {
                     if field == "text" {
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
+                            content_index: 0,
                             text: text.into(),
                         });
                     }
@@ -211,6 +212,7 @@ impl Decoder {
                     if !text.is_empty() {
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
+                            content_index: 0,
                             text: text.into(),
                         });
                     }

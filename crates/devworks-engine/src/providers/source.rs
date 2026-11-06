@@ -176,6 +176,14 @@ impl NativeProviderSource {
                     continue;
                 }
                 DecodedFrame::Terminal { outcome, .. } => {
+                    if self.status >= 300
+                        || !matches!(
+                            outcome,
+                            DecodedOutcome::Completed | DecodedOutcome::ToolCallsReady
+                        )
+                    {
+                        self.completed_items.clear();
+                    }
                     self.terminal = Some(if self.status >= 300 {
                         AttemptEnd::Failed
                     } else {
