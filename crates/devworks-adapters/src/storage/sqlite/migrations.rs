@@ -373,6 +373,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0028_usage.sql"),
         rebuilds_tables: true,
     },
+    // Earlier writers cannot preserve native account identity when credentials change.
+    Migration {
+        version: 29,
+        minimum_reader: 8,
+        minimum_writer: 29,
+        sql: include_str!("migrations/0029_connection_account_identity.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -694,3 +702,7 @@ pub const MIGRATION_0027_SHA256: &str =
 /// Recorded checksum of migration 28.
 pub const MIGRATION_0028_SHA256: &str =
     "e7a0aa389a4f71a7e4bd0956bcd862fbddc55d0ee7ba3d3910478e7e44be3d96";
+
+/// Recorded checksum of migration 29.
+pub const MIGRATION_0029_SHA256: &str =
+    "f2cd1ae9c2a966697927c3fa04a1c511006f93cd7d5392ef510d52a89c8a92d0";

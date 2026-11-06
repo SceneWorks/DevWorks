@@ -60,6 +60,7 @@ fn seeded(h: &Harness) -> SqliteStore {
                 open_router: None,
                 credential_ref: None,
                 credential_revision: 0,
+                account_revision: 1,
                 credential_epoch: None,
                 lifecycle: "Disconnected".into(),
                 state_reason: None,

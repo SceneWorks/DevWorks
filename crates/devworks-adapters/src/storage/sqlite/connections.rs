@@ -62,7 +62,7 @@ const QUESTION_TYPES: [&str; 4] = ["choice", "noul", "score", "box"];
 // ---------------------------------------------------------------------------------------------
 // Connections
 
-const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free";
+const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free,account_revision";
 
 struct RawConnection {
     id: String,
@@ -71,6 +71,7 @@ struct RawConnection {
     endpoint: String,
     credential_ref: Option<String>,
     credential_revision: i64,
+    account_revision: i64,
     credential_epoch: Option<i64>,
     lifecycle: String,
     state_reason: Option<String>,
@@ -100,6 +101,7 @@ fn raw_connection(r: &Row<'_>) -> rusqlite::Result<RawConnection> {
         endpoint: r.get(3)?,
         credential_ref: r.get(4)?,
         credential_revision: r.get(5)?,
+        account_revision: r.get(26)?,
         credential_epoch: r.get(6)?,
         lifecycle: r.get(7)?,
         state_reason: r.get(8)?,
@@ -180,6 +182,7 @@ fn connection_of(r: RawConnection) -> Result<StoredConnection, StorageError> {
         open_router: r.open_router,
         credential_ref: r.credential_ref.map(id_of).transpose()?,
         credential_revision: r.credential_revision,
+        account_revision: r.account_revision,
         credential_epoch: r.credential_epoch,
         lifecycle: r.lifecycle,
         state_reason: r.state_reason,
@@ -265,6 +268,9 @@ fn validate_connection(c: &StoredConnection) -> Result<(), StorageError> {
             return Err(invalid("OpenRouter constraints must be a JSON object"));
         }
     }
+    if c.account_revision < 1 {
+        return Err(invalid("account revision must be positive"));
+    }
     if c.credential_revision < 0 {
         return Err(invalid("credential revision must not be negative"));
     }
@@ -289,6 +295,20 @@ pub(super) fn put_connection(
     {
         return Err(invalid("a credential revision never goes back"));
     }
+    match &current {
+        None if c.account_revision != 1 => {
+            return Err(invalid("a new account identity starts at revision one"));
+        }
+        Some(prev)
+            if c.account_revision != prev.account_revision
+                && prev.account_revision.checked_add(1) != Some(c.account_revision) =>
+        {
+            return Err(invalid(
+                "account revision must stay unchanged or advance by one",
+            ));
+        }
+        _ => {}
+    }
     if let Some(r) = &c.credential_ref {
         let shared: bool = db(conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM router_connections WHERE credential_ref=?1 AND id<>?2)",
@@ -304,8 +324,8 @@ pub(super) fn put_connection(
         .as_ref()
         .map_or(c.created_at_ms, |p| p.created_at_ms);
     db(conn.execute(
-        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?25,?26,?27) \
+        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free,account_revision) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?25,?26,?27,?28) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile=excluded.profile, endpoint=excluded.endpoint, \
          credential_ref=excluded.credential_ref, credential_revision=excluded.credential_revision, \
          credential_epoch=excluded.credential_epoch, lifecycle=excluded.lifecycle, state_reason=excluded.state_reason, \
@@ -315,7 +335,7 @@ pub(super) fn put_connection(
          risk_accepted_at=excluded.risk_accepted_at, discovered_json=excluded.discovered_json, \
          discovered_at=excluded.discovered_at, healthy=excluded.healthy, checked_at=excluded.checked_at, \
          revision=excluded.revision, updated_at=excluded.updated_at, enabled=excluded.enabled, \
-         open_router_json=excluded.open_router_json, local_free=excluded.local_free WHERE revision=?24",
+         open_router_json=excluded.open_router_json, local_free=excluded.local_free, account_revision=excluded.account_revision WHERE revision=?24",
         params![
             c.id.as_str(),
             c.name,
@@ -344,6 +364,7 @@ pub(super) fn put_connection(
             c.enabled,
             c.open_router,
             c.local_free,
+            c.account_revision,
         ],
     ))?;
     connection(conn, &c.id)?.ok_or_else(|| corrupt("connection vanished inside its transaction"))
