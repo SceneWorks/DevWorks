@@ -1116,5 +1116,18 @@ for name,revisions in REVISIONS.items():
    output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
   case('dw13-r3-binding-'+name,'operation-result.r3',output)
 
+# DW89's additive history direction has its own recorded revision-3 admission.
+for scope in [{'rootId':'root-a'},{'projectId':'project-a'}]:
+ newest={'protocol':'1.0-draft.1','queryId':'newest-events','schemaRevision':3,'query':{'kind':'history.events','limit':200,'newestFirst':True,**scope}}
+ case('dw89-r3-newest-'+('root'if 'rootId'in scope else'project'),'query-request.r3',newest)
+forward=copy.deepcopy(newest);forward['query']['newestFirst']=False
+case('dw89-r3-forward-project','query-request.r3',forward)
+for revision in [1,2]:
+ old=copy.deepcopy(newest);old['schemaRevision']=revision
+ case('dw89-direction-before-r3-'+str(revision),'query-request'+('.r2'if revision==2 else''),old,False,False)
+for invalid in [None,'true']:
+ bad=copy.deepcopy(newest);bad['query']['newestFirst']=invalid
+ case('dw89-invalid-direction-'+('null'if invalid is None else'string'),'query-request.r3',bad,False,False)
+
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

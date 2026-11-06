@@ -304,7 +304,7 @@ pub enum Slot {
     /// Every card (feature task or standalone issue) of a project.
     WorkCards(String),
     /// The project change feed (Activity) of a project.
-    WorkActivity(String),
+    WorkActivity(String, Option<String>, u64),
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),
