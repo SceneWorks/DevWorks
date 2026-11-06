@@ -1073,3 +1073,248 @@ fn unconfigured_official_publisher_can_be_refreshed_manually_without_enabling_au
         dispatcher.stop();
     });
 }
+
+fn configured_history(fx: &Fx) -> (Vec<Value>, Vec<Value>) {
+    let mut cursor = None;
+    let mut entries = Vec::new();
+    let mut states = Vec::new();
+    for _ in 0..30 {
+        let mut body = json!({"modelIds":["priced-model"],"providerIds":["user-configured"],"includeHistory":true,"page":{"limit":2}});
+        if let Some(saved) = cursor.take() {
+            body["page"]["cursor"] = saved;
+        }
+        let reply = fx.query(body);
+        assert_eq!(reply["kind"], "Result", "{reply}");
+        let view = &reply["result"]["value"];
+        let count = [
+            "models",
+            "providers",
+            "snapshots",
+            "items",
+            "overrideHistory",
+        ]
+        .into_iter()
+        .map(|key| view[key].as_array().map_or(0, Vec::len))
+        .sum::<usize>();
+        assert!(count <= 2, "history shares the whole query page bound");
+        entries.extend(view["items"].as_array().unwrap().iter().cloned());
+        states.extend(view["overrideHistory"].as_array().unwrap().iter().cloned());
+        if !view["hasMore"].as_bool().unwrap() {
+            return (entries, states);
+        }
+        cursor = Some(view["nextCursor"].clone());
+    }
+    panic!("configured history pagination did not finish");
+}
+#[test]
+fn configured_history_preserves_set_a_set_b_clear_authorship_and_original_quotes_without_duplicate_current_rates()
+ {
+    runtime().block_on(async {
+    let fx = Fx::new();
+    let (worker,dispatcher)=fx.dispatcher(Source::new(vec![]));fx.refresh(&["openai"]);deliver(&dispatcher).await;
+    let published=read(&*fx.store,|s|s.usage().current_price_snapshot("openai")).unwrap();
+    let set = |fx: &Fx, expected: &str, amount: &str| {
+        let raw=fx.frame("router.price_override",3,"Command",json!({"modelId":"priced-model","expectedRevision":expected,"price":{"inputUsdPerMillion":amount,"outputUsdPerMillion":amount}}));
+        applied(fx.command(
+            &fx.user,
+            "router.price_override",
+            &raw,
+            WriteOptions::default(),
+        ))
+    };
+    let query = PriceQuery {
+        catalog_model_id: id("priced-model"),
+        provider_model_id: Some("priced-model".into()),
+        connection_id: id("openai-connection"),
+        endpoint_profile: "OpenAiResponses".into(),
+        access_mode: "Api".into(),
+        service_tier: None,
+        input_tokens: Some(100),
+        cache_write_ttl_ms: None,
+        processing_region: None,
+        required_modalities: vec!["Text".into()],
+    };
+    let source_quote=read(&*fx.store,|s|devworks_core::services::prices::CatalogPriceResolver.quote(s,&query));
+    assert_eq!(source_quote.classification,CostClassification::OfficialEstimate);
+    assert_eq!(source_quote.connection_revision,Some(1));assert_eq!(source_quote.snapshot_id,Some(published.id.clone()));assert_eq!(source_quote.price_revision,Some(published.revision));assert_eq!(source_quote.override_revision,Some(1));assert_eq!(source_quote.tariffs,published.tariffs);
+    let source_json=serde_json::to_value(&source_quote).unwrap();
+    set(&fx,"1","1.35");
+    let original = read(&*fx.store, |s| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
+    });
+    assert_eq!(original.override_revision, Some(2));
+    assert_eq!(original.classification,CostClassification::ConfiguredEstimate);assert_eq!(original.connection_revision,Some(1));assert!(original.snapshot_id.is_none());assert!(original.price_revision.is_none());assert_eq!(original.tariffs,read(&*fx.store,|s|s.usage().price_override(&id("priced-model"))).unwrap().tariffs);
+    assert_eq!(
+        original
+            .rates
+            .as_ref()
+            .unwrap()
+            .input_usd_per_million
+            .as_deref(),
+        Some("1.35")
+    );
+    let original_json = serde_json::to_value(&original).unwrap();
+    let retained = original_json.clone();
+    let retained_source=source_json.clone();
+    let actor = fx.user.principal().clone();
+    let quote_event = write(&*fx.store, move |tx| {
+        let event = devworks_core::protocol::EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor,
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "price_quote".into(),
+            aggregate_id: "original-quote".into(),
+            aggregate_revision: 1,
+            kind: "PriceQuoteCaptured".into(),
+            payload: json!({"quote":retained,"sourceQuote":retained_source}),
+        })?;
+        Ok(event)
+    })
+    .unwrap();
+    fx.h.advance(1_000);
+    set(&fx, "2", "2.75");
+    let first=fx.query(json!({"modelIds":["priced-model"],"providerIds":["user-configured"],"includeHistory":true,"page":{"limit":2}}));
+    let old_cursor = first["result"]["value"]["nextCursor"].clone();
+    let (entries, states) = configured_history(&fx);
+    let combined=fx.query(json!({"modelIds":["priced-model"],"includeHistory":true,"page":{"limit":50}}));
+    let combined=&combined["result"]["value"];
+    assert_eq!(combined["snapshots"].as_array().unwrap().len(),1);
+    assert_eq!(combined["overrideHistory"].as_array().unwrap().len(),2);
+    assert_eq!(combined["items"].as_array().unwrap().iter().filter(|entry|entry["origin"]=="UserConfigured").count(),4,"current B is emitted only through immutable configured history");
+    assert_eq!(combined["items"].as_array().unwrap().iter().filter(|entry|entry["origin"]=="OfficialSnapshot").count(),2,"official and configured histories are both present");
+    assert_eq!(states.len(), 2);
+    assert_eq!(
+        entries.len(),
+        4,
+        "two charge dimensions for each of two revisions; current B must not be repeated"
+    );
+    let unique: std::collections::BTreeSet<_> = entries
+        .iter()
+        .map(|v| {
+            (
+                v["overrideRevision"].as_str().unwrap().to_owned(),
+                v["tariff"]["chargeKind"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(unique.len(), 4);
+    assert!(
+        entries
+            .iter()
+            .all(|v| v["providerId"] == "user-configured" && v["modelId"] == "priced-model")
+    );
+    assert_eq!(states[0]["updatedBy"], "user");
+    assert_eq!(states[0]["updatedAtMs"], T0.to_string());
+    assert_eq!(states[1]["updatedAtMs"], (T0 + 1_000).to_string());
+    let current = fx.query(
+        json!({"modelIds":["priced-model"],"providerIds":["user-configured"],"page":{"limit":50}}),
+    );
+    let view = &current["result"]["value"];
+    assert!(view.get("overrideHistory").is_none());
+    assert_eq!(view["items"].as_array().unwrap().len(), 2);
+    assert!(
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["overrideRevision"] == "3")
+    );
+    fx.h.advance(1_000);
+    let clear = fx.frame(
+        "router.price_override",
+        3,
+        "Command",
+        json!({"modelId":"priced-model","expectedRevision":"3","change":{"kind":"Clear"}}),
+    );
+    applied(fx.command(
+        &fx.user,
+        "router.price_override",
+        &clear,
+        WriteOptions::default(),
+    ));
+    let expired=fx.query(json!({"modelIds":["priced-model"],"providerIds":["user-configured"],"includeHistory":true,"page":{"limit":2,"cursor":old_cursor}}));
+    assert_ne!(expired["kind"], "Result");
+    let (entries, states) = configured_history(&fx);
+    assert_eq!(entries.len(), 4);
+    assert_eq!(states.len(), 3);
+    assert_eq!(states[2]["kind"], "Cleared");
+    assert_eq!(states[2]["revision"], "4");
+    assert_eq!(states[2]["updatedBy"], "user");
+    assert_eq!(states[2]["updatedAtMs"], (T0 + 2_000).to_string());
+    assert!(
+        entries.iter().all(|v| v["overrideRevision"] != "4"),
+        "Clear is metadata, never a fabricated zero tariff"
+    );
+    let current = fx.query(json!({"modelIds":["priced-model"],"page":{"limit":50}}));
+    assert!(
+        current["result"]["value"]["items"]
+            .as_array()
+            .unwrap()
+            .iter().all(|entry|entry["origin"]!="UserConfigured")
+    );
+    assert_eq!(current["result"]["value"]["models"][0]["revision"], "4");
+    let now = read(&*fx.store, |s| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
+    });
+    assert_eq!(now.classification,CostClassification::OfficialEstimate);assert_eq!(now.snapshot_id,source_quote.snapshot_id);assert_eq!(now.price_revision,source_quote.price_revision);assert_eq!(now.override_revision,Some(4));assert_eq!(now.rates,source_quote.rates);assert_eq!(now.tariffs,source_quote.tariffs);
+    assert_eq!(
+        read(&*fx.store, |s| s.history().event(&quote_event))
+            .unwrap()
+            .payload["quote"],
+        original_json
+    );
+    let official_only=fx.query(json!({"modelIds":["priced-model"],"providerIds":["openai"],"includeHistory":true,"page":{"limit":50}}));
+    assert!(
+        official_only["result"]["value"]["overrideHistory"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        official_only["result"]["value"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["origin"] != "UserConfigured")
+    );
+    let wrong_model=fx.query(json!({"modelIds":["unpriced-model"],"providerIds":["user-configured"],"includeHistory":true,"page":{"limit":50}}));
+    assert!(
+        wrong_model["result"]["value"]["overrideHistory"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    worker.drain().await;dispatcher.stop();drop(dispatcher);drop(worker);
+    let Fx {
+        h,
+        store,
+        service,
+        cases,
+        user,
+        agent,
+    } = fx;
+    drop(store);
+    let store = h.open();
+    let fx = Fx {
+        h,
+        store,
+        service,
+        cases,
+        user,
+        agent,
+    };
+    let (entries, states) = configured_history(&fx);
+    assert_eq!((entries.len(), states.len()), (4, 3));
+    assert_eq!(fx.h.now(), T0 + 2_000);
+    assert_eq!(
+        read(&*fx.store, |s| s.history().event(&quote_event))
+            .unwrap()
+            .payload["quote"],
+        original_json
+    );
+    assert_eq!(read(&*fx.store,|s|s.history().event(&quote_event)).unwrap().payload["sourceQuote"],source_json);
+    });
+}

@@ -182,8 +182,10 @@ fn upstream(m: &StoredRouteModel) -> &str {
         &m.upstream_model_id
     }
 }
+const CONFIGURED_SOURCE: &str = "user-configured";
 struct ModelFacts {
     source: String,
+    official: Option<(String, String)>,
     kind: &'static str,
     reason: Option<&'static str>,
     snapshot: Option<StoredPriceSnapshot>,
@@ -193,7 +195,16 @@ struct ModelFacts {
 fn facts(s: &dyn ReadSnapshot, m: &StoredRouteModel) -> Result<ModelFacts, StorageError> {
     let c = connection(s.router(), m)?;
     let source = source(m, c.as_ref());
+    let official = c
+        .as_ref()
+        .and_then(|c| super::official_price_source(c, &m.upstream_model_id))
+        .map(|(p, model)| (p.id().to_owned(), model.to_owned()));
     let override_ = s.usage().price_override(&m.id)?.filter(|v| v.mode == "Set");
+    let source = if override_.is_some() {
+        CONFIGURED_SOURCE.to_owned()
+    } else {
+        source
+    };
     let snapshot = if override_.is_none() && refresh::official(&source).is_some() {
         s.usage().current_price_snapshot(&source)?
     } else {
@@ -229,6 +240,7 @@ fn facts(s: &dyn ReadSnapshot, m: &StoredRouteModel) -> Result<ModelFacts, Stora
     };
     Ok(ModelFacts {
         source,
+        official,
         kind,
         reason,
         snapshot,
@@ -260,6 +272,7 @@ struct Slice {
     providers: Vec<Value>,
     snapshots: Vec<Value>,
     items: Vec<Value>,
+    override_history: Vec<Value>,
     gaps: Vec<Id>,
     gaps_truncated: bool,
 }
@@ -270,7 +283,11 @@ impl Slice {
         if index < self.skip {
             return true;
         }
-        if self.models.len() + self.providers.len() + self.snapshots.len() + self.items.len()
+        if self.models.len()
+            + self.providers.len()
+            + self.snapshots.len()
+            + self.items.len()
+            + self.override_history.len()
             >= self.limit
         {
             self.more = true;
@@ -280,7 +297,8 @@ impl Slice {
             0 => self.models.push(value),
             1 => self.providers.push(value),
             2 => self.snapshots.push(value),
-            _ => self.items.push(value),
+            3 => self.items.push(value),
+            _ => self.override_history.push(value),
         }
         true
     }
@@ -338,6 +356,7 @@ pub(crate) fn query(
         providers: vec![],
         snapshots: vec![],
         items: vec![],
+        override_history: vec![],
         gaps: vec![],
         gaps_truncated: false,
     };
@@ -371,11 +390,21 @@ pub(crate) fn query(
             return Ok(true);
         }
         let f = facts(s, &m)?;
+        if let Some((publisher, upstream)) = &f.official {
+            if input.include_history.unwrap_or(false) || !snapshot_filter.is_empty() {
+                relevant.insert(publisher.clone());
+            }
+            if !model_filter.is_empty() {
+                upstreams.insert((publisher.clone(), upstream.clone()));
+            }
+        }
         if !provider_filter.is_empty() && !provider_filter.iter().any(|id| id == &f.source) {
             return Ok(true);
         }
         if snapshot_filter.is_empty()
-            && (!model_filter.is_empty() || refresh::official(&f.source).is_some())
+            && (!model_filter.is_empty()
+                || refresh::official(&f.source).is_some()
+                || f.source == CONFIGURED_SOURCE)
         {
             relevant.insert(f.source.clone());
         }
@@ -439,7 +468,9 @@ pub(crate) fn query(
         if !keep {
             return Ok(false);
         }
-        if let Some(o) = f.override_ {
+        if !input.include_history.unwrap_or(false)
+            && let Some(o) = f.override_
+        {
             for row in o.tariffs {
                 if !page.push(3,json!({"providerId":f.source,"modelId":m.id,"upstreamModelId":m.upstream_model_id,"origin":"UserConfigured","overrideRevision":o.revision.to_string(),"tariff":tariff(&row)?})){return Ok(false);}
             }
@@ -471,6 +502,51 @@ pub(crate) fn query(
             }),
             has_more: more,
         }));
+    }
+    if !page.more
+        && input.include_history.unwrap_or(false)
+        && snapshot_filter.is_empty()
+        && (provider_filter.is_empty() || provider_filter.contains(CONFIGURED_SOURCE))
+    {
+        let mut after = None;
+        loop {
+            let rows = s.usage().price_override_history(None, after.as_ref(), 64)?;
+            let n = rows.len();
+            for saved in rows {
+                after = Some(PriceOverridePosition {
+                    model_id: saved.model_id.clone(),
+                    revision: saved.revision,
+                });
+                if !model_filter.is_empty() && !model_filter.contains(saved.model_id.as_str()) {
+                    continue;
+                }
+                relevant.insert(CONFIGURED_SOURCE.to_owned());
+                let state = if saved.mode == "Set" {
+                    json!({"kind":"Set","modelId":saved.model_id,"revision":saved.revision.to_string(),"tariffs":saved.tariffs.iter().map(tariff).collect::<Result<Vec<_>,_>>()?,"updatedBy":saved.updated_by,"updatedAtMs":saved.updated_at_ms.to_string()})
+                } else if saved.mode == "Clear" {
+                    json!({"kind":"Cleared","modelId":saved.model_id,"revision":saved.revision.to_string(),"updatedBy":saved.updated_by,"updatedAtMs":saved.updated_at_ms.to_string()})
+                } else {
+                    return Err(StorageError::InvalidRecord(
+                        "invalid configured price history mode".into(),
+                    )
+                    .into());
+                };
+                if !page.push(4, state) {
+                    break;
+                }
+                if saved.mode == "Set" {
+                    for rate in saved.tariffs {
+                        if !page.push(3,json!({"providerId":CONFIGURED_SOURCE,"modelId":saved.model_id,"upstreamModelId":rate.upstream_model_id,"origin":"UserConfigured","overrideRevision":saved.revision.to_string(),"tariff":tariff(&rate)?})){break;}
+                    }
+                }
+                if page.more {
+                    break;
+                }
+            }
+            if page.more || n < 64 {
+                break;
+            }
+        }
     }
     if !page.more {
         let configured = refresh::configured(s.router())?;
@@ -567,8 +643,12 @@ pub(crate) fn query(
         page.gaps
             .push(Id::new("additional-price-pages").expect("static"));
     }
-    let value = wire(
-        json!({"catalogRevision":revision.to_string(),"items":page.items,"snapshots":page.snapshots,"providers":page.providers,"models":page.models,"nextCursor":next,"hasMore":page.more,"coverage":{"state":if partial{"Partial"}else{"Complete"},"gaps":page.gaps,"moreGaps":page.more||page.gaps_truncated}}),
-    )?;
+    let mut body = json!({"catalogRevision":revision.to_string(),"items":page.items,"snapshots":page.snapshots,"providers":page.providers,"models":page.models,"overrideHistory":page.override_history,"nextCursor":next,"hasMore":page.more,"coverage":{"state":if partial{"Partial"}else{"Complete"},"gaps":page.gaps,"moreGaps":page.more||page.gaps_truncated}});
+    if !input.include_history.unwrap_or(false) {
+        body.as_object_mut()
+            .expect("catalog object")
+            .remove("overrideHistory");
+    }
+    let value = wire(body)?;
     Ok(PriceCatalogResult::Current(value))
 }
