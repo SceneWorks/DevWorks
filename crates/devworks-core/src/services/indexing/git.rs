@@ -1251,6 +1251,15 @@ impl Git<'_> {
         if committed.is_some_and(|head| head != before.head) {
             return Err(GitFault::SourceChanged);
         }
+        // A worktree diff with `none` launches status inside each initialized submodule.
+        // `dirty` still includes every changed gitlink HEAD, overriding user `all`, while
+        // excluding child-worktree dirt that an outer `add --all` cannot commit. Object/index
+        // diffs do not inspect child worktrees and use `none` for their exact stored gitlinks.
+        let submodules = if staged || committed.is_some() {
+            "--ignore-submodules=none"
+        } else {
+            "--ignore-submodules=dirty"
+        };
         let mut args = vec!["diff"];
         if staged {
             args.push("--cached");
@@ -1259,6 +1268,8 @@ impl Git<'_> {
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
+            submodules,
+            "--submodule=short",
             "--no-renames",
             "--name-only",
             "-z",
@@ -1311,6 +1322,8 @@ impl Git<'_> {
                             "--no-color",
                             "--no-ext-diff",
                             "--no-textconv",
+                            submodules,
+                            "--submodule=short",
                             "--binary",
                             "--no-renames",
                             "--src-prefix=a/",
@@ -1337,6 +1350,8 @@ impl Git<'_> {
                     "--no-color",
                     "--no-ext-diff",
                     "--no-textconv",
+                    submodules,
+                    "--submodule=short",
                     "--binary",
                     "--no-renames",
                     "--src-prefix=a/",

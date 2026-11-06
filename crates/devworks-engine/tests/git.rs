@@ -296,6 +296,10 @@ enum ReviewedCommitCase {
     ChangedHookNames,
     LateConfiguredHook,
     UnavailablePolicy,
+    LateTrackedFilter,
+    LateUntrackedFilter,
+    IgnoredSubmodule,
+    LateStatusFilter,
 }
 
 #[test]
@@ -335,6 +339,25 @@ fn reviewed_commit_refuses_changed_hook_name_witness_before_dispatch() {
     native_task_lifecycle(false, Some(ReviewedCommitCase::ChangedHookNames));
 }
 
+#[test]
+fn reviewed_manifest_capture_blocks_tracked_filter_at_patch_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateTrackedFilter));
+}
+#[test]
+fn reviewed_manifest_capture_blocks_untracked_filter_at_patch_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateUntrackedFilter));
+}
+
+#[test]
+fn reviewed_preparation_blocks_new_filter_at_status_spawn() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateStatusFilter));
+}
+
+#[test]
+fn reviewed_manifest_includes_gitlinks_despite_user_diff_ignore_all() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::IgnoredSubmodule));
+}
+
 fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase>) {
     native_task_lifecycle_with_create(with_pr, reviewed_case, None);
 }
@@ -360,6 +383,25 @@ fn native_task_lifecycle_with_create(
     // This fixture asserts exact LF bytes; do not inherit the host's checkout conversion.
     git(&source, &["config", "core.autocrlf", "false"]);
     std::fs::write(source.join("a.txt"), "base\n").unwrap();
+    if matches!(reviewed_case, Some(ReviewedCommitCase::IgnoredSubmodule)) {
+        let nested = h.root.join("submodule-source");
+        std::fs::create_dir(&nested).unwrap();
+        git(&nested, &["init", "-b", "main"]);
+        std::fs::write(nested.join("item.txt"), "first\n").unwrap();
+        git(&nested, &["add", "."]);
+        git(&nested, &["commit", "-m", "first"]);
+        git(
+            &source,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                nested.to_str().unwrap(),
+                "nested",
+            ],
+        );
+    }
     git(&source, &["add", "a.txt"]);
     git(&source, &["commit", "-m", "base"]);
     let head = git(&source, &["rev-parse", "HEAD"]);
@@ -1238,6 +1280,53 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
                     "controlled unavailable platform".into(),
                 ),
             );
+        }
+        if matches!(self.case, Some(ReviewedCommitCase::LateStatusFilter))
+            && spec.args.first().is_some_and(|arg| arg == "status")
+            && let Some(path) = spec.cwd.as_deref()
+            && path.join(".manifest-race-armed").exists()
+            && !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            git(
+                path,
+                &[
+                    "config",
+                    "filter.new-filter.clean",
+                    "printf ran > review-hook-marker; cat",
+                ],
+            );
+            std::fs::write(path.join(".gitattributes"), "a.txt filter=new-filter\n").unwrap();
+        }
+        if matches!(
+            self.case,
+            Some(ReviewedCommitCase::LateTrackedFilter | ReviewedCommitCase::LateUntrackedFilter)
+        ) && spec.args.first().is_some_and(|arg| arg == "diff")
+            && spec.args.iter().any(|arg| arg == "--binary")
+            && let Some(path) = spec.cwd.as_deref()
+            && path.join(".manifest-race-armed").exists()
+            && spec.args.last().is_some_and(|arg| {
+                arg == if matches!(self.case, Some(ReviewedCommitCase::LateTrackedFilter)) {
+                    "a.txt"
+                } else {
+                    "reviewed.txt"
+                }
+            })
+            && !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let target = if matches!(self.case, Some(ReviewedCommitCase::LateTrackedFilter)) {
+                "a.txt"
+            } else {
+                "reviewed.txt"
+            };
+            std::fs::write(
+                path.join(".gitattributes"),
+                format!("{target} filter=probe\n"),
+            )
+            .unwrap();
         }
         if spec.no_child_processes
             && matches!(
