@@ -36,7 +36,10 @@ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "
 webpki-roots = "=1.0.11"
 # The provider endpoint and query string are built with the same WHATWG URL type core decides on.
 url = "=2.5.8"
-tokio = { version = "=1.54.1", default-features = false, features = ["sync"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["sync", "rt-multi-thread", "net", "time", "macros"] }
+# Provider streaming owns its async runtime, uses asynchronous DNS, bundled rustls roots and
+# the user's proxy environment. No cookies, compression, automatic retries or redirects.
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "hickory-dns", "stream"] }
 # Structural indexing (DW-23, CODE-01/02): the tree-sitter runtime and one grammar crate per
 # language the retained CodeGraph LanguageSpecs and frozen adapter surface cover. Every grammar
 # crate depends only on `tree-sitter-language` (the ABI shim), so the runtime and the grammars
