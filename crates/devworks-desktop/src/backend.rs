@@ -286,8 +286,8 @@ pub enum Slot {
     /// The job's active run, inspected by its ID (job ID): the latest occurrence may be a
     /// skipped one while the active run continues.
     JobActiveRun(String),
-    /// A project's artifacts, as prompt candidates of a job form (project ID).
-    JobPrompts(String),
+    /// A scoped prompt page of one form generation (None is workspace).
+    JobPrompts(u64, Option<String>),
     JobCreate,
     /// A command of one job or its run (one at a time per job).
     JobCommand(String),

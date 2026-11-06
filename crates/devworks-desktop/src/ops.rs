@@ -374,6 +374,34 @@ pub fn project_artifacts(backend: &dyn Backend, project: &str) -> Vec<u8> {
     .to_string()
     .into_bytes()
 }
+/// A bounded prompt-picker page, independent of the artifacts screen's current page.
+pub fn prompt_artifacts(
+    backend: &dyn Backend,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    let query = project.map_or_else(
+        || json!({"kind":"List","workspace":true}),
+        |project| json!({"kind":"List","projectId":project}),
+    );
+    let mut frame = json!({"protocol":PROTOCOL,"queryId":backend.token("q"),
+        "schemaRevision":4,"query":query,"limit":PAGE_LIMIT});
+    if let Some(cursor) = cursor {
+        frame["cursor"] = json!(cursor);
+    }
+    serde_json::to_vec(&frame).expect("prompt list frame")
+}
+pub fn prompt_artifact_page(
+    outcome: QueryOutcome,
+) -> Result<(Vec<ArtifactRecord>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsList { value }, _) => Ok((
+            value.items.0,
+            value.next_cursor.map(|c| c.0).filter(|_| value.has_more),
+        )),
+        (other, _) => Err(unexpected("artifacts.list", &other)),
+    }
+}
 pub fn artifacts(outcome: QueryOutcome) -> Result<(Vec<ArtifactRecord>, bool), Failure> {
     match query_result(outcome)? {
         (OperationResult::ArtifactsList { value }, _) => Ok((value.items.0, value.has_more)),
