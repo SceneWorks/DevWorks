@@ -249,7 +249,7 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             require(matches!(interval.trim().to_ascii_lowercase().as_str(), "" | "auto" | "day" | "week" | "month"), "usage interval must be auto/day/week/month")?;
         }
         for key in ["user", "provider", "model", "tool"] {
-            require(v[key].as_str().is_none_or(|s| s.trim().chars().count() <= 4096), "usage filter exceeds its output bound")?;
+            require(v[key].as_str().is_none_or(|s| s.trim().chars().count() <= 65536), "usage filter exceeds its output bound")?;
         }
         if present(v, "startMs") && present(v, "endMs") {
             let start = v["startMs"].as_str().and_then(|n| n.parse::<u128>().ok());

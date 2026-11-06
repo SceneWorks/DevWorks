@@ -11375,13 +11375,13 @@ pub struct UsageAppliedFilters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user: Option<Text>,
+    pub user: Option<Content>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<Text>,
+    pub provider: Option<Content>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<Text>,
+    pub model: Option<Content>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<Text>,
+    pub tool: Option<Content>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<Label>,
 }
@@ -11507,7 +11507,8 @@ impl Check for UsageCostSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageAttemptRecord {
     pub id: Id,
-    pub request_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11695,8 +11696,8 @@ pub enum UsageReportRow {
     },
     SeriesPoint {
         key: Label,
-        label: Label,
-        bucket_start_ms: Counter,
+        label: Content,
+        bucket_start_ms: SignedCounter,
         value: Counter,
     },
     Breakdown {

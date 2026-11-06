@@ -4268,10 +4268,10 @@
         "root_id": "?RootId",
         "session_id": "?Id",
         "job_run_id": "?Id",
-        "user": "?Text",
-        "provider": "?Text",
-        "model": "?Text",
-        "tool": "?Text",
+        "user": "?Content",
+        "provider": "?Content",
+        "model": "?Content",
+        "tool": "?Content",
         "purpose": "?Label"
       }
     },
@@ -4317,7 +4317,7 @@
       "kind": "record",
       "fields": {
         "id": "Id",
-        "request_id": "Id",
+        "request_id": "?Id",
         "attempt_id": "?Id",
         "attempt_number": "?Revision",
         "source_kind": "Label",
@@ -4394,8 +4394,8 @@
         },
         "SeriesPoint": {
           "key": "Label",
-          "label": "Label",
-          "bucket_start_ms": "Counter",
+          "label": "Content",
+          "bucket_start_ms": "SignedCounter",
           "value": "Counter"
         },
         "Breakdown": {

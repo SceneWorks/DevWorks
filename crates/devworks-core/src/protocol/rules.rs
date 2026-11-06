@@ -419,7 +419,7 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             require(
                 v[key]
                     .as_str()
-                    .is_none_or(|s| s.trim().chars().count() <= 4096),
+                    .is_none_or(|s| s.trim().chars().count() <= 65536),
                 "usage filter exceeds its output bound",
             )?;
         }
