@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 pub mod decisions;
+pub mod help;
 pub mod indexing;
 pub mod jobs;
 pub mod projects;
@@ -159,6 +160,7 @@ pub struct Shell {
     routes: BTreeMap<Route, RouteMemory>,
     pub chat: Chat,
     pub settings: SettingsScreen,
+    pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
     pub artifacts: ListState<ArtifactRecord>,
     pub resources: ListState<ResourceRecord>,
@@ -308,6 +310,7 @@ impl Shell {
             routes: memory.routes.clone(),
             chat,
             settings,
+            help: Default::default(),
             knowledge: KnowledgeScreen::new(),
             artifacts: ListState::default(),
             resources: ListState::default(),
@@ -447,6 +450,7 @@ impl Shell {
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
+            Route::Help if !self.help.loaded && !self.help.loading => self.refresh_help(),
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
             Route::Browser => self.load_browser(),
@@ -1722,6 +1726,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_help(slot, reply) else {
+            return;
+        };
         match (slot, reply) {
             // Started before a session mutation was applied: it may lack that change.
             (Slot::SessionsList, Reply::Query(_))
@@ -2776,6 +2783,7 @@ impl Shell {
             self.load_connections();
         }
         match self.route {
+            Route::Help if !self.help.loading => self.refresh_help(),
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
             Route::Browser if !self.pending(&Slot::BrowserSessions) => self.load_browser(),
@@ -2927,6 +2935,7 @@ impl Shell {
                     self.notifications_open = true;
                 }
                 SettingsAction::OpenConnections => self.load_connections(),
+                SettingsAction::OpenHelp(topic) => self.open_help_context(&topic),
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
             }
@@ -3360,6 +3369,10 @@ impl Shell {
                     p.restore_edit(*n, u.frame());
                     p.busy.push((*n, u.label.clone()));
                 }
+                Slot::HelpGenerate => {
+                    self.help.generating = true;
+                    self.help.generation_unknown = true;
+                }
                 Slot::SettingsSave => {
                     self.settings.saving = true;
                     self.settings.unconfirmed = true;
@@ -3649,8 +3662,23 @@ impl Shell {
                                 "Search arrives with the work, code and Knowledge indexes \
                                  (DW-12, DW-28, DW-30).",
                             );
-                        if ui.button("Help").clicked() {
-                            self.navigate(Route::Help);
+                        let help = ui
+                            .button("Help")
+                            .on_hover_text("Open local Help for this screen");
+                        help.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                true,
+                                "Help for current screen",
+                            )
+                        });
+                        if help.clicked() {
+                            let screen = if self.route == Route::Settings {
+                                self.settings.help_topic()
+                            } else {
+                                self.route.screen().id
+                            };
+                            self.open_help_context(screen);
                         }
                         let open = self.coordinator_open;
                         let tip = if self.route == Route::Chat {
@@ -4075,6 +4103,7 @@ impl Shell {
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
             }
+            Route::Help => self.help_screen(ui),
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),
             Route::Resources => self.resources_screen(ui),
