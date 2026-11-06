@@ -272,7 +272,7 @@ impl GraphScreen {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("graph-view-mode")
+            egui::ComboBox::from_label("Graph view")
                 .selected_text(
                     [
                         "Current scope",
@@ -293,7 +293,7 @@ impl GraphScreen {
                     }
                 });
             if self.view_mode == 2 {
-                egui::ComboBox::from_id_salt("graph-exact-view")
+                egui::ComboBox::from_label("Indexed capture")
                     .selected_text(if self.exact_view.is_empty() {
                         "Choose an indexed view"
                     } else {
@@ -409,12 +409,11 @@ impl GraphScreen {
                         egui::Button::new("Code snippet"),
                     )
                     .clicked()
+                    && let Some(mut read) = self.source(false)
                 {
-                    if let Some(mut read) = self.source(false) {
-                        read.operation = "code.snippet";
-                        read.title = "Code snippet".into();
-                        actions.push(Action::Read(read));
-                    }
+                    read.operation = "code.snippet";
+                    read.title = "Code snippet".into();
+                    actions.push(Action::Read(read));
                 }
             });
         }
@@ -422,7 +421,7 @@ impl GraphScreen {
             ui.horizontal_wrapped(|ui|{
                 field(ui,"Target name",&mut self.target_name,"Use selected node when empty");
                 ui.add(egui::DragValue::new(&mut self.depth).range(1..=16).prefix("Depth "));
-                egui::ComboBox::from_id_salt("graph-trace-direction").selected_text(["Callers","Callees","Both directions"][self.direction]).show_ui(ui,|ui|{
+                egui::ComboBox::from_label("Call direction").selected_text(["Callers","Callees","Both directions"][self.direction]).show_ui(ui,|ui|{
                     for(i,label)in ["Callers","Callees","Both directions"].iter().enumerate(){ui.selectable_value(&mut self.direction,i,*label);}
                 });
                 field(ui,"Relationship kind",&mut self.edge_kind,"All relationships");

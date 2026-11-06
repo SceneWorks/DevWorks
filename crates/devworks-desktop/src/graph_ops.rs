@@ -74,12 +74,20 @@ pub fn page(outcome: QueryOutcome) -> Result<GraphPage, Failure> {
     }
 }
 
-pub fn trust(backend: &dyn Backend, node: &CodeNode, trusted: bool) -> Vec<u8> {
-    json!({"protocol":ops::PROTOCOL,"schemaRevision":3,"requestKey":backend.token("rk"),
+pub fn trust(
+    backend: &dyn Backend,
+    node: &CodeNode,
+    scope: Value,
+    pin: Option<String>,
+    trusted: bool,
+) -> Vec<u8> {
+    let mut frame = json!({"protocol":ops::PROTOCOL,"schemaRevision":3,"requestKey":backend.token("rk"),
         "command":{"kind":"SetTrust","repositoryId":node.repository_id,"nodeId":node.node_id,
             "expectedRevision":node.trust_revision,"viewId":node.view_id,"unitKey":node.unit_key,
             "expectedViewDigest":node.view_digest,"expectedContentIdentity":node.content_identity,
-            "trusted":trusted}})
-    .to_string()
-    .into_bytes()
+            "scope":scope,"trusted":trusted}});
+    if let Some(pin) = pin {
+        frame["command"]["pinId"] = json!(pin);
+    }
+    frame.to_string().into_bytes()
 }

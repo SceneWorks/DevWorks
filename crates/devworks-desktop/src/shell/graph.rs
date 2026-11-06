@@ -76,6 +76,9 @@ impl Shell {
             },
         ) {
             self.graph.loading = false;
+            self.graph.error = Some(
+                "The repository graph cannot be read while DevWorks is offline or closing.".into(),
+            );
         }
     }
     pub(super) fn apply_graph(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
@@ -337,11 +340,17 @@ impl Shell {
                 }
                 Action::Trust(node, trusted) => {
                     let id = node.node_id.as_str().to_owned();
+                    let scope = self.graph.scope();
+                    let pin = self
+                        .graph
+                        .pin
+                        .as_ref()
+                        .map(|pin| pin.pin_id.as_str().to_owned());
                     if self.command(
                         Slot::GraphTrust(id),
                         "Changing node trust",
                         "code.set_trust",
-                        move |b| graph_ops::trust(b, &node, trusted),
+                        move |b| graph_ops::trust(b, &node, scope, pin, trusted),
                     ) {
                         self.graph.trust_busy = true;
                     }
