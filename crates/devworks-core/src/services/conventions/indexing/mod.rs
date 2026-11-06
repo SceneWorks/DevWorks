@@ -6,6 +6,8 @@ pub mod configuration;
 pub mod embedding;
 pub mod lifecycle;
 pub mod preparation;
+pub mod publisher;
+pub mod query;
 pub mod rank;
 mod status;
 

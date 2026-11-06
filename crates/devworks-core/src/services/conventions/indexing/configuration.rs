@@ -67,7 +67,7 @@ impl IndexService {
         let resolved = embedding_spaces::resolve_selected_in(tx, ctx)?;
         Ok(resolved_configuration(&resolved, self.native_available()))
     }
-    fn native_available(&self) -> bool {
+    pub(super) fn native_available(&self) -> bool {
         !self.is_stopped()
             && self
                 .embeddings

@@ -44,6 +44,8 @@ pub struct IndexJob {
     pub restore_epoch: i64,
     pub fences: Vec<AuthorityFence>,
     pub delivery_id: Id,
+    pub configuration_source_digest: String,
+    pub embedding_space: Option<String>,
 }
 impl IndexService {
     pub fn decide_index(
@@ -152,6 +154,10 @@ impl IndexService {
         let operation = OperationId(tx.new_id(IdKind::Operation));
         let delivery = tx.new_id(IdKind::QueueEntry);
         let event = EventId(tx.new_id(IdKind::Event));
+        let configuration = self.configuration_in(tx, ctx)?;
+        if let Some(space) = &configuration.space {
+            tx.conventions().put_convention_embedding_space(space)?;
+        }
         let job = IndexJob {
             kind: JOB_KIND.into(),
             target,
@@ -163,6 +169,8 @@ impl IndexService {
             restore_epoch: ctx.restore_epoch().get(),
             fences,
             delivery_id: delivery.clone(),
+            configuration_source_digest: configuration.source_digest,
+            embedding_space: configuration.space.map(|space| space.id),
         };
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
@@ -174,6 +182,22 @@ impl IndexService {
             payload: serde_json::to_value(&job)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         })?;
+        if let IndexTarget::One {
+            convention_id,
+            revision,
+        } = &job.target
+        {
+            let scoped = access::scope_in(tx, ctx, Some(&job.scope), true)
+                .map_err(|_| StorageError::ScopeDenied)?;
+            let owner = tx
+                .conventions()
+                .convention(convention_id, Some(*revision), &scoped.readable)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if owner.lifecycle == "Active" {
+                let header = super::publisher::header(&operation, &job, &owner, tx.now_ms())?;
+                tx.conventions().stage_convention_index(&header)?;
+            }
+        }
         let project = match scope {
             DataScope::Workspace => None,
             DataScope::Project { project_id } => Some(project_id),
