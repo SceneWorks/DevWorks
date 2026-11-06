@@ -200,6 +200,13 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         let scope=scope_json(self.conn,scope)?;
         db(self.conn.query_row("SELECT COALESCE(max(c.sequence)+1,1) FROM graph_trust_changes c JOIN json_each(?1,'$.views') j ON c.repository_id=json_extract(j.value,'$.repository_id') AND c.view_digest=json_extract(j.value,'$.view_digest')",[scope],|r|r.get(0)))
     }
+    fn graph_retirable_views(&self,now:i64,after:Option<&Id>,limit:u16)->Result<GraphPage<StoredView>,StorageError>{
+        let(n,_)=bounded(limit,None)?;
+        let mut statement=db(self.conn.prepare_cached("SELECT v.id FROM index_views v WHERE (json_extract(v.coverage_json,'$.overlayId') IS NOT NULL OR json_extract(v.coverage_json,'$.head') IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM published_views p WHERE p.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM index_overlays o WHERE o.view_id=v.id) AND NOT EXISTS(SELECT 1 FROM index_pins p WHERE p.view_id=v.id AND p.lease_until>?1) AND (?2 IS NULL OR v.id>?2) ORDER BY v.id LIMIT ?3"))?;
+        let rows=db(db(statement.query_map(params![now,after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
+        let views=rows.into_iter().map(|v|IndexRead::view(self,&id(v)?).and_then(|v|v.ok_or_else(||corrupt("retirable graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
+        Ok(page(views,limit))
+    }
     fn graph_pin(&self,key:&Id)->Result<Option<StoredGraphReadPin>,StorageError>{pin(self.conn,key)}
     fn graph_source_capture(&self,key:&Id)->Result<Option<StoredGraphSourceCapture>,StorageError>{capture(self.conn,key)}
 
@@ -235,13 +242,13 @@ fn trust(
     .transpose()
 }
 fn pin(conn: &Connection, key: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
-    let raw:Option<(String,String,i64,String,String,String,i64,i64,i64)>=db(conn.query_row("SELECT owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,revision,created_at,expires_at FROM graph_read_pins WHERE id=?1",[key.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?))).optional())?;
+    let raw:Option<(String,String,i64,String,String,String,String,i64,i64,i64)>=db(conn.query_row("SELECT owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,revision,created_at,expires_at FROM graph_read_pins WHERE id=?1",[key.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?))).optional())?;
     raw.map(|r|{
         let scope:GraphScope=serde_json::from_str(&r.5).map_err(|_|corrupt("invalid stored graph pin scope"))?;
-        scope_json(conn,&scope)?;
-        let count:i64=db(conn.query_row("SELECT count(*) FROM graph_read_pin_views v JOIN index_pins p ON p.id=v.index_pin_id WHERE v.pin_id=?1 AND p.view_id=v.view_id AND p.lease_until=?2",params![key.as_str(),r.8],|row|row.get(0)))?;
+        if scope.views.is_empty() || scope.views.len()>GRAPH_MAX_VIEWS || scope.views.iter().map(|v|v.repository_id.as_str()).collect::<BTreeSet<_>>().len()!=scope.views.len(){return Err(corrupt("invalid stored graph pin scope"));}
+        let count:i64=db(conn.query_row("SELECT count(*) FROM graph_read_pin_views v JOIN index_pins p ON p.id=v.index_pin_id JOIN json_each(?3,'$.views') j ON v.repository_id=json_extract(j.value,'$.repository_id') AND v.view_id=json_extract(j.value,'$.view_id') AND v.view_digest=json_extract(j.value,'$.view_digest') WHERE v.pin_id=?1 AND p.view_id=v.view_id AND p.lease_until=?2",params![key.as_str(),r.9,r.5],|row|row.get(0)))?;
         if count!=scope.views.len() as i64{return Err(corrupt("graph pin lost a child lease"));}
-        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,revision:r.6,created_at_ms:r.7,expires_at_ms:r.8})
+        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,view_witnesses:serde_json::from_str(&r.6).map_err(|_|corrupt("invalid graph pin witnesses"))?,revision:r.7,created_at_ms:r.8,expires_at_ms:r.9})
     }).transpose()
 }
 fn capture(conn: &Connection, key: &Id) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
@@ -340,12 +347,28 @@ impl GraphRepository for Unit<'_> {
                 })
             };
         }
+        if record.view_witnesses.len() != record.scope.views.len() {
+            return Err(invalid("graph pin needs one source witness per view"));
+        }
+        let mut witnessed = BTreeSet::new();
+        for witness in &record.view_witnesses {
+            if !witnessed.insert(witness.view_id.as_str()) {
+                return Err(invalid("duplicate graph view witness"));
+            }
+            validate_witness(
+                self.conn,
+                &record.scope,
+                witness,
+                self.now,
+                record.expires_at_ms,
+            )?;
+        }
         let boot = self
             .info
             .boot_id
             .as_ref()
             .ok_or_else(|| invalid("graph pin requires a native boot"))?;
-        db(self.conn.execute("INSERT INTO graph_read_pins(id,owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,revision,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8,?9)",params![record.id.as_str(),record.owner_namespace,record.store_id.0.as_str(),record.restore_epoch,record.scope_digest,record.intent_digest,scope,record.created_at_ms,record.expires_at_ms]))?;
+        db(self.conn.execute("INSERT INTO graph_read_pins(id,owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,revision,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9,?10)",params![record.id.as_str(),record.owner_namespace,record.store_id.0.as_str(),record.restore_epoch,record.scope_digest,record.intent_digest,scope,serde_json::to_string(&record.view_witnesses).map_err(|_|invalid("graph witness encoding"))?,record.created_at_ms,record.expires_at_ms]))?;
         for view in &record.scope.views {
             let child = format!(
                 "graphlease_{}",
@@ -388,6 +411,10 @@ impl GraphRepository for Unit<'_> {
             return Err(conflict("graph_read_pin", key, expected, record.revision));
         }
         if record.expires_at_ms <= self.now
+            || record
+                .view_witnesses
+                .iter()
+                .any(|witness| witness.expires_at_ms.is_some_and(|until| expiry > until))
             || expiry <= record.expires_at_ms
             || expiry.saturating_sub(self.now) > GRAPH_PIN_TTL_MS
         {
@@ -424,6 +451,10 @@ impl GraphRepository for Unit<'_> {
         db(self
             .conn
             .execute("DELETE FROM graph_read_pins WHERE id=?1", [key.as_str()]))?;
+        Ok(())
+    }
+    fn invalidate_graph_pins_for_view(&mut self, view: &Id) -> Result<(), StorageError> {
+        db(self.conn.execute("DELETE FROM graph_read_pins WHERE id IN(SELECT pin_id FROM graph_read_pin_views WHERE view_id=?1)",[view.as_str()]))?;
         Ok(())
     }
     fn insert_graph_source_capture(
@@ -468,5 +499,33 @@ pub(super) fn release_expired_pins_for_view(
     now: i64,
 ) -> Result<(), StorageError> {
     db(conn.execute("DELETE FROM graph_read_pins WHERE expires_at<=?2 AND id IN(SELECT pin_id FROM graph_read_pin_views WHERE view_id=?1)",params![view.as_str(),now]))?;
+    Ok(())
+}
+
+fn validate_witness(
+    conn: &Connection,
+    scope: &GraphScope,
+    w: &GraphViewWitness,
+    now: i64,
+    lease_until: i64,
+) -> Result<(), StorageError> {
+    let member = scope
+        .views
+        .iter()
+        .find(|v| v.view_id == w.view_id)
+        .ok_or_else(|| invalid("graph witness outside selected views"))?;
+    if w.source_revision <= 0 {
+        return Err(invalid(
+            "graph source revision must be observed and positive",
+        ));
+    }
+    let valid:bool=match (&w.overlay_id,w.expires_at_ms){
+        (Some(overlay),Some(expiry)) if expiry>now && lease_until<=expiry=>db(conn.query_row("SELECT EXISTS(SELECT 1 FROM index_overlays o WHERE o.id=?1 AND o.repository_id=?2 AND o.view_id=?3 AND o.revision=?4 AND o.expires_at=?5 AND o.state IN('Ready','Stale')) OR EXISTS(SELECT 1 FROM index_views v WHERE v.id=?3 AND json_extract(v.coverage_json,'$.sourceRevision')=?4 AND json_extract(v.coverage_json,'$.overlayId')=?1 AND json_extract(v.coverage_json,'$.expiresAtMs')=?5)",params![overlay.as_str(),member.repository_id.as_str(),member.view_id.as_str(),w.source_revision,expiry],|r|r.get(0)))?,
+        (None,None)=>db(conn.query_row("SELECT EXISTS(SELECT 1 FROM published_views p WHERE p.source_key=?1 AND p.view_id=?2 AND p.revision=?3) OR EXISTS(SELECT 1 FROM index_views v WHERE v.id=?2 AND v.branch_id IS NULL AND v.worktree_id IS NULL AND json_extract(v.coverage_json,'$.head') IS NULL AND json_extract(v.coverage_json,'$.overlayId') IS NULL AND json_extract(v.coverage_json,'$.sourceRevision')=?3) OR EXISTS(SELECT 1 FROM index_views v JOIN index_generations g ON g.id=v.baseline_id JOIN index_runs r ON r.id=json_extract(g.manifest_json,'$.runId') WHERE v.id=?2 AND v.source_key=?1 AND v.branch_id IS NULL AND v.worktree_id IS NULL AND json_extract(v.coverage_json,'$.head') IS NULL AND json_extract(v.coverage_json,'$.overlayId') IS NULL AND g.state='Sealed' AND json_extract(g.manifest_json,'$.parentPointerRevision')+1=?3 AND r.repository_id=?1 AND r.output_view_id=v.id AND r.state='Succeeded')",params![member.repository_id.as_str(),member.view_id.as_str(),w.source_revision],|r|r.get(0)))?,
+        _=>false,
+    };
+    if !valid {
+        return Err(StorageError::ScopeDenied);
+    }
     Ok(())
 }

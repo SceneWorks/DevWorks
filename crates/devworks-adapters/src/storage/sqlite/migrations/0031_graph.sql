@@ -21,6 +21,7 @@ CREATE TABLE graph_read_pins (
  scope_digest TEXT NOT NULL CHECK(length(scope_digest)=64),
  intent_digest TEXT NOT NULL CHECK(length(intent_digest)=64),
  scope_json TEXT NOT NULL CHECK(json_valid(scope_json) AND json_type(scope_json)='object'),
+ witness_json TEXT NOT NULL CHECK(json_valid(witness_json) AND json_type(witness_json)='array'),
  revision INTEGER NOT NULL CHECK(revision>0),
  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL CHECK(expires_at>created_at)
 ) STRICT;
