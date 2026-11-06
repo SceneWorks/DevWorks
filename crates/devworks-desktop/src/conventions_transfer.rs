@@ -96,7 +96,7 @@ fn prepare_edit_inner(
     if !d.body_complete || d.loading {
         return Err("The full opening source must finish loading before saving.".into());
     }
-    let order = if d.order.is_empty() && d.target().is_none() {
+    let order = if d.target().is_some() || d.order.is_empty() {
         None
     } else {
         Some(
@@ -115,7 +115,7 @@ fn prepare_edit_inner(
             .content
             .as_ref()
             .ok_or("The opening Markdown artifact is unavailable.")?;
-        let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug,"sortOrder":order.ok_or("An existing convention needs its captured order.")?.to_string(),"parent":d.parent.as_ref().map_or_else(||json!({"kind":"Root"}),|id|json!({"kind":"Child","parentId":id}))});
+        let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug});
         if d.markdown_changed {
             files.push(stage_text(
                 b,

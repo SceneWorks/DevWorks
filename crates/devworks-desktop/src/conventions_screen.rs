@@ -628,6 +628,12 @@ fn browse(
     {
         a.push(Action::ConfirmSearch);
     }
+    if s.search_recovery.is_some() && s.active_search.is_none() {
+        widgets::caption(
+            ui,
+            "A new search is a separate request and may incur usage. The earlier unconfirmed request stays available below.",
+        );
+    }
     if s.search_recovery.is_some()
         && ui
             .add_enabled(
@@ -1559,6 +1565,15 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
         if let Some(error) = &draft.error {
             widgets::chip(ui, error, Tone::Attention);
         }
+        if let Some(path) = &draft.replacement {
+            widgets::caption(
+                ui,
+                format!(
+                    "Selected replacement: {}. Save resource changes to upload it.",
+                    path.display()
+                ),
+            );
+        }
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!s.busy, egui::Button::new("Discard resource draft"))
@@ -1578,7 +1593,11 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             if ui
                 .add_enabled(
                     online && !s.busy && draft.base.is_some(),
-                    egui::Button::new("Save resource metadata"),
+                    egui::Button::new(if draft.replacement.is_some() {
+                        "Save resource changes"
+                    } else {
+                        "Save resource metadata"
+                    }),
                 )
                 .clicked()
             {
@@ -1587,7 +1606,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             if ui
                 .add_enabled(
                     online && !s.busy && draft.base.is_some(),
-                    egui::Button::new("Replace resource bytes"),
+                    egui::Button::new("Choose replacement resource"),
                 )
                 .clicked()
             {

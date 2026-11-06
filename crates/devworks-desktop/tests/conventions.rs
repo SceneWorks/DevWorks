@@ -1,5 +1,7 @@
 //! The dedicated manager over the native gateway. No inference, network or successful stub.
 mod common;
+#[path = "conventions/runtime.rs"]
+mod runtime;
 use common::*;
 use devworks_desktop::{conventions_screen::Scope, route::Route};
 use eframe::egui::{self, accesskit::Role};
@@ -15,19 +17,21 @@ fn replace(
     h.get_by_role_and_label(Role::TextInput, label).focus();
     h.step();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.get_by_role_and_label(Role::TextInput, label)
-        .type_text(text);
+    if text.is_empty() {
+        h.key_press(egui::Key::Backspace);
+    } else {
+        h.get_by_role_and_label(Role::TextInput, label)
+            .type_text(text);
+    }
     settle(h);
 }
 #[test]
-fn native_conventions_unavailable_keeps_draft_and_separates_knowledge_navigation() {
+fn native_conventions_empty_listing_keeps_draft_and_separates_knowledge_navigation() {
     let root = Root::new("conventions-unavailable");
     let engine = start(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1050.0);
     h.ctx
         .set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
-    settle(&mut h);
-    nav(&h, "Knowledge").scroll_to_me();
     settle(&mut h);
     nav(&h, "Knowledge").scroll_to_me();
     settle(&mut h);
@@ -40,10 +44,11 @@ fn native_conventions_unavailable_keeps_draft_and_separates_knowledge_navigation
         .state()
         .expect("selected convention scope");
     assert!(
-        !state.available,
-        "missing owner is unavailable, never a successful empty collection"
+        state.available,
+        "the actual registered convention owner answered"
     );
-    assert!(state.list_error.is_some());
+    assert!(state.list_error.is_none());
+    assert!(state.items.is_empty() && state.hits.is_empty());
     click(&mut h, Role::Button, "New convention");
     replace(&mut h, "Convention title", "Literal title, 日本語");
     replace(&mut h, "Convention slug", "literal-slug");
@@ -62,7 +67,7 @@ fn native_conventions_unavailable_keeps_draft_and_separates_knowledge_navigation
         .unwrap()
         .clone();
     assert!(
-        h.get_by_role_and_label(Role::Button, "Create convention")
+        !h.get_by_role_and_label(Role::Button, "Create convention")
             .accesskit_node()
             .is_disabled()
     );
