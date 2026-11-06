@@ -619,6 +619,10 @@ fn approve_owned_force_result(
     let outsider = principal(&*store, "unowned-force-worker", PrincipalKind::Agent);
     let binder = human.clone();
     write(&*store, move |tx| {
+        let previous = tx
+            .authority()
+            .principal(&ActorId(id("unowned-force-worker")))?
+            .map(|binding| binding.revision);
         devworks_core::authority::service::bind_principal(
             tx,
             &binder,
@@ -630,7 +634,7 @@ fn approve_owned_force_result(
                 tool_families: None,
                 bound_by: binder.principal().clone(),
             },
-            None,
+            previous,
         )
         .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
     })
@@ -689,7 +693,7 @@ fn approve_owned_force_result(
     let tree_id: devworks_core::protocol::Id =
         serde_json::from_value(input["command"]["worktreeId"].clone()).unwrap();
     let tree = read(&*store, |s| s.git().git_worktree(&tree_id)).unwrap();
-    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"saved-owned-force-proposal","schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":operation,"target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact reviewed Git operation","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
+    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":format!("saved-owned-force-proposal-{}",request.fingerprint.as_str()),"schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":operation,"target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact reviewed Git operation","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
     let reply = cases
         .command(gateway, agent, "approvals.propose", &propose)
         .unwrap();
@@ -734,7 +738,7 @@ fn approve_owned_force_result(
         .unwrap();
     let mut body = decision;
     body["kind"] = serde_json::json!("approvals.record_human_decision");
-    let decision_frame=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"approve-owned-force","body":body})).unwrap();
+    let decision_frame=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":format!("approve-owned-force-{}",p["id"].as_str().unwrap()),"body":body})).unwrap();
     let reply = cases
         .command(
             gateway,

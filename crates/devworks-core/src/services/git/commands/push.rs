@@ -153,7 +153,12 @@ impl GitService {
                 )
                 .into());
             }
-            let transport = self.push_transport(&git, Path::new(&tree.path), &tree.head.format)?;
+            let transport = self.push_transport(
+                &git,
+                Path::new(&tree.path),
+                &tree.head.format,
+                &repository.id,
+            )?;
             Ok(Destination {
                 transport_digest: transport.digest.clone(),
                 tree,
@@ -291,10 +296,15 @@ impl GitService {
         if git.literal_push_url(path, url).as_ref() != Ok(url) {
             return denied("literal push URL is rewritten or cannot be bound");
         }
-        let transport = match self.push_transport(git, path, &expected.format) {
-            Ok(transport) if transport_digest.as_ref() == Some(&transport.digest) => transport,
-            _ => return denied("trusted push transport configuration changed or is unavailable"),
-        };
+        let transport =
+            match self.push_transport(git, path, &expected.format, &job.tree.repository_id) {
+                Ok(transport) if transport_digest.as_ref() == Some(&transport.digest) => transport,
+                _ => {
+                    return denied(
+                        "trusted push transport configuration changed or is unavailable",
+                    );
+                }
+            };
         let network = Git {
             runner: &transport,
             ctx: git.ctx,

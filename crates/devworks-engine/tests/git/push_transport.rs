@@ -7,6 +7,8 @@ use std::sync::{
 };
 pub(super) struct State {
     home: PathBuf,
+    https: Option<TlsServer>,
+    credential_key: Mutex<Option<String>>,
     source: Mutex<Option<PathBuf>>,
     armed: AtomicBool,
     injected: AtomicBool,
@@ -15,7 +17,7 @@ pub(super) struct State {
     pub marker: PathBuf,
 }
 impl State {
-    pub fn new(root: &Path) -> Self {
+    pub fn new(root: &Path, https: bool) -> Self {
         let home = root.join("transport-home");
         std::fs::create_dir(&home).unwrap();
         let helper = home.join("trusted-ssh");
@@ -29,9 +31,23 @@ impl State {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        std::fs::write(home.join(".gitconfig"),format!("[core]\n sshCommand = {}\n[ssh]\n variant = ssh\n[credential]\n helper = \"!printf fixture-auth-secret\"\n",helper.display())).unwrap();
+        let credentials = home.join("trusted-credentials");
+        std::fs::write(
+            &credentials,
+            "#!/bin/sh\nprintf 'username=fixture\npassword=fixture-auth-secret\n'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(home.join(".gitconfig"),format!("[core]\n sshCommand = {}\n[ssh]\n variant = ssh\n[http]\n sslVerify = false\n extraHeader = X-Fixture-Secret: fixture-auth-secret\n[credential]\n helper = {}\n",helper.display(),credentials.display())).unwrap();
+        let https = https.then(|| TlsServer::start(root, &home));
         Self {
             home,
+            https,
+            credential_key: Mutex::new(None),
             source: Mutex::new(None),
             armed: AtomicBool::new(false),
             injected: AtomicBool::new(false),
@@ -40,9 +56,15 @@ impl State {
             marker: root.join("unreviewed-transport-marker"),
         }
     }
+    pub fn https_url(&self) -> Option<String> {
+        self.https
+            .as_ref()
+            .map(|server| format!("https://127.0.0.1:{}/remote.git", server.port))
+    }
     pub fn environment(&self, environment: &mut Vec<(String, String)>) {
         environment
             .retain(|(key, _)| !matches!(key.as_str(), "HOME" | "USERPROFILE" | "XDG_CONFIG_HOME"));
+        environment.push(("NO_PROXY".into(), "127.0.0.1,localhost".into()));
         for key in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME"] {
             environment.push((key.into(), self.home.to_string_lossy().into()));
         }
@@ -63,6 +85,12 @@ impl State {
             && !self.injected.swap(true, Ordering::SeqCst)
         {
             let source = self.source.lock().unwrap().clone().unwrap();
+            let private_config =
+                std::fs::read_to_string(spec.cwd.as_deref().unwrap().join("config")).unwrap();
+            assert!(
+                private_config.contains("fixture-auth-secret"),
+                "raw trusted auth material lives only in the private snapshot"
+            );
             assert_ne!(
                 spec.cwd.as_deref(),
                 Some(source.as_path()),
@@ -76,14 +104,14 @@ impl State {
             );
             let script = format!("printf unsafe > '{}'", self.marker.display());
             git(&source, &["config", "core.sshCommand", &script]);
-            git(
-                &source,
-                &[
-                    "config",
-                    "credential.https://fixture/.helper",
-                    &format!("!{script}"),
-                ],
-            );
+            let credential_key = if let Some(server) = &self.https {
+                format!("credential.https://127.0.0.1:{}.helper", server.port)
+            } else {
+                "credential.https://fixture/.helper".into()
+            };
+            git(&source, &["config", "credential.helper", ""]);
+            git(&source, &["config", &credential_key, &format!("!{script}")]);
+            *self.credential_key.lock().unwrap() = Some(credential_key);
             git(&source, &["config", "hook.injected.event", "pre-push"]);
             git(&source, &["config", "hook.injected.command", &script]);
             git(
@@ -145,6 +173,63 @@ pub(super) fn exercise(f: Fixture<'_>) {
             "{refusal:?}"
         );
         assert!(!server_marker.exists());
+        let host_actor = f.store.info().host_actor;
+        let prior_owner = read(&*f.store, |s| s.git().git_worktree(&f.tree.id))
+            .unwrap()
+            .owner;
+        let tree_id = f.tree.id.clone();
+        let owner = host_actor.clone();
+        write(&*f.store, move |tx| {
+            let mut tree = tx.git().git_worktree(&tree_id)?.unwrap();
+            let revision = tree.revision;
+            tree.owner = owner;
+            tree.revision += 1;
+            tree.ownership_revision += 1;
+            tx.git().update_git_worktree(&tree, revision)
+        })
+        .unwrap();
+        let host = HostIngress::new(&*f.store)
+            .context(
+                host_actor,
+                PrincipalKind::Host,
+                id("unattended-host"),
+                id("unattended-host"),
+                Counter::new(f.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_lineage(
+                f.agent.project_id().cloned(),
+                f.agent.root_id().cloned(),
+                None,
+            );
+        let mut host_request = unreviewed;
+        host_request["requestKey"] = serde_json::json!("unattended-host-local-push");
+        let refusal = f
+            .gateway
+            .command(
+                &host,
+                "git.push",
+                host_request.to_string().as_bytes(),
+                f.service.clone(),
+            )
+            .unwrap();
+        assert!(
+            serde_json::to_string(&refusal)
+                .unwrap()
+                .contains("ApprovalRequired"),
+            "Host is not human consent: {refusal:?}"
+        );
+        assert!(!server_marker.exists());
+        let tree_id = f.tree.id.clone();
+        write(&*f.store, move |tx| {
+            let mut tree = tx.git().git_worktree(&tree_id)?.unwrap();
+            let revision = tree.revision;
+            tree.owner = prior_owner;
+            tree.revision += 1;
+            tree.ownership_revision += 1;
+            tx.git().update_git_worktree(&tree, revision)
+        })
+        .unwrap();
     }
     git(path, &["remote", "set-url", "origin", &url]);
     std::fs::write(path.join("a.txt"), "new exact reviewed transport commit\n").unwrap();
@@ -228,6 +313,11 @@ pub(super) fn exercise(f: Fixture<'_>) {
     );
     let mut command = Command::new("git");
     command.current_dir(path);
+    command
+        .env("HOME", &f.state.home)
+        .env("XDG_CONFIG_HOME", &f.state.home)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("NO_PROXY", "127.0.0.1");
     if local {
         command.args(["hook", "run", "pre-push"]);
     } else {
@@ -239,16 +329,24 @@ pub(super) fn exercise(f: Fixture<'_>) {
     }
     assert!(
         f.state.marker.exists(),
-        "unconfined ssh command executes marker"
+        "unconfined repository client helper executes marker"
     );
     for key in [
         "core.sshCommand",
-        "credential.https://fixture/.helper",
+        "credential.helper",
         "hook.injected.event",
         "hook.injected.command",
     ] {
         git(path, &["config", "--unset-all", key]);
     }
+    git(
+        path,
+        &[
+            "config",
+            "--unset-all",
+            f.state.credential_key.lock().unwrap().as_ref().unwrap(),
+        ],
+    );
     std::fs::remove_file(&f.state.marker).unwrap();
     f.state.armed.store(false, Ordering::SeqCst);
     f.state.block_observation.store(false, Ordering::SeqCst);
@@ -266,4 +364,61 @@ pub(super) fn exercise(f: Fixture<'_>) {
         "recovery observes and never repeats push"
     );
     assert!(!f.state.marker.exists());
+}
+
+struct TlsServer {
+    child: Mutex<std::process::Child>,
+    port: u16,
+}
+impl TlsServer {
+    fn start(root: &Path, home: &Path) -> Self {
+        use std::io::BufRead;
+        let certificate = home.join("fixture.crt");
+        let key = home.join("fixture.key");
+        let output = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=localhost",
+                "-keyout",
+            ])
+            .arg(&key)
+            .arg("-out")
+            .arg(&certificate)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let script = home.join("https_server.py");
+        std::fs::write(&script, include_str!("https_server.py")).unwrap();
+        let mut child = Command::new("python3")
+            .arg(script)
+            .arg(root)
+            .arg(certificate)
+            .arg(key)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut port = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut port)
+            .unwrap();
+        Self {
+            child: Mutex::new(child),
+            port: port.trim().parse().unwrap(),
+        }
+    }
+}
+impl Drop for TlsServer {
+    fn drop(&mut self) {
+        let child = self.child.get_mut().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }

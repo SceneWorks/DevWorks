@@ -58,6 +58,7 @@ impl GitService {
         git: &Git<'_>,
         path: &Path,
         format: &ObjectFormat,
+        repository: &Id,
     ) -> Result<PushTransport<'a>, Failure> {
         let files = self.config.transport.as_ref().ok_or_else(refused)?;
         let (_, common) = git.metadata_dirs(path).map_err(|_| refused())?;
@@ -65,7 +66,7 @@ impl GitService {
         let repository_root = common_path.parent().ok_or_else(refused)?;
         let bytes = git
             .transport_configuration(path)
-            .map_err(|e| read_failure(e, &Id::new("git-transport").unwrap()))?;
+            .map_err(|e| read_failure(e, repository))?;
         let fields: Vec<_> = bytes
             .split(|b| *b == 0)
             .filter(|part| !part.is_empty())

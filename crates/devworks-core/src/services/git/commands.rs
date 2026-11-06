@@ -1295,7 +1295,12 @@ impl GitService {
                 transport_digest,
                 ..
             } => {
-                let transport = match self.push_transport(&git, path, &expected.format) {
+                let transport = match self.push_transport(
+                    &git,
+                    path,
+                    &expected.format,
+                    &job.tree.repository_id,
+                ) {
                     Ok(transport) if transport_digest.as_ref() == Some(&transport.digest) => {
                         transport
                     }

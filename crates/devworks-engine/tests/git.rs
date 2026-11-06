@@ -366,17 +366,22 @@ fn native_task_lifecycle_with_create(
     reviewed_case: Option<ReviewedCommitCase>,
     reviewed_create: Option<worktree_hooks::CreateCase>,
 ) {
-    native_task_lifecycle_transport(with_pr, reviewed_case, reviewed_create, false, false);
+    native_task_lifecycle_transport(with_pr, reviewed_case, reviewed_create, false, false, false);
 }
 #[test]
 #[cfg(unix)]
 fn reviewed_push_isolates_late_repository_transport_configuration_and_preserves_trusted_auth() {
-    native_task_lifecycle_transport(false, None, None, true, false);
+    native_task_lifecycle_transport(false, None, None, true, false, false);
 }
 #[test]
 #[cfg(unix)]
 fn reviewed_local_push_trusts_only_the_exact_approved_server_and_never_its_client_hooks() {
-    native_task_lifecycle_transport(false, None, None, true, true);
+    native_task_lifecycle_transport(false, None, None, true, true, false);
+}
+#[test]
+#[cfg(unix)]
+fn reviewed_https_push_preserves_trusted_credential_helpers_and_isolates_repository_helpers() {
+    native_task_lifecycle_transport(false, None, None, true, false, true);
 }
 fn native_task_lifecycle_transport(
     with_pr: bool,
@@ -384,6 +389,7 @@ fn native_task_lifecycle_transport(
     reviewed_create: Option<worktree_hooks::CreateCase>,
     push_case: bool,
     local_case: bool,
+    https_case: bool,
 ) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
@@ -391,7 +397,7 @@ fn native_task_lifecycle_transport(
     let h = Harness::new();
     h.readers.store(1, std::sync::atomic::Ordering::SeqCst);
     let store = h.open();
-    let push_state = push_case.then(|| Arc::new(push_transport::State::new(&h.root)));
+    let push_state = push_case.then(|| Arc::new(push_transport::State::new(&h.root, https_case)));
     let source = h.root.join("source");
     let owned = h.root.join("worktrees");
     std::fs::create_dir_all(&source).unwrap();
@@ -428,11 +434,14 @@ fn native_task_lifecycle_transport(
     let remote = h.root.join("remote.git");
     let local_remote_url = remote.to_string_lossy().into_owned();
     git(&source, &["init", "--bare", &local_remote_url]);
-    let remote_url = if push_state.is_some() && !local_case {
+    let remote_url = if let Some(url) = push_state.as_ref().and_then(|state| state.https_url()) {
+        url
+    } else if push_state.is_some() && !local_case {
         format!("ssh://git@fixture{}", remote.display())
     } else {
         local_remote_url
     };
+    git(&remote, &["config", "http.receivepack", "true"]);
     git(&source, &["remote", "add", "origin", &remote_url]);
     std::fs::write(source.join("a.txt"), "user change\n").unwrap();
     let path = source.to_string_lossy().into_owned();
@@ -1151,21 +1160,14 @@ fn native_task_lifecycle_transport(
     forbidden["requestKey"] = serde_json::json!("default-ref-force");
     forbidden["command"]["expectedHead"]["hex"] = serde_json::json!(another);
     forbidden["command"]["expectedRemote"]["hex"] = serde_json::json!(rebased);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            forbidden.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &forbidden,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(matches!(result, EffectOutcome::Failed(_)), "{result:?}");
@@ -1182,21 +1184,14 @@ fn native_task_lifecycle_transport(
     let mut alias = forbidden;
     alias["requestKey"] = serde_json::json!("symbolic-main-force");
     alias["command"]["expectedRemote"]["hex"] = serde_json::json!(main_before);
-    let operation = match gateway
-        .command(
-            &agent,
-            "git.push",
-            alias.to_string().as_bytes(),
-            service.clone(),
-        )
-        .unwrap()
-    {
-        CommandReply::Recorded { receipt, .. } => match receipt.decision {
-            DomainDecision::Accepted { operation_id } => operation_id,
-            other => panic!("{other:?}"),
-        },
-        other => panic!("{other:?}"),
-    };
+    let operation = approvals::approve_owned_force(
+        &h,
+        store.clone(),
+        service.clone(),
+        &gateway,
+        &agent,
+        &alias,
+    );
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
     assert!(
