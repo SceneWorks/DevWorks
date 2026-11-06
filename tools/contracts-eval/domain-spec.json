@@ -4346,7 +4346,7 @@
         "price_origin": "PriceOrigin",
         "amount_micro_usd": "?Counter",
         "currency": "?Label",
-        "original_amount": "?Money",
+        "original_amount": "?Label",
         "classification": "?Label",
         "price_snapshot_id": "?Id",
         "price_revision": "?Revision",
