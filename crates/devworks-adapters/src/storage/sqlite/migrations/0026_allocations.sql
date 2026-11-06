@@ -31,7 +31,7 @@ CREATE INDEX allocation_claims_work ON allocation_claims(work_id,fence);
 CREATE UNIQUE INDEX allocation_claims_live_work ON allocation_claims(work_id)
  WHERE state IN ('Active','Transferred','Yielding');
 CREATE UNIQUE INDEX allocation_claims_project_slot ON allocation_claims(project_id)
- WHERE queue_key='project' AND state IN ('Active','Transferred','Yielding');
+ WHERE queue_key='project' AND state IN ('Transferred','Yielding');
 -- An unstarted selection made before a link/unlink/transfer cannot start under its old scope.
 -- Transferred executions retain ownership and lineage; their service reconciles supervision.
 CREATE TRIGGER allocation_claims_membership AFTER UPDATE OF parent_feature_id ON work_items
@@ -40,3 +40,15 @@ CREATE TRIGGER allocation_claims_membership AFTER UPDATE OF parent_feature_id ON
   UPDATE allocation_claims SET state='Invalidated',revision=revision+1
    WHERE work_id=NEW.id AND state='Active';
  END;
+
+-- Explicit allocation keys persist complete responses even when no item was eligible.
+CREATE TABLE allocation_replays (
+ key TEXT PRIMARY KEY CHECK(length(key)=64 AND key NOT GLOB '*[^0-9a-f]*'),
+ intent_digest TEXT NOT NULL CHECK(length(intent_digest)=64 AND intent_digest NOT GLOB '*[^0-9a-f]*'),
+ result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json)='object' AND length(CAST(result_json AS BLOB))<=1048576),
+ claim_id TEXT REFERENCES allocation_claims
+) STRICT;
+CREATE TRIGGER allocation_replays_immutable_update BEFORE UPDATE ON allocation_replays
+ BEGIN SELECT RAISE(ABORT,'allocation replays are immutable'); END;
+CREATE TRIGGER allocation_replays_immutable_delete BEFORE DELETE ON allocation_replays
+ BEGIN SELECT RAISE(ABORT,'allocation replays are immutable'); END;

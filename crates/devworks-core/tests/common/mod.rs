@@ -1802,6 +1802,9 @@ impl ProjectRead for Unsupported {
     }
 }
 impl WorkRead for Unsupported {
+    fn allocation_replay(&self, _: &str) -> Result<Option<StoredAllocationReplay>, StorageError> {
+        nope()
+    }
     fn allocation_claim(&self, _: &Id) -> Result<Option<StoredAllocationClaim>, StorageError> {
         nope()
     }
@@ -1869,6 +1872,9 @@ impl WorkRead for Unsupported {
     }
 }
 impl WorkRepository for Unsupported {
+    fn insert_allocation_replay(&mut self, _: &StoredAllocationReplay) -> Result<(), StorageError> {
+        nope()
+    }
     fn insert_allocation_claim(&mut self, _: &StoredAllocationClaim) -> Result<(), StorageError> {
         nope()
     }

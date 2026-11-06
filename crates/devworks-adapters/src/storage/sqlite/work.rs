@@ -376,6 +376,7 @@ fn proposal_of(raw: ProposalRaw) -> Result<StoredProposal, StorageError> {
 macro_rules! work_reads {
     ($t:ty) => {
         impl WorkRead for $t {
+            fn allocation_replay(&self,key:&str)->Result<Option<StoredAllocationReplay>,StorageError>{super::allocations::replay(self.conn,key)}
             fn allocation_claim(&self,id:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::one(self.conn,id)}
             fn allocation_claims(&self,project:&ProjectId,after:Option<&Id>,limit:u16)->Result<Vec<StoredAllocationClaim>,StorageError>{super::allocations::page(self.conn,project,after,limit)}
             fn allocation_by_invocation(&self,namespace:&Id,invocation:&Id)->Result<Option<StoredAllocationClaim>,StorageError>{super::allocations::invocation(self.conn,namespace,invocation)}
@@ -568,6 +569,12 @@ fn plan_conflict(id: &Id, expected: i64, current: i64) -> Result<StorageError, S
 }
 
 impl WorkRepository for Unit<'_> {
+    fn insert_allocation_replay(
+        &mut self,
+        replay: &StoredAllocationReplay,
+    ) -> Result<(), StorageError> {
+        super::allocations::insert_replay(self, replay)
+    }
     fn insert_allocation_claim(
         &mut self,
         claim: &StoredAllocationClaim,

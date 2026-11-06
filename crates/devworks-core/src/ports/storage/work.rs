@@ -174,6 +174,19 @@ pub struct StoredReadiness {
     pub body: Value,
 }
 
+/// Maximum serialized explicit-key allocation replay result.
+pub const MAX_ALLOCATION_REPLAY_BYTES: usize = 1_048_576;
+
+/// Immutable response to an explicit allocation key, including successful NoEligible results.
+/// The service hashes the caller/session/ingress/project/key scope and validates intent replay.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredAllocationReplay {
+    pub key: String,
+    pub intent_digest: String,
+    pub result: Value,
+    pub claim_id: Option<Id>,
+}
+
 /// Durable allocation ownership, distinct from an execution or coordinator assignment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredAllocationClaim {
@@ -204,6 +217,7 @@ pub struct StoredAllocationClaim {
 }
 
 pub trait WorkRead {
+    fn allocation_replay(&self, key: &str) -> Result<Option<StoredAllocationReplay>, StorageError>;
     fn allocation_claim(&self, id: &Id) -> Result<Option<StoredAllocationClaim>, StorageError>;
     /// ID-ordered, exclusive cursor, limit 1..=MAX_PAGE. Includes historical rows.
     fn allocation_claims(
@@ -254,6 +268,10 @@ pub trait WorkRead {
 }
 
 pub trait WorkRepository: WorkRead {
+    fn insert_allocation_replay(
+        &mut self,
+        replay: &StoredAllocationReplay,
+    ) -> Result<(), StorageError>;
     fn insert_allocation_claim(
         &mut self,
         claim: &StoredAllocationClaim,

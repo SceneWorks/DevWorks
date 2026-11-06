@@ -207,15 +207,27 @@ fn source(unit: &Unit<'_>, c: &StoredAllocationClaim, original: bool) -> Result<
     }
     Ok(())
 }
-fn executing(conn: &Connection, work: &Id, execution: Option<&Id>) -> Result<bool, StorageError> {
-    db(conn.query_row("SELECT EXISTS(SELECT 1 FROM executions WHERE phase<>'Stopped' AND (root_id=?1 OR id=?2)) OR EXISTS(SELECT 1 FROM assignments a JOIN executions e ON e.id=a.execution_id WHERE a.work_id=?1 AND a.state IN ('Ready','Active','Waiting') AND e.phase<>'Stopped')",params![work.as_str(),execution.map(Id::as_str)],|row|row.get(0)))
+fn executing(conn: &Connection, c: &StoredAllocationClaim) -> Result<bool, StorageError> {
+    // A child shares its parent's activation. Only that child's assignments/execution protect
+    // its allocation; the parent coordinator may keep running after the child's completion.
+    let child = c.work_id != c.root_id.0;
+    let execution = if child { None } else { c.execution_id.as_ref() };
+    db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM executions WHERE phase<>'Stopped' AND (root_id=?1 OR id=?2)) OR EXISTS(SELECT 1 FROM assignments a LEFT JOIN executions e ON e.id=a.execution_id WHERE a.work_id=?1 AND a.state IN ('Ready','Active','Waiting') AND (?3 OR e.phase<>'Stopped'))",
+        params![c.work_id.as_str(),execution.map(Id::as_str),child],|row|row.get(0),
+    ))
 }
 fn duplicate(
     conn: &Connection,
     c: &StoredAllocationClaim,
     exclude: Option<&Id>,
 ) -> Result<(), StorageError> {
-    let collision:Option<String>=db(conn.query_row("SELECT id FROM allocation_claims WHERE id<>?1 AND state IN ('Active','Transferred','Yielding') AND (work_id=?2 OR (project_id=?3 AND queue_key='project' AND ?4='project')) LIMIT 1",params![exclude.map_or("",Id::as_str),c.work_id.as_str(),c.project_id.0.as_str(),c.queue_key],|row|row.get(0)).optional())?;
+    let execution_slot =
+        c.queue_key == PROJECT_QUEUE && matches!(c.state.as_str(), "Transferred" | "Yielding");
+    let collision:Option<String>=db(conn.query_row(
+        "SELECT id FROM allocation_claims WHERE id<>?1 AND ((state IN ('Active','Transferred','Yielding') AND work_id=?2) OR (?4 AND project_id=?3 AND queue_key='project' AND state IN ('Transferred','Yielding'))) LIMIT 1",
+        params![exclude.map_or("",Id::as_str),c.work_id.as_str(),c.project_id.0.as_str(),execution_slot],|row|row.get(0),
+    ).optional())?;
     if let Some(value) = collision {
         return Err(StorageError::Duplicate {
             kind: "allocation_claim",
@@ -224,6 +236,7 @@ fn duplicate(
     }
     Ok(())
 }
+
 pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(), StorageError> {
     check(c)?;
     if c.state != "Active"
@@ -244,7 +257,7 @@ pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(
         });
     }
     source(unit, c, true)?;
-    if executing(unit.conn, &c.work_id, None)? {
+    if executing(unit.conn, c)? {
         return Err(StorageError::Duplicate {
             kind: "allocation_execution",
             id: c.work_id.as_str().into(),
@@ -327,7 +340,7 @@ pub(super) fn update(
     }
     if old.execution_id.is_some()
         && c.execution_id != old.execution_id
-        && executing(unit.conn, &old.work_id, old.execution_id.as_ref())?
+        && executing(unit.conn, &old)?
     {
         return Err(invalid(
             "live allocation execution binding cannot be replaced",
@@ -336,7 +349,7 @@ pub(super) fn update(
     if c.state == "Expired" && c.expires_at_ms > unit.now_ms() {
         return Err(invalid("allocation lease has not expired"));
     }
-    if !live(&c.state) && executing(unit.conn, &old.work_id, old.execution_id.as_ref())? {
+    if !live(&c.state) && executing(unit.conn, &old)? {
         return Err(invalid(
             "live execution retains allocation ownership until quiescent",
         ));
@@ -373,5 +386,69 @@ pub(super) fn update(
         duplicate(unit.conn, c, Some(&c.id))?;
     }
     db(unit.conn.execute("UPDATE allocation_claims SET owner_id=?2,session_id=?3,fence=?4,expires_at=?5,state=?6,revision=?7,work_revision=?8,parent_feature_id=?9,root_control_revision=?10,queue_revision=?11,feature_task_set_revision=?12,execution_id=?13 WHERE id=?1 AND revision=?14",params![c.id.as_str(),c.owner_id.0.as_str(),c.session_id.as_ref().map(Id::as_str),c.fence,c.expires_at_ms,c.state,c.revision,c.work_revision,c.parent_feature_id.as_ref().map(Id::as_str),c.root_control_revision,c.queue_revision,c.feature_task_set_revision,c.execution_id.as_ref().map(Id::as_str),expected]))?;
+    Ok(())
+}
+
+fn sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+pub(super) fn replay(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<StoredAllocationReplay>, StorageError> {
+    if !sha256(key) {
+        return Err(invalid("allocation replay key is lowercase SHA-256"));
+    }
+    let row: Option<(String, String, Option<String>)> = db(conn
+        .query_row(
+            "SELECT intent_digest,result_json,claim_id FROM allocation_replays WHERE key=?1",
+            [key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional())?;
+    row.map(|(intent_digest, result, claim_id)| {
+        Ok(StoredAllocationReplay {
+            key: key.into(),
+            intent_digest,
+            claim_id: claim_id.map(id).transpose()?,
+            result: serde_json::from_str(&result).map_err(|_| {
+                StorageError::unavailable(Unavailable::Corrupt, "invalid allocation replay result")
+            })?,
+        })
+    })
+    .transpose()
+}
+pub(super) fn insert_replay(
+    unit: &mut Unit<'_>,
+    r: &StoredAllocationReplay,
+) -> Result<(), StorageError> {
+    if !sha256(&r.key) || !sha256(&r.intent_digest) || !r.result.is_object() {
+        return Err(invalid(
+            "allocation replay requires lowercase SHA-256 key/intent and an object result",
+        ));
+    }
+    let result = serde_json::to_string(&r.result)
+        .map_err(|_| invalid("allocation replay result cannot be serialized"))?;
+    if result.len() > MAX_ALLOCATION_REPLAY_BYTES {
+        return Err(invalid("allocation replay result exceeds size bound"));
+    }
+    if replay(unit.conn, &r.key)?.is_some() {
+        return Err(StorageError::Duplicate {
+            kind: "allocation_replay",
+            id: r.key.clone(),
+        });
+    }
+    if let Some(claim) = &r.claim_id {
+        if one(unit.conn, claim)?.is_none() {
+            return Err(StorageError::NotFound {
+                kind: "allocation_claim",
+                id: claim.as_str().into(),
+            });
+        }
+    }
+    db(unit.conn.execute("INSERT INTO allocation_replays(key,intent_digest,result_json,claim_id) VALUES(?1,?2,?3,?4)",params![r.key,r.intent_digest,result,r.claim_id.as_ref().map(Id::as_str)]))?;
     Ok(())
 }
