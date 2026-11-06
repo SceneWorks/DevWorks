@@ -5,8 +5,8 @@ use super::{ArtifactService, StagedFile, Viewer, complete_operation, visible};
 use crate::{
     context::InvocationContext,
     ports::{
-        IdKind, Preparation,
-        files::{ArtifactFiles, SourceOrigin},
+        IdKind,
+        files::ArtifactFiles,
         storage::*,
     },
     protocol::{DomainErrorCode, provider::ArtifactRef},
@@ -42,12 +42,13 @@ impl Read for SourceReader {
         let bytes = self
             .lease
             .files
-            .read_range(
+            .read_range_controlled(
                 &self.lease.version.blob_digest,
                 &self.lease.version.blob_generation,
                 self.lease.version.byte_count as u64,
                 self.position,
                 output.len().min(64 * 1024),
+                &mut || (self.stop)(),
             )
             .map_err(|_| io::Error::other("immutable import source unavailable"))?;
         if bytes.is_empty() {
@@ -103,6 +104,15 @@ fn matches_reference(version: &StoredVersion, reference: &ArtifactRef) -> bool {
         && version.media_type == reference.media_type
 }
 impl ArtifactService {
+    pub(crate) fn check_import_quota(&self,tx:&mut dyn WriteTransaction,draft:&StoredConventionImport)->Result<(),StorageError> {
+        let pending=tx.conventions().convention_import_storage_usage(&draft.operation_id)?;
+        let maximum=super::setting_i64(tx.configuration(),None,crate::settings::catalog::ARTIFACT_MAX_FILE_KEY).map_err(|_|StorageError::ScopeDenied)?;
+        let quota=super::setting_i64(tx.configuration(),draft.scope.project(),crate::settings::catalog::ARTIFACT_QUOTA_KEY).map_err(|_|StorageError::ScopeDenied)?;
+        let scope=draft.scope.project().cloned().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
+        let total=super::usage(tx.artifacts(),&scope)?.checked_add(pending.additional_scope_bytes).ok_or_else(||StorageError::InvalidRecord("import quota overflow".into()))?;
+        if (maximum>0 && pending.max_entry_bytes>maximum)||(quota>0 && total>quota){return Err(StorageError::InvalidRecord("import exceeds current artifact quota".into()))}Ok(())
+    }
+
     pub(crate) fn import_source(
         &self,
         read: &dyn ReadSnapshot,
@@ -169,64 +179,6 @@ impl ArtifactService {
             return Err(missing(reference));
         }
         Ok(())
-    }
-    pub(crate) fn stage_import_reader(
-        &self,
-        store: &dyn ApplicationStore,
-        cancellation: &Cancellation,
-        reader: &mut dyn Read,
-        expected_digest: &str,
-        expected_bytes: u64,
-        source: serde_json::Value,
-    ) -> Result<StagedFile, StorageError> {
-        let count = i64::try_from(expected_bytes)
-            .map_err(|_| StorageError::InvalidRecord("import entry exceeds store range".into()))?;
-        crate::protocol::provider::Digest::try_from(expected_digest.to_owned())
-            .map_err(|_| StorageError::InvalidRecord("invalid import entry digest".into()))?;
-        if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-        let env = Preparation::new(store, Some(cancellation), None);
-        let digest = expected_digest.to_owned();
-        let hash = digest.clone();
-        let reuse = env.read(move |read| {
-            Ok(read
-                .artifacts()
-                .blob(&hash)?
-                .filter(|blob| matches!(blob.state, BlobState::Present | BlobState::UnlinkPending))
-                .map(|blob| blob.generation))
-        })?;
-        let payload = json!({"digest":digest,"byteCount":count,"source":source});
-        let (staging, published) =
-            self.journal_and_publish(&env, reader, &digest, count, reuse.as_deref(), payload)?;
-        let published = match published {
-            Ok(published) => published,
-            Err(_) => {
-                self.abandon_or_defer(
-                    &env,
-                    &staging,
-                    json!({"abandoned":"import entry did not stage"}),
-                );
-                return Err(if cancellation.is_cancelled() {
-                    StorageError::Cancelled
-                } else {
-                    StorageError::InvalidRecord(
-                        "import entry digest/length or managed staging failed".into(),
-                    )
-                });
-            }
-        };
-        Ok(StagedFile {
-            operation_id: staging.operation_id,
-            digest,
-            byte_count: count,
-            generation: published.generation,
-            reused: published.reused,
-            relative_path: published.relative_path,
-            origin: SourceOrigin::default(),
-            source,
-            fence: staging.fence,
-        })
     }
     /// The enclosing worker must propagate any failure so the complete capture UoW rolls back.
     pub(crate) fn bind_import_capture(
