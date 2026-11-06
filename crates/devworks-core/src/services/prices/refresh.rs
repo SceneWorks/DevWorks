@@ -13,6 +13,37 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Drains only admitted database units. No read, parser or external source fetch holds this
+/// fence; after closure a late source result cannot publish or settle its journal.
+#[derive(Default)]
+pub struct RefreshWriteFence {
+    stopping: std::sync::atomic::AtomicBool,
+    units: std::sync::RwLock<()>,
+}
+impl RefreshWriteFence {
+    pub fn stop(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn close(&self) {
+        self.stop();
+        drop(self.units.write().unwrap_or_else(|p| p.into_inner()));
+    }
+    pub fn write<T, F>(&self, store: &dyn ApplicationStore, work: F) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    {
+        let admitted = self.units.read().unwrap_or_else(|p| p.into_inner());
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(StorageError::Cancelled);
+        }
+        let result = run_write(store, WriteOptions::default(), work);
+        drop(admitted);
+        result
+    }
+}
+
 pub const CONSUMER: &str = "price_refresh";
 pub const CAPABILITY: &str = "router.price_refresh";
 pub const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -359,6 +390,7 @@ impl PriceService {
         source: &dyn PriceSource,
         operation: &OperationRecord,
         stop: &dyn Fn() -> bool,
+        writes: &RefreshWriteFence,
     ) -> RefreshOutcome {
         if operation.capability != CAPABILITY
             || operation.schema_version != 1
@@ -466,7 +498,7 @@ impl PriceService {
             }
             let operation_id = operation.id.clone();
             let requested = p.clone();
-            let result = run_write(store, WriteOptions::default(), move |tx| {
+            let result = writes.write(store, move |tx| {
                 let old = tx
                     .usage()
                     .price_status(&requested.provider)?
@@ -559,6 +591,7 @@ impl PriceService {
         store: &dyn ApplicationStore,
         source: &dyn PriceSource,
         stop: &dyn Fn() -> bool,
+        writes: &RefreshWriteFence,
     ) -> Result<usize, StorageError> {
         let mut seen = BTreeSet::new();
         let mut resolved = 0;
@@ -585,7 +618,7 @@ impl PriceService {
                 continue;
             }
             if is_terminal(operation.state) {
-                resolved += run_write(store, WriteOptions::default(), move |tx| {
+                resolved += writes.write(store, move |tx| {
                     let mut changed = 0;
                     for source in ["openai", "anthropic"] {
                         if let Some(mut row) = tx.usage().price_status(source)?
@@ -610,7 +643,7 @@ impl PriceService {
             if operation.state != crate::protocol::OperationState::OutcomeUnknown {
                 continue;
             }
-            let outcome = self.execute_refresh(store, source, &operation, stop);
+            let outcome = self.execute_refresh(store, source, &operation, stop, writes);
             if stop() {
                 break;
             }
@@ -625,7 +658,7 @@ impl PriceService {
                 ),
                 RefreshOutcome::NotApplied(_) | RefreshOutcome::Unknown(_) => continue,
             };
-            let changed = run_write(store, WriteOptions::default(), move |tx| {
+            let changed = writes.write(store, move |tx| {
                 let Some(current) = tx.operations().operation(&operation.id)? else {
                     return Ok(false);
                 };
