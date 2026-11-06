@@ -1,0 +1,16 @@
+{
+  "jsonrpc": "2.0",
+  "id": "event-commit",
+  "method": "broker.commit_event",
+  "params": {
+    "processSessionId": "actual-session",
+    "invocationId": "actual-invocation",
+    "invocationToken": "actual-token",
+    "subscriptionId": "actual-subscription",
+    "eventId": "actual-event",
+    "expectedCheckpoint": "0",
+    "stateGeneration": "1",
+    "expectedStateRevision": "1",
+    "intents": []
+  }
+}

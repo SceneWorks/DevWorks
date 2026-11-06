@@ -1,0 +1,202 @@
+[
+  {
+    "kind": "Tool",
+    "meta": {
+      "id": "demo-echo/echo",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "requestedEffect": "ReadCandidate"
+  },
+  {
+    "kind": "Semantic",
+    "meta": {
+      "id": "demo-echo/index",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "languages": [
+      "csharp"
+    ],
+    "format": "Scip"
+  },
+  {
+    "kind": "Workflow",
+    "meta": {
+      "id": "demo-echo/verify",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "role": "VerificationGate",
+    "evidenceSchema": {
+      "schemaId": "demo-echo/data",
+      "revision": "1",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "kind": "EventHandler",
+    "meta": {
+      "id": "demo-echo/on-event",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "eventSchemas": [
+      {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  {
+    "kind": "ContextHook",
+    "meta": {
+      "id": "demo-echo/assemble",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "phase": "Assemble",
+    "priority": 10
+  },
+  {
+    "kind": "Content",
+    "meta": {
+      "id": "demo-echo/skill",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "contentKind": "Skill",
+    "artifact": {
+      "artifactId": "artifact",
+      "versionId": "version",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "byteLength": "2",
+      "mediaType": "application/json"
+    }
+  },
+  {
+    "kind": "Provider",
+    "meta": {
+      "id": "demo-echo/provider",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "profiles": [
+      "CompatibleChat"
+    ],
+    "endpointIds": [
+      "local"
+    ]
+  },
+  {
+    "kind": "NativeUi",
+    "meta": {
+      "id": "demo-echo/view",
+      "inputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "outputSchema": {
+        "schemaId": "demo-echo/data",
+        "revision": "1",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "helpTopic": "echo",
+      "required": false,
+      "cancellation": "Cooperative"
+    },
+    "view": {
+      "kind": "Group",
+      "children": [
+        {
+          "kind": "Text",
+          "text": "Index status"
+        },
+        {
+          "kind": "Action",
+          "actionId": "demo-echo/echo",
+          "label": "Inspect"
+        }
+      ]
+    }
+  }
+]
