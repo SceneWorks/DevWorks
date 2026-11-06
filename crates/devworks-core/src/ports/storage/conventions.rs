@@ -136,6 +136,10 @@ pub trait ConventionRead: ConventionIndexRead + ConventionImportRead {
     ) -> Result<Vec<StoredConventionResource>, StorageError>;
     /// Positive scope generation; the absent scope has revision one.
     fn convention_scope_revision(&self, scope: &KnowledgeScope) -> Result<i64, StorageError>;
+    /// Generation of Active indexed source membership and exact Markdown/title/scope.
+    /// Cosmetic metadata, raw content and attachments do not change this private witness.
+    fn convention_index_source_revision(&self, scope: &KnowledgeScope)
+    -> Result<i64, StorageError>;
 }
 
 pub trait ConventionRepository:

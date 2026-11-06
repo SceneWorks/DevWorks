@@ -29,6 +29,7 @@ CREATE INDEX convention_version_parent ON convention_versions(parent_id,sort_ord
 CREATE TABLE convention_scope_revisions (
  scope_key TEXT PRIMARY KEY, project_id TEXT REFERENCES projects,
  revision INTEGER NOT NULL CHECK(revision>0),
+ index_source_revision INTEGER NOT NULL DEFAULT 1 CHECK(index_source_revision>0),
  CHECK((project_id IS NULL AND scope_key='workspace') OR (project_id IS NOT NULL AND scope_key='project:'||project_id))
 ) STRICT;
 CREATE TABLE convention_resource_heads (
@@ -68,6 +69,7 @@ CREATE TABLE convention_indexes (
  error TEXT,embedding_space TEXT REFERENCES convention_embedding_spaces,source_digest TEXT NOT NULL,
  created_at INTEGER NOT NULL CHECK(created_at>=0),updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
  FOREIGN KEY(convention_id,convention_revision) REFERENCES convention_versions(convention_id,revision),
+ UNIQUE(convention_id,operation_id),
  CHECK(source_version_id=json_extract(source_ref_json,'$.versionId'))
 ) STRICT;
 CREATE INDEX convention_index_owner ON convention_indexes(convention_id,generation_id);

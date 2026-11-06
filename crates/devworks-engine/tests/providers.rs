@@ -1034,3 +1034,6 @@ mod convention_search;
 
 #[path = "providers/selection_refresh.rs"]
 mod selection_refresh;
+
+#[path = "providers/convention_index_compatibility.rs"]
+mod convention_index_compatibility;

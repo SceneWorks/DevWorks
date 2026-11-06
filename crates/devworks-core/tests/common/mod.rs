@@ -3500,6 +3500,9 @@ impl ConventionRead for Unsupported {
     fn convention_scope_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
         nope()
     }
+    fn convention_index_source_revision(&self, _: &KnowledgeScope) -> Result<i64, StorageError> {
+        nope()
+    }
 }
 
 impl ConventionRepository for Unsupported {

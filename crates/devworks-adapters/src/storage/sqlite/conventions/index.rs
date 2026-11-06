@@ -503,7 +503,10 @@ impl ConventionIndexRepository for Unit<'_> {
             };
         }
         active_operation(self.conn, &r.operation_id)?;
-        let reference = source(self.conn, r, r.convention_revision)?;
+        let revision = current(self.conn, &r.convention_id)?
+            .ok_or_else(|| invalid("convention owner missing"))?
+            .revision;
+        let reference = source(self.conn, r, revision)?;
         if let Some(id) = &r.embedding_space {
             space(self.conn, id)?.ok_or_else(|| invalid("embedding space missing"))?;
         }

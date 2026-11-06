@@ -67,11 +67,28 @@ pub(super) fn qualify(f: &Fx) -> (InvocationContext, Arc<NativeEmbeddings>, Arc<
     index.set_embeddings(Some(executor.clone()));
     (caller, executor, index)
 }
-fn source(
+pub(super) fn source(
     f: &Fx,
     index: Arc<IndexService>,
     ctx: &InvocationContext,
     name: &str,
+) -> (StoredConvention, OperationRecord) {
+    source_state(f, index, ctx, name, true)
+}
+pub(super) fn queued_source(
+    f: &Fx,
+    index: Arc<IndexService>,
+    ctx: &InvocationContext,
+    name: &str,
+) -> (StoredConvention, OperationRecord) {
+    source_state(f, index, ctx, name, false)
+}
+fn source_state(
+    f: &Fx,
+    index: Arc<IndexService>,
+    ctx: &InvocationContext,
+    name: &str,
+    dispatch: bool,
 ) -> (StoredConvention, OperationRecord) {
     let staged = f
         .artifacts
@@ -116,6 +133,9 @@ fn source(
         };
         tx.conventions().create_convention(&row)?;
         let op = index.record_changed(tx, &ctx, &row)?;
+        if !dispatch {
+            return Ok((row, tx.operations().operation(&op)?.unwrap()));
+        }
         let journal = tx
             .operations()
             .begin_attempt(&op, 1, AttemptBinding::default())?;
@@ -132,7 +152,7 @@ fn source(
     f.artifacts.settle_host_bytes(&*f.store, &staged, true);
     (row, op)
 }
-fn push(f: &Fx) {
+pub(super) fn push(f: &Fx) {
     f.http
         .lock()
         .unwrap()
