@@ -1246,3 +1246,132 @@ fn cancellation_before_dispatch_records_no_invented_attempt_fence() {
         0
     );
 }
+
+#[test]
+fn price_subject_is_atomic_deduplicated_and_never_a_chat_model() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let expected = devworks_core::services::router::connections::discovered_model_id(
+        "Embedding",
+        &id("embedding-connection"),
+        "literal-model",
+    );
+    let c = candidate(&s, "second-price-candidate");
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.router().insert_embedding_candidate(&c, 1)
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let subjects = r.router().embedding_price_subjects(None, 500)?;
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].model_id, expected);
+        for candidate in ["candidate", "second-price-candidate"] {
+            let subject = r
+                .router()
+                .embedding_price_subject_for_candidate(&id(candidate))?
+                .unwrap();
+            assert_eq!(subject.model_id, expected);
+            assert!(subject.current_candidate_id.is_some());
+        }
+        assert!(
+            r.router()
+                .embedding_price_subjects(Some(&expected), 1)?
+                .is_empty()
+        );
+        assert!(r.router().route_model(&expected)?.is_none());
+        assert!(r.router().decision_model(&expected)?.is_none());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM router_pins", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn failed_candidate_cannot_leave_price_subject_even_when_caller_commits() {
+    let h = Harness::new();
+    let s = h.store();
+    run_write(&s, WriteOptions::default(), |tx| {
+        tx.router().put_connection(&connection(), None)
+    })
+    .unwrap();
+    h.raw().execute_batch("CREATE TRIGGER reject_candidate BEFORE INSERT ON router_embedding_candidates BEGIN SELECT RAISE(ABORT,'native injected candidate failure'); END;").unwrap();
+    let c = candidate(&s, "failure");
+    run_write(&s, WriteOptions::default(), move |tx| {
+        assert!(tx.router().insert_embedding_candidate(&c, 1).is_err());
+        // Deliberately catch the SQL error and commit the outer unit.
+        Ok(())
+    })
+    .unwrap();
+    for table in [
+        "router_embedding_price_subjects",
+        "router_embedding_candidates",
+        "router_embedding_qualifications",
+    ] {
+        assert_eq!(
+            h.raw()
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table}"
+        );
+    }
+}
+
+#[test]
+fn price_subject_visibility_uses_identity_not_connection_routability() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-connection"))?
+            .unwrap();
+        c.name = "renamed".into();
+        c.enabled = false;
+        c.lifecycle = "Disconnected".into();
+        c.local_free = true;
+        c.revision = 2;
+        tx.router().put_connection(&c, Some(1))
+    })
+    .unwrap();
+    let subject = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.router()
+            .embedding_price_subject_for_candidate(&id("candidate"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(subject.current_candidate_id.is_some());
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-connection"))?
+            .unwrap();
+        c.account_revision = 2;
+        c.account_digest = Some(sha256_hex(b"another account"));
+        c.revision = 3;
+        tx.router().put_connection(&c, Some(2))
+    })
+    .unwrap();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        assert!(
+            r.router()
+                .embedding_price_subject_for_candidate(&id("candidate"))?
+                .is_none()
+        );
+        let retained = r
+            .router()
+            .embedding_price_subject(&subject.model_id)?
+            .unwrap();
+        assert!(retained.current_candidate_id.is_none());
+        assert_eq!(retained.upstream_model_id, "literal-model");
+        Ok(())
+    })
+    .unwrap();
+}
