@@ -642,3 +642,85 @@ fn revision_editor_changes_without_rewriting_original_provenance() {
 
 #[path = "conventions/imports.rs"]
 mod imports;
+#[test]
+fn convention_max_sort_order_is_nullable_current_scoped_parent_filtered_and_includes_retired() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store, WriteOptions::default(), |tx| {
+        let workspace = KnowledgeScope::Workspace;
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&workspace, None)?,
+            None
+        );
+        let zero = record("sort-zero", workspace.clone(), None);
+        tx.conventions().create_convention(&zero)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&workspace, None)?,
+            Some(0)
+        );
+        let negative = project(tx, "negative-scope")?;
+        for (name, order, state) in [
+            ("negative-a", -5, "Active"),
+            ("negative-b", -2, "Active"),
+            ("retired-negative", -1, "Retired"),
+            ("deleted-positive", 100, "Deleted"),
+        ] {
+            let mut row = record(name, negative.clone(), None);
+            row.sort_order = order;
+            row.lifecycle = state.into();
+            tx.conventions().create_convention(&row)?;
+        }
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&negative, None)?,
+            Some(-1)
+        );
+        for (name, order) in [("sort-folder", -10), ("other-folder", -11)] {
+            let mut row = record(name, workspace.clone(), None);
+            row.sort_order = order;
+            tx.conventions().create_convention(&row)?;
+        }
+        for (name, parent, order) in [
+            ("first-child", "sort-folder", 500),
+            ("second-child", "other-folder", 1000),
+        ] {
+            let mut row = record(name, workspace.clone(), None);
+            row.parent_id = Some(id(parent));
+            row.sort_order = order;
+            tx.conventions().create_convention(&row)?;
+        }
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&workspace, None)?,
+            Some(0)
+        );
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&workspace, Some(&id("sort-folder")))?,
+            Some(500)
+        );
+        let boundary = project(tx, "boundary-scope")?;
+        let mut max = record("int-max", boundary.clone(), None);
+        max.sort_order = i64::from(i32::MAX);
+        max.lifecycle = "Retired".into();
+        tx.conventions().create_convention(&max)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&boundary, None)?,
+            Some(i64::from(i32::MAX))
+        );
+        let mut revised = next(&zero);
+        revised.sort_order = -1;
+        tx.conventions().revise_convention(&revised, 1)?;
+        assert_eq!(
+            tx.conventions()
+                .convention_max_sort_order(&workspace, None)?,
+            Some(-1),
+            "MAX sees current heads, not obsolete revisions"
+        );
+        Ok(())
+    })
+    .unwrap();
+}

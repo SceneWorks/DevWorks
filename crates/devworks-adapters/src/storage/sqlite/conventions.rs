@@ -338,6 +338,9 @@ fn validate_resource(
 macro_rules! reads {
     ($ty:ty) => {
         impl ConventionRead for $ty {
+            fn convention_max_sort_order(&self,scope:&KnowledgeScope,parent:Option<&Id>)->Result<Option<i64>,StorageError>{
+                db(self.conn.query_row("SELECT max(v.sort_order) FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE v.scope_key=?1 AND v.parent_id IS ?2 AND v.lifecycle!='Deleted'",params![scope.key(),parent.map(Id::as_str)],|r|r.get(0)))
+            }
             fn convention(
                 &self,
                 id: &Id,

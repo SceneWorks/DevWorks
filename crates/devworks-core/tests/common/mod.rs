@@ -3448,6 +3448,13 @@ impl GraphRepository for Unsupported {
 }
 
 impl ConventionRead for Unsupported {
+    fn convention_max_sort_order(
+        &self,
+        _: &KnowledgeScope,
+        _: Option<&Id>,
+    ) -> Result<Option<i64>, StorageError> {
+        nope()
+    }
     fn convention(
         &self,
         _: &Id,

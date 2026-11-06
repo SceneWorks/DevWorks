@@ -92,6 +92,13 @@ pub struct ConventionResourceQuery {
 }
 
 pub trait ConventionRead: ConventionIndexRead + ConventionImportRead {
+    /// Current nondeleted siblings only, including retired rows. None is an empty sibling set;
+    /// the owning publisher applies the retained i32 wrapping increment inside its UoW.
+    fn convention_max_sort_order(
+        &self,
+        scope: &KnowledgeScope,
+        parent: Option<&Id>,
+    ) -> Result<Option<i64>, StorageError>;
     /// The current head and the requested historical snapshot must both have an allowed scope.
     fn convention(
         &self,
