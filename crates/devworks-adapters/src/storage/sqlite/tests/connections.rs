@@ -3157,3 +3157,117 @@ fn catalog_projected_concrete_model_edits_preserve_raw_tiers_before_and_after_pr
     );
     assert_eq!(setting().unwrap(), before_legacy_edit);
 }
+
+#[test]
+fn inventory_refresh_bounds_multibyte_display_labels_without_losing_upstream_identity() {
+    use devworks_core::services::router::connections::discovered_model_id;
+    let cx = Cx::new();
+    cx.add("long", "CompatibleChat", "http://long.test/v1", None);
+    let upstream = "界".repeat(300);
+    cx.http.on(
+        Method::Get,
+        "http://long.test/v1/models",
+        200,
+        json!({"data": [
+            {"id": upstream, "architecture": {"output_modalities": ["text"]}},
+            {"id": "gpt-5.2-sol"}
+        ]}),
+    );
+    summary(cx.configure(json!({"kind": "SignIn", "connectionId": "long", "action": "Inspect"})));
+    let connection = cx.row("long");
+    assert_eq!(connection.healthy, Some(true));
+    assert!(connection.discovered_at_ms.is_some());
+    let inventory = connection.discovered.unwrap();
+    assert_eq!(inventory.len(), 2);
+    assert!(inventory.iter().any(|m| m.id == upstream));
+    let model_id = discovered_model_id("CompatibleChat", &id("long"), &upstream);
+    let model = cx.read(|r| r.router().route_model(&model_id)).unwrap();
+    assert_eq!(model.upstream_model_id, upstream);
+    assert_eq!(
+        model.display_name,
+        upstream.chars().take(256).collect::<String>()
+    );
+    assert_eq!(model.display_name.chars().count(), 256);
+    assert!(cx.availability(model.id.as_str()).available);
+    assert!(
+        cx.availability(discovered_model_id("CompatibleChat", &id("long"), "gpt-5.2-sol").as_str())
+            .available
+    );
+}
+
+#[test]
+fn inventory_refresh_retains_edited_discovery_rows_and_allocates_stable_alternate_identity() {
+    use devworks_core::services::router::connections::discovered_model_id;
+    for (connection, upstream, enabled) in [
+        ("b", "gpt-5.2-sol", true),
+        ("a", "gpt-5.3-sol", true),
+        ("b", "gpt-5.3-sol", true),
+        ("b", "gpt-5.3-sol", false),
+    ] {
+        let cx = Cx::new();
+        cx.add("a", "CompatibleChat", "http://a.test/v1", None);
+        cx.add("b", "CompatibleChat", "http://b.test/v1", None);
+        cx.http.on(
+            Method::Get,
+            "http://a.test/v1/models",
+            200,
+            json!({"data": [
+                {"id": "gpt-5.1-sol"}, {"id": "gpt-5.2-sol"}
+            ]}),
+        );
+        let inspect =
+            || cx.configure(json!({"kind": "SignIn", "connectionId": "a", "action": "Inspect"}));
+        summary(inspect());
+        let original_id = discovered_model_id("CompatibleChat", &id("a"), "gpt-5.2-sol");
+        let before = cx.read(|r| r.router().route_model(&original_id)).unwrap();
+        summary(cx.configure(json!({"kind": "Model", "expectedRevision": before.revision.to_string(),
+            "model": {"id": original_id.as_str(), "displayName": "My edited model", "endpointProfile": "CompatibleChat",
+                "upstreamModelId": upstream, "connectionId": connection, "enabled": enabled,
+                "tierMemberships": [], "efforts": ["High"], "imageInput": true, "tools": true,
+                "contextTokens": "123456", "revision": before.revision.to_string()}})));
+        let edited = cx.read(|r| r.router().route_model(&original_id)).unwrap();
+        let mut published_id = None;
+        for _ in 0..3 {
+            cx.advance(1);
+            summary(inspect());
+            let refreshed = cx.row("a");
+            assert_eq!(refreshed.healthy, Some(true));
+            assert_eq!(refreshed.discovered.unwrap().len(), 2);
+            assert_eq!(
+                cx.read(|r| r.router().route_model(&original_id)).unwrap(),
+                edited
+            );
+            let models = cx.read(|r| r.router().route_models(None, 500));
+            let matching: Vec<_> = models
+                .iter()
+                .filter(|m| {
+                    m.endpoint_profile == "CompatibleChat"
+                        && m.connection_id.as_ref() == Some(&id("a"))
+                        && m.upstream_model_id == "gpt-5.2-sol"
+                })
+                .collect();
+            assert_eq!(matching.len(), 1);
+            let restored = matching[0];
+            assert_ne!(restored.id, original_id);
+            assert_eq!(
+                restored.enabled, enabled,
+                "a disabled edited identity is never bypassed"
+            );
+            assert!(!restored.tools && !restored.image_input && restored.efforts.is_empty());
+            assert_eq!(restored.context_tokens, None);
+            if let Some(previous) = &published_id {
+                assert_eq!(&restored.id, previous);
+            }
+            published_id = Some(restored.id.clone());
+            let availability = cx.availability("sol-latest");
+            assert_eq!(availability.available, enabled);
+            if enabled {
+                assert_eq!(
+                    availability.eligible_model_ids.0.as_slice(),
+                    std::slice::from_ref(&restored.id)
+                );
+                assert!(cx.availability(restored.id.as_str()).available);
+            }
+        }
+    }
+}
