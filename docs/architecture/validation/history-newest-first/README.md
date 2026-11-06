@@ -42,3 +42,17 @@ native recorded-contract suite passes 7/7 in 0.14 s, covering all 1,519 domain f
 542 operation/mode/revision admissions. The independent DTO probe passes the same recorded
 corpus; JSON Schema validation separately checks the seven new shapes. Native API/UI paging
 proofs remain unchanged. The expected gated-member list now names newestFirst explicitly.
+
+Current-main integration at 761fe2f6 includes the accepted Jobs prompt picker. All
+23 Work-screen cases pass (33.96 s); the Jobs suite also passes, the unchanged
+completion overlay regression passes (6.12 s), and strict workspace all-target
+checks pass (31.17 s). The overlay uses DW-130’s real online backend with its
+existing missing-hints fixture so background inbox reconciliation cannot replace
+synthetic presentation cards. Assertions and timeouts remain unchanged.
+
+The previous macOS job 128119442220 in run 42283841797 reached its existing
+45-minute limit while progressing through native/doctest phases, with no failing
+assertion. DW-128’s previously tested complete native partitions now apply here:
+all five workspace packages, integration tests and doctests remain covered, with
+the same 45-minute worker limit. Actionlint, Bash syntax, exact Cargo metadata
+partition coverage and diff checks pass. Fresh hosted CI and review remain required.
