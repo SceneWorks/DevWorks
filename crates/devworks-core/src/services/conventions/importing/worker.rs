@@ -25,9 +25,7 @@ impl ImportService {
     pub fn execute(&self, operation: &OperationRecord) -> ImportOutcome {
         match self.run(operation) {
             Ok(result) => ImportOutcome::Completed(result),
-            Err(StorageError::Busy) => ImportOutcome::NotApplied(
-                "Private import staging raced current blob metadata; recheck required".into(),
-            ),
+            Err(StorageError::Busy) => self.busy_outcome(operation),
             Err(StorageError::Cancelled) => {
                 ImportOutcome::NotApplied("Import cancelled or host closing".into())
             }
@@ -70,6 +68,35 @@ impl ImportService {
                 });
                 ImportOutcome::Failed(reason)
             }
+        }
+    }
+    // Recheck the shared execution guard under the SAME journal owner before classifying Busy.
+    // A temporary control hold is pending observation, never a four-attempt not-applied retry.
+    fn busy_outcome(&self, operation: &OperationRecord) -> ImportOutcome {
+        let job: Job = match serde_json::from_value(operation.payload.clone()) {
+            Ok(job) => job,
+            Err(_) => return ImportOutcome::Failed("Invalid import journal".into()),
+        };
+        let op = operation.clone();
+        match self.write(move|tx|{
+            match validate(tx,&op,&job) {
+                Ok(_)=>Ok(false),
+                Err(StorageError::Busy)=>{
+                    let current=tx.operations().operation(&op.id)?.ok_or_else(||invalid("import journal missing"))?;
+                    let attempt=current.latest_attempt().ok_or_else(||invalid("import attempt missing"))?;
+                    if !attempt.observations.iter().any(|v|v.get("conventionImportWaitingControls").is_some()) {
+                        let number=attempt.attempt_no;
+                        tx.operations().observe(&op.id,number,json!({"conventionImportWaitingControls":{"kind":"ExecutionControls","controls":job.controls,"assignmentGeneration":job.assignment_generation}}))?;
+                    }
+                    Ok(true)
+                },
+                Err(error)=>Err(error),
+            }
+        }) {
+            Ok(true)=>ImportOutcome::Unknown("Import is waiting for its current execution controls; the original journal and private draft are retained.".into()),
+            Ok(false)=>ImportOutcome::NotApplied("Private import staging raced current blob metadata; recheck required".into()),
+            Err(StorageError::ScopeDenied|StorageError::InvalidRecord(_))=>ImportOutcome::Failed("Import source or captured work ownership changed.".into()),
+            Err(_)=>ImportOutcome::Unknown("Import controls/storage could not be observed; the original journal and private draft are retained.".into()),
         }
     }
     pub fn observe(&self, operation: &OperationRecord) -> ImportOutcome {
