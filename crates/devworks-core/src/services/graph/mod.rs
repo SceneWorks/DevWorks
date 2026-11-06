@@ -1,6 +1,8 @@
 //! Exact composed graph reads, private source capture, and retention leases.
 mod budget;
+mod cursor;
 mod dataset;
+mod languages;
 mod lease;
 mod linking;
 mod model;

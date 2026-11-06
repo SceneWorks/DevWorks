@@ -97,6 +97,13 @@ pub(super) struct Edge {
     pub target: GraphNodeIdentity,
 }
 
+/// Both the re-evaluated result and its immutable producing-layer endpoint evidence.
+/// Removed-file attribution must not rediscover an old target from today's baseline.
+pub(super) struct Unmapped {
+    pub raw: GraphEdge,
+    pub original: GraphEdge,
+}
+
 /// Raw edges are streamed before endpoint filtering: inherited names may have rebound in
 /// this composition, and SQL's old target index must not hide those incoming references.
 pub(super) fn edges(
@@ -104,7 +111,7 @@ pub(super) fn edges(
     scope: &GraphScope,
     layers: &[ViewLayers],
     budget: &mut Budget,
-    mut visit: impl FnMut(Result<Edge, GraphEdge>, &mut Budget) -> Result<bool, Failure>,
+    mut visit: impl FnMut(Result<Edge, Unmapped>, &mut Budget) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {
     let mut after = None;
     let mut sessions =
@@ -129,6 +136,7 @@ pub(super) fn edges(
             let Some(view) = layers.iter().find(|v| v.view.view_id == raw.view_id) else {
                 continue;
             };
+            let original = raw.clone();
             if view.layers.len() > 1 {
                 // The shared index linker retains language/receiver/import ambiguity rules.
                 let unit_key = raw.edge.unit_key.clone();
@@ -159,7 +167,7 @@ pub(super) fn edges(
                 repository("sourceRepositoryId"),
                 repository("targetRepositoryId"),
             ) else {
-                if !visit(Err(raw), budget)? {
+                if !visit(Err(Unmapped { raw, original }), budget)? {
                     return Ok(());
                 }
                 continue;
@@ -168,7 +176,7 @@ pub(super) fn edges(
                 .iter()
                 .any(|key| payload.get(*key).is_some_and(|value| !value.is_string()))
             {
-                if !visit(Err(raw), budget)? {
+                if !visit(Err(Unmapped { raw, original }), budget)? {
                     return Ok(());
                 }
                 continue;
@@ -199,7 +207,7 @@ pub(super) fn edges(
                     source,
                     target,
                 }),
-                _ => Err(raw),
+                _ => Err(Unmapped { raw, original }),
             };
             if !visit(linked, budget)? {
                 return Ok(());

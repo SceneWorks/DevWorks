@@ -51,7 +51,7 @@ pub(super) fn nodes(
 
 pub(super) struct Edges {
     pub linked: Vec<scan::Edge>,
-    pub unmapped: Vec<GraphEdge>,
+    pub unmapped: Vec<scan::Unmapped>,
 }
 
 pub(super) fn edges(
@@ -65,9 +65,19 @@ pub(super) fn edges(
     scan::edges(read, scope, layers, budget, |edge, budget| {
         let raw = match &edge {
             Ok(edge) => &edge.raw,
-            Err(raw) => raw,
+            Err(unmapped) => &unmapped.raw,
         };
-        let bytes = std::mem::size_of::<scan::Edge>()
+        let original_bytes = match &edge {
+            Ok(_) => 0,
+            Err(e) => {
+                e.original.edge.payload.to_string().len()
+                    + e.original.edge.unit_key.len()
+                    + e.original.edge.target_node_id.len()
+                    + e.original.edge.source_node_id.len()
+            }
+        };
+        let bytes = original_bytes
+            + std::mem::size_of::<scan::Edge>()
             + raw.edge.unit_key.len()
             + raw.edge.edge_id.len()
             + raw.edge.source_node_id.len()
