@@ -671,3 +671,115 @@ fn admitted_intended_model_is_not_published_as_provider_confirmed() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estimate() {
+    use devworks_core::ports::usage::{PriceResolver, PublishedTariff};
+    let mut f = NativeFx::new();
+    let tariffs = |input: &str| -> [PublishedTariff; 2] {
+        ["Input", "Output"].map(|kind| PublishedTariff {
+            upstream_model_id: "upstream/accounted".into(),
+            service_tier: "Standard".into(),
+            context_lower_exclusive: None,
+            context_upper_inclusive: None,
+            modality: "Text".into(),
+            charge_kind: kind.into(),
+            cache_ttl_seconds: None,
+            unit: "Token".into(),
+            units: 1_000_000,
+            amount_usd: if kind == "Input" {
+                input.into()
+            } else {
+                "2".into()
+            },
+            region: None,
+            endpoint_profile: Some("OpenAiResponses".into()),
+        })
+    };
+    let initial = tariffs("1").to_vec();
+    f.fx.write(move |tx| {
+        tx.usage().put_price_override(
+            &StoredPriceOverride {
+                model_id: id("accounted"),
+                revision: 2,
+                mode: "Set".into(),
+                tariffs: initial,
+                updated_by: actor("user-a"),
+                updated_at_ms: T0,
+            },
+            1,
+        )
+    });
+    f.request.quote = f.fx.read(|read| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(read, &f.request.query)
+    });
+    f.request.override_revision = 2;
+    assert_eq!(
+        f.request.quote.classification,
+        CostClassification::ConfiguredEstimate
+    );
+    let attempt = f.admitted();
+    let newer = tariffs("100").to_vec();
+    f.fx.write(move |tx| {
+        tx.usage().put_price_override(
+            &StoredPriceOverride {
+                model_id: id("accounted"),
+                revision: 3,
+                mode: "Set".into(),
+                tariffs: newer,
+                updated_by: actor("user-a"),
+                updated_at_ms: T0,
+            },
+            2,
+        )
+    });
+    assert!(matches!(
+        f.admit(),
+        Admission::Admitted { reused: true, .. }
+    ));
+    let (src, _) = source(
+        vec![
+            InferenceFrame::Usage(observation("estimated", 1, Some(100), None)),
+            InferenceFrame::Terminal(AttemptEnd::Completed),
+        ],
+        false,
+    );
+    let DriveOutcome::Settled(balance) = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap()
+    else {
+        panic!("unsettled source")
+    };
+    assert_eq!(balance.priced_micro_usd, Some(100));
+    assert_eq!(balance.classification, "ConfiguredEstimate");
+    assert!(balance.monetary_complete);
+    let c = f.control.clone();
+    let id = attempt.attempt_id.clone();
+    let corrected = f.fx.write(move |tx| {
+        accounting::observe(
+            tx,
+            &c,
+            &id,
+            &observation("reported", 2, None, Some("0.000075")),
+        )
+    });
+    assert_eq!(corrected.priced_micro_usd, Some(75));
+    assert_eq!(corrected.classification, "ReportedCharge");
+    let retained =
+        f.fx.read(|s| s.usage().inference_attempt(&attempt.attempt_id))
+            .unwrap();
+    assert_eq!(
+        accounting::snapshot(&retained)
+            .unwrap()
+            .quote
+            .override_revision,
+        Some(2)
+    );
+    let changes = f.fx.read(|s| s.usage().usage_changes(None, None, 500));
+    assert!(
+        changes
+            .iter()
+            .any(|e| e.kind == "InferenceUsageObserved" && e.delta_micro_usd == Some(-25))
+    );
+}
