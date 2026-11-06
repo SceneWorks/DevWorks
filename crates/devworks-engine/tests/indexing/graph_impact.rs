@@ -389,40 +389,22 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
     let _ = std::fs::remove_dir_all(src);
 }
 
-#[test]
-fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baseline_fallback() {
-    let h = Harness::new();
-    let executor = runtime();
-    let store = h.open();
-    let src = sources();
-    let repo = src.join("deleted");
-    write_repo(
-        &repo,
-        &[
-            ("src/changed.rs", "pub fn target() {}\n"),
-            (
-                "src/lib.rs",
-                "pub mod changed;\nuse crate::changed::target;\npub fn caller() { target(); }\n",
-            ),
-        ],
-    );
-    let app = executor
-        .block_on(boot(composition(&h, store.clone(), "git")))
-        .unwrap();
-    let ctx = principal(&*store, "user", PrincipalKind::Human);
-    base_directory(&store, &ctx, &src);
-    let repository = discovered(&app, &ctx).remove(0);
-    let baseline = indexed(&executor, &app, &store, &ctx, &repository, "impact-base");
-    git(&repo, &["rm", "src/changed.rs"]);
-    git(&repo, &["commit", "-q", "-m", "delete changed target"]);
-    let source_revision = read(&*store, |r| {
+fn refresh_overlay(
+    executor: &tokio::runtime::Runtime,
+    app: &Runtime,
+    store: &Arc<dyn ApplicationStore>,
+    ctx: &InvocationContext,
+    repository: &str,
+    key: &str,
+) -> StoredIndexRun {
+    let source_revision = read(&**store, |r| {
         devworks_core::services::indexing::section_config(
             r.indexing(),
             &devworks_core::services::indexing::section_key(ctx.project_id()),
         )
         .map(|s| s.revision)
     });
-    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"impact-deleted-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":source_revision.to_string()}});
+    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":key,"command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":source_revision.to_string()}});
     let CommandReply::Recorded { receipt, .. } = app
         .command(
             &ctx,
@@ -439,16 +421,52 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         } => value,
         other => panic!("overlay expected Applied, got {other:?}"),
     };
-    let overlay = executor.block_on(within("deleted-file impact overlay publication", async {
+    executor.block_on(within("impact overlay publication", async {
         loop {
-            let state = run_state(&store, value.id.as_str());
+            let state = run_state(store, value.id.as_str());
             if state.state == RUN_SUCCEEDED {
                 break state;
             }
             assert!(!run_terminal(&state.state), "{state:?}");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-    }));
+    }))
+}
+
+#[test]
+fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baseline_fallback() {
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let src = sources();
+    let repo = src.join("deleted");
+    write_repo(
+        &repo,
+        &[
+            ("src/changed.rs", "pub fn target() {}\n"),
+            (
+                "src/lib.rs",
+                "pub mod changed;\nuse crate::changed::target;\npub fn caller() { target(); never_indexed(); }\n",
+            ),
+        ],
+    );
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    base_directory(&store, &ctx, &src);
+    let repository = discovered(&app, &ctx).remove(0);
+    let baseline = indexed(&executor, &app, &store, &ctx, &repository, "impact-base");
+    git(&repo, &["rm", "src/changed.rs"]);
+    git(&repo, &["commit", "-q", "-m", "delete changed target"]);
+    let overlay = refresh_overlay(
+        &executor,
+        &app,
+        &store,
+        &ctx,
+        &repository,
+        "impact-deleted-overlay",
+    );
     let old = graph_page(
         &app,
         &ctx,
@@ -465,7 +483,7 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         &ctx,
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
-        Some(json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]})),
+        Some(json!({"kind":"Exact","viewIds":[overlay.output_view_id.clone().unwrap()]})),
         (100, 100000),
         None,
     );
@@ -478,6 +496,25 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
     assert_eq!(
         serde_json::to_value(&deleted).unwrap()["scopeCoverage"]["coverage"]["state"],
         "Partial"
+    );
+    let unknown = graph_page(
+        &app,
+        &ctx,
+        "code.impact",
+        json!({"kind":"NodeImpact","selection":{"target":{"kind":"Name","name":"never_indexed","repositoryId":repository},"depth":3}}),
+        Some(json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]})),
+        (100, 100000),
+        None,
+    );
+    assert!(!impact(&unknown).found);
+    assert_eq!(
+        impact(&unknown)
+            .unmapped_inbound_edges
+            .as_ref()
+            .unwrap()
+            .get(),
+        0,
+        "a never-mapped symbol is not an unmapped former endpoint"
     );
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
@@ -656,8 +693,9 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
             ],
         );
     }
+    let mut baseline_views = std::collections::BTreeMap::new();
     for name in ["origin", "consumer", "downstream"] {
-        indexed(
+        let run = indexed(
             &executor,
             &app,
             &store,
@@ -665,6 +703,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
             &ids[name],
             &format!("semantic-{name}"),
         );
+        baseline_views.insert(name, run.output_view_id.unwrap());
     }
     let views = json!({"kind":"Published","repositoryIds":repositories});
     let direct = graph_page(
@@ -727,6 +766,38 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
             .any(|e| e.payload["properties"]["fixtureSource"] == "ScriptedSemanticCapture"))
     });
     assert!(marked);
+    // A caller's retained baseline can lose its exact foreign target in another repository's
+    // selected overlay. The operator must report that prior endpoint, not a current fallback.
+    std::fs::write(src.join("origin/src/lib.rs"), "pub fn publisher() {}\n").unwrap();
+    git(&src.join("origin"), &["add", "-A"]);
+    git(
+        &src.join("origin"),
+        &["commit", "-q", "-m", "remove exact foreign target"],
+    );
+    let overlay = refresh_overlay(
+        &executor,
+        &app,
+        &store,
+        &ctx,
+        &ids["origin"],
+        "semantic-remove-target",
+    );
+    let lost = graph_page(
+        &app,
+        &ctx,
+        "code.impact",
+        node_query(&ids["origin"], 3),
+        Some(
+            json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap(),baseline_views["consumer"],baseline_views["downstream"]]}),
+        ),
+        (500, 100000),
+        None,
+    );
+    assert!(!impact(&lost).found);
+    assert!(
+        impact(&lost).unmapped_inbound_edges.as_ref().unwrap().get() >= 1,
+        "baseline foreign callers retain lost-target provenance"
+    );
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);
 }

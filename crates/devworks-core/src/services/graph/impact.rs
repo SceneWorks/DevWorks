@@ -627,6 +627,32 @@ fn crate_dependents(
     Ok(())
 }
 
+/// Ordinary unresolved symbols are not evidence that a previously mapped endpoint was lost.
+/// A foreign caller may be in a baseline while its target is masked by a selected overlay.
+fn formerly_mapped(
+    edge: &GraphEdge,
+    layers: &[crate::services::indexing::views::ViewLayers],
+    source: &str,
+    target: &str,
+) -> bool {
+    if !matches!(
+        edge.edge.payload["resolution"].as_str(),
+        Some("Resolved" | "Inferred")
+    ) || edge.edge.payload["targetUnit"].as_str().is_none()
+    {
+        return false;
+    }
+    layers.iter().any(|view| {
+        (view.view.repository_id.as_str() == source
+            && view
+                .layers
+                .iter()
+                .skip(1)
+                .any(|generation| generation == &edge.generation_id))
+            || (view.view.repository_id.as_str() == target && view.layers.len() > 1)
+    })
+}
+
 fn unmapped_count(
     reader: &mut Reader<'_>,
     edges: &[scan::Unmapped],
@@ -675,6 +701,9 @@ fn unmapped_count(
                 .iter()
                 .any(|v| v.repository_id.as_str() == target_repo)
         {
+            continue;
+        }
+        if !formerly_mapped(edge, &reader.selected.layers, source_repo, target_repo) {
             continue;
         }
         let source = sources
