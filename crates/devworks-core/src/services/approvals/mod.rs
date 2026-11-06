@@ -62,8 +62,8 @@ mod service;
 mod writes;
 pub use replay::{ApprovedCommand, ResumePreparation};
 pub(crate) use replay::{restore_source_context, save_context, save_source_context};
-pub(crate) use service::prepare_authority;
 pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};
+pub(crate) use service::{prepare_authority, validate_authority};
 
 pub(crate) use writes::authority_binding;
 pub use writes::stage_saved;

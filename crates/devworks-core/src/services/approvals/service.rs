@@ -499,18 +499,31 @@ fn policy_permits(
             crate::authority::policy::Verdict::Deny(_)
         )
 }
-pub(crate) fn check_authority(
+pub(crate) fn validate_authority(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     request: &DecodedRequest,
-) -> Result<(), Failure> {
+) -> Result<bool, StorageError> {
     let kind = tx.actors().actor_kind(ctx.principal())?;
     let principal = match ctx.principal_kind() {
         crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host => None,
         _ => tx.authority().principal(ctx.principal())?,
     };
     let policy = crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?;
-    if !policy_permits(ctx, request, kind, principal.as_ref(), &policy) {
+    Ok(policy_permits(
+        ctx,
+        request,
+        kind,
+        principal.as_ref(),
+        &policy,
+    ))
+}
+pub(crate) fn check_authority(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &DecodedRequest,
+) -> Result<(), Failure> {
+    if !super::validate_authority(tx, ctx, request)? {
         return Err(denied("saved_operation_current_authority"));
     }
     Ok(())
