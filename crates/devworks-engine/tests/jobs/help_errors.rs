@@ -276,5 +276,102 @@ fn transient_help_open_and_mid_read_faults_preserve_source_and_recover_the_same_
     for (generated, mode) in [(true, 1), (true, 2), (false, 1)] {
         transient_help_fault_case(&rt, &app, &files, generated, mode);
     }
+    repair_same_source_bundle(&rt, &app, &files);
     finish(&rt, app);
+}
+
+// Version references name a digest; SQLite resolves its current physical blob
+// generation. Repairing identical bundled bytes must preserve readable history.
+fn repair_same_source_bundle(rt: &tokio::runtime::Runtime, app: &HelpApp, files: &FaultFiles) {
+    let before = app.head();
+    let topic = read(&*app.store, |s| {
+        s.help()
+            .help_topic(before.generation_id.as_ref().unwrap(), &id("help"))
+    })
+    .unwrap();
+    let reference: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(topic.content_ref.clone().unwrap()).unwrap();
+    let version = read(&*app.store, |s| {
+        s.artifacts().version(&reference.version_id)
+    })
+    .unwrap();
+    let old_page = result(query(
+        app,
+        &app.user(),
+        "help.read",
+        json!({"topicId":"help","version":topic.version,"maxChars":"65536"}),
+        3,
+    ));
+    assert_eq!(old_page["kind"], "Available");
+    files
+        .inner
+        .unlink(reference.sha256.as_str(), &version.blob_generation)
+        .unwrap();
+    assert!(
+        !files
+            .inner
+            .present(
+                reference.sha256.as_str(),
+                &version.blob_generation,
+                reference.byte_length.get() as u64
+            )
+            .unwrap()
+    );
+    let args = read(
+        &*app.store,
+        devworks_core::services::help::current_generation_args,
+    );
+    let reply = app.command(DOCS, serde_json::to_value(args).unwrap(), 1);
+    let CommandReply::Recorded {
+        receipt:
+            devworks_core::protocol::Receipt {
+                decision: DomainDecision::Accepted { operation_id },
+                ..
+            },
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}")
+    };
+    rt.block_on(within("repair identical bundled Help source", async {
+        loop {
+            app.runtime.dispatcher().run_until_idle().await.unwrap();
+            let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
+            if is_terminal(op.state) {
+                assert_eq!(op.state, OperationState::ObservedComplete, "{op:?}");
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }));
+    let after = app.head();
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.generation_id, before.generation_id);
+    assert_eq!(after.source_digest, before.source_digest);
+    assert_eq!(
+        read(&*app.store, |s| s
+            .help()
+            .help_topic(&topic.generation_id, &topic.id))
+        .unwrap(),
+        topic
+    );
+    let repaired = read(&*app.store, |s| {
+        s.artifacts().version(&reference.version_id)
+    })
+    .unwrap();
+    assert_ne!(repaired.blob_generation, version.blob_generation);
+    assert_eq!(
+        result(query(
+            app,
+            &app.user(),
+            "help.read",
+            json!({"topicId":"help","version":topic.version,"maxChars":"65536"}),
+            3
+        ))["passage"]["text"],
+        old_page["passage"]["text"]
+    );
+    assert!(matches!(
+        artifact_read(app, &app.user(), topic.content_ref.as_ref().unwrap()),
+        DomainQueryReply::Result { .. }
+    ));
 }
