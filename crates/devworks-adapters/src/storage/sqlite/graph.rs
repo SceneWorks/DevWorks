@@ -125,9 +125,26 @@ fn nodes(
 ) -> Result<GraphPage<GraphNode>, StorageError> {
     let scope = scope_json(conn, scope)?;
     let (limit, after) = bounded(limit, after)?;
+    // Unit selection commutes with the per-(repository,unit) layer ranking. Apply it
+    // before the window, keeping every selected layer of that unit so Delete/Replace
+    // masking is unchanged. An exact node predicate must remain indexable: an optional
+    // OR otherwise scans every node in every visible unit for each endpoint lookup.
+    let composed = if filter.unit_key.is_some() {
+        COMPOSED.replace(
+            "u.generation_id=l.generation_id)",
+            "u.generation_id=l.generation_id WHERE u.unit_key=json_extract(?2,'$.unit'))",
+        )
+    } else {
+        COMPOSED.to_owned()
+    };
+    let node_predicate = if filter.node_id.is_some() {
+        "n.node_id=json_extract(?2,'$.node')"
+    } else {
+        "1"
+    };
     let filter=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n| json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
     let sql = format!(
-        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.name.query') IS NULL OR devworks_graph_name_matches(n.name,CASE WHEN json_type(n.payload_json,'$.qualifiedName')='text' THEN json_extract(n.payload_json,'$.qualifiedName') END,json_extract(?2,'$.name.query'),json_extract(?2,'$.name.contains'))) AND (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?2,'$.node') IS NULL OR n.node_id=json_extract(?2,'$.node')) AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY v.repo,n.unit_key,n.node_id LIMIT ?4"
+        "{composed}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.name.query') IS NULL OR devworks_graph_name_matches(n.name,CASE WHEN json_type(n.payload_json,'$.qualifiedName')='text' THEN json_extract(n.payload_json,'$.qualifiedName') END,json_extract(?2,'$.name.query'),json_extract(?2,'$.name.contains'))) AND (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND {node_predicate} AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY v.repo,n.unit_key,n.node_id LIMIT ?4"
     );
     let mut statement = db(conn.prepare_cached(&sql))?;
     let rows = db(

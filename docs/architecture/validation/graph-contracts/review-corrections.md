@@ -15,3 +15,19 @@ Review 4496113728 found that a full edge scan could spend every visit before tra
 Edge materialization now receives half the remaining visits from the same budget. Its actual visits and retained memory remain charged, and its original deadline/cancellation remain in force. A phase-only visit limit becomes an explicit coverage gap while the reserved visits allow traversal/projection. Global visit limits, memory failures and cancellation remain terminal. Detail completeness, impact counts and unmapped counts retain the partial-scan boundary; the same shared edge loader supports traversal, call paths, shortest paths, detail, related nodes and impact.
 
 All 23 native Graph cases pass (130.60 s), including the three-request large-edge regression, existing large named-target search and impact/overlay cases. Both budget regressions pass; strict core/engine all-target checks pass (26.40 s). Native platform CI and fresh automated review remain required. Confidence: high for this local evidence, without increasing any query/test timeout, visit bound or memory bound. No inference runs.
+
+## Indexed exact endpoint lookup under the original deadline
+
+Hosted Ubuntu runs on3aac0754 and its Conventions integration exposed the unchanged
+21,000-edge traversal hitting the30-second query deadline. The native endpoint reader's
+optional `OR` predicate prevented an exact node primary-key lookup, and unit restriction
+occurred only after all units had entered the layer-ranking window.
+
+The actual SQLite node path now uses a direct node predicate when an ID is supplied and
+restricts an exact unit before ranking, while retaining every selected layer for that unit.
+Filtering by the partition key commutes with ranking; Delete/Replace masking and full-scope
+validation remain intact. No source-unit identity is assumed for unannotated endpoints.
+The unchanged large native case passes39.58s including setup and three bounded queries;
+all27 native indexing cases pass77.07s, and all11 graph storage cases pass11.28s including
+masking, scope, pin, source, cancellation and pool reuse. Query budgets/deadlines and fixture
+population remain unchanged. Hosted exact-head qualification is still required.
