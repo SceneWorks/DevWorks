@@ -72,7 +72,11 @@ class SchemaRevisionRules(unittest.TestCase):
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
             'browser.upload', 'browser.console', 'browser.network',
-            'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides'})
+            'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
+            'conventions.list', 'conventions.read', 'conventions.edit', 'conventions.move',
+            'conventions.applicability', 'conventions.delete', 'conventions.delete_resource',
+            'conventions.import', 'conventions.retire', 'conventions.index', 'conventions.search',
+            'conventions.resources', 'conventions.version'})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         self.assertEqual(carried['router.availability'], {2, 3})
@@ -203,6 +207,33 @@ class SchemaRevisionRules(unittest.TestCase):
         record = generate.record_attrs(generate.TYPES['AttributedGitLink'])
         self.assertIn('"x-earlier" = {"name": "GitLink", "before": 2}', record)
         self.assertIn('rename = "Page"', generate.record_attrs(generate.TYPES['UsagePage']))
+
+    def test_whole_union_introduction_is_nested_and_does_not_clear_the_variant(self):
+        action = generate.TYPES['RouterConfigAction']
+        action['variants']['CreateEmbeddingSpace'] = {'space_id': 'Id'}
+        action['introducedVariants'] = {'CreateEmbeddingSpace': 3}
+        generate.RC = generate.revisioned_types()
+        self.assertIn('RouterConfigAction', generate.RC)
+        self.assertIn(3, generate.type_since('RouterConfigAction'))
+        records = generate.gen_records()
+        self.assertIn('#[schemars(extend("x-since" = 3))]\n    CreateEmbeddingSpace', records)
+        self.assertIn('Self::CreateEmbeddingSpace{..} if revision<3=>return Err(', records)
+        self.assertNotIn('Self::CreateEmbeddingSpace{..} =', records)
+        router, operations = next((fam, [o for f, o in generate.operations() if f['family'] == 'router'])
+                                  for fam in generate.REGISTER['families'] if fam['family'] == 'router')
+        source = generate.gen_family(router, operations)
+        self.assertIn('self.action.check_revision(revision)?;', source)
+        nested = {'kind': 'record', 'fields': {'actions': '?Items<RouterConfigAction>'}}
+        from variant_revision import extend, containing
+        self.assertIn('self.actions.check_revision(revision)?;', extend('impl Revisioned for Nested {}', nested, containing(generate.TYPES)))
+
+    def test_whole_union_introduction_refuses_bad_metadata(self):
+        from variant_revision import containing
+        for metadata in [{'Missing': 3}, {'Connection': 1}, {'Connection': True}]:
+            with self.subTest(metadata=metadata):
+                generate.TYPES['RouterConfigAction']['introducedVariants'] = metadata
+                with self.assertRaises(ValueError):
+                    containing(generate.TYPES)
 
 
 if __name__ == '__main__':
