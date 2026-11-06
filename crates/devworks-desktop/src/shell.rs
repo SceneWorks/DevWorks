@@ -3683,7 +3683,9 @@ impl Shell {
                             )
                         });
                         if help.clicked() {
-                            let screen = if self.route == Route::Settings {
+                            let screen = if self.route == Route::Repositories && self.graph.opened {
+                                "code-exploration"
+                            } else if self.route == Route::Settings {
                                 self.settings.help_topic()
                             } else {
                                 self.route.screen().id

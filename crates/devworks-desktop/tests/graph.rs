@@ -1,4 +1,4 @@
-//! Native repository navigation. Positive cases use the real indexed Runtime once composed.
+//! Native repository navigation over the actual indexed SQLite Runtime.
 mod common;
 use common::*;
 use devworks_desktop::{chat::COMPOSER_LABEL, route::Route};
@@ -79,3 +79,6 @@ fn native_unavailable_graph_keeps_workspace_draft_and_never_invents_an_index() {
         Some("Keep this unsent workspace draft")
     );
 }
+
+#[path = "graph/native.rs"]
+mod native;

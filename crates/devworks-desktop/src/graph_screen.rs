@@ -895,7 +895,7 @@ fn modules(
                 if ui.button("Browse this module").clicked(){actions.push(Action::Filter{
                     repository:item.module.repository_id.as_str().into(),module:Some(item.module.module_name.0.clone()),kind:None});}
                 if let Some(node)=&item.module.indexed_node
-                    && ui.button("Inspect module node").clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}
+                    && ui.button(format!("Inspect {} module",item.module.module_name.0)).clicked(){actions.push(Action::Endpoint{id:node.node_id.as_str().into(),repository:node.repository_id.as_str().into()});}
                 if let Some(recorded)=&item.recorded {
                     selectable(ui,&recorded.summary.0);
                     widgets::caption(ui,format!("Recorded confidence: {} · recorded at {}",recorded.confidence.0,recorded.updated_at_ms.as_str()));
