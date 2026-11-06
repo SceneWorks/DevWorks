@@ -101,7 +101,10 @@ pub fn estimate(
         let matching = rates
             .cache_writes
             .iter()
-            .filter(|rate| rate.ttl_ms == context.cache_write_ttl_ms)
+            .filter(|rate| {
+                rate.ttl_ms
+                    .is_none_or(|ttl| Some(ttl) == context.cache_write_ttl_ms)
+            })
             .collect::<Vec<_>>();
         if matching.len() == 1 {
             Some(matching[0].usd_per_million.as_str())
@@ -180,10 +183,9 @@ pub fn estimate(
                 rate.unit == quantity.unit
                     && rate.modality == quantity.modality
                     && rate.charge_kind == quantity.charge_kind
-                    && rate
-                        .cache_ttl_seconds
-                        .and_then(|seconds| seconds.checked_mul(1000))
-                        == quantity.cache_write_ttl_ms
+                    && rate.cache_ttl_seconds.is_none_or(|seconds| {
+                        seconds.checked_mul(1000) == quantity.cache_write_ttl_ms
+                    })
             })
             .collect::<Vec<_>>();
         if quantity.quantity == 0 {
@@ -336,10 +338,9 @@ pub fn reservation(
                     && rate.modality == quantity.modality
                     && rate.charge_kind == quantity.charge_kind
                     && (quantity.cache_write_ttl_ms.is_none()
-                        || rate
-                            .cache_ttl_seconds
-                            .and_then(|seconds| seconds.checked_mul(1000))
-                            == quantity.cache_write_ttl_ms)
+                        || rate.cache_ttl_seconds.is_none_or(|seconds| {
+                            seconds.checked_mul(1000) == quantity.cache_write_ttl_ms
+                        }))
             })
             .collect::<Vec<_>>();
         // For an unknown write TTL, independently price each valid option and take its

@@ -899,3 +899,141 @@ fn legacy_gateway_keeps_full_stored_dates_including_maximum_timestamp() {
         }
     }
 }
+
+#[test]
+fn ttl_unrestricted_legacy_price_survives_actual_quote_settlement_and_gateway_report() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::usage::meter::MeasuredQuantity;
+    for dimensional in [false, true] {
+        let mut f = NativeFx::new();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+            devworks_core::services::prices::PriceService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+                false,
+            ),
+        ));
+        let decision=recorded(f.fx.command(&f.fx.user(),"router.price_override",json!({"modelId":"accounted","expectedRevision":"1","price":{"inputUsdPerMillion":"1","outputUsdPerMillion":"2","cacheWriteUsdPerMillion":"3"}}))).0;
+        assert!(
+            matches!(decision, DomainDecision::Applied { .. }),
+            "{decision:?}"
+        );
+        f.request.query.cache_write_ttl_ms = Some(300_000);
+        f.request.pricing.cache_write_possible = true;
+        f.request.pricing.cache_write_ttl_ms = Some(300_000);
+        f.request.pricing.input_semantics = InputSemantics::Disjoint;
+        f.request.quote = f.fx.read(|r| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+        });
+        f.request.override_revision = 2;
+        assert_eq!(
+            f.request.quote.classification,
+            CostClassification::ConfiguredEstimate
+        );
+        assert_eq!(
+            f.request.quote.rates.as_ref().unwrap().cache_writes[0].ttl_ms,
+            None
+        );
+        let headroom = MeasuredQuantity {
+            modality: "Text".into(),
+            charge_kind: "CacheWrite".into(),
+            unit: "Token".into(),
+            cache_write_ttl_ms: Some(300_000),
+            quantity: 20,
+        };
+        let reserved = devworks_core::services::usage::pricing::reservation(
+            &f.request.quote,
+            0,
+            0,
+            true,
+            std::slice::from_ref(&headroom),
+        )
+        .unwrap();
+        assert_eq!(reserved.tracked_micro_usd, Some(60));
+        assert!(reserved.monetary_complete);
+        let attempt = f.admitted();
+        let mut frame = observation("cache-write", 1, Some(0), None);
+        frame.quantities.cached_read_tokens = Some(0);
+        frame.quantities.cache_write_tokens = Some(20);
+        if dimensional {
+            frame.quantities.additional.push(MeasuredQuantity {
+                modality: "Text".into(),
+                charge_kind: "CacheWrite".into(),
+                unit: "Token".into(),
+                cache_write_ttl_ms: Some(300_000),
+                quantity: 20,
+            });
+        }
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let DriveOutcome::Settled(balance) = f
+            .host()
+            .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+            .unwrap()
+        else {
+            panic!("unsettled")
+        };
+        assert_eq!(
+            balance.priced_micro_usd,
+            Some(60),
+            "dimensional={dimensional}"
+        );
+        assert!(balance.monetary_complete);
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+            Some(3),
+        ));
+        let OperationResult::RouterUsage {
+            value:
+                devworks_core::protocol::records::RouterUsageResult::Current(
+                    devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                ),
+        } = report
+        else {
+            panic!("{report:?}")
+        };
+        assert_eq!(page.totals.tracked_micro_usd.get(), 60);
+        assert_eq!(
+            page.items.0[0]
+                .cache_write_micro_usd
+                .as_ref()
+                .unwrap()
+                .get(),
+            60
+        );
+        let mut ambiguous = f.request.quote.clone();
+        let rates = ambiguous.rates.as_mut().unwrap();
+        let mut duplicate = rates.cache_writes[0].clone();
+        duplicate.ttl_ms = Some(300_000);
+        rates.cache_writes.push(duplicate);
+        let estimate = devworks_core::services::usage::pricing::estimate(
+            &ambiguous,
+            &Quantities {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                cached_read_tokens: Some(0),
+                cache_write_tokens: Some(20),
+                ..Default::default()
+            },
+            &f.request.pricing,
+        )
+        .unwrap();
+        assert!(
+            !estimate.monetary_complete,
+            "unrestricted and exact TTL overlap stays ambiguous"
+        );
+    }
+}
