@@ -289,6 +289,148 @@ fn large_signed_bundle(package: &str) -> (Spec, Vec<u8>, String, usize) {
 }
 
 #[test]
+fn compact_package_review_sync_reopen_and_supersession_preserve_source_identity() {
+    let _serial = serial();
+    let mut a = native_app();
+    let user = a.user.principal().clone();
+    write(&*a.store, move |tx| {
+        tx.decisions().bind_notification_user(&user)
+    })
+    .unwrap();
+    let (spec, bytes, digest, _) = large_signed_bundle("compact-source-sync");
+    let source = a.save(&a.agent, &bytes);
+    let proposal = match applied(a.domain(
+        &a.agent,
+        "addons.propose",
+        json!({
+            "kind":"addons.propose", "source":source,
+            "manifestDigest":digest, "basePackageId":spec.package
+        }),
+    )) {
+        OperationResult::AddonsPropose { value } => value,
+        other => panic!("{other:?}"),
+    };
+    let original = saved(&a, &proposal);
+    assert!(original.payload["binding"].get("packageReview").is_some());
+    let reviews = |a: &App| {
+        read(&*a.store, |s| {
+            let rows = s.decisions().list_approval_sources(
+                &ApprovalSourceFilter {
+                    scope: ConfigScope::Workspace,
+                    state: None,
+                },
+                None,
+                500,
+            )?;
+            rows.into_iter()
+                .filter(|r| r.source == ApprovalSource::Generic)
+                .map(|r| s.decisions().approval(&r.id).map(Option::unwrap))
+                .collect::<Result<Vec<_>, StorageError>>()
+        })
+    };
+    let alerts = |a: &App| {
+        read(&*a.store, |s| {
+            s.decisions().notifications(
+                &NotificationFilter {
+                    user_id: a.user.principal().clone(),
+                    scope: ConfigScope::Workspace,
+                    categories: vec![],
+                    read: None,
+                    unacknowledged_only: false,
+                    completion_only: false,
+                },
+                None,
+                500,
+            )
+        })
+        .into_iter()
+        .filter(|n| n.source_id.starts_with("approval-Generic-"))
+        .map(|n| n.id)
+        .collect::<Vec<_>>()
+    };
+    let first_alerts = alerts(&a);
+    assert_eq!(first_alerts.len(), 1);
+    for _ in 0..2 {
+        a.app()
+            .packages()
+            .unwrap()
+            .service()
+            .sync_pending_reviews()
+            .unwrap();
+        assert_eq!(reviews(&a).len(), 1);
+        assert_eq!(saved(&a, &proposal).id, original.id);
+        assert_eq!(alerts(&a), first_alerts);
+    }
+    a.shutdown();
+    // Release the old store's exclusive data-root lease before reopening SQLite.
+    let parking = Harness::new();
+    drop(std::mem::replace(&mut a.store, parking.open()));
+    a.store = a.h.open();
+    let mut composition = a.composition();
+    composition.authority = Arc::new(RealAuthority {
+        store: a.store.clone(),
+        clock: a.h.clock(),
+    });
+    composition.config.approval_resume_interval = Duration::from_secs(3600);
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+    assert_eq!(reviews(&a).len(), 1);
+    assert_eq!(saved(&a, &proposal).id, original.id);
+    assert_eq!(alerts(&a), first_alerts);
+
+    // Changing the retained evidence generation requires one fresh review of this same source.
+    // Historical source matching must not require that obsolete artifact metadata stays current.
+    let artifact: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(original.artifact.clone().unwrap()).unwrap();
+    let tag = serde_json::to_vec(&json!({
+        "mode":"Command", "protocol":"1.0-draft.1", "schemaRevision":1,
+        "requestKey":"supersede-compact-review", "body":{
+            "kind":"artifacts.tag", "artifactId":artifact.artifact_id,
+            "expectedRevision":"1", "tags":["changed-after-review"]
+        }
+    }))
+    .unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    a.app()
+        .packages()
+        .unwrap()
+        .service()
+        .sync_pending_reviews()
+        .unwrap();
+    let rows = reviews(&a);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter().find(|r| r.id == original.id).unwrap().state,
+        "Superseded"
+    );
+    let current = rows.iter().find(|r| r.state == "Pending").unwrap();
+    assert_ne!(current.id, original.id);
+    assert_eq!(
+        current.payload["invocation"],
+        original.payload["invocation"]
+    );
+    assert_eq!(
+        current.payload["binding"]["owner"]["proposal"]["id"],
+        json!(proposal.id)
+    );
+    let current_id = current.id.clone();
+    let current_alerts = alerts(&a);
+    assert_eq!(current_alerts.len(), 2);
+    a.app()
+        .packages()
+        .unwrap()
+        .service()
+        .sync_pending_reviews()
+        .unwrap();
+    let rows = reviews(&a);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter().find(|r| r.state == "Pending").unwrap().id,
+        current_id
+    );
+    assert_eq!(alerts(&a), current_alerts);
+}
+
+#[test]
 fn large_signed_source_review_is_complete_human_readable_and_mutation_fenced() {
     let _serial = serial();
     let a = native_app();
