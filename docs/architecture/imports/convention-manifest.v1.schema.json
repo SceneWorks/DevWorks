@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devworks://schemas/convention-manifest/1",
+  "title": "DevWorks portable convention manifest version 1",
+  "description": "One authored Markdown convention and its binary resources. No source author is trusted as a native principal. UTF-8 source bytes and configured artifact/resource budgets are checked before atomic publication. Parent slugs resolve only within the explicitly authorized destination scope. Import creates a new convention; duplicate sibling slugs are conflicts.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "devworks-convention"
+    },
+    "version": {
+      "const": 1
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "parentPath": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "maxItems": 3
+    },
+    "sortOrder": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "lifecycle": {
+      "enum": [
+        "Active",
+        "Retired"
+      ]
+    },
+    "applicability": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "maxItems": 128,
+      "uniqueItems": true
+    },
+    "markdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "byteLength": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "text": {
+          "type": "string",
+          "x-maxUtf8Bytes": 16777215
+        }
+      },
+      "required": [
+        "sha256",
+        "byteLength",
+        "text"
+      ]
+    },
+    "rawContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "byteLength": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "text": {
+          "type": "string",
+          "x-maxUtf8Bytes": 16777215
+        }
+      },
+      "required": [
+        "sha256",
+        "byteLength",
+        "text"
+      ]
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "mediaType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "byteLength": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "lifecycle": {
+            "enum": [
+              "Active",
+              "Retired"
+            ]
+          },
+          "base64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "x-configuredMaximum": "conventions.resourceMaxBytes and storage.artifactMaxFileBytes"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "mediaType",
+          "sha256",
+          "byteLength",
+          "lifecycle",
+          "base64"
+        ]
+      }
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "slug",
+    "title",
+    "parentPath",
+    "sortOrder",
+    "lifecycle",
+    "applicability",
+    "markdown",
+    "resources"
+  ]
+}

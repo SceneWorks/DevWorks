@@ -42,6 +42,7 @@ def choice(fs,one,since,kind,required_since=None):
  return f'#[schemars(extend("oneOf" = {literal(alts)}))]'
 def record_attrs(d):
  out=[]
+ if d.get('exactlyOne'):out.append(choice(d['fields'],d['exactlyOne'],d.get('since',{}),False))
  if d.get('schemaName'):out.append(f'#[schemars(rename = "{d["schemaName"]}")]')
  if d.get('earlierName'):out.append(f'#[schemars(extend("x-earlier" = {literal({"name":d["earlierName"],"before":d.get("earlierBefore",min(d["since"].values()))})}))]')
  return ''.join(a+'\n' for a in out)
@@ -71,7 +72,7 @@ lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no 
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
-  lines += [REC+record_attrs(d)+f'pub struct {name} {{',fields(d['fields'],since=d.get('since')),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
+  lines += [REC+record_attrs(d)+f'pub struct {name} {{',fields(d['fields'],since=d.get('since'),one=d.get('exactlyOne',())),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
   if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{',*retain(d['fields'],d.get('since',{}),'self.'),'}}','']
  elif d['kind']=='enum':
   lines += [ATTR+f'pub enum {name} {{',*['    '+pascal(v)+',' if v[0].isupper() else '    #[serde(rename = "'+v+'")] '+pascal(v)+',' for v in d['values']],'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']

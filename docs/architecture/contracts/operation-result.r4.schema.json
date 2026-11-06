@@ -3340,6 +3340,706 @@
       ],
       "type": "string"
     },
+    "ConventionAvailability": {
+      "enum": [
+        "Available",
+        "Missing",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "ConventionFormat": {
+      "enum": [
+        "Markdown",
+        "Raw",
+        "Manifest",
+        "SectionPath"
+      ],
+      "type": "string"
+    },
+    "ConventionIndexPhase": {
+      "enum": [
+        "NotIndexed",
+        "Queued",
+        "Indexing",
+        "Ready",
+        "LexicalOnly",
+        "Stale",
+        "Failed",
+        "Cancelled"
+      ],
+      "type": "string"
+    },
+    "ConventionIndexStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "embeddingSpace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedChunks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ConventionIndexPhase"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ConventionLifecycle": {
+      "enum": [
+        "Active",
+        "Retired",
+        "Deleted"
+      ],
+      "type": "string"
+    },
+    "ConventionMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "convention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConventionRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConventionResourceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "changed"
+      ],
+      "type": "object"
+    },
+    "ConventionMutationResult": {
+      "$ref": "#/$defs/ConventionMutation",
+      "x-since": 3
+    },
+    "ConventionPage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_ConventionRecord_0_500"
+        },
+        "manifestSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "scopeRevision",
+        "manifestSchema"
+      ],
+      "type": "object"
+    },
+    "ConventionPageResult": {
+      "$ref": "#/$defs/ConventionPage",
+      "x-since": 3
+    },
+    "ConventionPassage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset": {
+          "$ref": "#/$defs/Counter"
+        },
+        "text": {
+          "$ref": "#/$defs/GraphSourceTextFragment"
+        }
+      },
+      "required": [
+        "text",
+        "offset",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "ConventionProvenance": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actorId": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Authored",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "actorId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actorId": {
+              "$ref": "#/$defs/Id"
+            },
+            "importedAtMs": {
+              "$ref": "#/$defs/Counter"
+            },
+            "kind": {
+              "const": "Imported",
+              "type": "string"
+            },
+            "schema": {
+              "$ref": "#/$defs/SchemaRef"
+            },
+            "source": {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          },
+          "required": [
+            "kind",
+            "actorId",
+            "source",
+            "schema",
+            "importedAtMs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConventionReadResult": {
+      "$ref": "#/$defs/ConventionReadView",
+      "x-since": 3
+    },
+    "ConventionReadView": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/ConventionAvailability"
+        },
+        "convention": {
+          "$ref": "#/$defs/ConventionRecord"
+        },
+        "format": {
+          "$ref": "#/$defs/ConventionFormat"
+        },
+        "manifestSchema": {
+          "$ref": "#/$defs/SchemaRef"
+        },
+        "passage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConventionPassage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "convention",
+        "format",
+        "availability",
+        "manifestSchema"
+      ],
+      "type": "object"
+    },
+    "ConventionRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "applicability": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "authorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "index": {
+          "$ref": "#/$defs/ConventionIndexStatus"
+        },
+        "legacyApproved": {
+          "type": "boolean"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ConventionLifecycle"
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/ConventionProvenance"
+        },
+        "rawContent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "scope": {
+          "$ref": "#/$defs/DataScope"
+        },
+        "slug": {
+          "$ref": "#/$defs/GraphSourceTextFragment"
+        },
+        "sortOrder": {
+          "$ref": "#/$defs/SignedCounter"
+        },
+        "title": {
+          "$ref": "#/$defs/GraphSourceTextFragment"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "scope",
+        "slug",
+        "title",
+        "sortOrder",
+        "lifecycle",
+        "applicability",
+        "provenance",
+        "authorId",
+        "createdAtMs",
+        "updatedAtMs",
+        "legacyApproved",
+        "index"
+      ],
+      "type": "object"
+    },
+    "ConventionRecordResult": {
+      "$ref": "#/$defs/ConventionRecord",
+      "x-since": 3
+    },
+    "ConventionResourcePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_ConventionResourceRecord_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "scopeRevision"
+      ],
+      "type": "object"
+    },
+    "ConventionResourcePageResult": {
+      "$ref": "#/$defs/ConventionResourcePage",
+      "x-since": 3
+    },
+    "ConventionResourceRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "applicability": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "authorId": {
+          "$ref": "#/$defs/Id"
+        },
+        "content": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "conventionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "conventionRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "createdAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "deletedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "index": {
+          "$ref": "#/$defs/ConventionIndexStatus"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ConventionLifecycle"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "scope": {
+          "$ref": "#/$defs/DataScope"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "conventionId",
+        "conventionRevision",
+        "scope",
+        "name",
+        "lifecycle",
+        "content",
+        "applicability",
+        "authorId",
+        "createdAtMs",
+        "index"
+      ],
+      "type": "object"
+    },
+    "ConventionRetrieval": {
+      "additionalProperties": false,
+      "properties": {
+        "embeddingSpace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gaps": {
+          "$ref": "#/$defs/List_Text0To65536_0_128"
+        },
+        "mode": {
+          "$ref": "#/$defs/ConventionRetrievalMode"
+        },
+        "moreGaps": {
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "gaps",
+        "moreGaps"
+      ],
+      "type": "object"
+    },
+    "ConventionRetrievalMode": {
+      "enum": [
+        "Lexical",
+        "Hybrid",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "ConventionSearchHit": {
+      "additionalProperties": false,
+      "properties": {
+        "chunkId": {
+          "$ref": "#/$defs/Id"
+        },
+        "chunkIndex": {
+          "$ref": "#/$defs/Counter"
+        },
+        "convention": {
+          "$ref": "#/$defs/ConventionRecord"
+        },
+        "excerpt": {
+          "$ref": "#/$defs/GraphSourceTextFragment"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConventionResourceRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score": {
+          "$ref": "#/$defs/Finite"
+        },
+        "sectionPath": {
+          "$ref": "#/$defs/ConventionSectionPath"
+        }
+      },
+      "required": [
+        "convention",
+        "chunkId",
+        "chunkIndex",
+        "sectionPath",
+        "excerpt",
+        "score"
+      ],
+      "type": "object"
+    },
+    "ConventionSearchPage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_ConventionSearchHit_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retrieval": {
+          "$ref": "#/$defs/ConventionRetrieval"
+        },
+        "scopeRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "scopeRevision",
+        "retrieval"
+      ],
+      "type": "object"
+    },
+    "ConventionSearchPageResult": {
+      "$ref": "#/$defs/ConventionSearchPage",
+      "x-since": 3
+    },
+    "ConventionSectionPath": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "required": [
+            "artifact"
+          ]
+        }
+      ],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "text": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "type": "object"
+    },
     "Counter": {
       "description": "Canonical decimal 0..9223372036854775807. Typed range validation required.",
       "pattern": "^(0|[1-9][0-9]{0,18})$",
@@ -8575,6 +9275,30 @@
     "List_ContextSource_0_500": {
       "items": {
         "$ref": "#/$defs/ContextSource"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ConventionRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/ConventionRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ConventionResourceRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/ConventionResourceRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ConventionSearchHit_0_500": {
+      "items": {
+        "$ref": "#/$defs/ConventionSearchHit"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -20071,7 +20795,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page21"
+          "$ref": "#/$defs/ConventionPageResult"
         }
       },
       "required": [
@@ -20088,7 +20812,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page21"
+          "$ref": "#/$defs/ConventionSearchPageResult"
         }
       },
       "required": [
@@ -20105,7 +20829,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page21"
+          "$ref": "#/$defs/ConventionResourcePageResult"
         }
       },
       "required": [
@@ -20122,7 +20846,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/InstructionRecord"
+          "$ref": "#/$defs/ConventionReadResult"
         }
       },
       "required": [
@@ -20139,7 +20863,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page21"
+          "$ref": "#/$defs/ConventionPageResult"
         }
       },
       "required": [
@@ -20156,7 +20880,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/InstructionRecord"
+          "$ref": "#/$defs/ConventionRecordResult"
         }
       },
       "required": [
@@ -20173,7 +20897,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/InstructionRecord"
+          "$ref": "#/$defs/ConventionRecordResult"
         }
       },
       "required": [
@@ -20190,7 +20914,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/MutationSummary"
+          "$ref": "#/$defs/ConventionMutationResult"
         }
       },
       "required": [
@@ -20207,7 +20931,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/MutationSummary"
+          "$ref": "#/$defs/ConventionMutationResult"
         }
       },
       "required": [
@@ -20224,7 +20948,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/MutationSummary"
+          "$ref": "#/$defs/ConventionMutationResult"
         }
       },
       "required": [
@@ -20241,7 +20965,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/MutationSummary"
+          "$ref": "#/$defs/ConventionMutationResult"
         }
       },
       "required": [
@@ -20258,7 +20982,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/InstructionRecord"
+          "$ref": "#/$defs/ConventionRecordResult"
         }
       },
       "required": [
@@ -20275,7 +20999,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/InstructionRecord"
+          "$ref": "#/$defs/ConventionRecordResult"
         }
       },
       "required": [

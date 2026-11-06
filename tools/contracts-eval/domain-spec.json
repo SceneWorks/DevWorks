@@ -5438,6 +5438,299 @@
         "reason": 3,
         "recorded": 3
       }
+    },
+    "ConventionLifecycle": {
+      "kind": "enum",
+      "values": [
+        "Active",
+        "Retired",
+        "Deleted"
+      ]
+    },
+    "ConventionFormat": {
+      "kind": "enum",
+      "values": [
+        "Markdown",
+        "Raw",
+        "Manifest",
+        "SectionPath"
+      ]
+    },
+    "ConventionAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "Missing",
+        "Unavailable"
+      ]
+    },
+    "ConventionIndexPhase": {
+      "kind": "enum",
+      "values": [
+        "NotIndexed",
+        "Queued",
+        "Indexing",
+        "Ready",
+        "LexicalOnly",
+        "Stale",
+        "Failed",
+        "Cancelled"
+      ]
+    },
+    "ConventionRetrievalMode": {
+      "kind": "enum",
+      "values": [
+        "Lexical",
+        "Hybrid",
+        "Unavailable"
+      ]
+    },
+    "ConventionProvenance": {
+      "kind": "union",
+      "variants": {
+        "Authored": {
+          "actor_id": "ActorId"
+        },
+        "Imported": {
+          "actor_id": "ActorId",
+          "source": "ArtifactRef",
+          "schema": "SchemaRef",
+          "imported_at_ms": "Counter"
+        }
+      }
+    },
+    "ConventionIndexStatus": {
+      "kind": "record",
+      "fields": {
+        "status": "ConventionIndexPhase",
+        "generation_id": "?Id",
+        "source_revision": "?Revision",
+        "resource_id": "?Id",
+        "resource_revision": "?Revision",
+        "source_digest": "?Digest",
+        "embedding_space": "?Content",
+        "indexed_chunks": "?Counter",
+        "operation": "?OperationRef",
+        "reason": "?Content"
+      }
+    },
+    "ConventionRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "scope": "DataScope",
+        "slug": "GraphText",
+        "title": "GraphText",
+        "parent_id": "?Id",
+        "sort_order": "SignedCounter",
+        "lifecycle": "ConventionLifecycle",
+        "content": "?ArtifactRef",
+        "raw_content": "?ArtifactRef",
+        "applicability": "Items<Label>",
+        "provenance": "ConventionProvenance",
+        "author_id": "ActorId",
+        "created_at_ms": "Counter",
+        "updated_at_ms": "Counter",
+        "legacy_approved": "bool",
+        "index": "ConventionIndexStatus"
+      }
+    },
+    "ConventionResourceRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "convention_id": "Id",
+        "convention_revision": "Revision",
+        "scope": "DataScope",
+        "name": "Content",
+        "lifecycle": "ConventionLifecycle",
+        "content": "ArtifactRef",
+        "applicability": "Items<Label>",
+        "author_id": "ActorId",
+        "created_at_ms": "Counter",
+        "deleted_at_ms": "?Counter",
+        "index": "ConventionIndexStatus"
+      }
+    },
+    "ConventionPassage": {
+      "kind": "record",
+      "fields": {
+        "text": "GraphText",
+        "offset": "Counter",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "ConventionReadView": {
+      "kind": "record",
+      "fields": {
+        "convention": "ConventionRecord",
+        "format": "ConventionFormat",
+        "passage": "?ConventionPassage",
+        "availability": "ConventionAvailability",
+        "reason": "?Content",
+        "manifest_schema": "SchemaRef"
+      }
+    },
+    "ConventionPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<ConventionRecord>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "scope_revision": "Revision",
+        "manifest_schema": "SchemaRef"
+      }
+    },
+    "ConventionResourcePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<ConventionResourceRecord>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "scope_revision": "Revision"
+      }
+    },
+    "ConventionRetrieval": {
+      "kind": "record",
+      "fields": {
+        "mode": "ConventionRetrievalMode",
+        "embedding_space": "?Content",
+        "reason": "?Content",
+        "gaps": "Items<Content>",
+        "more_gaps": "bool"
+      }
+    },
+    "ConventionSearchHit": {
+      "kind": "record",
+      "fields": {
+        "convention": "ConventionRecord",
+        "resource": "?ConventionResourceRecord",
+        "chunk_id": "Id",
+        "chunk_index": "Counter",
+        "section_path": "ConventionSectionPath",
+        "excerpt": "GraphText",
+        "score": "Finite"
+      }
+    },
+    "ConventionSearchPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<ConventionSearchHit>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "scope_revision": "Revision",
+        "retrieval": "ConventionRetrieval"
+      }
+    },
+    "ConventionMutation": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "changed": "bool",
+        "convention": "?ConventionRecord",
+        "resource": "?ConventionResourceRecord"
+      }
+    },
+    "ConventionParentChange": {
+      "kind": "union",
+      "variants": {
+        "Root": {},
+        "Child": {
+          "parent_id": "Id"
+        }
+      }
+    },
+    "ConventionRawChange": {
+      "kind": "union",
+      "variants": {
+        "Set": {
+          "content": "ArtifactRef"
+        },
+        "Remove": {}
+      }
+    },
+    "ConventionResourceChange": {
+      "kind": "union",
+      "variants": {
+        "Attach": {
+          "name": "Content",
+          "content": "ArtifactRef"
+        },
+        "Update": {
+          "resource_id": "Id",
+          "expected_revision": "Revision",
+          "name": "?Content",
+          "content": "?ArtifactRef",
+          "lifecycle": "?ConventionLifecycle"
+        }
+      }
+    },
+    "ConventionRecordResult": {
+      "kind": "versioned",
+      "legacy": "InstructionRecord",
+      "current": "ConventionRecord",
+      "revision": 3,
+      "projection": "convention_record"
+    },
+    "ConventionReadResult": {
+      "kind": "versioned",
+      "legacy": "InstructionRecord",
+      "current": "ConventionReadView",
+      "revision": 3,
+      "projection": "convention_read"
+    },
+    "ConventionPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<InstructionRecord>",
+      "current": "ConventionPage",
+      "revision": 3,
+      "projection": "convention_page",
+      "earlierName": "Page"
+    },
+    "ConventionResourcePageResult": {
+      "kind": "versioned",
+      "legacy": "Page<InstructionRecord>",
+      "current": "ConventionResourcePage",
+      "revision": 3,
+      "projection": "convention_resources",
+      "earlierName": "Page"
+    },
+    "ConventionSearchPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<InstructionRecord>",
+      "current": "ConventionSearchPage",
+      "revision": 3,
+      "projection": "convention_search",
+      "earlierName": "Page"
+    },
+    "ConventionMutationResult": {
+      "kind": "versioned",
+      "legacy": "MutationSummary",
+      "current": "ConventionMutation",
+      "revision": 3,
+      "projection": "convention_mutation"
+    },
+    "ConventionSectionPath": {
+      "kind": "record",
+      "fields": {
+        "text": "?Content",
+        "artifact": "?ArtifactRef"
+      },
+      "exactlyOne": [
+        "text",
+        "artifact"
+      ]
+    },
+    "ConventionIndexedPath": {
+      "kind": "record",
+      "fields": {
+        "generation_id": "Id",
+        "chunk_id": "Id"
+      }
     }
   },
   "operations": {
@@ -7379,12 +7672,16 @@
       "fields": {
         "scope": "DataScope",
         "page": "PageRequest",
-        "applicability": "Items<Label>"
+        "applicability": "Items<Label>",
+        "lifecycles": "?Items<ConventionLifecycle>"
       },
-      "result": "Page<InstructionRecord>",
+      "result": "ConventionPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "lifecycles": 3
+      }
     },
     "conventions.search": {
       "operation": "conventions.search",
@@ -7393,12 +7690,16 @@
         "scope": "DataScope",
         "page": "PageRequest",
         "applicability": "Items<Label>",
-        "text": "Text"
+        "text": "Text",
+        "lifecycles": "?Items<ConventionLifecycle>"
       },
-      "result": "Page<InstructionRecord>",
+      "result": "ConventionSearchPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "lifecycles": 3
+      }
     },
     "conventions.resources": {
       "operation": "conventions.resources",
@@ -7406,36 +7707,66 @@
       "fields": {
         "scope": "DataScope",
         "page": "PageRequest",
-        "applicability": "Items<Label>"
+        "applicability": "Items<Label>",
+        "convention_id": "?Id",
+        "lifecycles": "?Items<ConventionLifecycle>",
+        "convention_revision": "?Revision"
       },
-      "result": "Page<InstructionRecord>",
+      "result": "ConventionResourcePageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "convention_id": 3,
+        "lifecycles": 3,
+        "convention_revision": 3
+      }
     },
     "conventions.read": {
       "operation": "conventions.read",
       "mode": "Query",
       "fields": {
-        "convention_id": "Id",
-        "revision": "?Revision"
+        "convention_id": "?Id",
+        "revision": "?Revision",
+        "slug": "?GraphText",
+        "scope": "?DataScope",
+        "format": "?ConventionFormat",
+        "cursor": "?Cursor",
+        "max_chars": "?Counter",
+        "section_path": "?ConventionIndexedPath"
       },
-      "result": "InstructionRecord",
+      "result": "ConventionReadResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "slug": 3,
+        "scope": 3,
+        "format": 3,
+        "cursor": 3,
+        "max_chars": 3,
+        "section_path": 3
+      },
+      "exactlyOne": [
+        "convention_id",
+        "slug"
+      ]
     },
     "conventions.version": {
       "operation": "conventions.version",
       "mode": "Query",
       "fields": {
         "convention_id": "Id",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "scope": "?DataScope"
       },
-      "result": "Page<InstructionRecord>",
+      "result": "ConventionPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "scope": 3
+      }
     },
     "conventions.edit": {
       "operation": "conventions.edit",
@@ -7443,12 +7774,28 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "title": "?GraphText",
+        "slug": "?GraphText",
+        "parent": "?ConventionParentChange",
+        "sort_order": "?SignedCounter",
+        "raw_content": "?ConventionRawChange",
+        "resources": "?Items<ConventionResourceChange>",
+        "scope": "?DataScope"
       },
-      "result": "InstructionRecord",
+      "result": "ConventionRecordResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "title": 3,
+        "slug": 3,
+        "parent": 3,
+        "sort_order": 3,
+        "raw_content": 3,
+        "resources": 3,
+        "scope": 3
+      }
     },
     "conventions.applicability": {
       "operation": "conventions.applicability",
@@ -7456,12 +7803,18 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "applicability": "Items<Label>"
+        "applicability": "Items<Label>",
+        "lifecycle": "?ConventionLifecycle",
+        "scope": "?DataScope"
       },
-      "result": "InstructionRecord",
+      "result": "ConventionRecordResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "lifecycle": 3,
+        "scope": 3
+      }
     },
     "conventions.retire": {
       "operation": "conventions.retire",
@@ -7469,25 +7822,39 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "resource_id": "?Id"
+        "resource_id": "?Id",
+        "scope": "?DataScope"
       },
-      "result": "MutationSummary",
+      "result": "ConventionMutationResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement."
+      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "since": {
+        "scope": 3
+      }
     },
     "conventions.index": {
       "operation": "conventions.index",
       "mode": "Command",
       "fields": {
-        "convention_id": "Id",
+        "convention_id": "?Id",
         "expected_revision": "Revision",
-        "resource_id": "?Id"
+        "resource_id": "?Id",
+        "all_scope": "?DataScope",
+        "scope": "?DataScope"
       },
-      "result": "MutationSummary",
+      "result": "ConventionMutationResult",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement."
+      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "since": {
+        "all_scope": 3,
+        "scope": 3
+      },
+      "exactlyOne": [
+        "convention_id",
+        "all_scope"
+      ]
     },
     "conventions.delete": {
       "operation": "conventions.delete",
@@ -7495,12 +7862,16 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "resource_id": "?Id"
+        "resource_id": "?Id",
+        "scope": "?DataScope"
       },
-      "result": "MutationSummary",
+      "result": "ConventionMutationResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement."
+      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "since": {
+        "scope": 3
+      }
     },
     "conventions.delete_resource": {
       "operation": "conventions.delete_resource",
@@ -7508,12 +7879,16 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "resource_id": "?Id"
+        "resource_id": "?Id",
+        "scope": "?DataScope"
       },
-      "result": "MutationSummary",
+      "result": "ConventionMutationResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement."
+      "rules": "Delete resource requires exact registered resource ID. Authored content/retained references never removed by index retirement.",
+      "since": {
+        "scope": 3
+      }
     },
     "conventions.import": {
       "operation": "conventions.import",
@@ -7523,7 +7898,7 @@
         "source": "ArtifactRef",
         "schema": "SchemaRef"
       },
-      "result": "InstructionRecord",
+      "result": "ConventionRecordResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Explicit user-authored import only; excluded legacy conventions migration remains excluded."
@@ -7534,12 +7909,20 @@
       "fields": {
         "convention_id": "Id",
         "expected_revision": "Revision",
-        "destination": "DataScope"
+        "destination": "DataScope",
+        "parent": "?ConventionParentChange",
+        "sort_order": "?SignedCounter",
+        "scope": "?DataScope"
       },
-      "result": "InstructionRecord",
+      "result": "ConventionRecordResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "",
+      "since": {
+        "parent": 3,
+        "sort_order": 3,
+        "scope": 3
+      }
     },
     "skills.read": {
       "operation": "skills.read",
@@ -10474,6 +10857,58 @@
       3
     ],
     "help.package_guides": [
+      1,
+      3
+    ],
+    "conventions.list": [
+      1,
+      3
+    ],
+    "conventions.search": [
+      1,
+      3
+    ],
+    "conventions.resources": [
+      1,
+      3
+    ],
+    "conventions.read": [
+      1,
+      3
+    ],
+    "conventions.version": [
+      1,
+      3
+    ],
+    "conventions.edit": [
+      1,
+      3
+    ],
+    "conventions.applicability": [
+      1,
+      3
+    ],
+    "conventions.retire": [
+      1,
+      3
+    ],
+    "conventions.index": [
+      1,
+      3
+    ],
+    "conventions.delete": [
+      1,
+      3
+    ],
+    "conventions.delete_resource": [
+      1,
+      3
+    ],
+    "conventions.import": [
+      1,
+      3
+    ],
+    "conventions.move": [
       1,
       3
     ]

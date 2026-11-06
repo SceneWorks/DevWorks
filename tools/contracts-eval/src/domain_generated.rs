@@ -14912,6 +14912,978 @@ impl Revisioned for CodeModuleAnalysis {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionLifecycle {
+    Active,
+    Retired,
+    Deleted,
+}
+impl Check for ConventionLifecycle {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionFormat {
+    Markdown,
+    Raw,
+    Manifest,
+    SectionPath,
+}
+impl Check for ConventionFormat {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionAvailability {
+    Available,
+    Missing,
+    Unavailable,
+}
+impl Check for ConventionAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionIndexPhase {
+    NotIndexed,
+    Queued,
+    Indexing,
+    Ready,
+    LexicalOnly,
+    Stale,
+    Failed,
+    Cancelled,
+}
+impl Check for ConventionIndexPhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ConventionRetrievalMode {
+    Lexical,
+    Hybrid,
+    Unavailable,
+}
+impl Check for ConventionRetrievalMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionProvenance {
+    Authored {
+        actor_id: ActorId,
+    },
+    Imported {
+        actor_id: ActorId,
+        source: ArtifactRef,
+        schema: SchemaRef,
+        imported_at_ms: Counter,
+    },
+}
+impl Check for ConventionProvenance {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Authored { actor_id } => {
+                actor_id.check()?;
+            }
+            Self::Imported {
+                actor_id,
+                source,
+                schema,
+                imported_at_ms,
+            } => {
+                actor_id.check()?;
+                source.check()?;
+                schema.check()?;
+                imported_at_ms.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionIndexStatus {
+    pub status: ConventionIndexPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_digest: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_space: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_chunks: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<OperationRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for ConventionIndexStatus {
+    fn check(&self) -> Result<(), String> {
+        self.status.check()?;
+        self.generation_id.check()?;
+        self.source_revision.check()?;
+        self.resource_id.check()?;
+        self.resource_revision.check()?;
+        self.source_digest.check()?;
+        self.embedding_space.check()?;
+        self.indexed_chunks.check()?;
+        self.operation.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "ConventionIndexStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub scope: DataScope,
+    pub slug: GraphText,
+    pub title: GraphText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Id>,
+    pub sort_order: SignedCounter,
+    pub lifecycle: ConventionLifecycle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_content: Option<ArtifactRef>,
+    pub applicability: Items<Label>,
+    pub provenance: ConventionProvenance,
+    pub author_id: ActorId,
+    pub created_at_ms: Counter,
+    pub updated_at_ms: Counter,
+    pub legacy_approved: bool,
+    pub index: ConventionIndexStatus,
+}
+impl Check for ConventionRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.scope.check()?;
+        self.slug.check()?;
+        self.title.check()?;
+        self.parent_id.check()?;
+        self.sort_order.check()?;
+        self.lifecycle.check()?;
+        self.content.check()?;
+        self.raw_content.check()?;
+        self.applicability.check()?;
+        self.provenance.check()?;
+        self.author_id.check()?;
+        self.created_at_ms.check()?;
+        self.updated_at_ms.check()?;
+        self.legacy_approved.check()?;
+        self.index.check()?;
+        super::domain_rules::record(
+            "ConventionRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionResourceRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub convention_id: Id,
+    pub convention_revision: Revision,
+    pub scope: DataScope,
+    pub name: Content,
+    pub lifecycle: ConventionLifecycle,
+    pub content: ArtifactRef,
+    pub applicability: Items<Label>,
+    pub author_id: ActorId,
+    pub created_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at_ms: Option<Counter>,
+    pub index: ConventionIndexStatus,
+}
+impl Check for ConventionResourceRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.convention_id.check()?;
+        self.convention_revision.check()?;
+        self.scope.check()?;
+        self.name.check()?;
+        self.lifecycle.check()?;
+        self.content.check()?;
+        self.applicability.check()?;
+        self.author_id.check()?;
+        self.created_at_ms.check()?;
+        self.deleted_at_ms.check()?;
+        self.index.check()?;
+        super::domain_rules::record(
+            "ConventionResourceRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionPassage {
+    pub text: GraphText,
+    pub offset: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for ConventionPassage {
+    fn check(&self) -> Result<(), String> {
+        self.text.check()?;
+        self.offset.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "ConventionPassage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionReadView {
+    pub convention: ConventionRecord,
+    pub format: ConventionFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passage: Option<ConventionPassage>,
+    pub availability: ConventionAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub manifest_schema: SchemaRef,
+}
+impl Check for ConventionReadView {
+    fn check(&self) -> Result<(), String> {
+        self.convention.check()?;
+        self.format.check()?;
+        self.passage.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.manifest_schema.check()?;
+        super::domain_rules::record(
+            "ConventionReadView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionPage {
+    pub items: Rows<ConventionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub scope_revision: Revision,
+    pub manifest_schema: SchemaRef,
+}
+impl Check for ConventionPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.scope_revision.check()?;
+        self.manifest_schema.check()?;
+        super::domain_rules::record(
+            "ConventionPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionResourcePage {
+    pub items: Rows<ConventionResourceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub scope_revision: Revision,
+}
+impl Check for ConventionResourcePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.scope_revision.check()?;
+        super::domain_rules::record(
+            "ConventionResourcePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionRetrieval {
+    pub mode: ConventionRetrievalMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_space: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub gaps: Items<Content>,
+    pub more_gaps: bool,
+}
+impl Check for ConventionRetrieval {
+    fn check(&self) -> Result<(), String> {
+        self.mode.check()?;
+        self.embedding_space.check()?;
+        self.reason.check()?;
+        self.gaps.check()?;
+        self.more_gaps.check()?;
+        super::domain_rules::record(
+            "ConventionRetrieval",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionSearchHit {
+    pub convention: ConventionRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<ConventionResourceRecord>,
+    pub chunk_id: Id,
+    pub chunk_index: Counter,
+    pub section_path: ConventionSectionPath,
+    pub excerpt: GraphText,
+    pub score: Finite,
+}
+impl Check for ConventionSearchHit {
+    fn check(&self) -> Result<(), String> {
+        self.convention.check()?;
+        self.resource.check()?;
+        self.chunk_id.check()?;
+        self.chunk_index.check()?;
+        self.section_path.check()?;
+        self.excerpt.check()?;
+        self.score.check()?;
+        super::domain_rules::record(
+            "ConventionSearchHit",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionSearchPage {
+    pub items: Rows<ConventionSearchHit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub scope_revision: Revision,
+    pub retrieval: ConventionRetrieval,
+}
+impl Check for ConventionSearchPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.scope_revision.check()?;
+        self.retrieval.check()?;
+        super::domain_rules::record(
+            "ConventionSearchPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionMutation {
+    pub id: Id,
+    pub revision: Revision,
+    pub changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convention: Option<ConventionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<ConventionResourceRecord>,
+}
+impl Check for ConventionMutation {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.changed.check()?;
+        self.convention.check()?;
+        self.resource.check()?;
+        super::domain_rules::record(
+            "ConventionMutation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionParentChange {
+    Root {},
+    Child { parent_id: Id },
+}
+impl Check for ConventionParentChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Root {} => {}
+            Self::Child { parent_id } => {
+                parent_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionRawChange {
+    Set { content: ArtifactRef },
+    Remove {},
+}
+impl Check for ConventionRawChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Set { content } => {
+                content.check()?;
+            }
+            Self::Remove {} => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ConventionResourceChange {
+    Attach {
+        name: Content,
+        content: ArtifactRef,
+    },
+    Update {
+        resource_id: Id,
+        expected_revision: Revision,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<Content>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<ArtifactRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lifecycle: Option<ConventionLifecycle>,
+    },
+}
+impl Check for ConventionResourceChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Attach { name, content } => {
+                name.check()?;
+                content.check()?;
+            }
+            Self::Update {
+                resource_id,
+                expected_revision,
+                name,
+                content,
+                lifecycle,
+            } => {
+                resource_id.check()?;
+                expected_revision.check()?;
+                name.check()?;
+                content.check()?;
+                lifecycle.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "InstructionRecord", "before": 3}))]
+pub enum ConventionRecordResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(InstructionRecord),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionRecord),
+}
+impl Check for ConventionRecordResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionRecordResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count())
+                    || topic.title.0.contains('\0')
+                {
+                    return None;
+                }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()),
+                    scope: topic.scope.clone(),
+                    content,
+                    source_path: None,
+                    approved: topic.legacy_approved,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let legacy: Option<InstructionRecord> = match self {
+                Self::Current(value) => project(value),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "InstructionRecord", "before": 3}))]
+pub enum ConventionReadResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(InstructionRecord),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionReadView),
+}
+impl Check for ConventionReadResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count())
+                    || topic.title.0.contains('\0')
+                {
+                    return None;
+                }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()),
+                    scope: topic.scope.clone(),
+                    content,
+                    source_path: None,
+                    approved: topic.legacy_approved,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let legacy: Option<InstructionRecord> = match self {
+                Self::Current(value) if matches!(value.format, ConventionFormat::Markdown) => {
+                    project(&value.convention)
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum ConventionPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<InstructionRecord>),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionPage),
+}
+impl Check for ConventionPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count())
+                    || topic.title.0.contains('\0')
+                {
+                    return None;
+                }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()),
+                    scope: topic.scope.clone(),
+                    content,
+                    source_path: None,
+                    approved: topic.legacy_approved,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let legacy: Option<Page<InstructionRecord>> = match self {
+                Self::Current(value) => value
+                    .items
+                    .0
+                    .iter()
+                    .map(|topic| project(topic))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| Page {
+                        items: BoundedList(items),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum ConventionResourcePageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<InstructionRecord>),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionResourcePage),
+}
+impl Check for ConventionResourcePageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionResourcePageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\0')
+                {
+                    return None;
+                }
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.name.0.clone()),
+                    scope: topic.scope.clone(),
+                    content: topic.content.clone(),
+                    source_path: None,
+                    approved: false,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let legacy: Option<Page<InstructionRecord>> = match self {
+                Self::Current(value) => value
+                    .items
+                    .0
+                    .iter()
+                    .map(|topic| resource(topic))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| Page {
+                        items: BoundedList(items),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum ConventionSearchPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<InstructionRecord>),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionSearchPage),
+}
+impl Check for ConventionSearchPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionSearchPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count())
+                    || topic.title.0.contains('\0')
+                {
+                    return None;
+                }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()),
+                    scope: topic.scope.clone(),
+                    content,
+                    source_path: None,
+                    approved: topic.legacy_approved,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\0')
+                {
+                    return None;
+                }
+                let row = InstructionRecord {
+                    id: topic.id.clone(),
+                    revision: topic.revision.clone(),
+                    name: BoundedText(topic.name.0.clone()),
+                    scope: topic.scope.clone(),
+                    content: topic.content.clone(),
+                    source_path: None,
+                    approved: false,
+                    applicability: topic.applicability.clone(),
+                };
+                row.check().ok().map(|()| row)
+            };
+            let legacy: Option<Page<InstructionRecord>> = match self {
+                Self::Current(value) => value
+                    .items
+                    .0
+                    .iter()
+                    .map(|topic| {
+                        topic
+                            .resource
+                            .as_ref()
+                            .map_or_else(|| project(&topic.convention), resource)
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| Page {
+                        items: BoundedList(items),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "MutationSummary", "before": 3}))]
+pub enum ConventionMutationResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(MutationSummary),
+    #[schemars(extend("x-since" = 3))]
+    Current(ConventionMutation),
+}
+impl Check for ConventionMutationResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for ConventionMutationResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<MutationSummary> = match self {
+                Self::Current(value) => Some(MutationSummary {
+                    id: value.id.clone(),
+                    revision: value.revision.clone(),
+                    changed: value.changed,
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["text"]}, {"required": ["artifact"]}]))]
+pub struct ConventionSectionPath {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content")]
+    pub text: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef")]
+    pub artifact: Option<ArtifactRef>,
+}
+impl Check for ConventionSectionPath {
+    fn check(&self) -> Result<(), String> {
+        self.text.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "ConventionSectionPath",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConventionIndexedPath {
+    pub generation_id: Id,
+    pub chunk_id: Id,
+}
+impl Check for ConventionIndexedPath {
+    fn check(&self) -> Result<(), String> {
+        self.generation_id.check()?;
+        self.chunk_id.check()?;
+        super::domain_rules::record(
+            "ConventionIndexedPath",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -15390,6 +16362,13 @@ pub enum DomainQuery {
         scope: DataScope,
         page: PageRequest,
         applicability: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
+        lifecycles: Option<Items<ConventionLifecycle>>,
     },
     #[serde(rename = "conventions.search")]
     ConventionsSearch {
@@ -15397,23 +16376,107 @@ pub enum DomainQuery {
         page: PageRequest,
         applicability: Items<Label>,
         text: Text,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
+        lifecycles: Option<Items<ConventionLifecycle>>,
     },
     #[serde(rename = "conventions.resources")]
     ConventionsResources {
         scope: DataScope,
         page: PageRequest,
         applicability: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        convention_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<ConventionLifecycle>", extend("x-since" = 3))]
+        lifecycles: Option<Items<ConventionLifecycle>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Revision", extend("x-since" = 3))]
+        convention_revision: Option<Revision>,
     },
     #[serde(rename = "conventions.read")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId"]}, {"required": ["kind", "slug"], "x-since": 3}]))]
     ConventionsRead {
-        convention_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id")]
+        convention_id: Option<Id>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         revision: Option<Revision>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "GraphText", extend("x-since" = 3))]
+        slug: Option<GraphText>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionFormat", extend("x-since" = 3))]
+        format: Option<ConventionFormat>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Cursor", extend("x-since" = 3))]
+        cursor: Option<Cursor>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        max_chars: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionIndexedPath", extend("x-since" = 3))]
+        section_path: Option<ConventionIndexedPath>,
     },
     #[serde(rename = "conventions.version")]
     ConventionsVersion {
         convention_id: Id,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "skills.read")]
     SkillsRead {
@@ -16725,44 +17788,68 @@ impl Check for DomainQuery {
                 scope,
                 page,
                 applicability,
+                lifecycles,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
+                lifecycles.check()?;
             }
             Self::ConventionsSearch {
                 scope,
                 page,
                 applicability,
                 text,
+                lifecycles,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
                 text.check()?;
+                lifecycles.check()?;
             }
             Self::ConventionsResources {
                 scope,
                 page,
                 applicability,
+                convention_id,
+                lifecycles,
+                convention_revision,
             } => {
                 scope.check()?;
                 page.check()?;
                 applicability.check()?;
+                convention_id.check()?;
+                lifecycles.check()?;
+                convention_revision.check()?;
             }
             Self::ConventionsRead {
                 convention_id,
                 revision,
+                slug,
+                scope,
+                format,
+                cursor,
+                max_chars,
+                section_path,
             } => {
                 convention_id.check()?;
                 revision.check()?;
+                slug.check()?;
+                scope.check()?;
+                format.check()?;
+                cursor.check()?;
+                max_chars.check()?;
+                section_path.check()?;
             }
             Self::ConventionsVersion {
                 convention_id,
                 page,
+                scope,
             } => {
                 convention_id.check()?;
                 page.check()?;
+                scope.check()?;
             }
             Self::SkillsRead {
                 instruction_id,
@@ -17456,6 +18543,65 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *view = None;
+                }
+            }
+            Self::ConventionsList { lifecycles, .. } => {
+                if revision < 3 {
+                    *lifecycles = None;
+                }
+            }
+            Self::ConventionsSearch { lifecycles, .. } => {
+                if revision < 3 {
+                    *lifecycles = None;
+                }
+            }
+            Self::ConventionsResources {
+                convention_id,
+                lifecycles,
+                convention_revision,
+                ..
+            } => {
+                if revision < 3 {
+                    *convention_id = None;
+                }
+                if revision < 3 {
+                    *lifecycles = None;
+                }
+                if revision < 3 {
+                    *convention_revision = None;
+                }
+            }
+            Self::ConventionsRead {
+                slug,
+                scope,
+                format,
+                cursor,
+                max_chars,
+                section_path,
+                ..
+            } => {
+                if revision < 3 {
+                    *slug = None;
+                }
+                if revision < 3 {
+                    *scope = None;
+                }
+                if revision < 3 {
+                    *format = None;
+                }
+                if revision < 3 {
+                    *cursor = None;
+                }
+                if revision < 3 {
+                    *max_chars = None;
+                }
+                if revision < 3 {
+                    *section_path = None;
+                }
+            }
+            Self::ConventionsVersion { scope, .. } => {
+                if revision < 3 {
+                    *scope = None;
                 }
             }
             Self::NotificationsList {
@@ -18418,12 +19564,75 @@ pub enum DomainCommand {
         convention_id: Id,
         expected_revision: Revision,
         content: ArtifactRef,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "GraphText", extend("x-since" = 3))]
+        title: Option<GraphText>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "GraphText", extend("x-since" = 3))]
+        slug: Option<GraphText>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionParentChange", extend("x-since" = 3))]
+        parent: Option<ConventionParentChange>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+        sort_order: Option<SignedCounter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionRawChange", extend("x-since" = 3))]
+        raw_content: Option<ConventionRawChange>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<ConventionResourceChange>", extend("x-since" = 3))]
+        resources: Option<Items<ConventionResourceChange>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.applicability")]
     ConventionsApplicability {
         convention_id: Id,
         expected_revision: Revision,
         applicability: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionLifecycle", extend("x-since" = 3))]
+        lifecycle: Option<ConventionLifecycle>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.retire")]
     ConventionsRetire {
@@ -18431,13 +19640,41 @@ pub enum DomainCommand {
         expected_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.index")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "conventionId", "expectedRevision"]}, {"required": ["kind", "expectedRevision", "allScope"], "x-since": 3}]))]
     ConventionsIndex {
-        convention_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id")]
+        convention_id: Option<Id>,
         expected_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        all_scope: Option<DataScope>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.delete")]
     ConventionsDelete {
@@ -18445,6 +19682,13 @@ pub enum DomainCommand {
         expected_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.delete_resource")]
     ConventionsDeleteResource {
@@ -18452,6 +19696,13 @@ pub enum DomainCommand {
         expected_revision: Revision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resource_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "conventions.import")]
     ConventionsImport {
@@ -18464,6 +19715,27 @@ pub enum DomainCommand {
         convention_id: Id,
         expected_revision: Revision,
         destination: DataScope,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ConventionParentChange", extend("x-since" = 3))]
+        parent: Option<ConventionParentChange>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+        sort_order: Option<SignedCounter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "skills.draft")]
     SkillsDraft {
@@ -20220,55 +21492,83 @@ impl Check for DomainCommand {
                 convention_id,
                 expected_revision,
                 content,
+                title,
+                slug,
+                parent,
+                sort_order,
+                raw_content,
+                resources,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 content.check()?;
+                title.check()?;
+                slug.check()?;
+                parent.check()?;
+                sort_order.check()?;
+                raw_content.check()?;
+                resources.check()?;
+                scope.check()?;
             }
             Self::ConventionsApplicability {
                 convention_id,
                 expected_revision,
                 applicability,
+                lifecycle,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 applicability.check()?;
+                lifecycle.check()?;
+                scope.check()?;
             }
             Self::ConventionsRetire {
                 convention_id,
                 expected_revision,
                 resource_id,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 resource_id.check()?;
+                scope.check()?;
             }
             Self::ConventionsIndex {
                 convention_id,
                 expected_revision,
                 resource_id,
+                all_scope,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 resource_id.check()?;
+                all_scope.check()?;
+                scope.check()?;
             }
             Self::ConventionsDelete {
                 convention_id,
                 expected_revision,
                 resource_id,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 resource_id.check()?;
+                scope.check()?;
             }
             Self::ConventionsDeleteResource {
                 convention_id,
                 expected_revision,
                 resource_id,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 resource_id.check()?;
+                scope.check()?;
             }
             Self::ConventionsImport {
                 scope,
@@ -20283,10 +21583,16 @@ impl Check for DomainCommand {
                 convention_id,
                 expected_revision,
                 destination,
+                parent,
+                sort_order,
+                scope,
             } => {
                 convention_id.check()?;
                 expected_revision.check()?;
                 destination.check()?;
+                parent.check()?;
+                sort_order.check()?;
+                scope.check()?;
             }
             Self::SkillsDraft {
                 scope,
@@ -21289,6 +22595,89 @@ impl Revisioned for DomainCommand {
                     *reason = None;
                 }
             }
+            Self::ConventionsEdit {
+                title,
+                slug,
+                parent,
+                sort_order,
+                raw_content,
+                resources,
+                scope,
+                ..
+            } => {
+                if revision < 3 {
+                    *title = None;
+                }
+                if revision < 3 {
+                    *slug = None;
+                }
+                if revision < 3 {
+                    *parent = None;
+                }
+                if revision < 3 {
+                    *sort_order = None;
+                }
+                if revision < 3 {
+                    *raw_content = None;
+                }
+                if revision < 3 {
+                    *resources = None;
+                }
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsApplicability {
+                lifecycle, scope, ..
+            } => {
+                if revision < 3 {
+                    *lifecycle = None;
+                }
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsRetire { scope, .. } => {
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsIndex {
+                all_scope, scope, ..
+            } => {
+                if revision < 3 {
+                    *all_scope = None;
+                }
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsDelete { scope, .. } => {
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsDeleteResource { scope, .. } => {
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
+            Self::ConventionsMove {
+                parent,
+                sort_order,
+                scope,
+                ..
+            } => {
+                if revision < 3 {
+                    *parent = None;
+                }
+                if revision < 3 {
+                    *sort_order = None;
+                }
+                if revision < 3 {
+                    *scope = None;
+                }
+            }
             Self::ApprovalsPropose { payload, .. } => {
                 if revision < 3 {
                     *payload = None;
@@ -21711,31 +23100,31 @@ pub enum OperationResult {
     #[serde(rename = "documents.retry")]
     DocumentsRetry { value: IndexRunRecord },
     #[serde(rename = "conventions.list")]
-    ConventionsList { value: Page<InstructionRecord> },
+    ConventionsList { value: ConventionPageResult },
     #[serde(rename = "conventions.search")]
-    ConventionsSearch { value: Page<InstructionRecord> },
+    ConventionsSearch { value: ConventionSearchPageResult },
     #[serde(rename = "conventions.resources")]
-    ConventionsResources { value: Page<InstructionRecord> },
+    ConventionsResources { value: ConventionResourcePageResult },
     #[serde(rename = "conventions.read")]
-    ConventionsRead { value: InstructionRecord },
+    ConventionsRead { value: ConventionReadResult },
     #[serde(rename = "conventions.version")]
-    ConventionsVersion { value: Page<InstructionRecord> },
+    ConventionsVersion { value: ConventionPageResult },
     #[serde(rename = "conventions.edit")]
-    ConventionsEdit { value: InstructionRecord },
+    ConventionsEdit { value: ConventionRecordResult },
     #[serde(rename = "conventions.applicability")]
-    ConventionsApplicability { value: InstructionRecord },
+    ConventionsApplicability { value: ConventionRecordResult },
     #[serde(rename = "conventions.retire")]
-    ConventionsRetire { value: MutationSummary },
+    ConventionsRetire { value: ConventionMutationResult },
     #[serde(rename = "conventions.index")]
-    ConventionsIndex { value: MutationSummary },
+    ConventionsIndex { value: ConventionMutationResult },
     #[serde(rename = "conventions.delete")]
-    ConventionsDelete { value: MutationSummary },
+    ConventionsDelete { value: ConventionMutationResult },
     #[serde(rename = "conventions.delete_resource")]
-    ConventionsDeleteResource { value: MutationSummary },
+    ConventionsDeleteResource { value: ConventionMutationResult },
     #[serde(rename = "conventions.import")]
-    ConventionsImport { value: InstructionRecord },
+    ConventionsImport { value: ConventionRecordResult },
     #[serde(rename = "conventions.move")]
-    ConventionsMove { value: InstructionRecord },
+    ConventionsMove { value: ConventionRecordResult },
     #[serde(rename = "skills.read")]
     SkillsRead { value: InstructionRecord },
     #[serde(rename = "skills.draft")]
@@ -22969,6 +24358,19 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::ConventionsList { value } => value.retain_revision(revision),
+            Self::ConventionsSearch { value } => value.retain_revision(revision),
+            Self::ConventionsResources { value } => value.retain_revision(revision),
+            Self::ConventionsRead { value } => value.retain_revision(revision),
+            Self::ConventionsVersion { value } => value.retain_revision(revision),
+            Self::ConventionsEdit { value } => value.retain_revision(revision),
+            Self::ConventionsApplicability { value } => value.retain_revision(revision),
+            Self::ConventionsRetire { value } => value.retain_revision(revision),
+            Self::ConventionsIndex { value } => value.retain_revision(revision),
+            Self::ConventionsDelete { value } => value.retain_revision(revision),
+            Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
+            Self::ConventionsImport { value } => value.retain_revision(revision),
+            Self::ConventionsMove { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),
             Self::ApprovalsPropose { value } => value.retain_revision(revision),
@@ -23064,6 +24466,19 @@ impl Revisioned for OperationResult {
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            Self::ConventionsList { value } => value.check_revision(revision),
+            Self::ConventionsSearch { value } => value.check_revision(revision),
+            Self::ConventionsResources { value } => value.check_revision(revision),
+            Self::ConventionsRead { value } => value.check_revision(revision),
+            Self::ConventionsVersion { value } => value.check_revision(revision),
+            Self::ConventionsEdit { value } => value.check_revision(revision),
+            Self::ConventionsApplicability { value } => value.check_revision(revision),
+            Self::ConventionsRetire { value } => value.check_revision(revision),
+            Self::ConventionsIndex { value } => value.check_revision(revision),
+            Self::ConventionsDelete { value } => value.check_revision(revision),
+            Self::ConventionsDeleteResource { value } => value.check_revision(revision),
+            Self::ConventionsImport { value } => value.check_revision(revision),
+            Self::ConventionsMove { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

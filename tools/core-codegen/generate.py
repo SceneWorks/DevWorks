@@ -159,6 +159,8 @@ def choice(fs, one, since, required_since=None):
 
 def record_attrs(d):
     out = ''
+    if d.get('exactlyOne'):
+        out += choice(d['fields'], d['exactlyOne'], d.get('since', {}))
     if d.get('schemaName'):
         out += f'#[schemars(rename = "{d["schemaName"]}")]\n'
     if d.get('earlierName'):
@@ -281,7 +283,7 @@ def gen_records():
     for name, d in TYPES.items():
         if d['kind'] == 'record':
             since = d.get('since', {})
-            out += [RECORD + record_attrs(d) + f'pub struct {name} {{', fields(d['fields'], since=since), '}',
+            out += [RECORD + record_attrs(d) + f'pub struct {name} {{', fields(d['fields'], since=since, one=d.get('exactlyOne', ())), '}',
                     f'impl Check for {name} {{', '    fn check(&self) -> Result<(), String> {',
                     checks(d['fields']),
                     f'        crate::protocol::rules::record("{name}", &serde_json::to_value(self).map_err(|e| e.to_string())?)?;',

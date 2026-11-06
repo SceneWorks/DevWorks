@@ -1,0 +1,25 @@
+{
+  "status": "Interface foundation; full service acceptance remains in progress",
+  "source_base": "2a11778746c8cce09b4c7fe3821502bdb2ad2685",
+  "retained_source": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "legacy_schema_count": 56,
+  "legacy_bytes_exact": true,
+  "baseline_schema_count": 70,
+  "unchanged_baseline_schemas": 61,
+  "changed_shared_convention_envelopes": [
+    "docs/architecture/contracts/domain-command-reply.r3.schema.json",
+    "docs/architecture/contracts/domain-command-reply.r4.schema.json",
+    "docs/architecture/contracts/domain-query-reply.r3.schema.json",
+    "docs/architecture/contracts/domain-query-reply.r4.schema.json",
+    "docs/architecture/contracts/domain-request.r3.schema.json",
+    "docs/architecture/contracts/operation-completion.r3.schema.json",
+    "docs/architecture/contracts/operation-completion.r4.schema.json",
+    "docs/architecture/contracts/operation-result.r3.schema.json",
+    "docs/architecture/contracts/operation-result.r4.schema.json"
+  ],
+  "existing_domain_types_unchanged": true,
+  "non_conventions_operation_definitions_unchanged": true,
+  "native_contract_tests": 7,
+  "native_learned_compute": false,
+  "strict_limit": "Four pre-existing Graph dead-code warnings are owned by root; no suppression or unrelated repair here."
+}

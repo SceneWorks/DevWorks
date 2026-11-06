@@ -74,7 +74,191 @@ fn code_record(name:&str,v:&Value)->Result<(),String>{
     }
     Ok(())
 }
+fn convention_record(name: &str, v: &Value) -> Result<(), String> {
+    let text = |key: &str, max: usize| {
+        v[key]
+            .as_str()
+            .is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= max && !s.contains('\0'))
+    };
+    if name == "ConventionRecord" {
+        require(
+            [("title", 500), ("slug", 200)].iter().all(|(key, max)| {
+                v[*key]
+                    .as_str()
+                    .is_some_and(|s| !s.trim().is_empty() && s.chars().count() <= *max)
+            }),
+            "invalid convention title or slug",
+        )?;
+        require(
+            v["sortOrder"]
+                .as_str()
+                .and_then(|s| s.parse::<i32>().ok())
+                .is_some(),
+            "convention order must fit its retained signed integer",
+        )?;
+        require(
+            v["lifecycle"] == "Deleted" || present(v, "content"),
+            "live convention needs actual content",
+        )?;
+    }
+    if name == "ConventionSectionPath" {
+        require(
+            present(v, "text") != present(v, "artifact"),
+            "convention section path needs inline text or its actual artifact",
+        )?;
+    }
+    if name == "ConventionResourceRecord" {
+        require(text("name", 255), "invalid convention resource name")?;
+        require(
+            (v["lifecycle"] == "Deleted") == present(v, "deletedAtMs"),
+            "resource deletion state disagrees with its timestamp",
+        )?;
+    }
+    if name == "ConventionIndexStatus" {
+        require(
+            present(v, "resourceId") == present(v, "resourceRevision"),
+            "resource index needs an exact identity pair",
+        )?;
+        if v["status"] == "Ready" || v["status"] == "LexicalOnly" {
+            for key in [
+                "generationId",
+                "sourceRevision",
+                "sourceDigest",
+                "indexedChunks",
+            ] {
+                require(
+                    present(v, key),
+                    "published index needs observed source and counts",
+                )?;
+            }
+            require(
+                (v["status"] == "Ready") == present(v, "embeddingSpace"),
+                "index status must describe actual vector coverage",
+            )?;
+        }
+    }
+    if name == "ConventionPassage" {
+        require(v["text"].as_str().is_some_and(|text| text.len() <= 65_536), "convention passage exceeds its UTF-8 byte ceiling")?;
+    }
+    if matches!(
+        name,
+        "ConventionPassage" | "ConventionPage" | "ConventionResourcePage" | "ConventionSearchPage"
+    ) {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "convention continuation mismatch",
+        )?;
+    }
+    if name == "ConventionReadView" {
+        require(
+            (v["availability"] == "Available") == present(v, "passage"),
+            "available convention read needs an actual passage",
+        )?;
+        require(
+            v["availability"] == "Available" || present(v, "reason"),
+            "unavailable convention body needs its reason",
+        )?;
+    }
+    if name == "ConventionRetrieval" {
+        require(
+            (v["mode"] == "Hybrid") == present(v, "embeddingSpace"),
+            "hybrid retrieval needs an actual compatible embedding space",
+        )?;
+        require(
+            v["mode"] == "Hybrid" || present(v, "reason"),
+            "nonhybrid retrieval needs its reason",
+        )?;
+    }
+    Ok(())
+}
+
+fn convention_input(op: &str, v: &Value) -> Result<(), String> {
+    if op == "conventions.read" {
+        require(
+            present(v, "conventionId") != present(v, "slug"),
+            "read requires an ID or scoped slug",
+        )?;
+        require(
+            !present(v, "slug") || present(v, "scope"),
+            "slug resolution requires its exact scope",
+        )?;
+        require(
+            (v["format"] == "SectionPath") == present(v, "sectionPath"),
+            "section path read requires its exact generation and chunk",
+        )?;
+        if present(v, "maxChars") {
+            require(
+                v["maxChars"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .is_some_and(|n| (1..=65536).contains(&n)),
+                "convention passage limit is 1..65536 characters",
+            )?;
+        }
+    }
+    if op == "conventions.index" {
+        require(
+            present(v, "conventionId") != present(v, "allScope"),
+            "index requires one convention or a current scoped catalog",
+        )?;
+        require(
+            !present(v, "allScope") || (!present(v, "resourceId") && !present(v, "scope")),
+            "scoped indexing cannot select one resource",
+        )?;
+    }
+    if op == "conventions.resources" {
+        require(
+            !present(v, "conventionRevision") || present(v, "conventionId"),
+            "resource history requires its owning convention",
+        )?;
+    }
+    if op == "conventions.applicability" {
+        require(
+            v["lifecycle"] != "Deleted",
+            "delete requires its dedicated operation",
+        )?;
+    }
+    for key in ["title", "slug"] {
+        if let Some(s) = v[key].as_str() {
+            let max = if key == "title" { 500 } else { 200 };
+            require(
+                !s.trim().is_empty() && s.chars().count() <= max,
+                "invalid convention metadata",
+            )?;
+        }
+    }
+    if present(v, "sortOrder") {
+        require(
+            v["sortOrder"]
+                .as_str()
+                .and_then(|s| s.parse::<i32>().ok())
+                .is_some(),
+            "invalid convention order",
+        )?;
+    }
+    if let Some(resources) = v["resources"].as_array() {
+        let mut changed = std::collections::HashSet::new();
+        for row in resources {
+            if let Some(id) = row["resourceId"].as_str() {
+                require(changed.insert(id), "duplicate resource change")?;
+            }
+            if let Some(name) = row["name"].as_str() {
+                require(
+                    !name.trim().is_empty() && name.chars().count() <= 255,
+                    "invalid resource name",
+                )?;
+            }
+            require(
+                row["lifecycle"] != "Deleted",
+                "resource deletion requires its dedicated operation",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    convention_record(name, v)?;
     if name.starts_with("Code") { code_record(name,v)?; }
 
     if name == "WorkRecord" {
@@ -315,6 +499,7 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op.starts_with("conventions.") { convention_input(op, v)?; }
     if op=="repositories.nodes" {require(present(v,"views")!=present(v,"current")&&v.get("current").is_none_or(|v|v==true),"repository nodes requires explicit or current views")?;}
 
     if op == "help.read" && present(v, "maxChars") {
