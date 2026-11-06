@@ -18,14 +18,17 @@ struct NativeFx {
 }
 impl NativeFx {
     fn new() -> Self {
+        Self::profile("OpenAiResponses")
+    }
+    fn profile(profile: &str) -> Self {
         let fx = Fx::new();
         fx.dir.set(
-            "OpenAiResponses",
+            profile,
             "api",
             ConnectionState::Connected,
             Some(&["upstream/accounted"]),
         );
-        let mut model = custom("accounted", "OpenAiResponses", false, Some(128_000));
+        let mut model = custom("accounted", profile, false, Some(128_000));
         model.connection_id = Some(id("api"));
         fx.add_model(model);
         fx.write(|tx| {
@@ -48,7 +51,7 @@ impl NativeFx {
                 catalog_model_id: choice.model_id,
                 provider_model_id: pin.upstream_model_id,
                 connection_id: id("api"),
-                endpoint_profile: "OpenAiResponses".into(),
+                endpoint_profile: profile.into(),
                 access_mode: "NotBillingAuthority".into(),
                 service_tier: None,
                 input_tokens: Some(100),
@@ -1035,5 +1038,142 @@ fn ttl_unrestricted_legacy_price_survives_actual_quote_settlement_and_gateway_re
             !estimate.monetary_complete,
             "unrestricted and exact TTL overlap stays ambiguous"
         );
+    }
+}
+
+#[test]
+fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff() {
+    use devworks_core::ports::usage::{PriceResolver, PublishedTariff};
+    for profile in ["CodexSubscriptionResponses", "ClaudeSubscriptionMessages"] {
+        for priced in [false, true] {
+            let mut f = NativeFx::profile(profile);
+            if priced {
+                let profile = profile.to_owned();
+                f.fx.write(move |tx| {
+                    tx.usage().put_price_override(
+                        &StoredPriceOverride {
+                            model_id: id("accounted"),
+                            revision: 2,
+                            mode: "Set".into(),
+                            tariffs: ["Input", "Output"]
+                                .map(|kind| PublishedTariff {
+                                    upstream_model_id: "upstream/accounted".into(),
+                                    service_tier: "Standard".into(),
+                                    context_lower_exclusive: None,
+                                    context_upper_inclusive: None,
+                                    modality: "Text".into(),
+                                    charge_kind: kind.into(),
+                                    cache_ttl_seconds: None,
+                                    unit: "Token".into(),
+                                    units: 1_000_000,
+                                    amount_usd: "1".into(),
+                                    region: None,
+                                    endpoint_profile: Some(profile.clone()),
+                                })
+                                .to_vec(),
+                            updated_by: actor("user-a"),
+                            updated_at_ms: T0,
+                        },
+                        1,
+                    )
+                });
+                f.request.override_revision = 2;
+            }
+            f.request.quote = f.fx.read(|r| {
+                devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+            });
+            assert_eq!(
+                f.request.quote.classification,
+                if priced {
+                    CostClassification::SubscriptionApiEquivalent
+                } else {
+                    CostClassification::Untracked
+                }
+            );
+            let attempt = f.admitted();
+            assert_eq!(attempt.access_mode, "Subscription");
+            assert_eq!(
+                accounting::snapshot(&attempt).unwrap().query.access_mode,
+                "Subscription"
+            );
+            let (src, _) = source(
+                vec![
+                    InferenceFrame::Usage(observation(
+                        "reported-subscription",
+                        1,
+                        Some(100),
+                        Some("0.012345"),
+                    )),
+                    InferenceFrame::Terminal(AttemptEnd::Completed),
+                ],
+                false,
+            );
+            let DriveOutcome::Settled(balance) = f
+                .host()
+                .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+                .unwrap()
+            else {
+                panic!("unsettled")
+            };
+            assert_eq!(
+                balance.priced_micro_usd,
+                priced.then_some(100),
+                "{profile},priced={priced}"
+            );
+            assert_ne!(balance.classification, "ReportedCharge");
+            assert_eq!(
+                accounting::summary(&balance)
+                    .unwrap()
+                    .reported_cost
+                    .unwrap()
+                    .amount,
+                "0.012345"
+            );
+            let persisted =
+                f.fx.read(|r| {
+                    r.usage()
+                        .usage_observation(&attempt.attempt_id, "reported-subscription")
+                })
+                .unwrap();
+            assert_eq!(persisted.payload["reported_cost"]["amount"], "0.012345");
+            f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+                devworks_core::services::usage::UsageService::new(
+                    f.fx.h.ids.clone(),
+                    f.fx.h.clock.clone(),
+                ),
+            ));
+            let report = result(f.fx.query_at(
+                &f.fx.user(),
+                "router.usage",
+                json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+                Some(3),
+            ));
+            let OperationResult::RouterUsage {
+                value:
+                    devworks_core::protocol::records::RouterUsageResult::Current(
+                        devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                    ),
+            } = report
+            else {
+                panic!("{report:?}")
+            };
+            assert_eq!(page.totals.reported_micro_usd.get(), 0);
+            assert_eq!(
+                page.totals.tracked_micro_usd.get(),
+                if priced { 100 } else { 0 }
+            );
+            assert_eq!(
+                page.items.0[0]
+                    .cost
+                    .amount_micro_usd
+                    .as_ref()
+                    .map(|v| v.get()),
+                priced.then_some(100)
+            );
+            assert_eq!(
+                page.items.0[0].cost.original_amount.as_ref().unwrap().0,
+                "0.012345"
+            );
+        }
     }
 }

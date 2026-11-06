@@ -1010,7 +1010,13 @@ pub fn observe(
             vec!["provider-resolved model has no exact admitted tariff".into()];
         effective = CostClassification::Untracked;
     }
+    // Billing access is an admitted transport fact, independent of whether a matching
+    // API-equivalent tariff happened to be available when this attempt was quoted.
+    let subscription = attempt.access_mode == "Subscription"
+        || crate::services::router::connections::profiles::profile(&attempt.endpoint_profile)
+            .is_some_and(|profile| profile.subscription);
     if let Some(reported) = &state.reported_cost
+        && !subscription
         && !matches!(
             bound.quote.classification,
             CostClassification::LocalFree | CostClassification::SubscriptionApiEquivalent
