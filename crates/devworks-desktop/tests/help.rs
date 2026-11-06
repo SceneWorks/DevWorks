@@ -11,7 +11,17 @@ use devworks_desktop::{
 };
 use eframe::egui::{self, accesskit::Role};
 use egui_kittest::kittest::{NodeT, Queryable};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+// These cases exercise cold production runtimes and durable Help publication while
+// rendering headlessly. Share one CPU/disk budget for these integration cases; each case
+// still performs its real cold publication within the unchanged readiness bound.
+fn native_help_guard() -> MutexGuard<'static, ()> {
+    static NATIVE_HELP: Mutex<()> = Mutex::new(());
+    NATIVE_HELP
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
 type Ui = egui_kittest::Harness<'static, devworks_desktop::shell::Shell>;
 fn open(engine: &devworks_desktop::host::Engine, root: &Root) -> Ui {
     let mut h = harness(shell(engine, root, Script::default()), 1600.0, 1100.0);
@@ -71,6 +81,7 @@ fn selected(h: &Ui) -> (&str, &str) {
 }
 #[test]
 fn native_every_registered_screen_opens_its_exact_local_help_topic() {
+    let _guard = native_help_guard();
     let root = Root::new("help-all-screen-contexts");
     let engine = start(&root);
     let mut h = open(&engine, &root);
@@ -91,6 +102,7 @@ fn native_every_registered_screen_opens_its_exact_local_help_topic() {
 }
 #[test]
 fn native_settings_sections_open_exact_topics_and_keep_unsaved_settings() {
+    let _guard = native_help_guard();
     let root = Root::new("help-settings-context");
     let engine = start(&root);
     let mut h = open(&engine, &root);
@@ -128,6 +140,7 @@ fn native_settings_sections_open_exact_topics_and_keep_unsaved_settings() {
 }
 #[test]
 fn native_help_search_and_bounded_passages_use_local_version_references() {
+    let _guard = native_help_guard();
     let root = Root::new("help-offline-search");
     let offline = Arc::new(OfflineHttp(std::sync::atomic::AtomicUsize::new(0)));
     let mut config = config(&root.0);
@@ -181,6 +194,7 @@ fn native_help_search_and_bounded_passages_use_local_version_references() {
 }
 #[test]
 fn native_missing_context_is_explicit_and_never_becomes_an_empty_success() {
+    let _guard = native_help_guard();
     let root = Root::new("help-missing-context");
     let engine = start(&root);
     let mut h = open(&engine, &root);
@@ -192,6 +206,7 @@ fn native_missing_context_is_explicit_and_never_becomes_an_empty_success() {
 }
 #[test]
 fn native_help_generation_unknown_outcome_replays_the_exact_frame_after_relaunch() {
+    let _guard = native_help_guard();
     let root = Root::new("help-generation-unknown");
     let engine = start(&root);
     let real = engine.backend();
@@ -333,6 +348,7 @@ fn help_only(engine: &devworks_desktop::host::Engine) -> Arc<HelpOnly> {
 }
 #[test]
 fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generate() {
+    let _guard = native_help_guard();
     let root = Root::new("help-native-read-only");
     let engine = start(&root);
     let backend = help_only(&engine);
@@ -397,6 +413,7 @@ fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generat
 
 #[test]
 fn native_help_navigation_is_first_class_and_unavailable_runtime_is_explicit() {
+    let _guard = native_help_guard();
     let root = Root::new("help-runtime-unavailable");
     let mut h = harness(
         shell_with(
@@ -424,6 +441,7 @@ fn native_help_navigation_is_first_class_and_unavailable_runtime_is_explicit() {
 
 #[test]
 fn native_help_pages_search_results_and_reads_the_complete_maintained_source_example() {
+    let _guard = native_help_guard();
     let root = Root::new("help-native-pages");
     let engine = start(&root);
     let mut h = open(&engine, &root);
@@ -491,6 +509,7 @@ fn native_help_pages_search_results_and_reads_the_complete_maintained_source_exa
 
 #[test]
 fn native_notification_preferences_help_keeps_the_unsaved_preference_draft() {
+    let _guard = native_help_guard();
     let root = Root::new("help-notification-preferences");
     let engine = start(&root);
     let mut h = open(&engine, &root);
@@ -548,6 +567,7 @@ fn wait_generated(
 }
 #[test]
 fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
+    let _guard = native_help_guard();
     let root = Root::new("help-real-generation");
     let engine = start(&root);
     let b = engine.backend();
@@ -607,6 +627,7 @@ fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
 }
 #[test]
 fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_search() {
+    let _guard = native_help_guard();
     struct Release(Gate);
     impl Drop for Release {
         fn drop(&mut self) {
@@ -810,6 +831,7 @@ fn install_guide(
 }
 #[test]
 fn native_installed_package_help_has_exact_unicode_passages_and_stale_version_controls() {
+    let _guard = native_help_guard();
     let root = Root::new("help-installed-package");
     let engine = start(&root);
     let first = format!(
@@ -867,6 +889,7 @@ fn native_installed_package_help_has_exact_unicode_passages_and_stale_version_co
 
 #[test]
 fn native_context_help_returns_to_the_same_conversation_and_unsent_draft() {
+    let _guard = native_help_guard();
     let root = Root::new("help-unsent-conversation");
     let engine = start(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1100.0);
