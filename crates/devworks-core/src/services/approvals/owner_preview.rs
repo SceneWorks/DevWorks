@@ -17,6 +17,10 @@ pub struct NativeOwnerPreviews {
     git: Option<Arc<GitService>>,
     packages: Option<Arc<PackageService>>,
     jobs: Option<Arc<JobService>>,
+    evidence: Option<(
+        Arc<dyn crate::ports::storage::ApplicationStore>,
+        Arc<crate::services::artifacts::ArtifactService>,
+    )>,
 }
 impl NativeOwnerPreviews {
     pub fn new(
@@ -28,7 +32,16 @@ impl NativeOwnerPreviews {
             git,
             packages,
             jobs,
+            evidence: None,
         }
+    }
+    pub fn with_evidence(
+        mut self,
+        store: Arc<dyn crate::ports::storage::ApplicationStore>,
+        artifacts: Arc<crate::services::artifacts::ArtifactService>,
+    ) -> Self {
+        self.evidence = Some((store, artifacts));
+        self
     }
     pub fn with_control(self, control: Arc<crate::services::runs::ControlService>) -> Self {
         if let Some(git) = &self.git {
@@ -67,7 +80,7 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         if !self.supports(request.descriptor.name) {
             return Err(unsupported());
         }
-        match request.descriptor.family {
+        let preview = match request.descriptor.family {
             "git" => self
                 .git
                 .as_ref()
@@ -84,7 +97,28 @@ impl SavedOperationOwners for NativeOwnerPreviews {
                 .ok_or_else(unsupported)?
                 .approval_preview(ctx, request, env),
             _ => Err(unsupported()),
+        }?;
+        if !crate::services::approvals::review_evidence::needed(&preview) {
+            return Ok(preview);
         }
+        let (store, artifacts) = self.evidence.as_ref().ok_or_else(unsupported)?;
+        let document = crate::services::approvals::review_evidence::document(&preview);
+        let reference = publish_review_evidence(
+            artifacts,
+            &**store,
+            ctx,
+            env,
+            "SavedOperationReviewEvidence",
+            "Complete saved-operation owner review",
+            &document,
+        )?;
+        env.read(|s| {
+            Ok(crate::services::approvals::review_evidence::seal(
+                s.artifacts(),
+                &preview,
+                &reference,
+            ))
+        })?
     }
     fn validate(
         &self,
@@ -96,6 +130,9 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         if !self.supports(request.descriptor.name) {
             return Err(unsupported());
         }
+        let expanded =
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?;
+        let preview = &expanded;
         match request.descriptor.family {
             "git" => self
                 .git
@@ -123,6 +160,9 @@ impl SavedOperationOwners for NativeOwnerPreviews {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
+        let expanded =
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), preview)?;
+        let preview = &expanded;
         if request.descriptor.family == "addons" {
             return self
                 .packages
@@ -212,13 +252,35 @@ pub(crate) fn approved_binding(
             return Err(denied().into());
         }
     }
-    approved_binding_for(
+    let binding = approved_binding_for(
         tx,
         ctx,
         command.descriptor().name,
         command.schema_revision().0,
         command.fingerprint().as_str(),
-    )
+    )?;
+    if binding
+        .as_ref()
+        .is_some_and(|value| value.get("reviewEnvelope").is_some())
+    {
+        let evidence = ctx.reviewed_operation().expect("verified reviewed context");
+        let proposal = tx
+            .decisions()
+            .approval(evidence.approval_id())?
+            .ok_or_else(unsupported)?;
+        let preview = OwnerPreview {
+            scope: proposal.scope,
+            target_id: proposal.target_id,
+            target_revision: proposal.target_revision,
+            summary: proposal.summary,
+            reviewed: proposal.payload["reviewed"].clone(),
+            binding: binding.expect("verified binding"),
+        };
+        return Ok(Some(
+            crate::services::approvals::review_evidence::expand(tx.artifacts(), &preview)?.binding,
+        ));
+    }
+    Ok(binding)
 }
 
 pub(crate) fn approved_binding_for(
@@ -295,7 +357,7 @@ pub(crate) fn publish_review_evidence(
     use crate::services::artifacts::evidence::{Evidence, EvidenceFailure};
     use serde_json::json;
     let bytes = crate::jcs::canonicalize(value)
-        .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?
+        .unwrap_or_else(|_| value.to_string())
         .into_bytes();
     let digest = crate::fingerprint::sha256_hex(&bytes);
     let tags = vec![

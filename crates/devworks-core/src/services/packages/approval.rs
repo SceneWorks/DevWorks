@@ -76,15 +76,59 @@ impl PackageService {
             }
             _ => None,
         };
-        env.read(|s| {
+        let preview = env.read(|s| {
             Ok((|| {
                 let artifact = inspected
                     .as_ref()
-                    .map(|(_, _, reference)| artifact_binding(s.artifacts(), reference))
+                    .map(|(_, _, r)| artifact_binding(s.artifacts(), r))
                     .transpose()?;
                 self.package_approval(s.packages(), ctx, request, inspected.as_ref(), artifact)
             })())
-        })?
+        })??;
+        let candidate = preview
+            .binding
+            .get("candidate")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value::<Inspection>(v.clone()))
+            .transpose()
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        let bundle = preview
+            .binding
+            .pointer("/source/bundle")
+            .or_else(|| preview.binding.pointer("/version/provenance/source"))
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value::<ArtifactRef>(v.clone()))
+            .transpose()
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+        let body = match (candidate, bundle) {
+            (Some(candidate), Some(bundle)) => {
+                env.read(|s| Ok(self.review_facts(s.packages(), &candidate, &bundle)))??
+            }
+            _ => json!({"binding":preview.binding,"reviewed":preview.reviewed}),
+        };
+        let large_facts = serde_json::to_vec(&body)
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+            .len()
+            >= 32 * 1024;
+        let large_review = serde_json::to_vec(&preview.reviewed)
+            .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+            .len()
+            >= 256 * 1024;
+        if !large_facts && !large_review {
+            return Ok(preview);
+        }
+        let reference = self.publish_review_facts(ctx, env, &body)?;
+        let compact = env.read(|s| {
+            Ok(self.compact_review(s.artifacts(), preview.clone(), &reference, &body))
+        })??;
+        if serde_json::from_value::<crate::protocol::support::DynamicJson>(compact.reviewed.clone())
+            .is_ok()
+        {
+            return Ok(compact);
+        }
+        let body = json!({"binding":preview.binding,"reviewed":preview.reviewed});
+        let reference = self.publish_review_facts(ctx, env, &body)?;
+        env.read(|s| Ok(self.compact_review(s.artifacts(), preview, &reference, &body)))?
     }
 
     fn package_approval(
@@ -337,6 +381,8 @@ impl PackageService {
         request: &DecodedRequest,
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
+        let expanded = self.expand_review(tx, ctx, preview)?;
+        let preview = &expanded;
         let inspected = preview
             .reviewed
             .get("inspection")
@@ -402,6 +448,7 @@ impl PackageService {
         else {
             return Ok(None);
         };
+        let binding = self.expand_review_binding(tx, ctx, &binding)?;
         let control = self
             .approval_control
             .read()
@@ -469,7 +516,7 @@ impl PackageService {
             )
         })?;
         if !matches!(evidence.operation(), "addons.install" | "addons.update")
-            || binding != evidence.owner_binding()
+            || *binding != self.expand_review_binding(tx, ctx, evidence.owner_binding())?
             || binding["candidate"]
                 != serde_json::to_value(inspection)
                     .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
@@ -488,7 +535,13 @@ impl PackageService {
             evidence.schema_revision(),
             evidence.request_digest(),
         )?;
-        if checked.as_ref() != Some(binding) {
+        if checked
+            .as_ref()
+            .map(|b| self.expand_review_binding(tx, ctx, b))
+            .transpose()?
+            .as_ref()
+            != Some(binding)
+        {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
                 "package_version_approval",
@@ -539,6 +592,8 @@ impl PackageService {
         preview: &OwnerPreview,
         approve: bool,
     ) -> Result<(), Failure> {
+        let expanded = self.expand_review(tx, human, preview)?;
+        let preview = &expanded;
         let Some(id) = preview
             .binding
             .pointer("/proposal/id")
@@ -665,8 +720,11 @@ impl PackageService {
         tx: &mut dyn WriteTransaction,
         _ctx: &InvocationContext,
         proposal: &StoredPackageProposal,
+        prepared_facts: Option<&(ArtifactRef, Value)>,
     ) -> Result<(), Failure> {
-        let source_context = package_source_context(tx, proposal)?;
+        let Some(source_context) = package_source_context(tx, proposal)? else {
+            return Ok(());
+        };
         let ctx = &source_context;
         let version = tx
             .packages()
@@ -693,13 +751,21 @@ impl PackageService {
         let bundle: ArtifactRef = serde_json::from_value(proposal.summary["source"].clone())
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
         let artifact = artifact_binding(tx.artifacts(), &bundle)?;
-        let source = (
-            inspection,
-            version.provenance["artifactProvenance"].clone(),
-            bundle,
-        );
-        let preview =
+        let source = (inspection, artifact["provenance"].clone(), bundle);
+        let mut preview =
             self.package_approval(tx.packages(), ctx, &request, Some(&source), Some(artifact))?;
+        if let Some((reference, body)) = prepared_facts {
+            let current_facts = self.review_facts(tx.packages(), &source.0, &source.2)?;
+            if &current_facts != body {
+                return Err(Refusal::new(
+                    DomainErrorCode::SourceChanged,
+                    "package_review_facts",
+                    Some(proposal.id.clone()),
+                )
+                .into());
+            }
+            preview = self.compact_review(tx.artifacts(), preview, reference, body)?;
+        }
         // Repeated source reconciliation must not create another human decision for one exact
         // package proposal. It may be Pending, Approved-awaiting-readmission, or terminal.
         let mut after = None;
@@ -754,10 +820,14 @@ impl PackageService {
     }
 }
 
-fn package_source_context(
+pub(super) fn package_source_context(
     tx: &mut dyn WriteTransaction,
     proposal: &StoredPackageProposal,
-) -> Result<InvocationContext, Failure> {
+) -> Result<Option<InvocationContext>, Failure> {
+    let Some(saved) = proposal.origin.get("sourceContext") else {
+        // Existing owner proposals remain visible, but cannot attest an unrecorded invocation.
+        return Ok(None);
+    };
     let kind = tx
         .actors()
         .actor_kind(&proposal.originator)?
@@ -776,43 +846,18 @@ fn package_source_context(
         )
         .into());
     }
-    let optional_id = |key: &str| -> Result<Option<Id>, Failure> {
-        proposal
-            .origin
-            .get(key)
-            .filter(|v| !v.is_null())
-            .map(|v| {
-                v.as_str().and_then(|s| Id::new(s).ok()).ok_or_else(|| {
-                    Refusal::new(
-                        DomainErrorCode::InvalidArgument,
-                        "package_proposal_origin",
-                        Some(proposal.id.clone()),
-                    )
-                    .into()
-                })
-            })
-            .transpose()
-    };
-    let info = tx.store();
-    let mut context = InvocationContext::new(
-        proposal.originator.clone(),
+    match crate::services::approvals::restore_source_context(
+        tx.store(),
+        &proposal.originator,
         kind,
-        proposal.id.clone(),
-        Id::new("package-review-source").expect("namespace"),
-        info.store_id.clone(),
-        crate::protocol::Counter::new(info.restore_epoch).map_err(|_| invalid("restore_epoch"))?,
-        rev(1),
-    )
-    .with_lineage(
-        optional_id("projectId")?.map(crate::protocol::ProjectId),
-        optional_id("rootId")?.map(crate::protocol::RootId),
-        optional_id("assignmentId")?.map(crate::protocol::AssignmentId),
-    );
-    if let Some(session) = optional_id("sessionId")? {
-        context = context.with_session(session);
+        saved,
+    ) {
+        Ok(context) => Ok(Some(context)),
+        Err(StorageError::InvalidRecord(_)) => Ok(None),
+        Err(error) => Err(error.into()),
     }
-    Ok(context)
 }
+
 impl PackageService {
     /// Bootstrap the current owner proposal inventory through the same source-reference
     /// producer as addons.propose. Old pending work is visible without running or approving it.
@@ -833,6 +878,69 @@ impl PackageService {
                 };
                 let package_id = package.package_id.clone();
                 let digest = digest.clone();
+                // Capture and publish immutable review facts before acquiring the writer.
+                let prepared = crate::ports::storage::read_snapshot(
+                    &*self.store,
+                    &crate::ports::storage::ReadOptions::default(),
+                    |s| {
+                        let Some(source) = s
+                            .packages()
+                            .proposal_for(&package_id, &digest)?
+                            .filter(|p| p.state == "Pending")
+                        else {
+                            return Ok(None);
+                        };
+                        let Some(saved) = source.origin.get("sourceContext") else {
+                            return Ok(None);
+                        };
+                        let kind = s.actors().actor_kind(&source.originator)?.ok_or_else(|| {
+                            StorageError::InvalidRecord("package source actor missing".into())
+                        })?;
+                        let Ok(context) = crate::services::approvals::restore_source_context(
+                            &self.store.info(),
+                            &source.originator,
+                            kind,
+                            saved,
+                        ) else {
+                            return Ok(None);
+                        };
+                        let version = s
+                            .packages()
+                            .package_version(&package_id, &digest)?
+                            .ok_or_else(|| {
+                                StorageError::InvalidRecord("package source version missing".into())
+                            })?;
+                        let inspection = policy::inspection(&version).ok_or_else(|| {
+                            StorageError::InvalidRecord("package inspection missing".into())
+                        })?;
+                        let bundle: ArtifactRef =
+                            serde_json::from_value(source.summary["source"].clone())
+                                .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+                        let facts = self
+                            .review_facts(s.packages(), &inspection, &bundle)
+                            .map_err(review_failure)?;
+                        Ok(Some((source.id, source.revision, context, facts)))
+                    },
+                )?;
+                let Some((source_id, source_revision, context, facts)) = prepared else {
+                    continue;
+                };
+                let prepared_facts = if serde_json::to_vec(&facts)
+                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+                    .len()
+                    >= 32 * 1024
+                {
+                    let reference = self
+                        .publish_review_facts(
+                            &context,
+                            &Preparation::new(&*self.store, None, None),
+                            &facts,
+                        )
+                        .map_err(review_failure)?;
+                    Some((reference, facts))
+                } else {
+                    None
+                };
                 let service = self.clone_ports();
                 let produced = run_write(&*self.store, WriteOptions::default(), move |tx| {
                     let Some(source) = tx
@@ -842,6 +950,9 @@ impl PackageService {
                     else {
                         return Ok(false);
                     };
+                    if source.id != source_id || source.revision != source_revision {
+                        return Ok(false);
+                    };
                     let context = package_source_context(tx, &source).map_err(|e| match e {
                         Failure::Storage(e) => e,
                         Failure::Refused(r) => StorageError::InvalidRecord(format!(
@@ -849,8 +960,11 @@ impl PackageService {
                             r.code, r.target_kind
                         )),
                     })?;
+                    let Some(context) = context else {
+                        return Ok(false);
+                    };
                     service
-                        .stage_package_review(tx, &context, &source)
+                        .stage_package_review(tx, &context, &source, prepared_facts.as_ref())
                         .map_err(|e| match e {
                             Failure::Storage(e) => e,
                             Failure::Refused(r) => StorageError::InvalidRecord(format!(
@@ -867,5 +981,15 @@ impl PackageService {
                 return Ok(count);
             }
         }
+    }
+}
+
+fn review_failure(failure: Failure) -> StorageError {
+    match failure {
+        Failure::Storage(e) => e,
+        Failure::Refused(r) => StorageError::InvalidRecord(format!(
+            "package review refused: {:?} {}",
+            r.code, r.target_kind
+        )),
     }
 }

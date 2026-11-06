@@ -245,3 +245,337 @@ fn saved_package_late_root_pause_preserves_exact_pending_source_and_unspent_gran
         .unwrap_or_else(|_| panic!("runtime retained after drained dispatcher"));
     a.rt.block_on(runtime.shutdown());
 }
+
+fn large_signed_bundle(package: &str) -> (Spec, Vec<u8>, String, usize) {
+    let mut spec = Spec::new(package, "1.0.0");
+    spec.config_schema = Some(
+        json!({"type":"object","description":"schema evidence ".repeat(3500),"additionalProperties":true}),
+    );
+    let (original, _) = bundle(&spec);
+    let verified =
+        devworks_core::ports::packages::PackageInspector::inspect(&BundleInspector, &original)
+            .unwrap();
+    let length = u32::from_le_bytes(original[8..12].try_into().unwrap()) as usize;
+    let mut manifest: Value = serde_json::from_slice(&original[12..12 + length]).unwrap();
+    let mut files: Vec<(String, Vec<u8>)> = verified
+        .files
+        .into_iter()
+        .map(|f| (f.path, f.bytes))
+        .collect();
+    for i in 0..1800 {
+        let path = format!("evidence/{i:04}-{}.txt", "x".repeat(180));
+        let bytes = format!("exact evidence {i}\n").into_bytes();
+        manifest["files"].as_array_mut().unwrap().push(
+            json!({"path":path,"sha256":sha256_hex(&bytes),"byteLength":bytes.len().to_string()}),
+        );
+        files.push((path, bytes));
+    }
+    let manifest = serde_json::to_vec(&manifest).unwrap();
+    assert!(
+        manifest.len() > 524288,
+        "legal source must exceed the public preview JSON limit"
+    );
+    let refs: Vec<_> = files
+        .iter()
+        .map(|(p, b)| (p.as_str(), b.as_slice()))
+        .collect();
+    let bytes = write_bundle(&manifest, &refs, Some(&key(1)));
+    devworks_core::ports::packages::PackageInspector::inspect(&BundleInspector, &bytes).unwrap();
+    (spec, bytes, sha256_hex(&manifest), files.len())
+}
+
+#[test]
+fn large_signed_source_review_is_complete_human_readable_and_mutation_fenced() {
+    let _serial = serial();
+    let a = native_app();
+    let (spec, bytes, manifest_digest, file_count) = large_signed_bundle("saved-large");
+    let source = a.save(&a.agent, &bytes);
+    let proposal=match applied(a.domain(&a.agent,"addons.propose",json!({"kind":"addons.propose","source":source,"manifestDigest":manifest_digest,"basePackageId":spec.package}))){OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    let rows = read(&*a.store, |s| {
+        s.decisions().list_approval_sources(
+            &ApprovalSourceFilter {
+                scope: ConfigScope::Workspace,
+                state: None,
+            },
+            None,
+            500,
+        )
+    });
+    let review = rows
+        .into_iter()
+        .filter(|r| r.source == ApprovalSource::Generic)
+        .find_map(|r| read(&*a.store, |s| s.decisions().approval(&r.id)))
+        .unwrap();
+    assert!(review.payload["binding"].get("packageReview").is_some());
+    assert!(
+        serde_json::to_vec(&review.payload["reviewed"])
+            .unwrap()
+            .len()
+            < 524288
+    );
+    assert!(
+        review.payload["binding"]["packageReview"]["document"]
+            .as_str()
+            .unwrap()
+            .len()
+            > 524288
+    );
+    assert!(
+        serde_json::to_vec(&review.payload["binding"]["owner"])
+            .unwrap()
+            .len()
+            < 65536
+    );
+    let inspect=serde_json::to_vec(&json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"inspect-large","body":{"kind":"approvals.inspect","proposalId":review.id}})).unwrap();
+    assert!(matches!(
+        a.app()
+            .query(&a.user, "approvals.inspect", &inspect)
+            .unwrap(),
+        DomainQueryReply::Result { .. }
+    ));
+    let artifact: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(review.artifact.clone().unwrap()).unwrap();
+    let mut cursor = None;
+    let mut complete = String::new();
+    loop {
+        let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":4,"queryId":a.key("read-review"),"query":{"kind":"Read","artifactId":artifact.artifact_id,"versionId":artifact.version_id},"limit":1});
+        if let Some(cursor) = &cursor {
+            frame["cursor"] = json!(cursor);
+        }
+        match a
+            .app()
+            .query(
+                &a.user,
+                "artifacts.read",
+                &serde_json::to_vec(&frame).unwrap(),
+            )
+            .unwrap()
+        {
+            DomainQueryReply::Result {
+                result:
+                    OperationResult::ArtifactsRead {
+                        value:
+                            devworks_core::protocol::records::ArtifactReadContent::Text {
+                                content,
+                                next_byte,
+                                truncated,
+                                ..
+                            },
+                    },
+                ..
+            } => {
+                complete.push_str(&content.0);
+                if !truncated {
+                    break;
+                }
+                cursor = Some(next_byte.get().to_string());
+            }
+            other => panic!("Human must read entire original Agent review evidence: {other:?}"),
+        }
+    }
+    assert_eq!(
+        sha256_hex(complete.as_bytes()),
+        String::from(artifact.sha256.clone())
+    );
+    let facts: Value = serde_json::from_str(&complete).unwrap();
+    assert_eq!(
+        facts["inspection"]["files"].as_array().unwrap().len(),
+        file_count
+    );
+    assert_eq!(
+        facts["inspection"]["configurationSchemaDocument"],
+        spec.config_schema.clone().unwrap()
+    );
+    // A late owner mutation of the retained evidence invalidates the exact reviewed generation.
+    let tag=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,"requestKey":"mutate-review-artifact","body":{"kind":"artifacts.tag","artifactId":artifact.artifact_id,"expectedRevision":"1","tags":["changed-after-review"]}})).unwrap();
+    applied(a.app().command(&a.user, "artifacts.tag", &tag).unwrap());
+    let frame=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"refuse-mutated-review","body":{"kind":"approvals.record_human_decision","proposalId":review.id,"expectedRevision":review.revision.to_string(),"contentDigest":review.content_digest,"decision":"Approve","rationale":"Exact original evidence"}})).unwrap();
+    let reply = a.app().record_human_decision(&a.user, &frame).unwrap();
+    assert!(
+        matches!(
+            reply,
+            CommandReply::Recorded {
+                receipt: devworks_core::protocol::Receipt {
+                    decision: DomainDecision::Refused { .. },
+                    ..
+                },
+                ..
+            }
+        ),
+        "{reply:?}"
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().proposal(&proposal.id))
+            .unwrap()
+            .state,
+        "Pending"
+    );
+    assert!(read(&*a.store, |s| s.decisions().approval_resume(&review.id)).is_none());
+}
+
+#[test]
+fn large_signed_package_readmission_uses_compact_exact_owner_evidence() {
+    let _serial = serial();
+    let a = native_app();
+    let (spec, bytes, digest, _) = large_signed_bundle("saved-large-admit");
+    let source = a.save(&a.agent, &bytes);
+    applied(a.domain(&a.agent,"addons.propose",json!({"kind":"addons.propose","source":source,"manifestDigest":digest,"basePackageId":spec.package})));
+    let rows = read(&*a.store, |s| {
+        s.decisions().list_approval_sources(
+            &ApprovalSourceFilter {
+                scope: ConfigScope::Workspace,
+                state: None,
+            },
+            None,
+            500,
+        )
+    });
+    let review = rows
+        .into_iter()
+        .filter(|r| r.source == ApprovalSource::Generic)
+        .find_map(|r| read(&*a.store, |s| s.decisions().approval(&r.id)))
+        .unwrap();
+    decide(&a, &review, "Approve");
+    a.rt.block_on(a.app().approval_resumes().tick()).unwrap();
+    let resume = read(&*a.store, |s| s.decisions().approval_resume(&review.id)).unwrap();
+    assert_eq!(resume.state, "Admitted", "{resume:?}");
+    let version = read(&*a.store, |s| {
+        s.packages().package_version(&spec.package, &digest)
+    })
+    .unwrap();
+    assert!(version.approval.is_some());
+    assert_eq!(resume.principal, *a.agent.principal());
+}
+
+#[test]
+fn saved_enable_preserves_large_current_configuration_without_input_narrowing() {
+    let _serial = serial();
+    let a = native_app();
+    let mut spec = Spec::new("saved-large-config", "1.0.0");
+    let doc = json!({"type":"object","properties":{"padding":{"type":"string"}},"additionalProperties":false});
+    spec.config_schema = Some(doc.clone());
+    package(a.install(&a.user, &spec));
+    a.ready(&spec.package);
+    let current = read(&*a.store, |s| s.packages().package(&spec.package)).unwrap();
+    let configuration = json!({"padding":"exact retained config ".repeat(20000)});
+    assert!(serde_json::to_vec(&configuration).unwrap().len() > 400000);
+    applied(a.domain(&a.user,"addons.configure",json!({"kind":"addons.configure","packageId":spec.package,"expectedRevision":current.revision.to_string(),"config":{"schema":schema(&format!("{}/config",spec.package),&sha256_hex(doc.to_string().as_bytes())),"value":configuration}})));
+    applied(a.simple(&a.user, "addons.disable", "Disable", &spec.package));
+    let current = read(&*a.store, |s| s.packages().package(&spec.package)).unwrap();
+    let args = json!({"command":{"kind":"Enable","packageId":spec.package,"expectedRegistryRevision":a.registry().to_string()}});
+    let request =
+        devworks_core::services::approvals::requests::decode("addons.enable", 2, &args, true)
+            .unwrap();
+    let frame=serde_json::to_vec(&json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"review-large-current-config","body":{"kind":"approvals.propose","scope":{"kind":"Workspace"},"operationKind":"addons.enable","target":{"id":spec.package,"revision":current.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Enable exact current configuration","payload":{"kind":"SavedOperation","schemaRevision":"2","input":args}}})).unwrap();
+    applied(
+        a.app()
+            .command(&a.agent, "approvals.propose", &frame)
+            .unwrap(),
+    );
+    let rows = read(&*a.store, |s| {
+        s.decisions().list_approval_sources(
+            &ApprovalSourceFilter {
+                scope: ConfigScope::Workspace,
+                state: None,
+            },
+            None,
+            500,
+        )
+    });
+    let review = rows
+        .into_iter()
+        .filter(|r| r.source == ApprovalSource::Generic)
+        .find_map(|r| read(&*a.store, |s| s.decisions().approval(&r.id)))
+        .unwrap();
+    assert!(review.payload["binding"].get("packageReview").is_some());
+    assert!(
+        serde_json::to_vec(&review.payload["binding"]["owner"])
+            .unwrap()
+            .len()
+            < 16000
+    );
+    decide(&a, &review, "Approve");
+    a.rt.block_on(a.app().approval_resumes().tick()).unwrap();
+    let resumed = read(&*a.store, |s| s.decisions().approval_resume(&review.id)).unwrap();
+    assert_eq!(resumed.state, "Admitted", "{resumed:?}");
+    let current = read(&*a.store, |s| s.packages().package(&spec.package)).unwrap();
+    assert!(current.enabled);
+    assert_eq!(current.config.unwrap()["value"], configuration);
+}
+
+#[test]
+fn legacy_package_source_requires_fresh_context_instead_of_fabricated_replay() {
+    let _serial = serial();
+    let a = native_app();
+    let spec = Spec::new("legacy-source", "1.0.0");
+    let (old, digest, _) = propose(&a, &spec);
+    let old_review = saved(&a, &old);
+    // A pre-DW14 durable fixture: exact version/source and known actor exist, invocation does not.
+    let connection = rusqlite::Connection::open(a.h.root.join("workspace.sqlite")).unwrap();
+    connection.execute("UPDATE package_proposals SET origin_json=json_remove(origin_json,'$.sourceContext') WHERE id=?1",[old.id.as_str()]).unwrap();
+    connection
+        .execute(
+            "DELETE FROM decision_approvals WHERE id=?1",
+            [old_review.id.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        a.app()
+            .packages()
+            .unwrap()
+            .service()
+            .sync_pending_reviews()
+            .unwrap(),
+        0
+    );
+    assert!(read(&*a.store, |s| s.decisions().approval(&old_review.id)).is_none());
+    let shown = a.record(&spec.package);
+    assert!(
+        shown
+            .availability_reason
+            .unwrap()
+            .0
+            .contains("Original invocation was not recorded")
+    );
+    let fresh = devworks_core::context::HostIngress::new(&*a.store).context(
+        a.agent.principal().clone(),
+        PrincipalKind::Agent,
+        id("actual-fresh-invocation"),
+        id("actual-fresh-ingress"),
+        a.agent.restore_epoch().clone(),
+        a.agent.policy_revision().clone(),
+    );
+    let (fresh_bytes, _) = bundle(&spec);
+    let source = a.save(&fresh, &fresh_bytes);
+    let new=match applied(a.domain(&fresh,"addons.propose",json!({"kind":"addons.propose","source":source,"manifestDigest":digest,"basePackageId":spec.package}))){OperationResult::AddonsPropose{value}=>value,other=>panic!("{other:?}")};
+    assert_ne!(new.id, old.id);
+    let old = read(&*a.store, |s| s.packages().proposal(&old.id)).unwrap();
+    assert_eq!(old.state, "Superseded");
+    assert_eq!(
+        old.decision.unwrap()["reason"],
+        "FreshProposalRequiredOriginalInvocationUnavailable"
+    );
+    let current = read(&*a.store, |s| s.packages().proposal(&new.id)).unwrap();
+    assert_eq!(
+        current.origin["sourceContext"]["invocationContext"]["invocation"],
+        json!(fresh.invocation_id())
+    );
+    let review = saved(&a, &new);
+    assert_eq!(
+        review.payload["invocation"]["invocation"],
+        json!(fresh.invocation_id())
+    );
+    assert_eq!(
+        review.payload["invocation"]["namespace"],
+        json!(fresh.ingress_namespace())
+    );
+    decide(&a, &review, "Approve");
+    a.rt.block_on(a.app().approval_resumes().tick()).unwrap();
+    assert_eq!(
+        read(&*a.store, |s| s.decisions().approval_resume(&review.id))
+            .unwrap()
+            .state,
+        "Admitted"
+    );
+}

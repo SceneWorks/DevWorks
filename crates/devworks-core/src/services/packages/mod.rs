@@ -159,6 +159,7 @@ use std::time::Duration;
 pub mod approval;
 pub mod index;
 pub mod policy;
+mod review_evidence;
 pub mod view;
 
 /// The operations [`PackageService`] is registered for.
@@ -284,6 +285,7 @@ struct BundlePrep {
     /// The bundle artifact's creation provenance.
     provenance: Value,
     bundle: ArtifactRef,
+    review_evidence: Option<(ArtifactRef, Value)>,
     guard: GuardCell,
     /// Keeps the published install directory from collection until the command settles.
     _held: Option<PublishHold>,
@@ -516,6 +518,7 @@ impl PackageService {
                     outcome: Err((code, detail)),
                     provenance,
                     bundle: bundle.clone(),
+                    review_evidence: None,
                     guard,
                     _held: None,
                 };
@@ -541,6 +544,7 @@ impl PackageService {
                 outcome: Err(("InstallFailed".into(), e.to_string())),
                 provenance,
                 bundle: bundle.clone(),
+                review_evidence: None,
                 guard,
                 _held: None,
             };
@@ -554,6 +558,7 @@ impl PackageService {
             outcome: Ok(i),
             provenance,
             bundle: bundle.clone(),
+            review_evidence: None,
             guard,
             _held: Some(held),
         }
@@ -1574,12 +1579,26 @@ impl PackageService {
             .proposal_for(&p.package_id, &candidate.manifest_digest)?
             .filter(|pr| pr.state == "Pending")
         {
-            self.stage_package_review(tx, ctx, &pending)?;
-            return Ok(DomainDecision::NoChange {
-                result: OperationResult::AddonsPropose {
-                    value: view::proposal_record(&pending, p.revision, p.active_digest.is_some()),
-                },
-            });
+            if approval::package_source_context(tx, &pending)?.is_some() {
+                self.stage_package_review(tx, ctx, &pending, prep.review_evidence.as_ref())?;
+                return Ok(DomainDecision::NoChange {
+                    result: OperationResult::AddonsPropose {
+                        value: view::proposal_record(
+                            &pending,
+                            p.revision,
+                            p.active_digest.is_some(),
+                        ),
+                    },
+                });
+            }
+            // Legacy source rows did not retain an exact invocation. A fresh explicit proposal
+            // replaces that pending decision rather than claiming to replay unknown history.
+            let mut legacy = pending.clone();
+            legacy.state = "Superseded".into();
+            legacy.decided_at_ms = Some(now);
+            legacy.decision =
+                Some(json!({"reason":"FreshProposalRequiredOriginalInvocationUnavailable"}));
+            tx.packages().update_proposal(&legacy, pending.revision)?;
         }
         let base_version = match &p.active_digest {
             Some(d) => tx.packages().package_version(&p.package_id, d)?,
@@ -1669,7 +1688,6 @@ impl PackageService {
         let approved_before = existing.as_ref().and_then(|v| v.approval.clone());
         p.pending_digest = Some(candidate.manifest_digest.clone());
         Self::save(tx, &mut p, false)?;
-        let changes = view::changes(base.as_ref(), &candidate);
         let proposal = StoredPackageProposal {
             id: id.clone(),
             revision: 1,
@@ -1690,26 +1708,21 @@ impl PackageService {
                 "projectId": ctx.project_id().map(|p| p.0.as_str()),
                 "rootId": ctx.root_id().map(|r| r.0.as_str()),
                 "assignmentId": ctx.assignment_id().map(|a| a.0.as_str()),
+                "reviewEvidence": prep.review_evidence.as_ref().map(|(r,_)| r),
+                "sourceContext": crate::services::approvals::save_source_context(ctx),
             }),
-            summary: json!({
-                "requestedAccess": candidate.access,
-                "dependencies": candidate.dependencies,
-                "runtimes": candidate.runtimes,
-                "contributions": candidate.contribution_ids(),
-                "changes": changes,
-                "signed": candidate.signer_key.is_some(),
-                "source": prep.bundle,
-                // The proposal input carries no evidence or rationale members; the reviewer
-                // sees the source artifact and its provenance.
-                "verificationEvidence": [],
-            }),
+            summary: review_evidence::package_proposal_summary(
+                &candidate,
+                base.as_ref(),
+                &prep.bundle,
+            ),
             decided_by: None,
             decided_at_ms: approved_before.as_ref().map(|_| now),
             decision: approved_before.map(|a| json!({"decision": "Approve", "earlierApproval": a})),
             created_at_ms: now,
         };
         tx.packages().insert_proposal(&proposal)?;
-        self.stage_package_review(tx, ctx, &proposal)?;
+        self.stage_package_review(tx, ctx, &proposal, prep.review_evidence.as_ref())?;
         event(
             tx,
             ctx.principal(),
@@ -2506,7 +2519,34 @@ impl CommandHandler for PackageService {
             return Ok(None);
         }
         if let OperationInput::Addons(ops::Input::Propose(i)) = command.input() {
-            let prep = self.prepare_bundle(ctx, &i.source, None);
+            let mut prep = self.prepare_bundle(ctx, &i.source, None);
+            if let Ok(inspection) = &prep.outcome {
+                let facts = env
+                    .read(|s| Ok(self.review_facts(s.packages(), inspection, &i.source)))?
+                    .map_err(|e| match e {
+                        Failure::Storage(e) => e,
+                        Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                            "package review facts refused: {:?}",
+                            r.code
+                        )),
+                    })?;
+                if serde_json::to_vec(&facts)
+                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
+                    .len()
+                    >= 32 * 1024
+                {
+                    let reference =
+                        self.publish_review_facts(ctx, env, &facts)
+                            .map_err(|e| match e {
+                                Failure::Storage(e) => e,
+                                Failure::Refused(r) => StorageError::InvalidRecord(format!(
+                                    "package review evidence refused: {:?}",
+                                    r.code
+                                )),
+                            })?;
+                    prep.review_evidence = Some((reference, facts));
+                }
+            }
             return Ok(Some(Prepared::new(Prep::Bundle(Box::new(prep)))));
         }
         let Some((_, cmd)) = lifecycle(command.input()) else {

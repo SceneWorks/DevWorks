@@ -150,7 +150,12 @@ pub fn package_record(
     let pending_proposal = match &pending {
         Some(v) => read
             .proposal_for(&p.package_id, &v.manifest_digest)?
-            .map(|pr| pr.id),
+            .map(|pr| {
+                if pr.state == "Pending" && pr.origin.get("sourceContext").is_none() {
+                    reason.push_str(" Original invocation was not recorded; submit a fresh proposal to request saved-operation approval.");
+                }
+                pr.id
+            }),
         None => None,
     };
     let configuration_schema = inspection
@@ -405,6 +410,13 @@ pub fn proposal_record(
         pr.originator.0.as_str(),
         pr.origin["kind"].as_str().unwrap_or("unknown"),
     );
+    let summary = if pr.state == "Pending" && pr.origin.get("sourceContext").is_none() {
+        format!(
+            "{summary} Original invocation was not recorded; submit a fresh proposal to request saved-operation approval."
+        )
+    } else {
+        summary
+    };
     ProposalRecord {
         id: pr.id.clone(),
         revision: rev(pr.revision),

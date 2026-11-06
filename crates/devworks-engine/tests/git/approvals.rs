@@ -80,6 +80,47 @@ pub(super) fn approve_owned_force(
         runs::ControlService,
     };
     let human = principal(&*store, "git-reviewer", PrincipalKind::Human);
+    let outsider = principal(&*store, "unowned-force-worker", PrincipalKind::Agent);
+    let binder = human.clone();
+    write(&*store, move |tx| {
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &binder,
+            NewPrincipalBinding {
+                actor: ActorId(id("unowned-force-worker")),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: Some(devworks_core::protocol::ProjectId(id("project"))),
+                tool_families: None,
+                bound_by: binder.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    })
+    .unwrap();
+    let outsider =
+        outsider.with_lineage(agent.project_id().cloned(), agent.root_id().cloned(), None);
+    let mut unowned = force.clone();
+    unowned["requestKey"] = serde_json::json!("unowned-force-no-grant");
+    let denied = gateway
+        .command(
+            &outsider,
+            "git.push",
+            &serde_json::to_vec(&unowned).unwrap(),
+            service.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            denied,
+            CommandReply::Rejected {
+                code: devworks_core::protocol::Rejection::PermissionDenied,
+                ..
+            }
+        ),
+        "unowned Full force must require separate operation consent: {denied:?}"
+    );
     let cases = UseCases::new().with_git(service.clone());
     let approvals = Arc::new(
         ApprovalService::new(
