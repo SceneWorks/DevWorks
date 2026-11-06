@@ -13204,6 +13204,7 @@ pub struct CodeOverview {
     )]
     #[schemars(with = "CodeOverviewTotals", extend("x-since" = 3))]
     pub graph_totals: Option<CodeOverviewTotals>,
+    pub internal_modules: Rows<CodeModuleAnalysis>,
 }
 impl Check for CodeOverview {
     fn check(&self) -> Result<(), String> {
@@ -13213,6 +13214,7 @@ impl Check for CodeOverview {
         self.graph_coverage.check()?;
         self.unavailable_reason.check()?;
         self.graph_totals.check()?;
+        self.internal_modules.check()?;
         super::domain_rules::record(
             "CodeOverview",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -13231,6 +13233,7 @@ impl Revisioned for CodeOverview {
         if revision < 3 {
             self.graph_totals = None;
         }
+        self.internal_modules.retain_revision(revision);
     }
 }
 
@@ -13342,6 +13345,7 @@ pub struct CodeArchitecture {
     pub package_count: Counter,
     pub package_counts_by_ecosystem: Rows<CodeCount>,
     pub supertypes: Rows<CodeSupertype>,
+    pub internal_modules: Rows<CodeModuleAnalysis>,
 }
 impl Check for CodeArchitecture {
     fn check(&self) -> Result<(), String> {
@@ -13356,6 +13360,7 @@ impl Check for CodeArchitecture {
         self.package_count.check()?;
         self.package_counts_by_ecosystem.check()?;
         self.supertypes.check()?;
+        self.internal_modules.check()?;
         super::domain_rules::record(
             "CodeArchitecture",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -13375,6 +13380,7 @@ impl Revisioned for CodeArchitecture {
         self.inbound.retain_revision(revision);
         self.outbound.retain_revision(revision);
         self.packages.retain_revision(revision);
+        self.internal_modules.retain_revision(revision);
     }
 }
 
@@ -14430,6 +14436,411 @@ impl Check for CodeOverviewTotals {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeUnavailableRepository {
+    pub repository_id: Id,
+    pub reason: Label,
+}
+impl Check for CodeUnavailableRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "CodeUnavailableRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeReadCoverage {
+    pub coverage: Coverage,
+    pub unavailable_repositories: Rows<CodeUnavailableRepository>,
+}
+impl Check for CodeReadCoverage {
+    fn check(&self) -> Result<(), String> {
+        self.coverage.check()?;
+        self.unavailable_repositories.check()?;
+        super::domain_rules::record(
+            "CodeReadCoverage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodeReference {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub unit_key: GraphUnitKey,
+    pub node_id: Id,
+}
+impl Check for CodeNodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.unit_key.check()?;
+        self.node_id.check()?;
+        super::domain_rules::record(
+            "CodeNodeReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleIdentity {
+    pub repository_id: Id,
+    pub module_name: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNodeReference", extend("x-since" = 3))]
+    pub indexed_node: Option<CodeNodeReference>,
+}
+impl Check for CodeModuleIdentity {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.module_name.check()?;
+        self.indexed_node.check()?;
+        super::domain_rules::record(
+            "CodeModuleIdentity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleIdentity {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.indexed_node = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeModuleAnalysisState {
+    Recorded,
+    NotAnalyzed,
+    Unavailable,
+}
+impl Check for CodeModuleAnalysisState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleDrilldown {
+    pub node_kind: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub count: Option<Counter>,
+    pub nodes: Rows<CodeNodeReference>,
+    pub has_more: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 3))]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for CodeModuleDrilldown {
+    fn check(&self) -> Result<(), String> {
+        self.node_kind.check()?;
+        self.count.check()?;
+        self.nodes.check()?;
+        self.has_more.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "CodeModuleDrilldown",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleDrilldown {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.count = None;
+        }
+        if revision < 3 {
+            self.next_cursor = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleEndpoint {
+    pub route: Content,
+    pub http_method: Label,
+    pub description: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub request_model: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub response_model: Option<Content>,
+}
+impl Check for CodeModuleEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.route.check()?;
+        self.http_method.check()?;
+        self.description.check()?;
+        self.request_model.check()?;
+        self.response_model.check()?;
+        super::domain_rules::record(
+            "CodeModuleEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleEndpoint {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.request_model = None;
+        }
+        if revision < 3 {
+            self.response_model = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleService {
+    pub name: Content,
+    pub description: Content,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub interface_name: Option<Content>,
+    pub lifetime: Label,
+}
+impl Check for CodeModuleService {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.description.check()?;
+        self.interface_name.check()?;
+        self.lifetime.check()?;
+        super::domain_rules::record(
+            "CodeModuleService",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleService {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.interface_name = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleProgramTotals {
+    pub endpoint_count: Counter,
+    pub service_count: Counter,
+    pub table_count: Counter,
+}
+impl Check for CodeModuleProgramTotals {
+    fn check(&self) -> Result<(), String> {
+        self.endpoint_count.check()?;
+        self.service_count.check()?;
+        self.table_count.check()?;
+        super::domain_rules::record(
+            "CodeModuleProgramTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRecordedModuleAnalysis {
+    pub summary: Content,
+    pub confidence: Label,
+    pub endpoints: Rows<CodeModuleEndpoint>,
+    pub services: Rows<CodeModuleService>,
+    pub external_dependencies: Rows<Content>,
+    pub database_tables: Rows<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub model_used: Option<Content>,
+    pub updated_at_ms: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub source_hash: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub source_revision: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub source_view_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeModuleProgramTotals", extend("x-since" = 3))]
+    pub program_totals: Option<CodeModuleProgramTotals>,
+}
+impl Check for CodeRecordedModuleAnalysis {
+    fn check(&self) -> Result<(), String> {
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.endpoints.check()?;
+        self.services.check()?;
+        self.external_dependencies.check()?;
+        self.database_tables.check()?;
+        self.model_used.check()?;
+        self.updated_at_ms.check()?;
+        self.source_hash.check()?;
+        self.source_revision.check()?;
+        self.source_view_id.check()?;
+        self.program_totals.check()?;
+        super::domain_rules::record(
+            "CodeRecordedModuleAnalysis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeRecordedModuleAnalysis {
+    fn retain_revision(&mut self, revision: u32) {
+        self.endpoints.retain_revision(revision);
+        self.services.retain_revision(revision);
+        if revision < 3 {
+            self.model_used = None;
+        }
+        if revision < 3 {
+            self.source_hash = None;
+        }
+        if revision < 3 {
+            self.source_revision = None;
+        }
+        if revision < 3 {
+            self.source_view_id = None;
+        }
+        if revision < 3 {
+            self.program_totals = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeModuleAnalysis {
+    pub module: CodeModuleIdentity,
+    pub state: CodeModuleAnalysisState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub reason: Option<Label>,
+    pub observed_node_counts: Rows<CodeCount>,
+    pub observed_coverage: Coverage,
+    pub endpoints: CodeModuleDrilldown,
+    pub services: CodeModuleDrilldown,
+    pub tables: CodeModuleDrilldown,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeRecordedModuleAnalysis", extend("x-since" = 3))]
+    pub recorded: Option<CodeRecordedModuleAnalysis>,
+}
+impl Check for CodeModuleAnalysis {
+    fn check(&self) -> Result<(), String> {
+        self.module.check()?;
+        self.state.check()?;
+        self.reason.check()?;
+        self.observed_node_counts.check()?;
+        self.observed_coverage.check()?;
+        self.endpoints.check()?;
+        self.services.check()?;
+        self.tables.check()?;
+        self.recorded.check()?;
+        super::domain_rules::record(
+            "CodeModuleAnalysis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for CodeModuleAnalysis {
+    fn retain_revision(&mut self, revision: u32) {
+        self.module.retain_revision(revision);
+        if revision < 3 {
+            self.reason = None;
+        }
+        self.endpoints.retain_revision(revision);
+        self.services.retain_revision(revision);
+        self.tables.retain_revision(revision);
+        if revision < 3 {
+            self.recorded = None;
+        } else {
+            self.recorded.retain_revision(revision);
+        }
     }
 }
 
@@ -15521,7 +15932,7 @@ pub enum DomainQuery {
     #[serde(rename = "repositories.get")]
     RepositoriesGet { repository_id: Id },
     #[serde(rename = "repositories.nodes")]
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "views", "page"]}, {"required": ["kind", "repositoryId", "current", "page"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "views", "page"], "x-until": 3}, {"required": ["kind", "repositoryId", "views", "page", "scope"], "x-since": 3}, {"required": ["kind", "repositoryId", "current", "page", "scope"], "x-since": 3}]))]
     RepositoriesNodes {
         repository_id: Id,
         #[serde(
@@ -15553,6 +15964,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "Content", extend("x-since" = 3))]
         internal_module: Option<Content>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 3))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "repositories.readme")]
     RepositoriesReadme {
@@ -16784,6 +17202,7 @@ impl Check for DomainQuery {
                 page,
                 node_kind,
                 internal_module,
+                scope,
             } => {
                 repository_id.check()?;
                 views.check()?;
@@ -16791,6 +17210,7 @@ impl Check for DomainQuery {
                 page.check()?;
                 node_kind.check()?;
                 internal_module.check()?;
+                scope.check()?;
             }
             Self::RepositoriesReadme {
                 repository_id,
@@ -17138,6 +17558,7 @@ impl Revisioned for DomainQuery {
                 current,
                 node_kind,
                 internal_module,
+                scope,
                 ..
             } => {
                 if revision < 3 {
@@ -17148,6 +17569,9 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *internal_module = None;
+                }
+                if revision < 3 {
+                    *scope = None;
                 }
             }
             _ => {}
@@ -17160,6 +17584,9 @@ impl Revisioned for DomainQuery {
             }
             Self::ApprovalsReviewQueue { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
+            }
+            Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
+                Err("required current input member is absent: scope".into())
             }
             _ => Ok(()),
         }

@@ -470,6 +470,9 @@ fn decode_domain_body<T: DeserializeOwned + Serialize + Check + Revisioned + Clo
     let input: T =
         serde_json::from_value(body).map_err(|e| AdmissionError::Decode(e.to_string()))?;
     admit_revision(&input, revision)?;
+    input
+        .check_revision(revision.0)
+        .map_err(AdmissionError::Rule)?;
     input.check().map_err(AdmissionError::Rule)?;
     let normalized =
         serde_json::to_value(&input).map_err(|e| AdmissionError::Decode(e.to_string()))?;

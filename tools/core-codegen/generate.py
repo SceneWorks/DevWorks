@@ -138,7 +138,7 @@ def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None, strict=
     return '\n'.join(lines)
 
 
-def choice(fs, one, since):
+def choice(fs, one, since, required_since=None):
     """`oneOf` of an exactly-one member choice: each alternative lists the full required set (in
     field order) with that member; one introduced later carries its `x-since`, so an earlier
     revision's document folds back to the plain required list."""
@@ -146,6 +146,14 @@ def choice(fs, one, since):
     for m in one:
         req = [camel(n) for n, t in fs.items() if not t.startswith('?') or n == m]
         alts.append({'required': req, **({'x-since': since[m]} if m in since else {})})
+    if required_since:
+        expanded=[]
+        for alt in alts:
+            boundary=min(required_since.values())
+            if alt.get('x-since',1)<boundary:expanded.append({**alt,'x-until':boundary})
+            req=alt['required']+[camel(n) for n in required_since if camel(n) not in alt['required']]
+            expanded.append({**alt,'required':req,'x-since':max(boundary,alt.get('x-since',1))})
+        alts=expanded
     return f'#[schemars(extend("oneOf" = {json.dumps(alts)}))]\n'
 
 
@@ -228,6 +236,12 @@ def revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
     if not body:
         return f'impl Revisioned for {name} {{\n    fn retain_revision(&mut self, _: u32) {{}}\n}}'
     return '\n'.join([head, *body, '    }', '}'])
+
+
+def required_input_revision(implementation, required):
+    if not required:return implementation
+    rules=''.join(f'if revision>={rev} && self.{name}.is_none(){{return Err("required current input member is absent: {name}".into());}}' for name,rev in required.items())
+    return implementation[:-1]+f'    fn check_revision(&self,revision:u32)->Result<(),String>{{{rules}Ok(())}}\n}}'
 
 
 def checks(fs, base='self.', indent='        '):
@@ -514,10 +528,10 @@ def gen_family(fam, ops):
             since = {k: r for k, r in d.get('since', {}).items() if k in fs}
             one = d.get('exactlyOne', [])
             out += [f'/// `{o["operation"]}` {mode} input.',
-                    RECORD + (choice(fs, one, since) if one else '') + f'pub struct {ty} {{',
+                    RECORD + (choice(fs, one, since, d.get('requiredSince')) if one else '') + f'pub struct {ty} {{',
                     fields(fs, since=since, one=one, schema=d.get('fieldSchema'), strict=d.get('strictOptional',())), '}',
                     f'impl Check for {ty} {{', '    fn check(&self) -> Result<(), String> {', checks(fs),
-                    '        Ok(())', '    }', '}', revisioned(ty, fs, since, RC), '']
+                    '        Ok(())', '    }', '}', required_input_revision(revisioned(ty, fs, since, RC), d.get('requiredSince',{})), '']
     out += [f'/// An admitted input of the `{fam["family"]}` family, built only for the selected operation and mode.',
             '#[derive(Clone, Debug)]', 'pub enum Input {']
     for o in ops:
