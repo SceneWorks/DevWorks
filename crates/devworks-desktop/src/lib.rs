@@ -38,6 +38,7 @@ pub mod attachments;
 pub mod backend;
 pub mod chat;
 pub mod connections_screen;
+pub mod decision_ops;
 pub mod files;
 pub mod host;
 pub mod knowledge_screen;
