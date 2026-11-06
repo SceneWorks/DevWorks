@@ -1,8 +1,15 @@
 //! Versioned authored conventions: one scoped owner for native UI, agents and scheduled
 //! indexing. Convention data never grants authority or replaces explicit user instructions.
 pub(crate) mod access;
+pub(crate) use hierarchy::parent_path;
 pub mod indexing;
 pub mod model;
+mod hierarchy;
+mod commands;
+mod operation;
+mod passages;
+mod preparation;
+mod queries;
 
 use crate::ports::storage::ApplicationStore;
 use crate::ports::{Clock, IdSource};

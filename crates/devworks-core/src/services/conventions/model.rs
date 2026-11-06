@@ -126,3 +126,11 @@ pub fn resource(
 #[path = "manifest_writer.rs"]
 mod manifest_writer;
 pub use manifest_writer::{EditorConvention, EditorResource, EditorText, write_editor_manifest};
+
+/// The storage scope corresponding to the closed wire scope.
+pub(crate) fn scope_storage(scope: &DataScope) -> KnowledgeScope {
+    match scope {
+        DataScope::Workspace => KnowledgeScope::Workspace,
+        DataScope::Project { project_id } => KnowledgeScope::Project(project_id.clone()),
+    }
+}

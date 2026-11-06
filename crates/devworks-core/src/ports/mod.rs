@@ -96,6 +96,9 @@ pub enum IdKind {
     JobRun,
     /// Provider connections.
     Connection,
+    /// Authored convention identities and immutable attachment associations.
+    Convention,
+    ConventionResource,
     /// Persistent explicit embedding-space candidates.
     EmbeddingSpace,
     /// Secret-store credential handles (immutable; a replacement gets a new one).
