@@ -704,7 +704,7 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
     let filter = UsageAttemptFilter {
         project_id: q.project.clone(),
         start_ms: (!activity_view && !q.legacy_all_dates).then(|| q.start.max(0)),
-        end_ms: (!activity_view && !q.legacy_all_dates).then(|| q.end),
+        end_ms: (!activity_view && !q.legacy_all_dates).then_some(q.end),
         ..Default::default()
     };
     loop {
