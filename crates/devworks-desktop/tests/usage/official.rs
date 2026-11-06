@@ -10,11 +10,13 @@ use devworks_core::services::prices::CatalogPriceResolver;
 
 #[test]
 fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes() {
+    let _case = native_runtime_case();
     official_tariff_edit("OpenAiResponses", "https://api.openai.com/v1", "gpt-test");
 }
 
 #[test]
 fn native_openrouter_official_tariff_editor_saves_exact_selected_binding_and_quotes() {
+    let _case = native_runtime_case();
     official_tariff_edit(
         "OpenRouterChat",
         "https://openrouter.ai/api/v1",
