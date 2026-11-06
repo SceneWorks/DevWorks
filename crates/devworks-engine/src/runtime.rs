@@ -604,7 +604,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 git.clone(),
                 packages.as_ref().map(|p| p.service.clone()),
                 Some(jobs.clone()),
-            ),
+            )
+            .with_control(runs.service.clone()),
         )),
     );
     let use_cases = use_cases
@@ -684,6 +685,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             tokio::task::spawn_blocking(move || booting.boot())
                 .await
                 .unwrap_or_else(|_| Err(panicked("package boot")))
+                .map_err(BootError::Packages)
+                .map_err(failed)?;
+            let reviews = p.service.clone();
+            tokio::task::spawn_blocking(move || reviews.sync_pending_reviews())
+                .await
+                .unwrap_or_else(|_| Err(panicked("package review recovery")))
                 .map_err(BootError::Packages)
                 .map_err(failed)?;
             Some(host)
