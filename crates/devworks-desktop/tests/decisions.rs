@@ -319,9 +319,15 @@ fn durable_completion_cards_open_actual_work_and_separate_read_from_individual_a
     settle(&mut h);
     assert!(has_text(&h, "Earlier verified completion"));
     h.state_mut().on_exit();
+    let store = std::sync::Arc::downgrade(engine.host().runtime().store());
     drop(h);
     drop(b);
     drop(engine);
+    assert_eq!(
+        store.strong_count(),
+        0,
+        "completion review shutdown releases every store owner before immediate reopen"
+    );
     let again = start(&root);
     let mut h = harness(shell(&again, &root, Script::default()), 1800.0, 1400.0);
     settle(&mut h);
