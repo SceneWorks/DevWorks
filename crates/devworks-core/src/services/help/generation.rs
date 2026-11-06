@@ -309,9 +309,13 @@ impl HelpService {
                         .map(|_| ()),
                     Err(error) => Err(error),
                 };
-                if valid.is_err() {
-                    control.finish(Ok(()))?;
-                    document.topic.content_ref = None;
+                match valid {
+                    Ok(()) => {}
+                    Err(StorageError::ViewUnavailable) => {
+                        control.finish(Ok(()))?;
+                        document.topic.content_ref = None;
+                    }
+                    Err(error) => return control.finish(Err(error)),
                 }
             }
         }

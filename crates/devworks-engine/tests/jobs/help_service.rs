@@ -1253,3 +1253,6 @@ fn composed_capability_changes_remove_only_orphan_auto_topics_and_keep_authored_
         "published history remains immutable"
     );
 }
+
+#[path = "help_errors.rs"]
+mod error_classification;
