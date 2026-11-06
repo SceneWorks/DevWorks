@@ -4,6 +4,8 @@
 //! (killing its Git tree) while the run keeps its checkpoint for the next boot. Real SQLite, real
 //! Git repositories in temporary directories, the Tree-sitter parser; no network, no inference.
 mod common;
+#[path = "indexing/graph_source.rs"]
+mod graph_source;
 
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;

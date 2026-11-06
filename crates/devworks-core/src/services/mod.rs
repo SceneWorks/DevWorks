@@ -12,6 +12,7 @@ pub mod cursor;
 pub mod diagnostics;
 pub mod evals;
 pub mod git;
+pub mod graph;
 pub mod history;
 pub mod indexing;
 pub mod jobs;

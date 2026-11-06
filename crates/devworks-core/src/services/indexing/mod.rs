@@ -82,6 +82,7 @@ pub mod helper;
 pub(crate) mod linking;
 pub mod overlay;
 pub mod paths;
+pub(crate) mod source;
 pub mod status;
 pub mod views;
 pub mod worker;
