@@ -373,21 +373,32 @@ pub fn sources(
     collections: watch::Receiver<Option<CollectionPass>>,
     dispatcher: Dispatcher,
 ) {
+    // A consumer may itself reach DiagnosticService (Help reaches the package service).
+    // Owning the dispatcher here would make that health source a permanent service cycle.
+    let dispatcher = dispatcher.observer();
     service.register_source(Arc::new(move |_now: i64| {
         let pass = collections.borrow().clone();
-        vec![
-            boot_check(&report, booted_at_ms),
-            HealthCheck::new(
+        let queue = match dispatcher.metrics() {
+            Some((in_flight, passes)) => HealthCheck::new(
                 "queue.dispatcher",
                 HealthState::Healthy,
                 "The delivery dispatcher is running.",
             )
-            .metric(count("inFlight", dispatcher.in_flight()))
+            .metric(count("inFlight", in_flight))
             .metric(MetricReading::new(
                 "passes",
                 Some("count"),
-                Metric::Available(dispatcher.passes()),
+                Metric::Available(passes),
             )),
+            None => HealthCheck::new(
+                "queue.dispatcher",
+                HealthState::Unavailable,
+                "The delivery dispatcher has been released.",
+            ),
+        };
+        vec![
+            boot_check(&report, booted_at_ms),
+            queue,
             collection_check(pass.as_ref()),
         ]
     }));
