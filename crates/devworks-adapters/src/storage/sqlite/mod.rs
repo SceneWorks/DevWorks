@@ -80,6 +80,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use writer::{WriterConfig, WriterHandle};
@@ -138,19 +139,32 @@ struct ReadPool {
     wait: Duration,
 }
 impl ReadPool {
-    fn checkout(&self, cancel: Option<&Cancellation>) -> Result<Connection, StorageError> {
+    fn checkout(
+        &self,
+        cancel: Option<&Cancellation>,
+        operation_deadline: Option<Instant>,
+    ) -> Result<Connection, StorageError> {
         let deadline = Instant::now() + self.wait;
         let mut idle = self.idle.lock().unwrap_or_else(|p| p.into_inner());
         loop {
-            if cancel.is_some_and(Cancellation::is_cancelled) {
+            if cancel.is_some_and(Cancellation::is_cancelled)
+                || operation_deadline.is_some_and(|until| Instant::now() >= until)
+            {
                 return Err(StorageError::Cancelled);
             }
             if let Some(c) = idle.pop() {
                 return Ok(c);
             }
-            let left = deadline.saturating_duration_since(Instant::now());
+            let until = operation_deadline.map_or(deadline, |until| until.min(deadline));
+            let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(StorageError::Busy);
+                return Err(
+                    if operation_deadline.is_some_and(|until| Instant::now() >= until) {
+                        StorageError::Cancelled
+                    } else {
+                        StorageError::Busy
+                    },
+                );
             }
             // Wake at least every CANCEL_POLL so a cancelled caller stops waiting promptly.
             idle = self
@@ -176,9 +190,14 @@ struct ReadLease<'p> {
 }
 impl Drop for ReadLease<'_> {
     fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            if !conn.is_autocommit() {
-                let _ = conn.execute_batch("ROLLBACK");
+        if let Some(mut conn) = self.conn.take() {
+            // Remove callbacks before cleanup on success, error, cancellation AND panic. A
+            // connection whose hook or rollback cannot be cleared never re-enters the pool.
+            if conn.progress_handler(0, None::<fn() -> bool>).is_err() {
+                return;
+            }
+            if !conn.is_autocommit() && conn.execute_batch("ROLLBACK").is_err() {
+                return;
             }
             self.pool.checkin(conn);
         }
@@ -323,9 +342,16 @@ impl SqliteStore {
     }
 
     fn lease(&self, cancel: Option<&Cancellation>) -> Result<ReadLease<'_>, StorageError> {
+        self.lease_bounded(cancel, None)
+    }
+    fn lease_bounded(
+        &self,
+        cancel: Option<&Cancellation>,
+        deadline: Option<Instant>,
+    ) -> Result<ReadLease<'_>, StorageError> {
         Ok(ReadLease {
             pool: &self.readers,
-            conn: Some(self.readers.checkout(cancel)?),
+            conn: Some(self.readers.checkout(cancel, deadline)?),
         })
     }
 
@@ -445,26 +471,64 @@ impl ApplicationStore for SqliteStore {
         options: &ReadOptions,
         work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
     ) -> Result<(), StorageError> {
+        let now = self.clock.now_ms().get();
+        let monotonic = options.deadline_ms.and_then(|until| {
+            Instant::now().checked_add(Duration::from_millis(
+                until.saturating_sub(now).max(0) as u64
+            ))
+        });
         let expired = || {
             options
                 .cancellation
                 .as_ref()
                 .is_some_and(Cancellation::is_cancelled)
+                || monotonic.is_some_and(|until| Instant::now() >= until)
                 || options
                     .deadline_ms
-                    .is_some_and(|d| self.clock.now_ms().get() > d)
+                    .is_some_and(|until| self.clock.now_ms().get() >= until)
         };
         if expired() {
             return Err(StorageError::Cancelled);
         }
-        let lease = self.lease(options.cancellation.as_ref())?;
+        let mut lease = self.lease_bounded(options.cancellation.as_ref(), monotonic)?;
+        if expired() {
+            return Err(StorageError::Cancelled);
+        }
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let flag = interrupted.clone();
+        let cancel = options.cancellation.clone();
+        let clock = self.clock.clone();
+        let deadline = options.deadline_ms;
+        db(lease.conn.as_mut().expect("leased").progress_handler(
+            1000,
+            Some(move || {
+                let stop = cancel.as_ref().is_some_and(Cancellation::is_cancelled)
+                    || monotonic.is_some_and(|until| Instant::now() >= until)
+                    || deadline.is_some_and(|until| clock.now_ms().get() >= until);
+                if stop {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                stop
+            }),
+        ))?;
         let conn = lease.conn.as_ref().expect("leased");
-        db(conn.execute_batch("BEGIN DEFERRED"))?;
-        // The first read establishes the snapshot; everything in `work` sees exactly it.
-        let stamp = repos::stamp(conn)?;
-        let snapshot = repos::Snapshot { conn, stamp };
-        work(&snapshot)?;
-        db(conn.execute_batch("COMMIT"))
+        let result = (|| {
+            db(conn.execute_batch("BEGIN DEFERRED"))?;
+            // The first read establishes the snapshot; every statement shares this snapshot
+            // and the same VM progress bound. The lease unregisters before rollback/check-in.
+            let stamp = repos::stamp(conn)?;
+            let snapshot = repos::Snapshot { conn, stamp };
+            work(&snapshot)?;
+            if expired() {
+                return Err(StorageError::Cancelled);
+            }
+            db(conn.execute_batch("COMMIT"))
+        })();
+        if interrupted.load(Ordering::SeqCst) {
+            Err(StorageError::Cancelled)
+        } else {
+            result
+        }
     }
 }
 
