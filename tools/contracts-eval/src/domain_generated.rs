@@ -13152,6 +13152,13 @@ pub struct CodeOverviewRepository {
     #[schemars(with = "Label", extend("x-since" = 3))]
     pub framework: Option<Label>,
     pub foundational: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeSourceLocation", extend("x-since" = 3))]
+    pub readme_source: Option<CodeSourceLocation>,
 }
 impl Check for CodeOverviewRepository {
     fn check(&self) -> Result<(), String> {
@@ -13161,6 +13168,7 @@ impl Check for CodeOverviewRepository {
         self.language.check()?;
         self.framework.check()?;
         self.foundational.check()?;
+        self.readme_source.check()?;
         super::domain_rules::record(
             "CodeOverviewRepository",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -13179,6 +13187,11 @@ impl Revisioned for CodeOverviewRepository {
         }
         if revision < 3 {
             self.framework = None;
+        }
+        if revision < 3 {
+            self.readme_source = None;
+        } else {
+            self.readme_source.retain_revision(revision);
         }
     }
 }
