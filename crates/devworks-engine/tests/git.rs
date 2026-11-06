@@ -780,7 +780,13 @@ fn native_task_lifecycle_transport(
     );
     let committed_head = git(tree_path, &["rev-parse", "HEAD"]);
     let result = service.observe(&record);
-    assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
+    assert!(
+        matches!(result, EffectOutcome::Completed(_)),
+        "{result:?}\n{}",
+        push_state
+            .as_ref()
+            .map_or_else(String::new, |state| state.diagnostics())
+    );
     assert_eq!(
         git(tree_path, &["rev-parse", "HEAD"]),
         committed_head,
@@ -932,7 +938,13 @@ fn native_task_lifecycle_transport(
     };
     let record = read(&*store, |s| s.operations().operation(&operation)).unwrap();
     let result = service.execute(&record);
-    assert!(matches!(result, EffectOutcome::Completed(_)), "{result:?}");
+    assert!(
+        matches!(result, EffectOutcome::Completed(_)),
+        "{result:?}\n{}",
+        push_state
+            .as_ref()
+            .map_or_else(String::new, |state| state.diagnostics())
+    );
     assert_eq!(git(&remote, &["rev-parse", &current.branch]), new_head);
     assert_eq!(service.observe(&record), result);
     let stale = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"stale-push","command":{"kind":"Push","worktreeId":current.id,"remoteId":"origin","targetRef":current.branch,"expectedHead":current.head,"expectedRemote":{"format":"Sha1","hex":head},"mode":"Normal"}});
@@ -1305,6 +1317,8 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         Box<dyn devworks_core::ports::process::ProcessTree>,
         devworks_core::ports::process::ProcessError,
     > {
+        let fixture_spec = self.push.as_ref().map(|state| state.auth_spec(spec));
+        let spec = fixture_spec.as_ref().unwrap_or(spec);
         if let Some(state) = &self.push {
             state.before_spawn(spec);
             if state.refuse_postcondition(spec) {
@@ -1443,7 +1457,19 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         if let Some(state) = &self.2 {
             state.assert_recorded(&spec, false);
         }
-        self.0.run(ctx, spec, limits, stop)
+        let verb = spec.args.first().cloned().unwrap_or_default();
+        let flags = spec
+            .args
+            .iter()
+            .filter(|arg| matches!(arg.as_str(), "--symref" | "--refs" | "--get-url"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let result = self.0.run(ctx, spec, limits, stop);
+        if let Some(state) = &self.2 {
+            state.note_failure(&verb, &flags, &result);
+        }
+        result
     }
     fn run_difference(
         &self,
@@ -1479,9 +1505,21 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         }
         let commit = spec.args.first().is_some_and(|arg| arg == "commit");
         let directory = spec.cwd.clone();
-        let reply = self
+        let verb = spec.args.first().cloned().unwrap_or_default();
+        let flags = spec
+            .args
+            .iter()
+            .filter(|arg| matches!(arg.as_str(), "--symref" | "--refs" | "--get-url"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let result = self
             .0
-            .run_recorded(ctx, spec, limits, stop, operation, approved_hold)?;
+            .run_recorded(ctx, spec, limits, stop, operation, approved_hold);
+        if let Some(state) = &self.2 {
+            state.note_failure(&verb, &flags, &result);
+        }
+        let reply = result?;
         if commit {
             if let Some(case) = self.1 {
                 let path = directory.as_deref().unwrap();
