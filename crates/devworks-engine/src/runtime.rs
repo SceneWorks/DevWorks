@@ -333,6 +333,8 @@ pub struct Runtime {
     resources: Arc<ResourceService>,
     housekeeper: Arc<Housekeeper>,
     runs: Arc<RunSupervisor>,
+    usage: Arc<crate::usage::UsageRuntime>,
+    usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
     stage: std::sync::atomic::AtomicU8,
@@ -424,6 +426,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
+    let usage = crate::usage::UsageRuntime::new(
+        store.clone(),
+        runs.service.clone(),
+        use_cases.inference_router(),
+    );
+    let use_cases = use_cases.with_usage(Arc::new(
+        devworks_core::services::usage::UsageService::new(ids.clone(), clock.clone()),
+    ));
     for suite in &config.automatic_eval_suites {
         devworks_core::protocol::Check::check(suite)
             .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))?;
@@ -757,6 +767,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let housekeeping = tokio::spawn(async move { keeper.run(every).await });
     run_supervisor.set_dispatcher_wakeup(dispatcher.wakeup());
     let supervision = tokio::spawn(run_supervisor.clone().run(every));
+    let usage_task = tokio::spawn(usage.clone().run(Duration::from_secs(1)));
     diag::sources(
         &diagnostics,
         report.clone(),
@@ -814,6 +825,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         admission: admission.clone(),
         dispatcher: dispatcher.clone(),
         runs: run_supervisor.clone(),
+        usage: usage.clone(),
         collector: collector.clone(),
         diagnostics: diagnostics.clone(),
         keep_awake: keep_awake.clone(),
@@ -860,6 +872,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources,
         housekeeper,
         runs: run_supervisor,
+        usage,
+        usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
         admitter,
@@ -1006,6 +1020,11 @@ impl Runtime {
     fn enter(&self, stage: ShutdownStage) {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
+    /// Canonical native producers and bounded historical accounting over the same router.
+    pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
+        &self.usage
+    }
+
     /// Run supervision (activation claims, stops, recovery) over the composed control service.
     pub fn runs(&self) -> &Arc<RunSupervisor> {
         &self.runs
@@ -1202,6 +1221,7 @@ impl Runtime {
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
+        self.usage.stop();
         self.evals.stop();
         self.resumes.stop();
         if let Some(worker) = &self.prices {
@@ -1213,6 +1233,7 @@ impl Runtime {
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
         // readmission or let its outbox CAS write after shutdown has returned.
         self.resumes.drain().await;
+        self.usage.drain().await;
         if let Some(worker) = &self.prices {
             worker.drain().await;
         }
@@ -1260,6 +1281,7 @@ impl Runtime {
             &self.resuming,
             &self.pricing,
             &self.notifying,
+            &self.usage_task,
         ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
@@ -1321,6 +1343,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.usage.stop();
         if let Some(worker) = &self.prices {
             worker.stop();
         }
@@ -1458,6 +1481,7 @@ struct Admitter {
     admission: Arc<std::sync::RwLock<bool>>,
     dispatcher: Dispatcher,
     runs: Arc<RunSupervisor>,
+    usage: Arc<crate::usage::UsageRuntime>,
     collector: Arc<Collector>,
     diagnostics: Arc<DiagnosticService>,
     keep_awake: Arc<KeepAwake>,
@@ -1524,6 +1548,7 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            self.usage.notify();
             if operation.starts_with("router.")
                 && let Some(worker) = &self.prices
             {
