@@ -10,12 +10,25 @@ use devworks_core::services::prices::CatalogPriceResolver;
 
 #[test]
 fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes() {
-    let root = Root::new("usage-native-official-edit");
+    official_tariff_edit("OpenAiResponses", "https://api.openai.com/v1", "gpt-test");
+}
+
+#[test]
+fn native_openrouter_official_tariff_editor_saves_exact_selected_binding_and_quotes() {
+    official_tariff_edit(
+        "OpenRouterChat",
+        "https://openrouter.ai/api/v1",
+        "openai/gpt-test",
+    );
+}
+
+fn official_tariff_edit(profile: &str, endpoint: &str, upstream: &str) {
+    let root = Root::new(&format!("usage-native-official-edit-{profile}"));
     let mut config = config(&root.0);
     config.connection_tick = None;
     let engine = devworks_desktop::host::Engine::start(config).unwrap();
     let b = engine.backend();
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Official quote connection","profile":"OpenAiResponses","endpoint":"https://api.openai.com/v1"})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Official quote connection","profile":profile,"endpoint":endpoint})))).unwrap();
     let connection =
         ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
             .unwrap()
@@ -24,7 +37,7 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
             .find(|c| c.name.0 == "Official quote connection")
             .unwrap();
     let model = "native-official-edit-model";
-    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Official edit model","endpointProfile":"OpenAiResponses","connectionId":connection.id,"upstreamModelId":"gpt-test","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Official edit model","endpointProfile":profile,"connectionId":connection.id,"upstreamModelId":upstream,"enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
     let base = PublishedTariff {
         upstream_model_id: "gpt-test".into(),
         service_tier: "Standard".into(),
@@ -37,7 +50,7 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
         units: 1_000_000,
         amount_usd: "1".into(),
         region: None,
-        endpoint_profile: Some("OpenAiResponses".into()),
+        endpoint_profile: (profile != "OpenRouterChat").then(|| profile.into()),
     };
     let mut tariffs = vec![base.clone()];
     for (kind, amount, ttl) in [
@@ -57,6 +70,7 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
         unit: "Image".into(),
         units: 1,
         amount_usd: "3".into(),
+        endpoint_profile: Some("OpenAiResponses".into()),
         ..base.clone()
     });
     let expected = tariffs.clone();
@@ -111,9 +125,9 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
     .unwrap();
     let query = PriceQuery {
         catalog_model_id: Id::new(model).unwrap(),
-        provider_model_id: Some("gpt-test".into()),
+        provider_model_id: Some(upstream.into()),
         connection_id: connection.id,
-        endpoint_profile: "OpenAiResponses".into(),
+        endpoint_profile: profile.into(),
         access_mode: "ApiKey".into(),
         service_tier: None,
         input_tokens: Some(100),
@@ -156,23 +170,29 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
         .iter()
         .map(|t| t.tariff().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(
-        serde_json::to_value(&initial).unwrap(),
-        serde_json::to_value(
-            price_catalog(&*b, model)
-                .items
-                .0
-                .iter()
-                .filter(|e| matches!(e.origin, PriceOrigin::OfficialSnapshot)
+    let expected_initial = serde_json::to_value(
+        price_catalog(&*b, model)
+            .items
+            .0
+            .iter()
+            .filter(|e| {
+                matches!(e.origin, PriceOrigin::OfficialSnapshot)
                     && e.snapshot_id
                         .as_ref()
                         .is_some_and(|id| id.as_str() == "official-selected")
-                    && e.upstream_model_id.0 == "gpt-test")
-                .map(|e| e.tariff.clone())
-                .collect::<Vec<_>>()
-        )
-        .unwrap()
-    );
+                    && e.upstream_model_id.0 == "gpt-test"
+            })
+            .map(|e| {
+                let mut row = serde_json::to_value(&e.tariff).unwrap();
+                row["upstreamModelId"] = json!(upstream);
+                if row.get("endpointProfile").is_some() {
+                    row["endpointProfile"] = json!(profile);
+                }
+                row
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     let first = h
         .query_all_by_role_and_label(Role::TextInput, "Amount USD per rate")
         .next()
@@ -207,7 +227,12 @@ fn native_official_tariff_edit_preserves_selected_snapshot_dimensions_and_quotes
         })
         .collect::<Vec<_>>();
     assert_eq!(configured.len(), expected.len());
-    let mut expected_saved = serde_json::to_value(&initial).unwrap();
+    assert_eq!(
+        serde_json::to_value(&initial).unwrap(),
+        expected_initial,
+        "official drafts bind the actual selected upstream/profile while retaining every other dimension"
+    );
+    let mut expected_saved = expected_initial;
     expected_saved[0]["amountUsd"] = json!("1.75");
     assert_eq!(
         serde_json::to_value(configured.iter().map(|e| &e.tariff).collect::<Vec<_>>()).unwrap(),
