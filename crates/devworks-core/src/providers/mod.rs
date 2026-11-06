@@ -5,6 +5,7 @@ pub mod context;
 pub mod decode;
 pub mod encode;
 pub mod materialize;
+pub mod sse;
 use crate::protocol::provider::{EndpointProfile, NativeBinding, QualifiedId, SchemaRef};
 use crate::protocol::{AttemptId, Id};
 use serde::{Deserialize, Serialize};

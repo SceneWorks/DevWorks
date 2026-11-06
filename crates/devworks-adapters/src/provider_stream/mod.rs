@@ -1,9 +1,11 @@
 //! Provider HTTP streaming, independent of web-fetch egress permissions. Uses configured
 //! endpoints and credentials already authorized by core; never follows a redirect or retries.
 //!
-//! HTTP/1 parsing is bounded by locked Hyper 1.12 (417792 bytes / 100 headers). Reqwest
-//! exposes no smaller parser allocation knob: caller header limits are checked after parsing,
-//! before publishing the head. Body handoff is demand-driven, with one bounded native chunk.
+//! HTTP/1 uses locked Hyper 1.12's finite parser (100 headers, 417792-byte read-buffer
+//! target, with library allocation rounding). Reqwest exposes no smaller parser allocation
+//! knob: caller limits bound decoded headers after parsing, before publishing the head; they
+//! are not advertised as preallocation limits. Body handoff is demand-driven, with one
+//! bounded native chunk.
 use devworks_core::ports::{
     http::{HeaderValue, HttpRequest, Method},
     provider_http::{
@@ -27,7 +29,7 @@ use tokio::{
     sync::{Notify, mpsc as async_mpsc, oneshot},
 };
 
-pub mod sse;
+pub use devworks_core::providers::sse;
 const READ_SIZE: usize = 16 * 1024;
 const CANCEL_POLL: Duration = Duration::from_millis(10);
 fn error(phase: SendPhase, kind: TransportFailure) -> TransportError {
@@ -342,7 +344,7 @@ impl HttpStream for NativeStream {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
-                .unwrap_or_else(|| after(TransportFailure::Cancelled)));
+                .unwrap_or_else(|| after(TransportFailure::Protocol)));
         }
         let result = received.recv().unwrap_or_else(|_| {
             let _ = self.control.close();
@@ -352,7 +354,7 @@ impl HttpStream for NativeStream {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
-                .unwrap_or_else(|| after(TransportFailure::Cancelled)))
+                .unwrap_or_else(|| after(TransportFailure::Protocol)))
         });
         match result {
             Ok(bytes) => {
@@ -443,7 +445,7 @@ impl StreamingHttp for NativeStreamingHttp {
             }
             Err(_) => {
                 control.close()?;
-                Err(before(TransportFailure::Protocol))
+                Err(after(TransportFailure::Protocol))
             }
         }
     }
@@ -534,7 +536,14 @@ impl Transfer {
                 _ = control.cancelled(&read.cancellation) => Err(after(TransportFailure::Cancelled)),
                 _ = remaining() => Err(after(TransportFailure::Deadline)),
                 result = tokio::time::timeout(Duration::from_millis(limits.idle_timeout_ms), async {
-                    if pending.is_none() { pending = response.chunk().await.map_err(|e| classify(&e))?; }
+                    if pending.is_none() {
+                    loop {
+                        let chunk = response.chunk().await.map_err(|e| classify(&e))?;
+                        if chunk.as_ref().is_some_and(|chunk| chunk.is_empty()) { continue; }
+                        pending = chunk;
+                        break;
+                    }
+                }
                     match &mut pending {
                         None => Ok(Vec::new()),
                         Some(chunk) => {
@@ -561,6 +570,16 @@ impl Transfer {
 }
 fn classify(error: &reqwest::Error) -> TransportError {
     // Never format the error: it may contain the credential-bearing request URL.
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if cause
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_parse_too_large)
+        {
+            return after(TransportFailure::TooLarge);
+        }
+        source = cause.source();
+    }
     if error.is_connect() {
         before(TransportFailure::Unreachable)
     } else if error.is_timeout() {
@@ -586,3 +605,6 @@ fn selected(name: &str) -> bool {
             | "x-ratelimit-reset-tokens"
     )
 }
+
+#[cfg(test)]
+mod tests;
