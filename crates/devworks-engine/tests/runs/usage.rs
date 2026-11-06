@@ -1074,3 +1074,205 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
         host.stop(); host.drain().await;
     }));
 }
+
+#[test]
+fn settled_unknown_and_cancelled_producer_replay_never_reopens_the_same_admission() {
+    runtime().block_on(async {
+        struct TerminalSource {
+            opened: Arc<AtomicUsize>,
+            terminal: Option<devworks_core::services::usage::accounting::AttemptEnd>,
+        }
+        impl OwnedInferenceSource for TerminalSource {
+            fn start(&mut self, _: &StoredInferenceAttempt) -> Result<(), StorageError> {
+                self.opened.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            fn next(&mut self, _: &Cancellation) -> Result<Option<InferenceFrame>, StorageError> {
+                Ok(self.terminal.take().map(InferenceFrame::Terminal))
+            }
+            fn close(&mut self) -> Result<(), StorageError> {
+                Ok(())
+            }
+        }
+        use devworks_core::services::usage::accounting::AttemptEnd;
+        for end in [
+            Some(AttemptEnd::Completed),
+            Some(AttemptEnd::UnknownTail),
+            Some(AttemptEnd::Cancelled),
+            None,
+        ] {
+            let f = Fx::new();
+            let selected_router = router(&f);
+            let info = f.store.info();
+            let context = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+                info.host_actor,
+                PrincipalKind::Host,
+                id("replay-invocation"),
+                id("native-replay"),
+                devworks_core::protocol::Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            );
+            let logical = RequestAdmission {
+                request_id: id("replay-request"),
+                purpose: Purpose::Conversation,
+                session_id: None,
+                project_id: None,
+                root_id: None,
+                model_id: id("usage-model"),
+                connection_id: id("usage-connection"),
+                pin_id: None,
+                args_digest: "a".repeat(64),
+            };
+            let request = AttemptRequest {
+                admission_key: id("replay-admission"),
+                request_id: logical.request_id.clone(),
+                actor_id: context.principal().clone(),
+                work_id: None,
+                job_run_id: None,
+                role: "Host".into(),
+                query: PriceQuery {
+                    catalog_model_id: id("usage-model"),
+                    provider_model_id: Some("native-metadata-source".into()),
+                    connection_id: id("usage-connection"),
+                    endpoint_profile: "CompatibleChat".into(),
+                    access_mode: "host-derived".into(),
+                    service_tier: None,
+                    input_tokens: Some(10),
+                    cache_write_ttl_ms: None,
+                    processing_region: None,
+                    required_modalities: vec!["Text".into()],
+                },
+                quote: PriceQuote {
+                    classification: CostClassification::LocalFree,
+                    connection_revision: Some(1),
+                    snapshot_id: None,
+                    price_revision: None,
+                    override_revision: None,
+                    currency: "USD".into(),
+                    rates: None,
+                    tariffs: vec![],
+                    untracked_reason: None,
+                },
+                price_generation: 1,
+                override_revision: 1,
+                pricing: PricingContext {
+                    input_semantics: InputSemantics::Inclusive,
+                    cache_read_possible: false,
+                    cache_write_possible: false,
+                    cache_write_ttl_ms: None,
+                },
+                selection: AttemptSelection::Conversation {
+                    intent: RouteIntent::Model {
+                        model_id: id("usage-model"),
+                    },
+                    effort: EffortName::Default,
+                    required_capabilities: vec![],
+                    pin: None,
+                },
+                input_tokens: 10,
+                output_headroom: 10,
+                unit_headroom: vec![],
+                expected_context_epoch: None,
+                dispatch: None,
+                cache_diagnostics: vec![],
+            };
+            let owned = UsageRuntime::new(
+                f.store.clone(),
+                f.service.clone(),
+                Some(selected_router.clone()),
+            );
+            let opened = Arc::new(AtomicUsize::new(0));
+            if let Some(end) = end {
+                let result = owned
+                    .produce(
+                        context.clone(),
+                        logical.clone(),
+                        ReportCategory::Other,
+                        request.clone(),
+                        Box::new(TerminalSource {
+                            opened: opened.clone(),
+                            terminal: Some(end),
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                assert!(matches!(result, DriveOutcome::Settled(_)));
+            } else {
+                let host = devworks_core::services::usage::host::AttemptHost::new(
+                    f.store.clone(),
+                    f.service.clone(),
+                    selected_router,
+                );
+                let devworks_core::services::usage::accounting::Admission::Admitted {
+                    attempt, ..
+                } = host
+                    .admit(
+                        context.clone(),
+                        logical.clone(),
+                        ReportCategory::Other,
+                        request.clone(),
+                    )
+                    .unwrap()
+                else {
+                    panic!("not admitted")
+                };
+                let cancel = Cancellation::new();
+                cancel.cancel();
+                assert!(matches!(
+                    host.drive(
+                        attempt.attempt_id,
+                        Box::new(TerminalSource {
+                            opened: opened.clone(),
+                            terminal: None
+                        }),
+                        cancel
+                    )
+                    .unwrap(),
+                    DriveOutcome::CancelledBeforeDispatch
+                ));
+            }
+            let before = read(f.store.as_ref(), |s| {
+                let attempts =
+                    s.usage()
+                        .inference_attempts(&UsageAttemptFilter::default(), None, 64)?;
+                assert_eq!(attempts.len(), 1);
+                Ok((
+                    attempts[0].clone(),
+                    s.usage().attempt_balance(&attempts[0].attempt_id)?.unwrap(),
+                ))
+            });
+            let result = owned
+                .produce(
+                    context,
+                    logical,
+                    ReportCategory::Other,
+                    request,
+                    Box::new(TerminalSource {
+                        opened: opened.clone(),
+                        terminal: Some(AttemptEnd::Completed),
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(result, DriveOutcome::AlreadyDispatched),
+                "{result:?}"
+            );
+            assert_eq!(opened.load(Ordering::SeqCst), usize::from(end.is_some()));
+            let after = read(f.store.as_ref(), |s| {
+                let attempts =
+                    s.usage()
+                        .inference_attempts(&UsageAttemptFilter::default(), None, 64)?;
+                assert_eq!(attempts.len(), 1);
+                Ok((
+                    attempts[0].clone(),
+                    s.usage().attempt_balance(&attempts[0].attempt_id)?.unwrap(),
+                ))
+            });
+            assert_eq!(
+                before, after,
+                "same admission must preserve canonical attempt and balance"
+            );
+        }
+    });
+}
