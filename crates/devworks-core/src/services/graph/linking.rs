@@ -122,8 +122,8 @@ impl IndexRead for BoundedIndex<'_> {
 
 pub(super) fn link(
     read: &dyn IndexRead,
-    repository: &str,
-    layers: &[Id],
+    view: &crate::services::indexing::views::ViewLayers,
+    session: &mut crate::services::indexing::worker::ViewLinker,
     unit: &str,
     edges: Vec<StoredEdge>,
     budget: &mut Budget,
@@ -132,8 +132,12 @@ pub(super) fn link(
         read,
         budget: RefCell::new(budget),
     };
-    let result = crate::services::indexing::worker::link_view_edges(
-        &bounded, repository, layers, unit, edges,
+    let result = session.link(
+        &bounded,
+        view.view.repository_id.as_str(),
+        &view.layers,
+        unit,
+        edges,
     );
     match result {
         Err(StorageError::Busy) if bounded.budget.borrow().exhausted.is_some() => Ok(None),

@@ -232,19 +232,25 @@ pub(super) fn exact(
     Ok(layers)
 }
 
+pub(super) struct Resolved {
+    pub layers: Vec<views::ViewLayers>,
+    pub unavailable: Vec<(Id, &'static str)>,
+}
+
 pub(super) fn resolve(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     scope: &DataScope,
     selection: Option<&ViewSelection>,
     now_ms: i64,
-) -> Result<Vec<views::ViewLayers>, Failure> {
+) -> Result<Resolved, Failure> {
     if matches!(scope, DataScope::Workspace) && ctx.project_id().is_some() {
         return Err(
             Refusal::new(DomainErrorCode::PermissionDenied, "workspace_scope", None).into(),
         );
     }
     let mut out = Vec::new();
+    let mut missing = Vec::new();
     match selection {
         Some(ViewSelection::Exact { view_ids }) => {
             for id in view_ids {
@@ -311,24 +317,37 @@ pub(super) fn resolve(
                     include_deleted: false,
                 };
                 let mut after = None;
-                loop {
+                let mut last_selected: Option<Id> = None;
+                'repositories: loop {
                     let rows = read.projects().repositories(&filter, after.as_ref(), 256)?;
                     let more = rows.len() == 256;
                     for repo in &rows {
                         authorize(read, ctx, scope, &repo.id)?;
-                        let published = read
-                            .indexing()
-                            .published(&repo.id)?
-                            .ok_or_else(|| unavailable(Some(repo.id.clone())))?;
-                        out.push(exact(read, ctx, scope, &published.view_id, now_ms)?);
-                        if out.len() > 256 {
-                            return Err(Refusal::new(
-                                DomainErrorCode::InvalidArgument,
-                                "graph_repository_limit",
-                                None,
-                            )
-                            .into());
+                        if out.len() + missing.len() >= 256 {
+                            // Reserve one real member as the stable scope-limit witness rather
+                            // than inventing a repository ID or overflowing the pin's bound.
+                            let marker = last_selected.as_ref().expect("a full selected scope");
+                            out.retain(|v| &v.view.repository_id != marker);
+                            missing.retain(|(id, _)| id != marker);
+                            missing.push((marker.clone(), "ScopeEnumerationIncomplete"));
+                            break 'repositories;
                         }
+                        match read.indexing().published(&repo.id)? {
+                            None => missing.push((repo.id.clone(), "NotIndexedAtSelection")),
+                            Some(published) => {
+                                match exact(read, ctx, scope, &published.view_id, now_ms) {
+                                    Ok(view) => out.push(view),
+                                    Err(Failure::Refused(r))
+                                        if r.code == DomainErrorCode::ViewUnavailable =>
+                                    {
+                                        missing
+                                            .push((repo.id.clone(), "ViewUnavailableAtSelection"))
+                                    }
+                                    Err(error) => return Err(error),
+                                }
+                            }
+                        }
+                        last_selected = Some(repo.id.clone());
                     }
                     after = rows.last().map(|r| r.id.clone());
                     if !more {
@@ -363,7 +382,10 @@ pub(super) fn resolve(
             .as_str()
             .cmp(b.view.repository_id.as_str())
     });
-    Ok(out)
+    Ok(Resolved {
+        layers: out,
+        unavailable: missing,
+    })
 }
 
 /// The lease writer rechecks current authority and immutable view identity in its own unit.

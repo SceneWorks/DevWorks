@@ -10,7 +10,10 @@ pub(super) struct Module {
     name: String,
 }
 
-pub(super) struct Modules(Vec<Module>);
+pub(super) struct Modules {
+    entries: Vec<Module>,
+    complete: bool,
+}
 
 impl Modules {
     pub fn load(
@@ -49,7 +52,10 @@ impl Modules {
                 Ok(true)
             },
         )?;
-        Ok(Self(modules))
+        Ok(Self {
+            entries: modules,
+            complete: budget.exhausted.is_none(),
+        })
     }
 
     /// A tied directory with distinct project names is ambiguous, rather than dependent on
@@ -61,10 +67,13 @@ impl Modules {
         if node.node.kind == "Repository" {
             return (None, false);
         }
+        if !self.complete {
+            return (None, true);
+        }
         let path = node.node.unit_key.trim_start_matches('/').to_lowercase();
         let mut best: Option<&Module> = None;
         let mut ambiguous = false;
-        for module in &self.0 {
+        for module in &self.entries {
             if module.repository != node.repository_id.as_str()
                 || !(module.directory.is_empty()
                     || path == module.directory

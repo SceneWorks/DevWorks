@@ -1073,6 +1073,7 @@ impl IndexCoordinator {
                     rev(1),
                 )));
             }
+            tx.graph().invalidate_graph_pins_for_view(&v.view_id)?;
             worker::retire_view(tx, &v)?;
             return Ok(DomainDecision::Applied {
                 result: OperationResult::IndexingRetireView {

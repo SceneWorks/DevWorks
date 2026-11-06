@@ -63,6 +63,7 @@ pub(super) fn select(
                     Ok(pin) => {
                         let selected = (|| {
                             check_pin(&pin, ctx, data_scope, now)?;
+                            for missing in &pin.unavailable_repositories { scope::authorize(read, ctx, data_scope, &missing.repository_id)?; }
                             let mut layers = Vec::with_capacity(pin.scope.views.len());
                             for binding in &pin.scope.views {
                                 let view = scope::retained(read, ctx, data_scope, &pin, binding, now)?;
@@ -78,14 +79,16 @@ pub(super) fn select(
                     Err(e) => Err(e),
                 }
             }
-            _ => scope::resolve(read, ctx, data_scope, requested, now).and_then(|layers| {
+            _ => scope::resolve(read, ctx, data_scope, requested, now).and_then(|resolved| {
+                let layers = resolved.layers;
+                let unavailable_repositories = resolved.unavailable.into_iter().map(|(repository_id,reason)|GraphUnavailableRepository { repository_id,reason:reason.to_owned() }).collect::<Vec<_>>();
                 let witnesses = layers.iter().map(|v| scope::witness(read, &v.view)).collect::<Result<Vec<_>, _>>()?;
                 let expires = witnesses.iter().filter_map(|w| w.expires_at_ms).fold(now.saturating_add(GRAPH_PIN_TTL_MS), i64::min);
                 let graph_scope = GraphScope { views: layers.iter().map(|v| GraphViewBinding { repository_id: v.view.repository_id.clone(), view_id: v.view.view_id.clone(), view_digest: v.view.view_digest.clone() }).collect() };
                 let namespace = owner(ctx);
                 let scope_hash = scope_digest(data_scope);
-                let intent_digest = sha256_hex(json!({"owner":namespace,"store":ctx.store_id(),"restore":ctx.restore_epoch(),"allowedScope":scope_hash,"views":graph_scope,"witnesses":witnesses}).to_string().as_bytes());
-                Ok(Selected { pin: StoredGraphReadPin { id:ids.next_id(IdKind::Lease),owner_namespace:namespace,store_id:ctx.store_id().clone(),restore_epoch:ctx.restore_epoch().get(),scope_digest:scope_hash,intent_digest,scope:graph_scope,revision:1,created_at_ms:now,expires_at_ms:expires,view_witnesses:witnesses }, layers })
+                let intent_digest = sha256_hex(json!({"owner":namespace,"store":ctx.store_id(),"restore":ctx.restore_epoch(),"allowedScope":scope_hash,"views":graph_scope,"witnesses":witnesses,"unavailableRepositories":unavailable_repositories}).to_string().as_bytes());
+                Ok(Selected { pin: StoredGraphReadPin { id:ids.next_id(IdKind::Lease),owner_namespace:namespace,store_id:ctx.store_id().clone(),restore_epoch:ctx.restore_epoch().get(),scope_digest:scope_hash,intent_digest,scope:graph_scope,revision:1,created_at_ms:now,expires_at_ms:expires,view_witnesses:witnesses,unavailable_repositories }, layers })
             }),
         })
     })??;
@@ -99,7 +102,12 @@ pub(super) fn select(
     let renew = matches!(requested, Some(ViewSelection::Pinned { .. }));
     let selected = run_write(&**store, WriteOptions::default(), move |tx| {
         if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
-            return Err(StorageError::ScopeDenied);
+            return Ok(Err(crate::services::sessions::Refusal::new(
+                crate::protocol::DomainErrorCode::PermissionDenied,
+                "graph_scope",
+                None,
+            )
+            .into()));
         }
         if let Err(error) = scope::validate_in(
             tx,
@@ -111,8 +119,41 @@ pub(super) fn select(
         ) {
             return Ok(Err(error));
         }
+        for missing in &found.pin.unavailable_repositories {
+            if let Err(error) = crate::services::projects::visible_repository(
+                tx.projects(),
+                &context,
+                &missing.repository_id,
+            ) {
+                return Ok(Err(error));
+            }
+            if let DataScope::Project { project_id } = &data_scope
+                && !tx
+                    .projects()
+                    .members(project_id)?
+                    .contains(&missing.repository_id)
+            {
+                return Ok(Err(crate::services::sessions::Refusal::new(
+                    crate::protocol::DomainErrorCode::PermissionDenied,
+                    "graph_scope",
+                    None,
+                )
+                .into()));
+            }
+        }
         let mut selected = found;
         if renew {
+            // Concurrent detail/source reads may renew the same immutable lease. Refresh
+            // only its lifecycle CAS; owner, scope, views and witnesses cannot change.
+            let Some(current) = tx.graph().graph_pin(&selected.pin.id)? else {
+                return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
+            };
+            if current.intent_digest != selected.pin.intent_digest {
+                return Ok(Err(scope::unavailable(Some(selected.pin.id.clone()))));
+            }
+            if let Err(error) = check_pin(&current, &context, &data_scope, tx.now_ms()) {
+                return Ok(Err(error));
+            }
             let expiry = selected
                 .pin
                 .view_witnesses
@@ -122,7 +163,7 @@ pub(super) fn select(
             selected.pin = tx.graph().renew_graph_pin(
                 &selected.pin.id,
                 &selected.pin.owner_namespace,
-                selected.pin.revision,
+                current.revision,
                 expiry,
             )?;
         } else {
