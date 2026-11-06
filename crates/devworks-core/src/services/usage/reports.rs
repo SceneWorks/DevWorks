@@ -113,6 +113,7 @@ impl Fact {
 }
 struct Query {
     context: UsageQueryContext,
+    legacy_all_dates: bool,
     start: i64,
     end: i64,
     interval: Interval,
@@ -130,39 +131,49 @@ impl Query {
         i: &UsageInput,
         now: i64,
         resolved: Option<(i64, i64)>,
+        legacy_all_dates: bool,
     ) -> SResult<Self> {
         if ctx.store_id() != &read.stamp().store_id
             || ctx.restore_epoch().get() != read.stamp().restore_epoch
         {
             return Err(StorageError::ScopeDenied.into());
         }
-        let kind = i.report_kind.clone().unwrap_or(UsageReportKind::Attempts);
-        let parse_time = |v: &crate::protocol::support::SignedCounter| {
-            v.0.parse::<i64>().map_err(|_| invalid("usage_range"))
+        let kind = if legacy_all_dates {
+            UsageReportKind::Attempts
+        } else {
+            i.report_kind.clone().unwrap_or(UsageReportKind::Attempts)
         };
-        let end = i
-            .end_ms
-            .as_ref()
-            .map(parse_time)
-            .transpose()?
-            .or(resolved.map(|r| r.1))
-            .unwrap_or(now);
-        calendar::valid_source_date(end)?;
-        let default_start = end
-            .checked_sub(30 * DAY)
-            .ok_or_else(|| invalid("usage_range"))?;
-        let start = i
-            .start_ms
-            .as_ref()
-            .map(parse_time)
-            .transpose()?
-            .or(resolved.map(|r| r.0))
-            .unwrap_or(default_start);
-        calendar::valid_source_date(start)?;
-        if start >= end || end.checked_sub(start).is_none() {
-            return Err(invalid("usage_range"));
-        }
-        let interval = Interval::parse(i.interval.as_ref().map(|s| s.0.as_str()), start, end)?;
+        let (start, end, interval) = if legacy_all_dates {
+            (0, i64::MAX, Interval::Day)
+        } else {
+            let parse_time = |v: &crate::protocol::support::SignedCounter| {
+                v.0.parse::<i64>().map_err(|_| invalid("usage_range"))
+            };
+            let end = i
+                .end_ms
+                .as_ref()
+                .map(parse_time)
+                .transpose()?
+                .or(resolved.map(|r| r.1))
+                .unwrap_or(now);
+            calendar::valid_source_date(end)?;
+            let default_start = end
+                .checked_sub(30 * DAY)
+                .ok_or_else(|| invalid("usage_range"))?;
+            let start = i
+                .start_ms
+                .as_ref()
+                .map(parse_time)
+                .transpose()?
+                .or(resolved.map(|r| r.0))
+                .unwrap_or(default_start);
+            calendar::valid_source_date(start)?;
+            if start >= end || end.checked_sub(start).is_none() {
+                return Err(invalid("usage_range"));
+            }
+            let interval = Interval::parse(i.interval.as_ref().map(|s| s.0.as_str()), start, end)?;
+            (start, end, interval)
+        };
         let mut project = ctx.project_id().cloned();
         fn constrain(
             project: &mut Option<crate::protocol::ProjectId>,
@@ -266,6 +277,7 @@ impl Query {
         };
         Ok(Self {
             context,
+            legacy_all_dates,
             start,
             end,
             interval,
@@ -284,7 +296,7 @@ impl Query {
         })
     }
     fn in_range(&self, time: i64) -> bool {
-        time >= self.start && time < self.end
+        self.legacy_all_dates || time >= self.start && time < self.end
     }
     fn matches(&self, f: &Fact) -> bool {
         let a = &self.context.applied_filters;
@@ -424,8 +436,18 @@ fn cost(
     complete: bool,
     incomplete: bool,
     quote: Option<&crate::ports::usage::PriceQuote>,
-    reported: Option<&accounting::ReportedCost>,
+    current: Option<&accounting::BalanceSummary>,
 ) -> Value {
+    let reported = current.and_then(|s| s.reported_cost.as_ref());
+    let reason = if complete {
+        None
+    } else {
+        current
+            .filter(|s| !s.unknown_components.is_empty())
+            .map(|s| s.unknown_components.join(", "))
+            .or_else(|| quote.and_then(|q| q.untracked_reason.clone()))
+            .or_else(|| Some("Usage observation is not available or complete".into()))
+    };
     let (kind, origin) = match classification {
         "ReportedCharge" => ("Reported", "ProviderReported"),
         "ConfiguredEstimate" => ("Estimated", "UserConfigured"),
@@ -434,7 +456,7 @@ fn cost(
         "Untracked" => ("Untracked", "Untracked"),
         _ => ("Unknown", "Untracked"),
     };
-    json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":classification,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification=="SubscriptionApiEquivalent","incomplete":incomplete,"untrackedReason":quote.and_then(|q|q.untracked_reason.as_ref()),"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
+    json!({"priceKind":kind,"priceOrigin":origin,"amountMicroUsd":optional(amount),"currency":reported.map(|r|r.currency.as_str()).or(quote.map(|q|q.currency.as_str())),"originalAmount":reported.map(|r|r.amount.as_str()),"classification":classification,"priceSnapshotId":quote.and_then(|q|q.snapshot_id.as_ref()),"priceRevision":optional(quote.and_then(|q|q.price_revision)),"overrideRevision":optional(quote.and_then(|q|q.override_revision)),"subscriptionEquivalent":classification=="SubscriptionApiEquivalent","incomplete":incomplete,"untrackedReason":reason,"tariffs":quote.map(|q|q.tariffs.iter().map(tariff_json).collect::<Vec<_>>()).unwrap_or_default(),"monetaryComplete":complete})
 }
 fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) -> SResult<Fact> {
     let admitted = accounting::snapshot(&a)?;
@@ -496,7 +518,7 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
         b.is_some_and(|b| b.monetary_complete),
         b.is_none_or(|b| b.incomplete),
         Some(&admitted.quote),
-        summary.reported_cost.as_ref(),
+        Some(&summary),
     );
     let mut diagnostics = admitted.cache_diagnostics.clone();
     if cache_read_cost.is_some() || cache_write_cost.is_some() {
@@ -681,8 +703,8 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
     );
     let filter = UsageAttemptFilter {
         project_id: q.project.clone(),
-        start_ms: (!activity_view).then(|| q.start.max(0)),
-        end_ms: (!activity_view).then(|| q.end),
+        start_ms: (!activity_view && !q.legacy_all_dates).then(|| q.start.max(0)),
+        end_ms: (!activity_view && !q.legacy_all_dates).then(|| q.end),
         ..Default::default()
     };
     loop {
@@ -719,8 +741,8 @@ fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<F
     let mut after = None;
     let filter = UsageOriginFilter {
         project_id: q.project.clone(),
-        start_ms: Some(q.start.max(0)),
-        end_ms: Some(q.end),
+        start_ms: (!q.legacy_all_dates).then(|| q.start.max(0)),
+        end_ms: (!q.legacy_all_dates).then_some(q.end),
         ..Default::default()
     };
     loop {
@@ -851,7 +873,16 @@ fn page<T: Clone + Serialize>(
     let binding = CursorBinding::new(
         ctx,
         "router.usage",
-        &[&context, &source, &i.page.limit.get().to_string()],
+        &[
+            &context,
+            &source,
+            &i.page.limit.get().to_string(),
+            if q.legacy_all_dates {
+                "legacy-all-dates"
+            } else {
+                "current-date-range"
+            },
+        ],
         q.context.read_revision.get(),
     );
     let start = i
@@ -905,11 +936,12 @@ fn page<T: Clone + Serialize>(
     ))
 }
 /// Query handler projection; the owner registers this through the ordinary authenticated gateway.
-pub fn query(
+fn query_with_mode(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &UsageInput,
     now_ms: i64,
+    legacy_all_dates: bool,
 ) -> SResult<UsageQueryResult> {
     let resolved = input
         .page
@@ -917,7 +949,7 @@ pub fn query(
         .as_ref()
         .map(|c| cursor_range(&c.0).map(|(start, end, _)| (start, end)))
         .transpose()?;
-    let q = Query::new(read, ctx, input, now_ms, resolved)?;
+    let q = Query::new(read, ctx, input, now_ms, resolved, legacy_all_dates)?;
     let mut gaps = Gaps::default();
     let facts = collect(read, &q, &mut gaps)?;
     if !matches!(q.kind, UsageReportKind::McpUsage)
@@ -1026,4 +1058,25 @@ pub fn query(
             })
         }
     }
+}
+
+/// Current retained AdminReports query, including signed DateTime-compatible ranges.
+pub fn query(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &UsageInput,
+    now_ms: i64,
+) -> SResult<UsageQueryResult> {
+    query_with_mode(read, ctx, input, now_ms, false)
+}
+/// The legacy native shape had no date range. This private service path selects every stored
+/// timestamp (including i64::MAX), while sharing scope, meters, totals, cursor and byte bounds.
+/// It forces Attempts, so no public calendar range or aggregate bucket walk is bypassed.
+pub(crate) fn query_legacy_attempts(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &UsageInput,
+    now_ms: i64,
+) -> SResult<UsageQueryResult> {
+    query_with_mode(read, ctx, input, now_ms, true)
 }
