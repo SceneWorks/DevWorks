@@ -576,3 +576,6 @@ mod cancellation;
 
 #[path = "help_service.rs"]
 mod service;
+
+#[path = "conventions_native.rs"]
+mod conventions;

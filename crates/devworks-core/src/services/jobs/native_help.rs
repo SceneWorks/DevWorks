@@ -126,7 +126,7 @@ pub(super) fn invocation(
             .clone()
             .map_or(KnowledgeScope::Workspace, KnowledgeScope::Project);
         let current = tx.conventions().convention_scope_revision(&stored)?;
-        json!({"allScope":scope,"expectedRevision":current})
+        json!({"allScope":scope,"expectedRevision":Revision::new(current).map_err(|_| invalid())?})
     } else {
         return Err(invalid());
     };
