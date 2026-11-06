@@ -869,6 +869,36 @@ pub enum QueryCompletion {
     Deadline,
     Cancelled,
 }
+/// Graph-only completion; retrieval keeps its existing five-value contract.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphCompletion {
+    Complete,
+    ResultLimit,
+    WorkLimit,
+    Deadline,
+    Cancelled,
+    Partial,
+}
+impl schemars::JsonSchema for GraphCompletion {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GraphCompletion".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"x-earlier":{"name":"QueryCompletion","before":3},"oneOf":[{"type":"string","enum":["Complete","ResultLimit","WorkLimit","Deadline","Cancelled"]},{"type":"string","const":"Partial","x-since":3}]})
+    }
+}
+impl From<QueryCompletion> for GraphCompletion {
+    fn from(value: QueryCompletion) -> Self {
+        match value {
+            QueryCompletion::Complete => Self::Complete,
+            QueryCompletion::ResultLimit => Self::ResultLimit,
+            QueryCompletion::WorkLimit => Self::WorkLimit,
+            QueryCompletion::Deadline => Self::Deadline,
+            QueryCompletion::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Passage {
@@ -1793,7 +1823,7 @@ pub enum GraphResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"oneOf": [{"properties": {"kind": {"const": "ScopeDetails"}, "value": {"required": ["unavailableReason"]}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "SchemaDetails"}, "value": {"required": ["unavailableReason"], "properties": {"origin": {"const": "Declared"}}}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "RepositoryOverview"}, "value": {"required": ["unavailableReason"], "properties": {"graphCoverage": {"properties": {"state": {"const": "Unavailable"}}}, "dependencies": {"maxItems": 0}}, "not": {"required": ["graphTotals"]}}}, "required": ["kind", "value"]}]}}, "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"], "x-until": 3}, {"required": ["protocol", "queryId", "view", "completion", "result", "scopeCoverage"], "x-since": 3}, {"required": ["protocol", "queryId", "completion", "result", "scopeCoverage"], "not": {"required": ["view"]}, "properties": {"result": {"oneOf": [{"properties": {"kind": {"const": "ScopeDetails"}, "value": {"required": ["unavailableReason"]}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "SchemaDetails"}, "value": {"required": ["unavailableReason"], "properties": {"origin": {"const": "Declared"}}}}, "required": ["kind", "value"]}, {"properties": {"kind": {"const": "RepositoryOverview"}, "value": {"required": ["unavailableReason"], "properties": {"graphCoverage": {"properties": {"state": {"const": "Unavailable"}}}, "dependencies": {"maxItems": 0}, "internalModules": {"maxItems": 0}}, "not": {"required": ["graphTotals"]}}}, "required": ["kind", "value"]}]}}, "x-since": 3}]))]
 pub struct GraphPage {
     pub protocol: Protocol,
     pub query_id: QueryId,
@@ -1805,8 +1835,15 @@ pub struct GraphPage {
     #[schemars(with = "ResolvedViewSet")]
     pub view: Option<ResolvedViewSet>,
 
-    pub completion: QueryCompletion,
+    pub completion: GraphCompletion,
     pub result: GraphResult,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::support::gated_member"
+    )]
+    #[schemars(with="CodeReadCoverage",extend("x-since"=3))]
+    pub scope_coverage: Option<CodeReadCoverage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
@@ -1825,6 +1862,7 @@ impl GraphPage {
                     matches!(value.graph_coverage.state, CoverageState::Unavailable)
                         && value.unavailable_reason.is_some()
                         && value.dependencies.0.is_empty()
+                        && value.internal_modules.0.is_empty()
                         && value.graph_totals.is_none()
                 }
                 _ => false,
@@ -1935,6 +1973,33 @@ impl Revisioned for GraphReadRequest {
 }
 impl GraphPage {
     fn validate_current(&self) -> Result<(), &'static str> {
+        let current = !matches!(
+            &self.result,
+            GraphResult::Nodes { .. }
+                | GraphResult::Graph { .. }
+                | GraphResult::Source { .. }
+                | GraphResult::Schema { .. }
+                | GraphResult::ScopeStatus { .. }
+        );
+        if current {
+            let coverage = self
+                .scope_coverage
+                .as_ref()
+                .ok_or("current graph result requires explicit scope coverage")?;
+            coverage
+                .check()
+                .map_err(|_| "invalid graph scope coverage")?;
+            if matches!(self.completion, GraphCompletion::Partial)
+                && !matches!(coverage.coverage.state, CoverageState::Partial)
+            {
+                return Err("partial completion requires actual partial scope coverage");
+            }
+            if matches!(coverage.coverage.state, CoverageState::Partial)
+                && matches!(self.completion, GraphCompletion::Complete)
+            {
+                return Err("incomplete graph scope cannot claim complete results");
+            }
+        }
         let checked = match &self.result {
             GraphResult::CodeSearch { value } => value.check(),
             GraphResult::CodeNodes { value } => value.check(),
@@ -1994,6 +2059,15 @@ impl GraphPage {
             GraphResult::SourceText { value } => self.current_source(&value.source)?,
             _ => {}
         }
+        match &self.result {
+            GraphResult::Architecture { value } => {
+                self.validate_modules(&value.internal_modules.0)?
+            }
+            GraphResult::RepositoryOverview { value } => {
+                self.validate_modules(&value.internal_modules.0)?
+            }
+            _ => {}
+        }
         let mut identities = std::collections::HashMap::new();
         for node in nodes {
             let Some(view) = &self.view else {
@@ -2036,6 +2110,37 @@ impl GraphPage {
             .is_some_and(|s| s.is_empty() || s.len() > 4096)
         {
             return Err("invalid graph continuation");
+        }
+        Ok(())
+    }
+    fn validate_modules(&self, modules: &[CodeModuleAnalysis]) -> Result<(), &'static str> {
+        for module in modules {
+            let Some(view) = &self.view else {
+                return Err("module facts require actual scoped views");
+            };
+            if !view
+                .views
+                .iter()
+                .any(|v| v.snapshot.repository_id == module.module.repository_id)
+            {
+                return Err("module outside graph scope");
+            }
+            let refs = module
+                .module
+                .indexed_node
+                .iter()
+                .chain(module.endpoints.nodes.0.iter())
+                .chain(module.services.nodes.0.iter())
+                .chain(module.tables.nodes.0.iter());
+            for node in refs {
+                if node.repository_id != module.module.repository_id
+                    || !view.views.iter().any(|v| {
+                        v.view_id == node.view_id && v.snapshot.repository_id == node.repository_id
+                    })
+                {
+                    return Err("module drilldown outside graph scope");
+                }
+            }
         }
         Ok(())
     }
@@ -2087,6 +2192,15 @@ impl Revisioned for GraphPage {
         if revision >= 3 || self.view.is_none() {
             return;
         }
+        if matches!(self.completion, GraphCompletion::Partial)
+            || self
+                .scope_coverage
+                .as_ref()
+                .is_some_and(|v| !matches!(v.coverage.state, CoverageState::Complete))
+        {
+            return;
+        }
+        self.scope_coverage = None;
         let projected = match &self.result {
             GraphResult::CodeNodes { value } => {
                 legacy_nodes(&value.nodes.0).map(|nodes| GraphResult::Nodes { nodes })
@@ -2154,6 +2268,13 @@ impl Revisioned for GraphPage {
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 3 && matches!(self.completion, GraphCompletion::Partial) {
+            return Err("legacy graph completion cannot represent missing-index scope".into());
+        }
+        if revision >= 3 && self.scope_coverage.is_none() {
+            return Err("qualified graph output requires scope coverage".into());
+        }
+
         if revision < 3 && self.view.is_none() {
             return Err("legacy graph results require a real resolved view".into());
         }

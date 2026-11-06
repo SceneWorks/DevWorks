@@ -58,7 +58,7 @@ impl Revisioned for GetInput {
 /// `repositories.nodes` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["repositoryId", "views", "page"]}, {"required": ["repositoryId", "current", "page"], "x-since": 3}]))]
+#[schemars(extend("oneOf" = [{"required": ["repositoryId", "views", "page"], "x-until": 3}, {"required": ["repositoryId", "views", "page", "scope"], "x-since": 3}, {"required": ["repositoryId", "current", "page", "scope"], "x-since": 3}]))]
 pub struct NodesInput {
     pub repository_id: Id,
     #[serde(
@@ -90,6 +90,13 @@ pub struct NodesInput {
     )]
     #[schemars(with = "Content", extend("x-since" = 3))]
     pub internal_module: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 3))]
+    pub scope: Option<DataScope>,
 }
 impl Check for NodesInput {
     fn check(&self) -> Result<(), String> {
@@ -99,6 +106,7 @@ impl Check for NodesInput {
         self.page.check()?;
         self.node_kind.check()?;
         self.internal_module.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
@@ -113,6 +121,15 @@ impl Revisioned for NodesInput {
         if revision < 3 {
             self.internal_module = None;
         }
+        if revision < 3 {
+            self.scope = None;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision >= 3 && self.scope.is_none() {
+            return Err("required current input member is absent: scope".into());
+        }
+        Ok(())
     }
 }
 

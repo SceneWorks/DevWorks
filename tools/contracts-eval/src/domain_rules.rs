@@ -51,6 +51,27 @@ fn code_record(name:&str,v:&Value)->Result<(),String>{
     if matches!(name,"CodeNode"|"CodeSourceLocation"|"CodeEdge") {
         for key in ["unitKey","sourceUnitKey","targetUnitKey","producingUnit"] {if let Some(unit)=v[key].as_str(){require(!unit.contains('\\'),"graph unit keys use canonical separators")?;}}
     }
+
+    if name=="CodeReadCoverage" {
+        let missing=v["unavailableRepositories"].as_array().ok_or("missing repository coverage rows")?;
+        let gaps=v["coverage"]["gaps"].as_array().ok_or("missing graph coverage gaps")?;
+        let mut ids=std::collections::HashSet::new();require(missing.iter().all(|r|ids.insert(r["repositoryId"].as_str())),"duplicate unavailable repository")?;
+        if v["coverage"]["state"]=="Complete"{require(missing.is_empty()&&gaps.is_empty()&&v["coverage"]["moreGaps"]==false,"complete graph scope cannot hide missing repositories")?;}
+        if v["coverage"]["state"]=="Partial"{require(!missing.is_empty()||!gaps.is_empty()||v["coverage"]["moreGaps"]==true,"partial graph scope needs explicit omissions")?;}
+    }
+    if name=="CodeModuleIdentity"{require(v["moduleName"].as_str().is_some_and(|s|!s.trim().is_empty()),"module identity requires its actual name")?;}
+    if name=="CodeModuleDrilldown"{
+        require(v["hasMore"]==present(v,"nextCursor"),"module drilldown continuation mismatch")?;
+        if let Some(total)=number("count"){require(v["nodes"].as_array().is_some_and(|rows|rows.len()as u64<=total),"module rows exceed observed count")?;}
+    }
+    if name=="CodeModuleAnalysis"{
+        require((v["state"]=="Recorded")==present(v,"recorded"),"only an actual recorded module analysis supplies summary or semantic results")?;
+        if v["state"]!="Recorded"{require(present(v,"reason"),"unrecorded module analysis needs its actual reason")?;}
+        if v["observedCoverage"]["state"]=="Unavailable"{
+            require(v["observedNodeCounts"].as_array().is_some_and(|r|r.is_empty()),"unavailable observed module counts are unknown")?;
+            for key in ["endpoints","services","tables"]{require(!present(&v[key],"count")&&v[key]["nodes"].as_array().is_some_and(|r|r.is_empty())&&v[key]["hasMore"]==false,"unavailable module drilldown cannot invent zero totals or node references")?;}
+        }
+    }
     Ok(())
 }
 pub fn record(name: &str, v: &Value) -> Result<(), String> {

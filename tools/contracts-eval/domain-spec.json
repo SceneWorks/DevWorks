@@ -4895,7 +4895,8 @@
         "stamp": "ReadStamp",
         "graph_coverage": "Coverage",
         "unavailable_reason": "?Label",
-        "graph_totals": "?CodeOverviewTotals"
+        "graph_totals": "?CodeOverviewTotals",
+        "internal_modules": "Rows<CodeModuleAnalysis>"
       },
       "since": {
         "unavailable_reason": 3,
@@ -4946,7 +4947,8 @@
         "packages": "Rows<CodePackageDependency>",
         "package_count": "Counter",
         "package_counts_by_ecosystem": "Rows<CodeCount>",
-        "supertypes": "Rows<CodeSupertype>"
+        "supertypes": "Rows<CodeSupertype>",
+        "internal_modules": "Rows<CodeModuleAnalysis>"
       },
       "since": {
         "summary": 3,
@@ -5299,6 +5301,138 @@
       "fields": {
         "node_count": "Counter",
         "edge_count": "Counter"
+      }
+    },
+    "CodeUnavailableRepository": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "reason": "Label"
+      }
+    },
+    "CodeReadCoverage": {
+      "kind": "record",
+      "fields": {
+        "coverage": "Coverage",
+        "unavailable_repositories": "Rows<CodeUnavailableRepository>"
+      }
+    },
+    "CodeNodeReference": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "unit_key": "GraphUnitKey",
+        "node_id": "Id"
+      }
+    },
+    "CodeModuleIdentity": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "module_name": "Content",
+        "indexed_node": "?CodeNodeReference"
+      },
+      "since": {
+        "indexed_node": 3
+      }
+    },
+    "CodeModuleAnalysisState": {
+      "kind": "enum",
+      "values": [
+        "Recorded",
+        "NotAnalyzed",
+        "Unavailable"
+      ]
+    },
+    "CodeModuleDrilldown": {
+      "kind": "record",
+      "fields": {
+        "node_kind": "Label",
+        "count": "?Counter",
+        "nodes": "Rows<CodeNodeReference>",
+        "has_more": "bool",
+        "next_cursor": "?Cursor"
+      },
+      "since": {
+        "count": 3,
+        "next_cursor": 3
+      }
+    },
+    "CodeModuleEndpoint": {
+      "kind": "record",
+      "fields": {
+        "route": "Content",
+        "http_method": "Label",
+        "description": "Content",
+        "request_model": "?Content",
+        "response_model": "?Content"
+      },
+      "since": {
+        "request_model": 3,
+        "response_model": 3
+      }
+    },
+    "CodeModuleService": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "description": "Content",
+        "interface_name": "?Content",
+        "lifetime": "Label"
+      },
+      "since": {
+        "interface_name": 3
+      }
+    },
+    "CodeModuleProgramTotals": {
+      "kind": "record",
+      "fields": {
+        "endpoint_count": "Counter",
+        "service_count": "Counter",
+        "table_count": "Counter"
+      }
+    },
+    "CodeRecordedModuleAnalysis": {
+      "kind": "record",
+      "fields": {
+        "summary": "Content",
+        "confidence": "Label",
+        "endpoints": "Rows<CodeModuleEndpoint>",
+        "services": "Rows<CodeModuleService>",
+        "external_dependencies": "Rows<Content>",
+        "database_tables": "Rows<Content>",
+        "model_used": "?Content",
+        "updated_at_ms": "Counter",
+        "source_hash": "?Content",
+        "source_revision": "?Content",
+        "source_view_id": "?Id",
+        "program_totals": "?CodeModuleProgramTotals"
+      },
+      "since": {
+        "model_used": 3,
+        "source_hash": 3,
+        "source_revision": 3,
+        "source_view_id": 3,
+        "program_totals": 3
+      }
+    },
+    "CodeModuleAnalysis": {
+      "kind": "record",
+      "fields": {
+        "module": "CodeModuleIdentity",
+        "state": "CodeModuleAnalysisState",
+        "reason": "?Label",
+        "observed_node_counts": "Rows<CodeCount>",
+        "observed_coverage": "Coverage",
+        "endpoints": "CodeModuleDrilldown",
+        "services": "CodeModuleDrilldown",
+        "tables": "CodeModuleDrilldown",
+        "recorded": "?CodeRecordedModuleAnalysis"
+      },
+      "since": {
+        "reason": 3,
+        "recorded": 3
       }
     }
   },
@@ -9168,7 +9302,8 @@
         "current": "?bool",
         "page": "PageRequest",
         "node_kind": "?Label",
-        "internal_module": "?Content"
+        "internal_module": "?Content",
+        "scope": "?DataScope"
       },
       "result": "GraphPage",
       "effect": "Local",
@@ -9177,7 +9312,8 @@
       "since": {
         "current": 3,
         "node_kind": 3,
-        "internal_module": 3
+        "internal_module": 3,
+        "scope": 3
       },
       "exactlyOne": [
         "views",
@@ -9190,7 +9326,10 @@
       },
       "strictOptional": [
         "views"
-      ]
+      ],
+      "requiredSince": {
+        "scope": 3
+      }
     },
     "repositories.remove_index": {
       "operation": "repositories.remove_index",
