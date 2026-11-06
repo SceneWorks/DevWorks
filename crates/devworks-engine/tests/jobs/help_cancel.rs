@@ -18,6 +18,7 @@ struct PublishGate {
     store: Mutex<Option<std::sync::Weak<dyn ApplicationStore>>>,
     job: Mutex<Option<Id>>,
     held: Mutex<Option<HeldPublication>>,
+    last_observed: Mutex<Option<Value>>,
 }
 impl PublishGate {
     fn new(h: &Harness) -> Arc<Self> {
@@ -30,6 +31,7 @@ impl PublishGate {
             store: Mutex::new(None),
             job: Mutex::new(None),
             held: Mutex::new(None),
+            last_observed: Mutex::new(None),
         })
     }
     fn arm(&self) {
@@ -57,6 +59,9 @@ impl PublishGate {
                 return Ok(None);
             };
             let source = &staged.payload["source"];
+            *self.last_observed.lock().unwrap() = Some(
+                json!({"staging":staging,"sourceKind":source["kind"],"sourceGeneration":source["generationId"],"head":s.help().help_head()?.generation_operation_id,"jobRuns":s.jobs().job_runs(&job,None,3)?.iter().map(|r|json!({"id":r.id,"state":r.status,"inner":r.inner_operation_id})).collect::<Vec<_>>() }),
+            );
             if source["kind"] != "HelpTopic" {
                 return Ok(None);
             }
@@ -126,6 +131,15 @@ impl PublishGate {
 struct Release(Arc<PublishGate>);
 impl Drop for Release {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "HELP_CANCEL_PUBLICATION_OBSERVATION {:?}",
+                self.0
+                    .last_observed
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+            );
+        }
         self.0.release();
     }
 }
@@ -220,6 +234,8 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     let gate = PublishGate::new(&h);
     let app = boot_help_with_files(&rt, &h, gate.clone());
     *gate.store.lock().unwrap() = Some(Arc::downgrade(&app.store));
+    let _diagnostics =
+        crate::common::help_startup_diagnostics(&*app.store, app.runtime.dispatcher());
     let (scheduler, _) = scheduler(&app, 0);
     let old_head = app.head();
     // Make one real generated source unavailable. Recovery must produce new bytes
@@ -243,11 +259,8 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     gate.inner
         .unlink(reference.sha256.as_str(), &version.blob_generation)
         .unwrap();
-    let registry = read(&*app.store, |s| s.packages().registry_revision());
-    write(&*app.store, move |tx| {
-        tx.packages().advance_registry(registry)
-    })
-    .unwrap();
+    // This scheduled generation owns the source-loss repair. Advancing the registry here
+    // would also authorize background maintenance to repair it before this job is armed.
     let unrelated = enqueue(
         &*app.store,
         "unrelated-help-control",
