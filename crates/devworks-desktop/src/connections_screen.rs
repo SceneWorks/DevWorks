@@ -38,6 +38,11 @@ pub const SESSION_ONLY_LABEL: &str = "Keep credentials for this session only";
 pub enum ConnectionAction {
     /// Reload connections and the catalog.
     Reload,
+    /// Reads one bounded embedding-space status page.
+    EmbeddingSpaces {
+        cursor: Option<String>,
+    },
+    EmbeddingSetup,
     /// A `router.configure` action; `key` (an API key the user typed) is staged in the OS secret
     /// store first and its handle set as the action's `credentialRef`; `code` (a pasted
     /// `code#state`) is attached to the open sign-in `flow` first.
@@ -99,6 +104,7 @@ struct ModelEdit {
 
 #[derive(Default)]
 pub struct ConnectionsPanel {
+    pub embedding_spaces: crate::embedding_spaces_screen::EmbeddingSpacesPanel,
     pub records: Vec<ConnectionRecord>,
     pub loaded: bool,
     pub loading: bool,
@@ -480,6 +486,8 @@ impl ConnectionsPanel {
                 }
                 widgets::divider(ui);
                 self.add_ui(ui, &mut scroll_actions);
+                self.embedding_spaces
+                    .ui(ui, &records, self.busy.is_empty(), &mut scroll_actions);
                 widgets::divider(ui);
                 self.catalog_ui(ui, &mut scroll_actions);
             });

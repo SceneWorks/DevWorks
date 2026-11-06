@@ -39,6 +39,7 @@ pub mod backend;
 pub mod chat;
 pub mod connections_screen;
 pub mod decision_ops;
+pub mod embedding_spaces_screen;
 pub mod files;
 pub mod graph_ops;
 pub mod graph_screen;

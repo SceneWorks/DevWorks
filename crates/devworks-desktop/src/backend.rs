@@ -339,6 +339,8 @@ pub enum Slot {
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
     ConnectionCatalog(u64),
+    /// One bounded persistent embedding-space status page.
+    EmbeddingSpaces(u64),
     /// One `router.configure` submission from the connections panel (its sequence number).
     Configure(u64),
 }
