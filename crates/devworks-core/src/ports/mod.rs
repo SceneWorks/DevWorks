@@ -95,6 +95,8 @@ pub enum IdKind {
     JobRun,
     /// Provider connections.
     Connection,
+    /// Persistent explicit embedding-space candidates.
+    EmbeddingSpace,
     /// Secret-store credential handles (immutable; a replacement gets a new one).
     Credential,
     /// In-process sign-in flows.
