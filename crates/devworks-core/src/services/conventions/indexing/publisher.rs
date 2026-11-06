@@ -93,6 +93,13 @@ fn current(
     }
     let context =
         approvals::restore_source_context(tx.store(), &job.actor, kind, &job.source_context)?;
+    crate::services::conventions::control::check(
+        tx,
+        &context,
+        &operation.id,
+        &job.control_roots,
+        job.assignment_generation,
+    )?;
     super::selection::validate_child(tx, job, &context)?;
     let scoped = access::scope_in(tx, &context, Some(&job.scope), true)
         .map_err(|_| StorageError::ScopeDenied)?;

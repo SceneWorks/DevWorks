@@ -68,21 +68,23 @@ pub(crate) fn check(
         .blockers(&BlockerFilter::Operation(operation.clone()), None, 1)?
         .is_empty()
     {
-        return Err(StorageError::ScopeDenied);
+        return Err(StorageError::Busy);
     }
     for (root, epoch) in roots {
         let control = tx
             .runs()
             .root_control(root)?
             .unwrap_or_else(|| StoredRootControl::initial(root.clone()));
-        if control.stop_epoch != *epoch
-            || control.desired != DesiredExecution::Enabled
+        if control.stop_epoch != *epoch {
+            return Err(StorageError::ScopeDenied);
+        }
+        if control.desired != DesiredExecution::Enabled
             || !tx
                 .runs()
                 .blockers(&BlockerFilter::RootLevel(root.clone()), None, 1)?
                 .is_empty()
         {
-            return Err(StorageError::ScopeDenied);
+            return Err(StorageError::Busy);
         }
     }
     if let Some(id) = ctx.assignment_id() {
@@ -93,12 +95,15 @@ pub(crate) fn check(
                 a.state,
                 AssignmentState::Superseded | AssignmentState::Failed | AssignmentState::Completed
             )
-            || !tx
-                .runs()
-                .blockers(&BlockerFilter::Assignment(id.clone()), None, 1)?
-                .is_empty()
         {
             return Err(StorageError::ScopeDenied);
+        }
+        if !tx
+            .runs()
+            .blockers(&BlockerFilter::Assignment(id.clone()), None, 1)?
+            .is_empty()
+        {
+            return Err(StorageError::Busy);
         }
     }
     Ok(())

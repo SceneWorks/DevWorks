@@ -48,6 +48,10 @@ pub struct IndexJob {
     pub embedding_space: Option<String>,
     pub selection_event: Option<EventId>,
     pub selection_revision: Option<i64>,
+    #[serde(default)]
+    pub control_roots: Vec<(crate::protocol::RootId, i64)>,
+    #[serde(default)]
+    pub assignment_generation: Option<i64>,
 }
 impl IndexService {
     pub fn decide_index(
@@ -213,6 +217,7 @@ impl IndexService {
         if let Some(space) = &configuration.space {
             tx.conventions().put_convention_embedding_space(space)?;
         }
+        let controls = crate::services::conventions::control::capture(tx, ctx)?;
         let job = IndexJob {
             kind: JOB_KIND.into(),
             target,
@@ -228,6 +233,8 @@ impl IndexService {
             embedding_space: configuration.space.map(|space| space.id),
             selection_event: identity.selection.map(|(event, _)| event.clone()),
             selection_revision: identity.selection.map(|(_, revision)| revision),
+            control_roots: controls.roots,
+            assignment_generation: controls.assignment_generation,
         };
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),

@@ -32,6 +32,10 @@ struct SelectionJob {
     restore_epoch: i64,
     fences: Vec<AuthorityFence>,
     delivery_id: Id,
+    #[serde(default)]
+    control_roots: Vec<(crate::protocol::RootId, i64)>,
+    #[serde(default)]
+    assignment_generation: Option<i64>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -187,6 +191,13 @@ fn check(
         return Err(StorageError::ScopeDenied);
     }
     lineage(tx, &context)?;
+    crate::services::conventions::control::check(
+        tx,
+        &context,
+        &operation.id,
+        &job.control_roots,
+        job.assignment_generation,
+    )?;
     let actual = tx
         .operations()
         .operation(&operation.id)?
@@ -256,6 +267,7 @@ impl IndexService {
             }
             return Ok(());
         }
+        let controls = crate::services::conventions::control::capture(tx, ctx)?;
         let job = SelectionJob {
             kind: SELECTION_KIND.into(),
             event_id: event_id.clone(),
@@ -267,6 +279,8 @@ impl IndexService {
             restore_epoch: ctx.restore_epoch().get(),
             fences: commands::source_fences(tx, ctx)?,
             delivery_id: delivery.clone(),
+            control_roots: controls.roots,
+            assignment_generation: controls.assignment_generation,
         };
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
