@@ -12,7 +12,7 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 fn invalid(m: impl Into<String>) -> StorageError {
     StorageError::InvalidRecord(m.into())
@@ -562,16 +562,49 @@ fn objects(conn: &Connection) -> Result<BTreeSet<String>, StorageError> {
     Ok(names)
 }
 
-/// The schema objects of a freshly migrated store at `version` (computed once per version).
-fn expected_objects(version: i64) -> Result<BTreeSet<String>, StorageError> {
-    static CACHE: Mutex<BTreeMap<i64, BTreeSet<String>>> = Mutex::new(BTreeMap::new());
-    if let Some(found) = CACHE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&version)
-    {
-        return Ok(found.clone());
+type SchemaObjects = BTreeSet<String>;
+type SchemaCell = Arc<Mutex<Option<SchemaObjects>>>;
+
+/// Only immutable expected metadata is cached. Each live database is still inspected anew.
+struct ExpectedSchemas {
+    versions: Mutex<BTreeMap<i64, SchemaCell>>,
+}
+impl ExpectedSchemas {
+    const fn new() -> Self {
+        Self {
+            versions: Mutex::new(BTreeMap::new()),
+        }
     }
+    fn get(
+        &self,
+        version: i64,
+        build: impl FnOnce() -> Result<SchemaObjects, StorageError>,
+    ) -> Result<SchemaObjects, StorageError> {
+        let cell = self
+            .versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(version)
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone();
+        // Single-flight per version. The global map lock is released before building the
+        // private in-memory schema; no actual store transaction or writer is involved.
+        let mut ready = cell.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(found) = ready.as_ref() {
+            return Ok(found.clone());
+        }
+        let found = build()?;
+        *ready = Some(found.clone());
+        Ok(found)
+    }
+}
+static EXPECTED_SCHEMAS: ExpectedSchemas = ExpectedSchemas::new();
+
+/// The schema objects of a freshly migrated store at `version` (computed once per version).
+fn expected_objects(version: i64) -> Result<SchemaObjects, StorageError> {
+    EXPECTED_SCHEMAS.get(version, || build_expected_objects(version))
+}
+fn build_expected_objects(version: i64) -> Result<SchemaObjects, StorageError> {
     let conn = db(Connection::open_in_memory())?;
     db(conn.pragma_update(None, "foreign_keys", true))?;
     let through: Vec<_> = MIGRATIONS
@@ -580,12 +613,13 @@ fn expected_objects(version: i64) -> Result<BTreeSet<String>, StorageError> {
         .filter(|m| m.version <= version)
         .collect();
     migrations::prepare(&conn, &through, || "expected-schema".into(), 0, "health")?;
-    let found = objects(&conn)?;
-    CACHE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(version, found.clone());
-    Ok(found)
+    objects(&conn)
+}
+
+/// Complete cold immutable catalogue work before a runtime can launch its health monitor.
+/// A diagnostic failure does not change store admission; database() still reports/retries it.
+pub(super) fn prepare_expected_schema(version: i64) {
+    let _ = expected_objects(version);
 }
 
 impl SqliteStore {
@@ -630,5 +664,103 @@ impl StorageHealthProbe for SqliteStore {
 
     fn integrity(&self) -> Result<IntegrityReport, StorageError> {
         self.integrity_check()
+    }
+}
+
+#[cfg(test)]
+mod expected_schema_tests {
+    use super::*;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn cold_catalogue_is_single_flight_and_preserves_exact_native_schema_objects() {
+        let harness = super::super::tests::Harness::new();
+        let store = harness.store(); // Register the same native SQLite runtime as store boot.
+        let version = MIGRATIONS.last().unwrap().version;
+        let cache = Arc::new(ExpectedSchemas::new());
+        let barrier = Arc::new(Barrier::new(4));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let (cache, barrier, builds) = (cache.clone(), barrier.clone(), builds.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cache
+                        .get(version, || {
+                            builds.fetch_add(1, Ordering::SeqCst);
+                            build_expected_objects(version)
+                        })
+                        .unwrap()
+                })
+            })
+            .collect();
+        let mut results = workers.into_iter().map(|w| w.join().unwrap());
+        let expected = results.next().unwrap();
+        assert!(expected.contains("index:diagnostic_records_recorded"));
+        assert!(results.all(|set| set == expected));
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            1,
+            "concurrent cold owners build once"
+        );
+        assert_eq!(
+            cache
+                .get(version, || panic!("ready catalogue rebuilt"))
+                .unwrap(),
+            expected
+        );
+        // The cache contains expected names only; the actual database is still inspected.
+        let healthy = store.database().unwrap();
+        assert!(healthy.missing_objects.is_empty());
+        assert_eq!(healthy.expected_objects, expected.len() as u64);
+    }
+
+    #[test]
+    fn store_open_finishes_pure_catalogue_work_before_any_monitor_can_start() {
+        let harness = super::super::tests::Harness::new();
+        let store = harness.store();
+        let version = store.compatibility().unwrap().store_schema_version;
+        let cell = EXPECTED_SCHEMAS
+            .versions
+            .lock()
+            .unwrap()
+            .get(&version)
+            .cloned()
+            .expect("store opening owns expected catalogue preparation");
+        let expected = cell.lock().unwrap().as_ref().unwrap().clone();
+        assert!(!expected.is_empty());
+        // Warming expected metadata must never cache the health of this real database.
+        store
+            .with_writer_connection(|conn| {
+                db(conn.execute_batch("DROP INDEX diagnostic_records_recorded"))
+            })
+            .unwrap();
+        let changed = store.database().unwrap();
+        assert_eq!(
+            changed.missing_objects,
+            vec!["index:diagnostic_records_recorded"]
+        );
+        assert_eq!(changed.expected_objects, expected.len() as u64);
+    }
+
+    #[test]
+    fn a_failed_pure_build_remains_retryable_and_returned_sets_cannot_mutate_the_cache() {
+        let cache = ExpectedSchemas::new();
+        assert!(matches!(
+            cache.get(1, || Err(invalid("controlled expected schema failure"))),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        let expected = BTreeSet::from(["table:actual-name".to_owned()]);
+        let mut returned = cache.get(1, || Ok(expected.clone())).unwrap();
+        returned.clear();
+        assert_eq!(
+            cache
+                .get(1, || panic!("successful catalogue rebuilt"))
+                .unwrap(),
+            expected
+        );
     }
 }
