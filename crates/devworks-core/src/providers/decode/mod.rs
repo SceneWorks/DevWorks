@@ -139,6 +139,7 @@ struct Call {
     arguments: String,
     item: Value,
     complete: bool,
+    arguments_fragmented: bool,
 }
 
 pub struct Decoder {
@@ -158,6 +159,8 @@ pub struct Decoder {
     generation_id: Option<String>,
     chat_reasoning: Value,
     continuations: BTreeMap<(u64, String), Value>,
+    stopped_blocks: std::collections::BTreeSet<u64>,
+    embedding_dimensions: Option<usize>,
 }
 
 impl Decoder {
@@ -182,7 +185,14 @@ impl Decoder {
             generation_id: None,
             chat_reasoning: serde_json::json!({}),
             continuations: BTreeMap::new(),
+            stopped_blocks: Default::default(),
+            embedding_dimensions: None,
         }
+    }
+    /// Bind the requested embedding dimension before consuming any response bytes.
+    pub fn with_embedding_dimensions(mut self, dimensions: Option<u32>) -> Self {
+        self.embedding_dimensions = dimensions.map(|n| n as usize);
+        self
     }
     /// Consume one already-framed SSE data event. The adapter owns byte fragmentation, UTF-8,
     /// comment/multiline framing and event-ID handling; event JSON remains native here.
@@ -205,13 +215,21 @@ impl Decoder {
             }
             return out;
         }
-        let value: Value = match serde_json::from_str(data) {
+        let value: Value = match json_value(data) {
             Ok(v) => v,
             Err(_) => {
+                self.native(None, "invalid_json", &Value::Null, data, true, &mut out);
                 self.error(DecodeErrorKind::InvalidJson, "invalid_event_json", &mut out);
                 return out;
             }
         };
+        if let (Some(event), Some(kind)) = (event, value.get("type").and_then(Value::as_str))
+            && event != kind
+        {
+            self.native(None, "mismatched_event_type", &value, data, true, &mut out);
+            self.error(DecodeErrorKind::Protocol, "mismatched_event_type", &mut out);
+            return out;
+        }
         self.observe_identity(&value, &mut out);
         match self.profile {
             EndpointProfile::OpenAiResponses | EndpointProfile::CodexSubscriptionResponses => {
@@ -232,6 +250,9 @@ impl Decoder {
     /// when an embedding or content block is invalid. An aggregate is a complete transport body.
     pub fn consume_aggregate(&mut self, bytes: &[u8]) -> Vec<DecodedFrame> {
         let mut out = Vec::new();
+        if self.finished {
+            return out;
+        }
         let Ok(raw) = std::str::from_utf8(bytes) else {
             self.error(DecodeErrorKind::InvalidJson, "invalid_utf8", &mut out);
             out.extend(self.finish());
@@ -241,9 +262,10 @@ impl Decoder {
             out.extend(self.finish());
             return out;
         }
-        let value: Value = match serde_json::from_str(raw) {
+        let value: Value = match json_value(raw) {
             Ok(v) => v,
             Err(_) => {
+                self.native(None, "invalid_json", &Value::Null, raw, true, &mut out);
                 self.error(DecodeErrorKind::InvalidJson, "invalid_body_json", &mut out);
                 out.extend(self.finish());
                 return out;
@@ -265,6 +287,25 @@ impl Decoder {
         }
         out.extend(self.finish());
         out
+    }
+
+    /// Transport cancellation, read errors, or an unterminated SSE frame invalidate readiness
+    /// even if a native completion marker was observed earlier. The adapter must use this
+    /// instead of ordinary finish when the transport/framer did not end successfully.
+    pub fn finish_interrupted(
+        &mut self,
+        outcome: DecodedOutcome,
+        reason: &str,
+    ) -> Vec<DecodedFrame> {
+        let outcome = match outcome {
+            DecodedOutcome::Cancelled
+            | DecodedOutcome::Incomplete
+            | DecodedOutcome::OutcomeUnknown => outcome,
+            _ => DecodedOutcome::OutcomeUnknown,
+        };
+        self.stop = Some((outcome, Some(reason.into())));
+        self.ended = true;
+        self.finish()
     }
 
     /// EOF is never evidence of successful completion. This is the sole tool-release point;
@@ -306,12 +347,36 @@ impl Decoder {
             outcome = DecodedOutcome::Failed;
         }
         if outcome == DecodedOutcome::Completed {
+            let native_tools = match self.profile {
+                EndpointProfile::AnthropicMessages
+                | EndpointProfile::ClaudeSubscriptionMessages => {
+                    Some(reason.as_deref() == Some("tool_use"))
+                }
+                EndpointProfile::OpenRouterChat | EndpointProfile::CompatibleChat => {
+                    Some(reason.as_deref() == Some("tool_calls"))
+                }
+                _ => None,
+            };
+            if native_tools.is_some_and(|reported| reported == self.calls.is_empty()) {
+                outcome = DecodedOutcome::Failed;
+                out.push(DecodedFrame::Error {
+                    error: DecodeError {
+                        kind: DecodeErrorKind::InvalidToolCall,
+                        code: None,
+                        message: "native stop reason contradicts recorded tool calls".into(),
+                    },
+                });
+            }
+        }
+        if outcome == DecodedOutcome::Completed {
             let mut ready = Vec::new();
+            let mut ids = std::collections::BTreeSet::new();
             for (ordinal, call) in &self.calls {
                 let parsed = serde_json::from_str::<Value>(&call.arguments)
                     .ok()
                     .filter(Value::is_object);
                 if !call.complete
+                    || *ordinal > i64::MAX as u64
                     || call
                         .id
                         .as_ref()
@@ -321,6 +386,7 @@ impl Decoder {
                         .as_ref()
                         .is_none_or(|s| s.is_empty() || s.len() > 1024)
                     || parsed.is_none()
+                    || !ids.insert(call.id.as_deref())
                 {
                     outcome = DecodedOutcome::Failed;
                     out.push(DecodedFrame::Error {
@@ -432,8 +498,37 @@ impl Decoder {
         ordinal: Option<u64>,
         kind: &str,
         value: &Value,
-        _out: &mut Vec<DecodedFrame>,
+        out: &mut Vec<DecodedFrame>,
     ) {
+        let unsupported = match kind {
+            "messages_reasoning" => match value.get("type").and_then(Value::as_str) {
+                Some("thinking") => value
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty),
+                Some("redacted_thinking") => value
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty),
+                _ => true,
+            },
+            "chat_reasoning" => value
+                .get("reasoning_details")
+                .and_then(Value::as_array)
+                .is_some_and(|items| {
+                    items.iter().any(|v| {
+                        !matches!(
+                            v.get("type").and_then(Value::as_str),
+                            Some("reasoning.text" | "reasoning.summary" | "reasoning.encrypted")
+                        )
+                    })
+                }),
+            _ => false,
+        };
+        if unsupported {
+            self.native(ordinal, kind, value, &value.to_string(), false, out);
+            return;
+        }
         if let Some(ordinal) = ordinal {
             self.continuations
                 .insert((ordinal, kind.into()), value.clone());
@@ -499,3 +594,30 @@ fn index(value: &Value, key: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests;
+
+// The exact native raw JSON remains authoritative. Retain an out-of-range numeric lexeme
+// in the convenience projection without enabling global arbitrary-precision DTO behavior.
+fn json_value(raw: &str) -> Result<Value, serde_json::Error> {
+    if let Ok(value) = serde_json::from_str(raw) {
+        return Ok(value);
+    }
+    let checked: &serde_json::value::RawValue = serde_json::from_str(raw)?;
+    let raw = checked.get();
+    if raw.starts_with('{') {
+        let fields: BTreeMap<String, &serde_json::value::RawValue> = serde_json::from_str(raw)?;
+        fields
+            .into_iter()
+            .map(|(k, v)| Ok((k, json_value(v.get())?)))
+            .collect::<Result<serde_json::Map<_, _>, serde_json::Error>>()
+            .map(Value::Object)
+    } else if raw.starts_with('[') {
+        let values: Vec<&serde_json::value::RawValue> = serde_json::from_str(raw)?;
+        values
+            .into_iter()
+            .map(|v| json_value(v.get()))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array)
+    } else {
+        Ok(Value::String(raw.into()))
+    }
+}

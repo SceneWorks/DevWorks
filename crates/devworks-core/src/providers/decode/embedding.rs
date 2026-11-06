@@ -14,7 +14,7 @@ fn base64(value: &str) -> Option<Vec<u8>> {
         _ => None,
     };
     let n = value.len() / 4;
-    for (i, c) in value.as_bytes().chunks_exact(4).enumerate() {
+    for (i, c) in value.as_bytes().as_chunks::<4>().0.iter().enumerate() {
         let a = sextet(c[0])?;
         let b = sextet(c[1])?;
         let padding = if c[2] == b'=' {
@@ -99,8 +99,10 @@ impl Decoder {
                     base64(text)
                         .filter(|b| b.len().is_multiple_of(4))
                         .map(|b| {
-                            b.chunks_exact(4)
-                                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                            b.as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|c| f32::from_le_bytes(*c))
                                 .collect::<Vec<_>>()
                         })
                         .filter(|v| v.iter().all(|x| x.is_finite()))
@@ -110,7 +112,9 @@ impl Decoder {
             if let Some(vector) =
                 vector.filter(|v| !v.is_empty() && v.len() <= self.limits.embedding_dimensions)
             {
-                if dimensions.is_some_and(|n| n != vector.len()) {
+                if dimensions.is_some_and(|n| n != vector.len())
+                    || self.embedding_dimensions.is_some_and(|n| n != vector.len())
+                {
                     self.error(
                         DecodeErrorKind::InvalidEmbedding,
                         "inconsistent_embedding_dimensions",

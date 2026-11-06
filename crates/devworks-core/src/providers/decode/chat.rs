@@ -123,7 +123,37 @@ impl Decoder {
                                 }
                                 // Retain each actual fragment in Native; the final item is a
                                 // projection of those fragments, never a fabricated call ID.
-                                call.item = item.clone();
+                                if aggregate {
+                                    call.item = item.clone();
+                                } else if let Some(fields) = item.as_object() {
+                                    if !call.item.is_object() {
+                                        call.item = serde_json::json!({});
+                                    }
+                                    for (field, value) in fields {
+                                        if field != "function" && !value.is_null() {
+                                            call.item[field] = value.clone();
+                                        }
+                                    }
+                                    if !call.item["function"].is_object() {
+                                        call.item["function"] = serde_json::json!({});
+                                    }
+                                    if let Some(fields) =
+                                        item.get("function").and_then(Value::as_object)
+                                    {
+                                        for (field, value) in fields {
+                                            if !matches!(field.as_str(), "name" | "arguments")
+                                                && !value.is_null()
+                                            {
+                                                call.item["function"][field] = value.clone();
+                                            }
+                                        }
+                                    }
+                                    if let Some(name) = &call.name {
+                                        call.item["function"]["name"] = Value::String(name.clone());
+                                    }
+                                    call.item["function"]["arguments"] =
+                                        Value::String(call.arguments.clone());
+                                }
                                 call.complete = aggregate;
                             }
                             if id_changed {
@@ -255,13 +285,12 @@ impl Decoder {
             });
             if let Some(entry) = existing {
                 for (name, value) in fields {
-                    if matches!(name.as_str(), "text" | "summary" | "data" | "signature") {
-                        if let (Some(old), Some(part)) =
+                    if matches!(name.as_str(), "text" | "summary" | "data" | "signature")
+                        && let (Some(old), Some(part)) =
                             (entry.get(name).and_then(Value::as_str), value.as_str())
-                        {
-                            entry[name] = Value::String(format!("{old}{part}"));
-                            continue;
-                        }
+                    {
+                        entry[name] = Value::String(format!("{old}{part}"));
+                        continue;
                     }
                     if !value.is_null() {
                         entry[name] = value.clone();

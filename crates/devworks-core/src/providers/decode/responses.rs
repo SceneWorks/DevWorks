@@ -160,13 +160,17 @@ impl Decoder {
                     if let Some(name) = string(item, "name") {
                         call.name = Some(name);
                     }
-                    if let Some(args) = string(item, "arguments") {
-                        if complete || call.arguments.is_empty() {
-                            call.arguments = args;
-                        }
+                    if let Some(args) = string(item, "arguments")
+                        && (complete || call.arguments.is_empty())
+                    {
+                        call.arguments = args;
                     }
                     call.item = item.clone();
-                    call.complete = complete;
+                    call.complete = complete
+                        && item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .is_none_or(|s| s == "completed");
                 }
             }
             "message" if complete => {

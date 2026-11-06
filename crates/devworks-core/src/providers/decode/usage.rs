@@ -16,6 +16,9 @@ pub struct ReportedCost {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedUsage {
+    pub semantics: crate::services::usage::meter::ObservationSemantics,
+    pub service_tier: Option<String>,
+    pub processing_region: Option<String>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
@@ -33,12 +36,17 @@ pub struct DecodedUsage {
     pub validation_errors: Vec<String>,
 }
 
-fn raw_at<'a>(raw: &'a str, path: &[&str]) -> Option<&'a str> {
+pub(super) fn raw_at<'a>(raw: &'a str, path: &[&str]) -> Option<&'a str> {
     if path.is_empty() {
         return Some(raw);
     }
-    let fields: BTreeMap<&str, &RawValue> = serde_json::from_str(raw).ok()?;
-    raw_at(fields.get(path[0])?.get(), &path[1..])
+    if raw.trim_start().starts_with('[') {
+        let items: Vec<&RawValue> = serde_json::from_str(raw).ok()?;
+        raw_at(items.get(path[0].parse::<usize>().ok()?)?.get(), &path[1..])
+    } else {
+        let fields: BTreeMap<&str, &RawValue> = serde_json::from_str(raw).ok()?;
+        raw_at(fields.get(path[0])?.get(), &path[1..])
+    }
 }
 
 /// Expand JSON's decimal exponent exactly, bounded by the containing event and a finite
@@ -109,16 +117,27 @@ pub(super) fn decimal(raw: &str) -> Option<String> {
 
 impl Decoder {
     pub(super) fn usage(&mut self, raw: &str, path: &[&str], out: &mut Vec<DecodedFrame>) {
+        let enclosing =
+            raw_at(raw, &path[..path.len().saturating_sub(1)]).and_then(|raw| json_value(raw).ok());
         let Some(raw) = raw_at(raw, path).filter(|s| *s != "null") else {
             return;
         };
-        let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        let Ok(value) = json_value(raw) else {
             return;
         };
         if !value.is_object() {
             self.error(DecodeErrorKind::InvalidContent, "usage_not_object", out);
             return;
         }
+        let service_tier = string(&value, "service_tier")
+            .or_else(|| enclosing.as_ref().and_then(|v| string(v, "service_tier")));
+        let processing_region = string(&value, "inference_geo")
+            .or_else(|| string(&value, "processing_region"))
+            .or_else(|| {
+                enclosing
+                    .as_ref()
+                    .and_then(|v| string(v, "processing_region"))
+            });
         let mut errors = Vec::new();
         let mut quantity = |paths: &[&[&str]]| -> Option<u64> {
             for path in paths {
@@ -181,7 +200,9 @@ impl Decoder {
                 ttl_seconds: None,
             });
         }
-        let currency = string(&value, "currency");
+        let currency = string(&value, "currency").or_else(|| {
+            matches!(self.profile, EndpointProfile::OpenRouterChat).then(|| "USD".into())
+        });
         let mut reported = |path: &[&str]| {
             let lexeme = raw_at(raw, path).filter(|v| *v != "null")?;
             match decimal(lexeme) {
@@ -216,6 +237,9 @@ impl Decoder {
         };
         out.push(DecodedFrame::Usage {
             observation: DecodedUsage {
+                semantics: crate::services::usage::meter::ObservationSemantics::Cumulative,
+                service_tier,
+                processing_region,
                 input_tokens,
                 output_tokens,
                 total_tokens,

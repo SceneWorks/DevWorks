@@ -37,7 +37,9 @@ impl Decoder {
                     self.error(DecodeErrorKind::Protocol, "duplicate_content_block", out);
                     return;
                 }
-                self.message_block(i, block, false, raw, out);
+                self.native(Some(i), kind, v, raw, true, out);
+                let block_raw = usage::raw_at(raw, &["content_block"]).unwrap_or(raw);
+                self.message_block(i, block, false, block_raw, out);
             }
             "content_block_delta" => {
                 let (Some(i), Some(delta)) = (index(v, "index"), v.get("delta")) else {
@@ -45,6 +47,10 @@ impl Decoder {
                     return;
                 };
                 self.native(Some(i), kind, v, raw, true, out);
+                if self.stopped_blocks.contains(&i) {
+                    self.error(DecodeErrorKind::Protocol, "delta_after_block_stop", out);
+                    return;
+                }
                 let Some(block) = self.blocks.get_mut(&i) else {
                     self.error(DecodeErrorKind::Protocol, "delta_without_block", out);
                     return;
@@ -82,6 +88,15 @@ impl Decoder {
                 };
                 if field == "partial_json" {
                     if let Some(call) = self.call(i, out) {
+                        if !call.arguments_fragmented {
+                            if serde_json::from_str::<Value>(&call.arguments)
+                                .ok()
+                                .is_some_and(|v| v.as_object().is_some_and(|o| o.is_empty()))
+                            {
+                                call.arguments.clear();
+                            }
+                            call.arguments_fragmented = true;
+                        }
                         call.arguments.push_str(text);
                     }
                 } else {
@@ -104,12 +119,15 @@ impl Decoder {
                     self.error(DecodeErrorKind::Protocol, "stop_without_block", out);
                     return;
                 }
+                if !self.stopped_blocks.insert(i) {
+                    self.error(DecodeErrorKind::Protocol, "duplicate_block_stop", out);
+                    return;
+                }
                 if let Some(call) = self.calls.get_mut(&i) {
                     call.complete = true;
-                    if call.arguments.is_empty()
-                        && let Some(input) = call.item.get("input")
-                    {
-                        call.arguments = input.to_string();
+                    if let Ok(input) = json_value(&call.arguments) {
+                        call.item["input"] = input.clone();
+                        self.blocks.get_mut(&i).unwrap()["input"] = input;
                     }
                 }
                 let block = self.blocks[&i].clone();
@@ -136,6 +154,9 @@ impl Decoder {
                 }
             }
             "message_stop" => {
+                if self.blocks.keys().any(|i| !self.stopped_blocks.contains(i)) {
+                    self.error(DecodeErrorKind::Protocol, "unclosed_content_block", out);
+                }
                 self.ended = true;
                 self.native(None, kind, v, raw, true, out);
             }
@@ -201,11 +222,7 @@ impl Decoder {
                     call.id = string(block, "id");
                     call.name = string(block, "name");
                     call.item = block.clone();
-                    call.arguments = if complete {
-                        block.get("input").map(Value::to_string).unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
+                    call.arguments = usage::raw_at(raw, &["input"]).unwrap_or_default().into();
                     call.complete = complete;
                 }
             }
@@ -230,7 +247,9 @@ impl Decoder {
         self.native(None, "message", v, raw, true, out);
         if let Some(content) = v.get("content").and_then(Value::as_array) {
             for (i, block) in content.iter().enumerate() {
-                self.message_block(i as u64, block, true, raw, out);
+                let ordinal = i.to_string();
+                let block_raw = usage::raw_at(raw, &["content", &ordinal]).unwrap_or(raw);
+                self.message_block(i as u64, block, true, block_raw, out);
             }
         } else {
             self.error(
