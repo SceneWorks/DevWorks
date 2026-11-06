@@ -958,3 +958,27 @@ fn aggregate_observed_subtotals_never_claim_complete_coverage_of_an_unknown_remo
     assert!(gap(&v, "usage-observation-incomplete"));
     assert_eq!(v["report"]["coverage"]["state"], "Partial");
 }
+
+#[test]
+fn full_datetime_ranges_page_synthetic_buckets_without_expanding_them() {
+    let h = Harness::new();
+    let s = seed(&h);
+    for interval in ["day", "week", "month"] {
+        let mut raw = json!({"reportKind":"AssistantActivity","startMs":"-62135596800000",
+            "endMs":"253402300799999","interval":interval,"page":{"limit":3}});
+        let first = query(&s, &serde_json::from_value(raw.clone()).unwrap());
+        assert_eq!(first["report"]["items"].as_array().unwrap().len(), 3);
+        assert_eq!(first["report"]["hasMore"], true);
+        let cursor = first["report"]["nextCursor"].clone();
+        raw["page"]["cursor"] = cursor;
+        let second = query(&s, &serde_json::from_value(raw.clone()).unwrap());
+        assert_eq!(second["report"]["items"].as_array().unwrap().len(), 3);
+        assert_eq!(second["report"]["items"][2]["kind"], "SeriesPoint");
+        assert_eq!(second["report"]["items"][2]["value"], "0");
+        assert_eq!(
+            second["report"]["items"][2]["bucketStartMs"],
+            "-62135596800000"
+        );
+        assert_eq!(second, query(&s, &serde_json::from_value(raw).unwrap()));
+    }
+}
