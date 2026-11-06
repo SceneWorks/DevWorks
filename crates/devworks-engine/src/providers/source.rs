@@ -104,10 +104,9 @@ impl NativeProviderSource {
                             modality: "Text".into(),
                             charge_kind: "CacheWrite".into(),
                             unit: "Token".into(),
-                            cache_write_ttl_ms: write
-                                .ttl_seconds
-                                .map(|n| i64::try_from(n).ok().and_then(|n| n.checked_mul(1000)))
-                                .flatten(),
+                            cache_write_ttl_ms: write.ttl_seconds.and_then(|n| {
+                                i64::try_from(n).ok().and_then(|n| n.checked_mul(1000))
+                            }),
                             quantity: n(Some(write.tokens))?.expect("provided"),
                         });
                     }
@@ -405,7 +404,7 @@ impl OwnedInferenceSource for NativeProviderSource {
                     self.frames(frames)?;
                     if self.status >= 300 {
                         let kind = match self.status {
-                            401 | 402 | 403 => {
+                            401..=403 => {
                                 devworks_core::providers::decode::DecodeErrorKind::Authentication
                             }
                             404 => {

@@ -536,39 +536,38 @@ struct LazySink {
 }
 impl LazySink {
     fn get(&mut self) -> Result<Option<&mut ProviderSink>, StorageError> {
-        if self.inner.is_none() {
-            if let Some(prepared) = self
+        if self.inner.is_none()
+            && let Some(prepared) = self
                 .shared
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone()
-            {
-                let embedding = match &self.request.input {
-                    InferenceInput::Embedding {
-                        embedding_space_id,
-                        inputs,
-                        ..
-                    } => {
-                        let registration = self
-                            .owner
-                            .composition
-                            .embedding_spaces
-                            .iter()
-                            .find(|r| r.space.space_id == *embedding_space_id)
-                            .ok_or(StorageError::ScopeDenied)?;
-                        Some((registration.space.clone(), inputs.clone()))
-                    }
-                    _ => None,
-                };
-                self.inner = Some(ProviderSink::new(
-                    self.owner.store.clone(),
-                    self.owner.artifacts.clone(),
-                    self.context.clone(),
-                    prepared,
-                    embedding,
-                    self.result.clone(),
-                ));
-            }
+        {
+            let embedding = match &self.request.input {
+                InferenceInput::Embedding {
+                    embedding_space_id,
+                    inputs,
+                    ..
+                } => {
+                    let registration = self
+                        .owner
+                        .composition
+                        .embedding_spaces
+                        .iter()
+                        .find(|r| r.space.space_id == *embedding_space_id)
+                        .ok_or(StorageError::ScopeDenied)?;
+                    Some((registration.space.clone(), inputs.clone()))
+                }
+                _ => None,
+            };
+            self.inner = Some(ProviderSink::new(
+                self.owner.store.clone(),
+                self.owner.artifacts.clone(),
+                self.context.clone(),
+                prepared,
+                embedding,
+                self.result.clone(),
+            ));
         }
         Ok(self.inner.as_mut())
     }

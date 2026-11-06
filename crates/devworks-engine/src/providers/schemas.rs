@@ -236,8 +236,7 @@ impl RegisteredSchemas {
             .iter()
             .find(|f| f.path == path)
             .ok_or(ProviderError::MaterialUnavailable)?;
-        let length =
-            u64::try_from(expected.byte_length).map_err(|_| ProviderError::MaterialUnavailable)?;
+        let length = expected.byte_length;
         if length > max {
             return Err(ProviderError::TooLarge);
         }
