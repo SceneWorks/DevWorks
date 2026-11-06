@@ -603,6 +603,22 @@ fn selected(name: &str) -> bool {
             | "x-ratelimit-remaining-tokens"
             | "x-ratelimit-reset-requests"
             | "x-ratelimit-reset-tokens"
+            // Non-secret subscription fields consumed by core::providers::limits.
+            | "x-codex-primary-used-percent"
+            | "x-codex-primary-reset-at"
+            | "x-codex-primary-reset-after-seconds"
+            | "x-codex-secondary-used-percent"
+            | "x-codex-secondary-reset-at"
+            | "x-codex-secondary-reset-after-seconds"
+            | "anthropic-ratelimit-unified-status"
+            | "anthropic-ratelimit-unified-utilization"
+            | "anthropic-ratelimit-unified-reset"
+            | "anthropic-ratelimit-unified-5h-status"
+            | "anthropic-ratelimit-unified-5h-utilization"
+            | "anthropic-ratelimit-unified-5h-reset"
+            | "anthropic-ratelimit-unified-7d-status"
+            | "anthropic-ratelimit-unified-7d-utilization"
+            | "anthropic-ratelimit-unified-7d-reset"
     )
 }
 

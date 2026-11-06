@@ -657,3 +657,6 @@ fn http_invalid_request_never_connects_and_refused_connection_is_not_sent() {
         before(TransportFailure::Unreachable)
     );
 }
+
+#[path = "tests/subscription_limits.rs"]
+mod subscription_limits;
