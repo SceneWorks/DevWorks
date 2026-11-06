@@ -447,13 +447,13 @@ impl ConventionRepository for Unit<'_> {
         }
         atomic(self.conn, || {
             insert_snapshot(self.conn, r, &self.info.boot_id, self.serial)?;
-            index::invalidate(
-                self.conn,
-                &r.id,
-                None,
-                r.scope != old.scope || r.title != old.title || r.lifecycle != old.lifecycle,
-                r.updated_at_ms,
-            )?;
+            if r.content_ref != old.content_ref
+                || r.scope != old.scope
+                || r.title != old.title
+                || r.lifecycle != old.lifecycle
+            {
+                index::invalidate(self.conn, &r.id, r.updated_at_ms)?;
+            }
             db(self.conn.execute(
                 "UPDATE convention_heads SET revision=?2 WHERE id=?1 AND revision=?3",
                 params![r.id.as_str(), r.revision, expected],
@@ -518,7 +518,6 @@ impl ConventionRepository for Unit<'_> {
         }
         atomic(self.conn, || {
             insert_resource(self.conn, r)?;
-            index::invalidate(self.conn, &r.convention_id, Some(&r.id), false, self.now)?;
             db(self.conn.execute(
                 "UPDATE convention_resource_heads SET revision=?2 WHERE id=?1 AND revision=?3",
                 params![r.id.as_str(), r.revision, expected_resource],

@@ -166,13 +166,13 @@ pub struct StoredConventionEmbeddingSpace {
     pub element_type: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StoredConventionIndex {
     pub generation_id: Id,
     pub convention_id: Id,
     pub convention_revision: i64,
-    pub resource_id: Option<Id>,
-    pub resource_revision: Option<i64>,
+    /// Exact immutable authored body ArtifactRef, including version identity.
+    pub source_ref: Value,
     pub operation_id: crate::protocol::OperationId,
     /// Draft or Published. Source fields remain immutable in either state.
     pub state: String,
@@ -185,31 +185,49 @@ pub struct StoredConventionIndex {
     pub updated_at_ms: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConventionTerm {
     pub term: String,
     pub frequency: u32,
 }
-
+/// Root title is inline; H1-H3 headings are exact byte spans in the generation's source_ref.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredConventionSection {
+    pub generation_id: Id,
+    pub id: Id,
+    pub parent_id: Option<Id>,
+    pub heading: Option<String>,
+    pub level: u8,
+    pub source_offset: Option<i64>,
+    pub source_length: Option<i64>,
+    /// Own segment tokens only, never repeated ancestor tokens.
+    pub token_count: i64,
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredConventionChunk {
     pub generation_id: Id,
     pub id: Id,
     pub convention_id: Id,
     pub convention_revision: i64,
-    pub resource_id: Option<Id>,
-    pub resource_revision: Option<i64>,
     pub index: i64,
-    pub section_path: String,
-    /// Optional exact UTF-8 breadcrumb artifact when the public inline bound is insufficient.
-    pub section_path_ref: Option<Value>,
+    pub section_id: Id,
     pub text: String,
-    pub embedding_text: String,
-    /// Frozen ASCII token count of embedding_text, including its breadcrumb.
+    /// Body tokens only. Effective length adds the at-most-four section ancestors.
     pub token_count: i64,
-    /// Sorted, unique ASCII term frequencies computed by the owning chunker.
-    pub terms: Vec<ConventionTerm>,
     pub vector: Option<Vec<f32>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConventionChunkMatch {
+    pub generation_id: Id,
+    pub id: Id,
+    pub convention_id: Id,
+    pub convention_revision: i64,
+    pub index: i64,
+    pub section_id: Id,
+    pub source_digest: String,
+    /// At most 360 Unicode scalars, without materializing full ranked bodies.
+    pub excerpt: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,7 +243,7 @@ pub struct ConventionWeightedTerm {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConventionRankedChunk {
-    pub chunk: StoredConventionChunk,
+    pub chunk: ConventionChunkMatch,
     pub lexical_score: f64,
     pub dense_score: f64,
     pub score: f64,
@@ -246,12 +264,27 @@ pub struct StoredConventionEmbeddingInputs {
 }
 
 pub trait ConventionIndexRead {
+    fn convention_section(
+        &self,
+        generation: &Id,
+        section: &Id,
+    ) -> Result<Option<StoredConventionSection>, StorageError>;
+    fn convention_sections(
+        &self,
+        generation: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredConventionSection>, StorageError>;
+    fn convention_chunk(
+        &self,
+        generation: &Id,
+        chunk: &Id,
+    ) -> Result<Option<StoredConventionChunk>, StorageError>;
     fn convention_chunk_count(&self, generation: &Id) -> Result<u64, StorageError>;
     /// Current eligible pending draft, newest first; otherwise the published head's current validity.
     fn convention_index_status(
         &self,
         convention: &Id,
-        resource: Option<&Id>,
     ) -> Result<Option<StoredConventionIndex>, StorageError>;
     /// Positive monotonic generation of the exact requested scopes, including publication/status changes.
     fn convention_index_revision(&self, scopes: &[KnowledgeScope]) -> Result<i64, StorageError>;
@@ -266,7 +299,6 @@ pub trait ConventionIndexRead {
     fn convention_index_head(
         &self,
         convention: &Id,
-        resource: Option<&Id>,
     ) -> Result<Option<StoredConventionIndex>, StorageError>;
     fn convention_index_generation(
         &self,
@@ -295,7 +327,7 @@ pub trait ConventionIndexRead {
     /// Frozen BM25 (k1=1.2,b=.75); positive dense top 4*K; union with ALL lexical matches.
     /// Final score=.35*lexical/full_corpus_max+.65*dense, including lexical-only fallback.
     /// Scope/current-version filters precede statistics/ranking. Limit is 1..=50; ties use
-    /// current title (binary Unicode), then stable convention/resource/generation/chunk identity.
+    /// current title (binary Unicode), then stable convention/generation/chunk identity.
     fn convention_ranked_chunks(
         &self,
         query: &ConventionQuery,
@@ -308,6 +340,28 @@ pub trait ConventionIndexRead {
 }
 
 pub trait ConventionIndexRepository: ConventionIndexRead {
+    fn stage_convention_section(
+        &mut self,
+        section: &StoredConventionSection,
+    ) -> Result<(), StorageError>;
+    /// SHA256(JCS(ordered ConventionTerm objects)); additive TF, exact batch replay is a no-op.
+    /// Each batch contains at most 500 actual tokens. Term strings are interned once/generation.
+    fn stage_convention_section_terms(
+        &mut self,
+        generation: &Id,
+        section: &Id,
+        batch_index: i64,
+        digest: &str,
+        terms: &[ConventionTerm],
+    ) -> Result<(), StorageError>;
+    fn stage_convention_chunk_terms(
+        &mut self,
+        generation: &Id,
+        chunk: &Id,
+        batch_index: i64,
+        digest: &str,
+        terms: &[ConventionTerm],
+    ) -> Result<(), StorageError>;
     /// Returns the winning immutable artifact refs for an exact request/context/space/batch.
     /// Newly staged equivalent UUID refs do not replace a prior winner. Caller retires its
     /// unused candidate refs atomically; this stores no provider outcome or dispatch state.
@@ -335,7 +389,7 @@ pub trait ConventionIndexRepository: ConventionIndexRead {
         status: &str,
         error: Option<&str>,
     ) -> Result<(), StorageError>;
-    /// Rechecks actual current owner/resource/source/live artifact and real operation, then
+    /// Rechecks actual current owner/source/live artifact and real operation, then
     /// flips one head atomically. Ready requires complete vectors; otherwise LexicalOnly.
     fn publish_convention_index(
         &mut self,
@@ -397,7 +451,17 @@ pub struct StoredConventionImportArtifact {
     pub managed_path: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConventionImportStorageUsage {
+    pub max_entry_bytes: i64,
+    pub additional_scope_bytes: i64,
+}
 pub trait ConventionImportRead {
+    /// Distinct prospective blobs not already charged to the target Explicit artifact scope.
+    fn convention_import_storage_usage(
+        &self,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<ConventionImportStorageUsage, StorageError>;
     fn convention_import(
         &self,
         operation: &crate::protocol::OperationId,

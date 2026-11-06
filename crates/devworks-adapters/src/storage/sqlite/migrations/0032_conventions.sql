@@ -62,51 +62,70 @@ CREATE TABLE convention_embedding_spaces (
 ) STRICT;
 CREATE TABLE convention_indexes (
  generation_id TEXT PRIMARY KEY, convention_id TEXT NOT NULL, convention_revision INTEGER NOT NULL,
- resource_id TEXT, resource_revision INTEGER, operation_id TEXT NOT NULL REFERENCES operations,
- state TEXT NOT NULL CHECK(state IN('Draft','Published')),
+ source_ref_json TEXT NOT NULL CHECK(json_valid(source_ref_json)), source_version_id TEXT NOT NULL REFERENCES artifact_versions,
+ operation_id TEXT NOT NULL REFERENCES operations,state TEXT NOT NULL CHECK(state IN('Draft','Published')),
  status TEXT NOT NULL CHECK(status IN('Queued','Indexing','Ready','LexicalOnly','Stale','Failed','Cancelled')),
- error TEXT, embedding_space TEXT REFERENCES convention_embedding_spaces, source_digest TEXT NOT NULL,
- created_at INTEGER NOT NULL CHECK(created_at>=0), updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
+ error TEXT,embedding_space TEXT REFERENCES convention_embedding_spaces,source_digest TEXT NOT NULL,
+ created_at INTEGER NOT NULL CHECK(created_at>=0),updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
  FOREIGN KEY(convention_id,convention_revision) REFERENCES convention_versions(convention_id,revision),
- FOREIGN KEY(resource_id,resource_revision) REFERENCES convention_resource_versions(resource_id,revision),
- CHECK((resource_id IS NULL)=(resource_revision IS NULL))
+ CHECK(source_version_id=json_extract(source_ref_json,'$.versionId'))
 ) STRICT;
-CREATE INDEX convention_index_owner ON convention_indexes(convention_id,resource_id,generation_id);
+CREATE INDEX convention_index_owner ON convention_indexes(convention_id,generation_id);
 CREATE INDEX convention_index_operation ON convention_indexes(operation_id,generation_id);
 CREATE TABLE convention_index_heads (
- convention_id TEXT NOT NULL REFERENCES convention_heads, resource_key TEXT NOT NULL,
- generation_id TEXT NOT NULL UNIQUE REFERENCES convention_indexes,
- PRIMARY KEY(convention_id,resource_key)
+ convention_id TEXT PRIMARY KEY REFERENCES convention_heads,generation_id TEXT NOT NULL UNIQUE REFERENCES convention_indexes
 ) STRICT;
+CREATE TABLE convention_sections (
+ generation_id TEXT NOT NULL REFERENCES convention_indexes,id TEXT NOT NULL,parent_id TEXT,
+ heading TEXT,level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 3),source_offset INTEGER,source_length INTEGER,
+ token_count INTEGER NOT NULL CHECK(token_count>=0),PRIMARY KEY(generation_id,id),
+ FOREIGN KEY(generation_id,parent_id) REFERENCES convention_sections(generation_id,id),
+ CHECK((level=0 AND parent_id IS NULL AND heading IS NOT NULL AND source_offset IS NULL AND source_length IS NULL)
+ OR(level>0 AND parent_id IS NOT NULL AND heading IS NULL AND source_offset>=0 AND source_length>=0))
+) STRICT;
+CREATE UNIQUE INDEX convention_section_root ON convention_sections(generation_id) WHERE level=0;
 CREATE TABLE convention_chunks (
- generation_id TEXT NOT NULL REFERENCES convention_indexes, id TEXT NOT NULL,
- chunk_index INTEGER NOT NULL CHECK(chunk_index>=0), section_path TEXT NOT NULL,
- section_path_ref_json TEXT CHECK(section_path_ref_json IS NULL OR json_valid(section_path_ref_json)),
- section_path_version_id TEXT REFERENCES artifact_versions,
- text TEXT NOT NULL, embedding_text TEXT NOT NULL, token_count INTEGER NOT NULL CHECK(token_count>=0),
- vector BLOB CHECK(vector IS NULL OR length(vector)%4=0),
- PRIMARY KEY(generation_id,id), UNIQUE(generation_id,chunk_index),
- CHECK((section_path_ref_json IS NULL)=(section_path_version_id IS NULL))
+ generation_id TEXT NOT NULL REFERENCES convention_indexes,id TEXT NOT NULL,
+ chunk_index INTEGER NOT NULL CHECK(chunk_index>=0),section_id TEXT NOT NULL,text TEXT NOT NULL,
+ token_count INTEGER NOT NULL CHECK(token_count>=0),vector BLOB CHECK(vector IS NULL OR length(vector)%4=0),
+ PRIMARY KEY(generation_id,id),UNIQUE(generation_id,chunk_index),
+ FOREIGN KEY(generation_id,section_id) REFERENCES convention_sections(generation_id,id)
+) STRICT;
+CREATE TABLE convention_terms (
+ generation_id TEXT NOT NULL REFERENCES convention_indexes,id INTEGER NOT NULL,term TEXT NOT NULL,
+ PRIMARY KEY(generation_id,id),UNIQUE(generation_id,term)
+) STRICT;
+CREATE TABLE convention_section_terms (
+ generation_id TEXT NOT NULL,section_id TEXT NOT NULL,term_id INTEGER NOT NULL,frequency INTEGER NOT NULL CHECK(frequency>0),
+ PRIMARY KEY(generation_id,section_id,term_id),
+ FOREIGN KEY(generation_id,section_id) REFERENCES convention_sections(generation_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(generation_id,term_id) REFERENCES convention_terms(generation_id,id)
 ) STRICT;
 CREATE TABLE convention_chunk_terms (
- generation_id TEXT NOT NULL, chunk_id TEXT NOT NULL, term TEXT NOT NULL,
- frequency INTEGER NOT NULL CHECK(frequency>0), PRIMARY KEY(generation_id,chunk_id,term),
- FOREIGN KEY(generation_id,chunk_id) REFERENCES convention_chunks(generation_id,id) ON DELETE CASCADE
+ generation_id TEXT NOT NULL,chunk_id TEXT NOT NULL,term_id INTEGER NOT NULL,frequency INTEGER NOT NULL CHECK(frequency>0),
+ PRIMARY KEY(generation_id,chunk_id,term_id),
+ FOREIGN KEY(generation_id,chunk_id) REFERENCES convention_chunks(generation_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(generation_id,term_id) REFERENCES convention_terms(generation_id,id)
 ) STRICT;
-CREATE INDEX convention_term_chunks ON convention_chunk_terms(term,generation_id,chunk_id,frequency);
+CREATE INDEX convention_term_chunks ON convention_chunk_terms(generation_id,term_id,chunk_id,frequency);
+CREATE INDEX convention_term_sections ON convention_section_terms(generation_id,term_id,section_id,frequency);
+CREATE TABLE convention_term_batches (
+ generation_id TEXT NOT NULL REFERENCES convention_indexes,kind TEXT NOT NULL CHECK(kind IN('Section','Chunk')),
+ owner_id TEXT NOT NULL,batch_index INTEGER NOT NULL CHECK(batch_index>=0),digest TEXT NOT NULL,
+ PRIMARY KEY(generation_id,kind,owner_id,batch_index)
+) STRICT;
 CREATE TRIGGER convention_space_immutable_update BEFORE UPDATE ON convention_embedding_spaces BEGIN SELECT RAISE(ABORT,'immutable convention embedding space'); END;
 CREATE TRIGGER convention_space_immutable_delete BEFORE DELETE ON convention_embedding_spaces BEGIN SELECT RAISE(ABORT,'immutable convention embedding space'); END;
 CREATE TRIGGER convention_index_source_immutable BEFORE UPDATE ON convention_indexes
  WHEN NEW.generation_id!=OLD.generation_id OR NEW.convention_id!=OLD.convention_id OR NEW.convention_revision!=OLD.convention_revision
- OR NEW.resource_id IS NOT OLD.resource_id OR NEW.resource_revision IS NOT OLD.resource_revision OR NEW.operation_id!=OLD.operation_id
+ OR NEW.source_ref_json!=OLD.source_ref_json OR NEW.operation_id!=OLD.operation_id
  OR NEW.embedding_space IS NOT OLD.embedding_space OR NEW.source_digest!=OLD.source_digest OR NEW.created_at!=OLD.created_at
  BEGIN SELECT RAISE(ABORT,'immutable convention index source'); END;
 CREATE TRIGGER convention_index_immutable_delete BEFORE DELETE ON convention_indexes BEGIN SELECT RAISE(ABORT,'retained convention index source'); END;
 CREATE TRIGGER convention_chunks_immutable_update BEFORE UPDATE ON convention_chunks BEGIN SELECT RAISE(ABORT,'immutable convention chunk'); END;
-CREATE TRIGGER convention_terms_immutable_update BEFORE UPDATE ON convention_chunk_terms BEGIN SELECT RAISE(ABORT,'immutable convention term'); END;
+CREATE TRIGGER convention_sections_immutable_update BEFORE UPDATE ON convention_sections BEGIN SELECT RAISE(ABORT,'immutable convention section'); END;
 CREATE TRIGGER convention_chunk_cleanup_guard BEFORE DELETE ON convention_chunks
- WHEN EXISTS(SELECT 1 FROM convention_index_heads h JOIN convention_indexes g ON g.generation_id=h.generation_id
- WHERE h.generation_id=OLD.generation_id AND g.status IN('Ready','LexicalOnly'))
+ WHEN EXISTS(SELECT 1 FROM convention_index_heads WHERE generation_id=OLD.generation_id)
  BEGIN SELECT RAISE(ABORT,'current convention chunks cannot be discarded'); END;
 CREATE TABLE convention_embedding_inputs (
  request_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES actors,
