@@ -96,7 +96,7 @@ pub(crate) fn generic(
         v["resumedOperationId"] = r
             .result
             .as_ref()
-            .and_then(|v| v.get("operationId"))
+            .and_then(resumed_operation_id)
             .cloned()
             .unwrap_or(Value::Null);
     }
@@ -109,8 +109,35 @@ pub(crate) fn scope_wire(scope: &crate::ports::storage::ConfigScope) -> Value {
     }
 }
 
+fn resumed_operation_id(result: &Value) -> Option<&Value> {
+    result
+        .pointer("/receipt/operationId")
+        .filter(|v| !v.is_null())
+        .or_else(|| {
+            result
+                .pointer("/receipt/decision/operationId")
+                .filter(|v| !v.is_null())
+        })
+        .or_else(|| result.get("operationId").filter(|v| !v.is_null()))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resumed_operation_projects_the_canonical_recorded_reply() {
+        let reply:crate::protocol::results::DomainCommandReply=serde_json::from_value(serde_json::json!({"kind":"Recorded","protocol":"1.0-draft.1","replayed":false,"receipt":{"commandId":"command","committedSequence":"1","acceptedAtMs":"1","requestDigest":"a".repeat(64),"operationId":"operation","decision":{"kind":"Accepted","operationId":"operation"}}})).unwrap();
+        let value = serde_json::to_value(reply).unwrap();
+        assert_eq!(
+            super::resumed_operation_id(&value),
+            Some(&serde_json::json!("operation"))
+        );
+        assert!(
+            super::resumed_operation_id(
+                &serde_json::json!({"kind":"CommandStatusUnknown","requestKey":"request"})
+            )
+            .is_none()
+        );
+    }
     #[test]
     fn private_owner_digest_preserves_large_host_identifiers_without_rounding() {
         let a = super::hash(&serde_json::json!({"fileIdentity":u64::MAX}));
