@@ -17,7 +17,7 @@ use devworks_core::ports::{
     Decided, HandlerFailure, IdKind, IdSource,
 };
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision};
-use devworks_core::protocol::{ActorId, Id, ProjectId, RootId};
+use devworks_core::protocol::{ActorId, ProjectId, RootId};
 use devworks_core::registry::SchemaRevision;
 use devworks_core::services::{
     UseCases, artifacts::ArtifactService, diagnostics::DiagnosticService,
@@ -106,6 +106,12 @@ fn composition(h: &Harness, store: Arc<dyn ApplicationStore>) -> Composition {
     }
 }
 fn principals(store: &dyn ApplicationStore) -> (InvocationContext, InvocationContext) {
+    principals_with_audience(store, true)
+}
+fn principals_with_audience(
+    store: &dyn ApplicationStore,
+    bind: bool,
+) -> (InvocationContext, InvocationContext) {
     let user = principal(store, "user", PrincipalKind::Human);
     let agent = principal(store, "agent", PrincipalKind::Agent);
     if read(store, |s| s.authority().principal(agent.principal())).is_none() {
@@ -129,11 +135,13 @@ fn principals(store: &dyn ApplicationStore) -> (InvocationContext, InvocationCon
         })
         .unwrap();
     }
-    let recipient = user.principal().clone();
-    write(store, move |tx| {
-        tx.decisions().bind_notification_user(&recipient)
-    })
-    .unwrap();
+    if bind {
+        let recipient = user.principal().clone();
+        write(store, move |tx| {
+            tx.decisions().bind_notification_user(&recipient)
+        })
+        .unwrap();
+    }
     (user, agent)
 }
 fn frame(h: &Harness, op: &str, revision: u32, mut body: Value) -> Vec<u8> {
@@ -255,7 +263,7 @@ fn only_dedicated_native_decisions_readmit_the_saved_command_as_its_original_age
         let raw=decision(&h,&proposal);
         value(app.record_human_decision(&user,&raw).unwrap());
         app.approval_resumes().tick().await.unwrap();
-        assert!(enabled(&*store,&job));
+        assert!(enabled(&*store,&job), "resume={:?}", resume(&*store,&proposal));
         let saved=resume(&*store,&proposal);assert_eq!(saved.state,"Admitted");assert_eq!(saved.principal_kind,PrincipalKind::Agent);assert_eq!(saved.principal,agent.principal().clone());
         // An exact native interaction replay and another catch-up pass do not re-execute it.
         value(app.record_human_decision(&user,&raw).unwrap());app.approval_resumes().tick().await.unwrap();
@@ -430,12 +438,11 @@ fn lost_admission_reply_reuses_the_original_agent_frame_and_receipt() {
         assert_eq!(resume(&*store, &proposal).state, "Unknown");
         driver.tick().await.unwrap();
         assert_eq!(resume(&*store, &proposal).state, "Admitted");
-        let seen = admission.observations.lock().unwrap();
+        let seen = admission.observations.lock().unwrap().clone();
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[0], seen[1]);
         assert_eq!(seen[0].0, *agent.principal());
         assert_eq!(seen[0].1, PrincipalKind::Agent);
-        drop(seen);
         driver.drain().await;
         app.shutdown().await;
     });
@@ -565,5 +572,160 @@ fn paused_rows_at_the_head_do_not_starve_ready_approvals_beyond_one_page() {
         let report=driver.tick().await.unwrap();assert_eq!(report.visited,66);assert_eq!(report.waiting,65);assert_eq!(report.submitted,1);
         for (index,(_,_,job)) in records.iter().enumerate(){assert_eq!(enabled(&*store,job),index==65);}
         driver.drain().await;app.shutdown().await;
+    });
+}
+
+struct PauseAtAdmission {
+    runtime: Arc<Runtime>,
+    human: InvocationContext,
+    pause: Vec<u8>,
+    first: std::sync::atomic::AtomicBool,
+}
+impl devworks_engine::approvals::ResumeAdmission for PauseAtAdmission {
+    fn readmit(
+        &self,
+        context: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            value(
+                self.runtime
+                    .command(&self.human, "runs.pause", &self.pause)
+                    .unwrap(),
+            );
+        }
+        self.runtime.command_with(context, operation, raw, options)
+    }
+}
+#[test]
+fn pause_between_preparation_and_gateway_rolls_back_without_poisoning_the_saved_key() {
+    let h = Harness::new();
+    runtime().block_on(async {
+        let store = h.open();
+        seed_root(&h, "root");
+        rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap()
+            .execute("UPDATE work_items SET kind='issue' WHERE id='root'", []).unwrap();
+        let (user, agent) = principals(&*store);
+        let agent = agent.with_lineage(Some(ProjectId(id("project-a"))), Some(RootId(id("root"))), None);
+        let app = Arc::new(boot(composition(&h, store.clone())).await.unwrap());
+        app.approval_resumes().drain().await;
+        let job = draft(&h, &app, &agent, "Pause-race reviewed job", true);
+        let proposal = propose_enable(&h, &app, &agent, &job, true);
+        value(app.record_human_decision(&user, &decision(&h, &proposal)).unwrap());
+        let before = resume(&*store, &proposal);
+        let pause = serde_json::to_vec(&json!({"protocol":"1.0-draft.1","requestKey":h.ids.next_id(IdKind::Link),
+            "command":{"kind":"runs.pause","rootId":"root","expectedControlRevision":"1"}})).unwrap();
+        let driver = devworks_engine::approvals::ResumeDispatcher::new(store.clone(), app.approvals().clone(), Arc::new(PauseAtAdmission {
+            runtime: app.clone(), human: user.clone(), pause, first: std::sync::atomic::AtomicBool::new(true),
+        }));
+        assert_eq!(driver.tick().await.unwrap().submitted, 1);
+        assert!(!enabled(&*store, &job));
+        let waiting = resume(&*store, &proposal);
+        assert_eq!(waiting.state, "Unknown", "no immutable refusal receipt may be written for a transient pause");
+        assert_eq!(waiting.request_key, before.request_key);
+        assert_eq!(waiting.result.as_ref().unwrap()["kind"], "Rejected");
+        assert_eq!(driver.tick().await.unwrap().waiting, 1);
+        let control = read(&*store, |s|s.runs().root_control(&RootId(id("root")))).unwrap();
+        assert_eq!(control.desired, DesiredExecution::Paused);
+        let holds = read(&*store, |s|s.runs().blockers(&BlockerFilter::RootLevel(RootId(id("root"))), None, 500));
+        let covered: Vec<_> = holds.iter().filter(|h|h.cause.manual_resume()).map(|h|json!({"holdId":h.id,"revision":h.revision.to_string()})).collect();
+        let resume_frame = serde_json::to_vec(&json!({"protocol":"1.0-draft.1","requestKey":h.ids.next_id(IdKind::Link),
+            "command":{"kind":"runs.continue","rootId":"root","expectedControlRevision":control.revision.to_string(),"coveredHolds":covered}})).unwrap();
+        value(app.command(&user, "runs.continue", &resume_frame).unwrap());
+        driver.tick().await.unwrap();
+        assert!(enabled(&*store, &job));
+        let admitted = resume(&*store, &proposal);
+        assert_eq!(admitted.state, "Admitted");
+        assert_eq!(admitted.request_key, before.request_key);
+        assert_eq!(admitted.principal_kind, PrincipalKind::Agent);
+        driver.drain().await;
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn late_canonical_user_binding_catches_up_required_input_and_missing_adapter_recovers_uncertainty()
+{
+    let h = Harness::new();
+    runtime().block_on(async {
+        let store = h.open();
+        let (user, agent) = principals_with_audience(&*store, false);
+        let app = boot(composition(&h, store.clone())).await.unwrap();
+        let job = draft(&h, &app, &agent, "Late recipient job", false);
+        let proposal = propose_enable(&h, &app, &agent, &job, false);
+        let source = format!("approval-Generic-{}", proposal["id"].as_str().unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        assert!(
+            read(&*store, |s| s
+                .decisions()
+                .notification_by_source(user.principal(), &source))
+            .is_none()
+        );
+        let recipient = user.principal().clone();
+        write(&*store, move |tx| {
+            tx.decisions().bind_notification_user(&recipient)
+        })
+        .unwrap();
+        let mut passes = app.approval_resumes().watch();
+        passes.borrow_and_update();
+        app.notification_wakeup();
+        within("canonical audience source catch-up", async {
+            while read(&*store, |s| {
+                s.decisions()
+                    .notification_by_source(user.principal(), &source)
+            })
+            .is_none()
+            {
+                passes.changed().await.unwrap();
+            }
+        })
+        .await;
+        let notice = read(&*store, |s| {
+            s.decisions()
+                .notification_by_source(user.principal(), &source)
+        })
+        .unwrap();
+        assert!(notice.requires_input);
+        let row = notice.clone();
+        let recipient = user.principal().clone();
+        write(&*store, move |tx| {
+            tx.decisions()
+                .claim_os_notification_delivery(&recipient, &row.id, None, false)
+        })
+        .unwrap();
+        assert!(matches!(
+            app.notification_permission(),
+            devworks_core::ports::os_notifications::OsNotificationPermission::Unavailable(_)
+        ));
+        assert!(matches!(
+            app.request_notification_permission().await,
+            devworks_core::ports::os_notifications::OsNotificationPermission::Unavailable(_)
+        ));
+        app.shutdown().await;
+        drop(app);
+        drop(store);
+        let store = h.open();
+        let app = boot(composition(&h, store.clone())).await.unwrap();
+        let ledger = read(&*store, |s| {
+            s.decisions()
+                .os_notification_delivery(user.principal(), &notice.id)
+        })
+        .unwrap();
+        assert_eq!(
+            ledger.state, "Unknown",
+            "boot must reconcile prior native claims even without a configured adapter"
+        );
+        assert!(!enabled(&*store, &job));
+        assert_eq!(
+            read(&*store, |s| s
+                .decisions()
+                .approval(&id(proposal["id"].as_str().unwrap())))
+            .unwrap()
+            .state,
+            "Pending"
+        );
+        app.shutdown().await;
     });
 }
