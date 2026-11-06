@@ -512,9 +512,9 @@ fn interrupted_query(
     std::thread::scope(|scope| {
         let worker = scope.spawn(|| {
             search(
-                &f,
+                f,
                 index.clone(),
-                &ctx,
+                ctx,
                 "same-financial-query",
                 "alpha",
                 None,
@@ -577,9 +577,9 @@ fn interrupted_query(
     ));
     index.set_embeddings(Some(native));
     let first = search(
-        &f,
+        f,
         index.clone(),
-        &ctx,
+        ctx,
         "same-financial-query",
         "alpha",
         None,
