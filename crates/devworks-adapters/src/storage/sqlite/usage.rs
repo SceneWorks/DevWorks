@@ -466,7 +466,7 @@ fn write_snapshot(
         1,
     )
 }
-const STATUS_COLS: &str = "provider,revision,current_snapshot_id,last_attempt,last_success,refresh_pending,last_error,next_refresh";
+const STATUS_COLS: &str = "provider,revision,current_snapshot_id,last_attempt,last_success,refresh_pending,last_error,next_refresh,refresh_operation_id";
 fn decode_status(v: &Value) -> Result<StoredPriceStatus, StorageError> {
     Ok(StoredPriceStatus {
         provider: field(v, "provider")?,
@@ -475,6 +475,7 @@ fn decode_status(v: &Value) -> Result<StoredPriceStatus, StorageError> {
         last_attempt_ms: field(v, "last_attempt")?,
         last_success_ms: field(v, "last_success")?,
         refresh_pending: boolean(v, "refresh_pending")?,
+        refresh_operation_id: field(v, "refresh_operation_id")?,
         last_error: field(v, "last_error")?,
         next_refresh_ms: field(v, "next_refresh")?,
     })
@@ -493,6 +494,7 @@ fn write_status(c: &Connection, r: &StoredPriceStatus, update: bool) -> Result<(
             sql(&r.refresh_pending)?,
             sql(&r.last_error)?,
             sql(&r.next_refresh_ms)?,
+            sql(&r.refresh_operation_id)?,
         ],
         update,
         1,
@@ -686,6 +688,7 @@ macro_rules! usage_reads{($t:ty)=>{impl UsageRead for $t{
  fn usage_changes(&self,feature:Option<&Id>,after:Option<&Id>,limit:u16)->Result<Vec<StoredUsageChange>,StorageError>{rows(self.conn,&format!("SELECT {CHANGE_COLS} FROM usage_changes WHERE event_id>?1 AND (?2 IS NULL OR feature_id=?2) ORDER BY event_id LIMIT ?3"),params![after.map_or("",Id::as_str),feature.map(Id::as_str),page(limit)?],decode_change)}
  fn usage_bootstrap(&self)->Result<StoredUsageBootstrap,StorageError>{bootstrap(self.conn)}
  fn price_revision(&self)->Result<i64,StorageError>{price_revision(self.conn)}
+ fn price_snapshots(&self,provider:Option<&str>,after:Option<&Id>,limit:u16)->Result<Vec<StoredPriceSnapshot>,StorageError>{if let Some(p)=provider{bounded(p,128)?;}rows(self.conn,&format!("SELECT {SNAPSHOT_COLS} FROM usage_price_snapshots WHERE id>?1 AND (?2 IS NULL OR provider=?2) ORDER BY id LIMIT ?3"),params![after.map_or("",Id::as_str),provider,page(limit)?],decode_snapshot)}
  fn price_snapshot(&self,id:&Id)->Result<Option<StoredPriceSnapshot>,StorageError>{snapshot(self.conn,id)}
  fn current_price_snapshot(&self,p:&str)->Result<Option<StoredPriceSnapshot>,StorageError>{status(self.conn,p)?.and_then(|s|s.current_snapshot_id).map(|id|snapshot(self.conn,&id)).transpose().map(Option::flatten)}
  fn price_status(&self,p:&str)->Result<Option<StoredPriceStatus>,StorageError>{status(self.conn,p)}
@@ -1209,6 +1212,14 @@ impl UsageRepository for Unit<'_> {
             || old.as_ref().and_then(|s| s.last_success_ms) != r.last_success_ms
         {
             return Err(invalid("only publication changes last-good price identity"));
+        }
+        if let Some(prior) = old.as_ref().and_then(|s| s.refresh_operation_id.as_ref())
+            && (r.refresh_operation_id.is_none()
+                || (!r.refresh_pending && r.refresh_operation_id.as_ref() != Some(prior)))
+        {
+            return Err(invalid(
+                "terminal price status retains its owning refresh operation",
+            ));
         }
         for n in [r.last_attempt_ms, r.last_success_ms, r.next_refresh_ms] {
             nonnegative(n)?;

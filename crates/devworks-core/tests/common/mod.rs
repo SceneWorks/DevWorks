@@ -2982,6 +2982,14 @@ impl UsageRead for Unsupported {
     fn price_revision(&self) -> Result<i64, StorageError> {
         nope()
     }
+    fn price_snapshots(
+        &self,
+        _provider: Option<&str>,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredPriceSnapshot>, StorageError> {
+        nope()
+    }
     fn price_snapshot(&self, _id: &Id) -> Result<Option<StoredPriceSnapshot>, StorageError> {
         nope()
     }

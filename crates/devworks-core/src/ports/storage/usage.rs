@@ -173,6 +173,8 @@ pub struct StoredPriceStatus {
     pub last_attempt_ms: Option<i64>,
     pub last_success_ms: Option<i64>,
     pub refresh_pending: bool,
+    /// Most recent owning refresh journal operation, retained after terminal publication/failure.
+    pub refresh_operation_id: Option<OperationId>,
     pub last_error: Option<String>,
     pub next_refresh_ms: Option<i64>,
 }
@@ -227,6 +229,13 @@ pub trait UsageRead {
     fn usage_bootstrap(&self) -> Result<StoredUsageBootstrap, StorageError>;
     /// Workspace generation has authoritative implicit initial revision1.
     fn price_revision(&self) -> Result<i64, StorageError>;
+    /// Immutable publication history in exclusive ID order, optionally one provider.
+    fn price_snapshots(
+        &self,
+        provider: Option<&str>,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredPriceSnapshot>, StorageError>;
     fn price_snapshot(&self, id: &Id) -> Result<Option<StoredPriceSnapshot>, StorageError>;
     fn current_price_snapshot(
         &self,

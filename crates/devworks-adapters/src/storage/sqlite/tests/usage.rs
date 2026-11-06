@@ -190,6 +190,7 @@ fn pending() -> StoredPriceStatus {
         last_attempt_ms: Some(T0),
         last_success_ms: None,
         refresh_pending: true,
+        refresh_operation_id: None,
         last_error: None,
         next_refresh_ms: None,
     }
@@ -1061,6 +1062,75 @@ fn usage28_host_decision_purposes_are_closed_and_preserve_router_identity() {
             pin_id: None,
             created_at_ms: T0,
         })
+    })
+    .unwrap();
+    assert!(s.integrity_check().unwrap().problems.is_empty());
+}
+#[test]
+fn usage28_price_history_is_bounded_and_refresh_operation_survives_publication_failure_and_restart()
+{
+    let h = Harness::new();
+    let s = seeded(&h);
+    run_write(&s, WriteOptions::default(), |tx| {
+        let operation = OperationId(id("refresh-operation"));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "usage.price_refresh".into(),
+            schema_version: 1,
+            args_digest: "a".repeat(64),
+            payload: json!({}),
+        })?;
+        let mut first = pending();
+        first.refresh_operation_id = Some(operation.clone());
+        tx.usage().put_price_status(&first, None)?;
+        let published = tx.usage().publish_price_snapshot(&publication(), 1)?;
+        assert_eq!(published.refresh_operation_id, Some(operation.clone()));
+        let mut refresh = published;
+        refresh.revision = 3;
+        refresh.refresh_pending = true;
+        tx.usage().put_price_status(&refresh, Some(2))?;
+        let mut second = publication();
+        second.id = id("snapshot-z");
+        second.revision = 2;
+        tx.usage().publish_price_snapshot(&second, 3)?;
+        let mut failed = tx.usage().price_status("OpenAI")?.unwrap();
+        failed.revision = 5;
+        failed.last_error = Some("safe failure".into());
+        tx.usage().put_price_status(&failed, Some(4))?;
+        failed.revision = 6;
+        failed.refresh_operation_id = None;
+        assert!(tx.usage().put_price_status(&failed, Some(5)).is_err());
+        let mut other = pending();
+        other.provider = "Anthropic".into();
+        tx.usage().put_price_status(&other, None)?;
+        let mut other = publication();
+        other.id = id("snapshot-other");
+        other.provider = "Anthropic".into();
+        tx.usage().publish_price_snapshot(&other, 1)?;
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let status = r.usage().price_status("OpenAI")?.unwrap();
+        assert_eq!(
+            status.refresh_operation_id,
+            Some(OperationId(id("refresh-operation")))
+        );
+        assert_eq!(status.current_snapshot_id, Some(id("snapshot-z")));
+        let first = r.usage().price_snapshots(Some("OpenAI"), None, 1)?;
+        assert_eq!(first[0].id, id("snapshot"));
+        let next = r
+            .usage()
+            .price_snapshots(Some("OpenAI"), Some(&first[0].id), 1)?;
+        assert_eq!(next[0].id, id("snapshot-z"));
+        assert_eq!(r.usage().price_snapshots(None, None, 500)?.len(), 3);
+        assert!(r.usage().price_snapshots(None, None, 0).is_err());
+        assert!(r.usage().price_snapshots(None, None, 501).is_err());
+        Ok(())
     })
     .unwrap();
     assert!(s.integrity_check().unwrap().problems.is_empty());

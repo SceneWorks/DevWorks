@@ -168,6 +168,7 @@ CREATE TABLE usage_price_snapshots (
  tariffs_json TEXT NOT NULL CHECK(json_valid(tariffs_json) AND json_type(tariffs_json)='array'),
  UNIQUE(provider,revision)
 ) STRICT;
+CREATE INDEX usage_price_snapshots_history ON usage_price_snapshots(provider,id);
 CREATE TRIGGER usage_price_snapshots_immutable_update BEFORE UPDATE ON usage_price_snapshots
  BEGIN SELECT RAISE(ABORT,'price snapshots are immutable'); END;
 CREATE TRIGGER usage_price_snapshots_immutable_delete BEFORE DELETE ON usage_price_snapshots
@@ -179,6 +180,7 @@ CREATE TABLE usage_price_status (
  last_attempt INTEGER,
  last_success INTEGER,
  refresh_pending INTEGER NOT NULL CHECK(refresh_pending IN (0,1)),
+ refresh_operation_id TEXT REFERENCES operations,
  last_error TEXT,
  next_refresh INTEGER
 ) STRICT;
