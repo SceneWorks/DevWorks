@@ -8,12 +8,16 @@ fn graph_page(
     ctx: &InvocationContext,
     operation: &str,
     query: Value,
-    views: Value,
+    views: Option<Value>,
     limits: (u16, u32),
     cursor: Option<&str>,
 ) -> GraphPage {
     let (max_results, max_visited) = limits;
-    let mut request = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"impact-native","scope":{"kind":"Workspace"},"view":views,"query":query,"limits":{"maxResults":max_results,"maxVisited":max_visited,"deadlineMs":300000}});
+    let mut request = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"impact-native","scope":{"kind":"Workspace"},"query":query,"limits":{"maxResults":max_results,"maxVisited":max_visited,"deadlineMs":300000}});
+    match views {
+        Some(view) => request["view"] = view,
+        None => request["current"] = json!(true),
+    }
     if let Some(cursor) = cursor {
         request["cursor"] = json!(cursor);
     }
@@ -107,7 +111,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         &ctx,
         "code.impact",
         node_query(&repository, 3),
-        views.clone(),
+        Some(views.clone()),
         (500, 100000),
         None,
     );
@@ -131,7 +135,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         &ctx,
         "code.impact",
         node_query(&repository, 3),
-        views.clone(),
+        Some(views.clone()),
         (1, 100000),
         None,
     );
@@ -151,7 +155,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
             &ctx,
             "code.impact",
             node_query(&repository, 3),
-            views.clone(),
+            Some(views.clone()),
             (1, 100000),
             Some(&cursor),
         );
@@ -162,7 +166,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         &ctx,
         "code.impact",
         node_query(&repository, 1),
-        views.clone(),
+        Some(views.clone()),
         (500, 100000),
         None,
     );
@@ -174,7 +178,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         &ctx,
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
-        views.clone(),
+        Some(views.clone()),
         (500, 100000),
         None,
     );
@@ -194,7 +198,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
         &ctx,
         "code.impact",
         node_query(&repository, 3),
-        views,
+        Some(views),
         (500, 1),
         None,
     );
@@ -240,7 +244,7 @@ fn native_file_impact_distinguishes_unindexed_language_and_missing_indexed_file(
             &ctx,
             "code.file_impact",
             file_query(&repository, path),
-            views.clone(),
+            Some(views.clone()),
             (100, 100000),
             None,
         );
@@ -314,7 +318,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         &ctx,
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
-        all_views.clone(),
+        None,
         (500, 100000),
         None,
     );
@@ -350,7 +354,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         &ctx,
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
-        all_views,
+        Some(all_views),
         (500, 100000),
         None,
     );
@@ -375,7 +379,7 @@ fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_rep
         &ctx,
         "code.file_impact",
         file_query(&ids["core"], "src/lib.rs"),
-        json!({"kind":"Published","repositoryIds":[ids["core"]]}),
+        Some(json!({"kind":"Published","repositoryIds":[ids["core"]]})),
         (500, 100000),
         None,
     );
@@ -411,7 +415,14 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
     let baseline = indexed(&executor, &app, &store, &ctx, &repository, "impact-base");
     git(&repo, &["rm", "src/changed.rs"]);
     git(&repo, &["commit", "-q", "-m", "delete changed target"]);
-    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"impact-deleted-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"HEAD","expectedSourceRevision":"1"}});
+    let source_revision = read(&*store, |r| {
+        devworks_core::services::indexing::section_config(
+            r.indexing(),
+            &devworks_core::services::indexing::section_key(ctx.project_id()),
+        )
+        .map(|s| s.revision)
+    });
+    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,"requestKey":"impact-deleted-overlay","command":{"kind":"RefreshOverlay","repositoryId":repository,"ref":"refs/heads/main","expectedSourceRevision":source_revision.to_string()}});
     let CommandReply::Recorded { receipt, .. } = app
         .command(
             &ctx,
@@ -420,13 +431,13 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         )
         .unwrap()
     else {
-        panic!("overlay receipt")
+        panic!("overlay reply was not recorded")
     };
-    let DomainDecision::Applied {
-        result: OperationResult::IndexingRefreshOverlay { value },
-    } = receipt.decision
-    else {
-        panic!("overlay accepted")
+    let value = match receipt.decision {
+        DomainDecision::Applied {
+            result: OperationResult::IndexingRefreshOverlay { value },
+        } => value,
+        other => panic!("overlay expected Applied, got {other:?}"),
     };
     let overlay = executor.block_on(within("deleted-file impact overlay publication", async {
         loop {
@@ -443,7 +454,7 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         &ctx,
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
-        json!({"kind":"Exact","viewIds":[baseline.output_view_id.unwrap()]}),
+        Some(json!({"kind":"Exact","viewIds":[baseline.output_view_id.unwrap()]})),
         (100, 100000),
         None,
     );
@@ -454,7 +465,7 @@ fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baselin
         &ctx,
         "code.file_impact",
         file_query(&repository, "src/changed.rs"),
-        json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]}),
+        Some(json!({"kind":"Exact","viewIds":[overlay.output_view_id.unwrap()]})),
         (100, 100000),
         None,
     );
@@ -661,7 +672,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
         &ctx,
         "code.impact",
         node_query(&ids["origin"], 3),
-        views.clone(),
+        Some(views.clone()),
         (500, 100000),
         None,
     );
@@ -685,7 +696,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
         &ctx,
         "code.impact",
         publisher,
-        views,
+        Some(views),
         (500, 100000),
         None,
     );
@@ -699,7 +710,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
         &ctx,
         "code.impact",
         node_query(&ids["origin"], 3),
-        json!({"kind":"Published","repositoryIds":[ids["origin"]]}),
+        Some(json!({"kind":"Published","repositoryIds":[ids["origin"]]})),
         (500, 100000),
         None,
     );
@@ -749,7 +760,7 @@ fn native_impact_totals_are_not_capped_by_the_five_hundred_row_wire_page() {
             &ctx,
             "code.impact",
             node_query(&repository, 3),
-            views.clone(),
+            Some(views.clone()),
             (500, 100000),
             cursor.as_deref(),
         );
