@@ -1,0 +1,468 @@
+{
+  "date": "2026-11-06",
+  "sourceCommit": "559bcbe49f625dbbb467ad29590dee47a643e80c",
+  "baseCommit": "d784c2a36f6ae1ff70b3c476934c76f34b88ccfd",
+  "review": "https://github.com/SceneWorks/DevWorks/pull/40#discussion_r4492295182",
+  "confidence": "High for exercised retention class and compatibility regressions",
+  "environment": {
+    "os": "Darwin 27.0.0 arm64",
+    "rustc": "1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "1.98.0 (797e8a9bc 2026-08-05)"
+  },
+  "scope": "Exact native Chat choice/content/tool evidence without repeated enclosing-envelope copies; no decoding limit or public schema changes",
+  "red": [
+    {
+      "source": "d784 original chat.rs",
+      "population": "64 choices",
+      "wireBytes": 6320,
+      "allocatedBytes": 935827,
+      "peakAdditionalLiveBytes": 755787,
+      "result": "failed 128x input allocation budget before any 5,000-choice run",
+      "log": "/tmp/pr40-chat-choice-red.log"
+    },
+    {
+      "source": "d784 original chat.rs",
+      "population": "64unsupported content parts",
+      "wireBytes": 5502,
+      "allocatedBytes": 728044,
+      "peakAdditionalLiveBytes": 587867,
+      "result": "failed 128x input allocation budget",
+      "log": "/tmp/pr40-chat-nested-red.log"
+    }
+  ],
+  "checks": [
+    {
+      "command": "cargo test --locked -p devworks-core --test provider_response_retention -- --nocapture",
+      "passed": 4,
+      "failed": 0,
+      "elapsedSeconds": 1.26,
+      "log": "/tmp/pr40-chat-retention-green.log",
+      "note": "Serialized allocation measurements. Both Chat profiles, aggregate/SSE: 64, 512 and 5,000 choices; 64, 512 and 2,000 unsupported content/tool items. Existing Responses/Messages retention regressions included."
+    },
+    {
+      "command": "cargo test --locked -p devworks-core --lib providers::decode::tests -- --nocapture",
+      "passed": 26,
+      "failed": 0,
+      "elapsedSeconds": 0.02,
+      "log": "/tmp/pr40-chat-decode-native.log",
+      "note": "Includes escaped/duplicate structural keys, huge opaque numeric lexemes, exact usage u64 and unsupported/no-call semantics for both Chat profiles and aggregate/SSE."
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test providers -- --nocapture",
+      "passed": 42,
+      "failed": 0,
+      "elapsedSeconds": 64.92,
+      "log": "/tmp/pr40-chat-provider-native.log"
+    },
+    {
+      "command": "cargo clippy --locked -p devworks-core -p devworks-adapters -p devworks-engine --all-targets -- -D warnings",
+      "result": "passed",
+      "elapsedSeconds": 38.21,
+      "log": "/tmp/pr40-chat-retention-clippy.log"
+    },
+    {
+      "check": "All existing contract schema artifacts byte comparison with d784",
+      "result": "passed",
+      "count": 67,
+      "legacyCount": 56
+    }
+  ],
+  "greenMeasurements": [
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 64,
+      "wireBytes": 5502,
+      "allocated": 385716,
+      "peakLive": 241588
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 512,
+      "wireBytes": 43994,
+      "allocated": 3023865,
+      "peakLive": 1897857
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 2000,
+      "wireBytes": 172962,
+      "allocated": 9050937,
+      "peakLive": 6032065
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 64,
+      "wireBytes": 5007,
+      "allocated": 384164,
+      "peakLive": 240687
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 512,
+      "wireBytes": 40327,
+      "allocated": 3021252,
+      "peakLive": 1896363
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 2000,
+      "wireBytes": 159879,
+      "allocated": 9048372,
+      "peakLive": 6032595
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 64,
+      "wireBytes": 5500,
+      "allocated": 384759,
+      "peakLive": 240771
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 512,
+      "wireBytes": 43992,
+      "allocated": 3023855,
+      "peakLive": 1897851
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 2000,
+      "wireBytes": 172960,
+      "allocated": 9050927,
+      "peakLive": 6032059
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 64,
+      "wireBytes": 5005,
+      "allocated": 384154,
+      "peakLive": 240353
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 512,
+      "wireBytes": 40325,
+      "allocated": 3021242,
+      "peakLive": 1896357
+    },
+    {
+      "population": "nested",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 2000,
+      "wireBytes": 159877,
+      "allocated": 9048362,
+      "peakLive": 6032589
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 64,
+      "wireBytes": 5502,
+      "allocated": 384769,
+      "peakLive": 241105
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 512,
+      "wireBytes": 43994,
+      "allocated": 3023865,
+      "peakLive": 1897857
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "false",
+      "count": 2000,
+      "wireBytes": 172962,
+      "allocated": 9050937,
+      "peakLive": 6032065
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 64,
+      "wireBytes": 5007,
+      "allocated": 384164,
+      "peakLive": 240687
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 512,
+      "wireBytes": 40327,
+      "allocated": 3021252,
+      "peakLive": 1896363
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "tools": "true",
+      "count": 2000,
+      "wireBytes": 159879,
+      "allocated": 9048372,
+      "peakLive": 6032595
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 64,
+      "wireBytes": 5500,
+      "allocated": 384759,
+      "peakLive": 240771
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 512,
+      "wireBytes": 43992,
+      "allocated": 3023855,
+      "peakLive": 1897851
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "false",
+      "count": 2000,
+      "wireBytes": 172960,
+      "allocated": 9050927,
+      "peakLive": 6032059
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 64,
+      "wireBytes": 5005,
+      "allocated": 384154,
+      "peakLive": 240353
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 512,
+      "wireBytes": 40325,
+      "allocated": 3021242,
+      "peakLive": 1896357
+    },
+    {
+      "population": "nested",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "tools": "true",
+      "count": 2000,
+      "wireBytes": 159877,
+      "allocated": 9048362,
+      "peakLive": 6032589
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "count": 64,
+      "wireBytes": 6320,
+      "allocated": 546727,
+      "peakLive": 363536
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "count": 512,
+      "wireBytes": 50636,
+      "allocated": 4362271,
+      "peakLive": 2907909
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "false",
+      "count": 5000,
+      "wireBytes": 498948,
+      "allocated": 40559623,
+      "peakLive": 27288133
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "count": 64,
+      "wireBytes": 6192,
+      "allocated": 545961,
+      "peakLive": 362705
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "count": 512,
+      "wireBytes": 49612,
+      "allocated": 4356129,
+      "peakLive": 2902793
+    },
+    {
+      "population": "choices",
+      "profile": "CompatibleChat",
+      "stream": "true",
+      "count": 5000,
+      "wireBytes": 488948,
+      "allocated": 40499625,
+      "peakLive": 27238137
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "count": 64,
+      "wireBytes": 6320,
+      "allocated": 546727,
+      "peakLive": 363729
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "count": 512,
+      "wireBytes": 50636,
+      "allocated": 4362271,
+      "peakLive": 2907909
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "false",
+      "count": 5000,
+      "wireBytes": 498948,
+      "allocated": 40559623,
+      "peakLive": 27288133
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "count": 64,
+      "wireBytes": 6192,
+      "allocated": 545961,
+      "peakLive": 362705
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "count": 512,
+      "wireBytes": 49612,
+      "allocated": 4356129,
+      "peakLive": 2902793
+    },
+    {
+      "population": "choices",
+      "profile": "OpenRouterChat",
+      "stream": "true",
+      "count": 5000,
+      "wireBytes": 488948,
+      "allocated": 40499625,
+      "peakLive": 27238137
+    }
+  ],
+  "sourceSha256": {
+    "crates/devworks-core/src/providers/decode/chat.rs": "fcc86ace4fe42cb5f3e702fa347b84680cdda96cb31a1f9edd64198c6a7e3b77",
+    "crates/devworks-core/src/providers/decode/tests.rs": "61c22794787ce6d001401a992f4b672ffb80ed18d8bee38fa40e4790b9392229",
+    "crates/devworks-core/tests/provider_response_retention.rs": "f3e8c09c2c405e980cd86cbb26098f7f40f4ef7a19286aee8a6db00255a26beb"
+  },
+  "retentionBinarySha256": "2371fa432c9fa9401472c1d632a68ea6a0f0261bb49e4a936f11db92dc365aeb",
+  "audit": [
+    {
+      "profiles": [
+        "CompatibleChat",
+        "OpenRouterChat"
+      ],
+      "path": "crates/devworks-core/src/providers/decode/chat.rs",
+      "result": "Fixed all three concrete population loops: additional choices, unsupported content parts and non-function tools. Exact borrowed choices/body arrays parsed once per container; envelope retained once."
+    },
+    {
+      "profiles": [
+        "OpenAiResponses",
+        "CodexSubscriptionResponses"
+      ],
+      "path": "crates/devworks-core/src/providers/decode/responses.rs",
+      "result": "Existing fold_response/response_item borrow exact output/content slices once. Standalone item events do not repeat an enclosing array per row."
+    },
+    {
+      "profiles": [
+        "AnthropicMessages",
+        "ClaudeSubscriptionMessages"
+      ],
+      "path": "crates/devworks-core/src/providers/decode/messages.rs",
+      "result": "Base d784 messages_body borrows contentarray once; standalone events contain one block. Per-block input lookup reads only that block."
+    },
+    {
+      "profiles": [
+        "Embedding"
+      ],
+      "path": "crates/devworks-core/src/providers/decode/embedding.rs",
+      "result": "One embedding_response observation before data iteration; per row output contains vector only, no enclosing raw copy."
+    },
+    {
+      "path": "crates/devworks-core/src/providers/decode/usage.rs",
+      "result": "Finite static field paths; no cardinality-dependent loop repeatedly traverses an enclosing content/choice array."
+    }
+  ],
+  "limits": [
+    "No live network or inference compute. Provider cases use controlled transports/recorded vectors.",
+    "Allocator peak is additional tracked live allocation above the prepared input baseline, not process RSS. Original 5,000-choice envelope multiplication was intentionally not executed; bounded 64-choice causal RED plus full 5,000-choice GREEN.",
+    "No universal performance claim for every parser or stream-assembly algorithm; audit targets enclosing-envelope retention/parse loops across all seven profiles."
+  ]
+}
