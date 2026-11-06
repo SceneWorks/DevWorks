@@ -1234,7 +1234,26 @@ impl Runtime {
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
-        let outcome = self.use_cases.query(&self.gateway(), ctx, operation, raw);
+        self.query_with(
+            ctx,
+            operation,
+            raw,
+            &devworks_core::ports::storage::ReadOptions::default(),
+        )
+    }
+
+    /// The native caller owns this exact cancellation/deadline. It is passed unchanged to
+    /// preparation, the read snapshot and any auxiliary native inference source.
+    pub fn query_with(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: &devworks_core::ports::storage::ReadOptions,
+    ) -> QueryOutcome {
+        let outcome =
+            self.use_cases
+                .query_with(&self.gateway(), ctx, operation, raw, options.clone());
         if operation == DISCOVERS_REPOSITORIES
             && let Some(ix) = &self.indexing
             && discovery_scans_inline(ctx, &outcome)
@@ -1248,11 +1267,22 @@ impl Runtime {
                 return outcome;
             }
             let env = ix.env().clone();
-            let never = || false;
+            let cancelled = || {
+                options
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(devworks_core::ports::storage::Cancellation::is_cancelled)
+            };
             // A scan that fails leaves the recorded registrations to answer.
-            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &never);
+            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
             drop(open);
-            return self.use_cases.query(&self.gateway(), ctx, operation, raw);
+            return self.use_cases.query_with(
+                &self.gateway(),
+                ctx,
+                operation,
+                raw,
+                options.clone(),
+            );
         }
         outcome
     }
