@@ -569,6 +569,112 @@ fn unchanged_regeneration_preserves_topic_references_and_exact_receipt_replay() 
     finish(&rt, app);
 }
 
+#[test]
+fn missing_or_corrupt_generated_source_can_be_rebuilt_without_losing_other_help() {
+    for missing in [true, false] {
+        let rt = runtime();
+        let h = Harness::new();
+        let app = boot_help(&rt, &h);
+        let _user = principal(&*app.store, "user-a", PrincipalKind::Human);
+        let topic_id = id(&format!(
+            "capability-{}",
+            &devworks_core::fingerprint::sha256_hex(b"help.search\0Query")[..40]
+        ));
+        let old_head = app.head();
+        let old = read(&*app.store, |s| {
+            s.help()
+                .help_topic(old_head.generation_id.as_ref().unwrap(), &topic_id)
+        })
+        .unwrap();
+        let reference: devworks_core::protocol::provider::ArtifactRef =
+            serde_json::from_value(old.content_ref.clone().unwrap()).unwrap();
+        let version = read(&*app.store, |s| {
+            s.artifacts().version(&reference.version_id)
+        })
+        .unwrap();
+        let digest = reference.sha256.as_str();
+        let path = h
+            .root
+            .join("artifacts")
+            .join("sha256")
+            .join(&digest[..2])
+            .join(format!("{digest}.{}", version.blob_generation));
+        assert!(path.is_file());
+        if missing {
+            std::fs::remove_file(&path).unwrap();
+        } else {
+            std::fs::write(&path, b"damaged generated source").unwrap();
+        }
+        let args = read(
+            &*app.store,
+            devworks_core::services::help::current_generation_args,
+        );
+        let reply = app.command(DOCS, serde_json::to_value(args).unwrap(), 1);
+        let CommandReply::Recorded {
+            receipt:
+                devworks_core::protocol::Receipt {
+                    decision: DomainDecision::Accepted { operation_id },
+                    ..
+                },
+            ..
+        } = reply
+        else {
+            panic!("{reply:?}");
+        };
+        rt.block_on(within("repair generated Help source", async {
+            loop {
+                app.runtime.dispatcher().run_until_idle().await.unwrap();
+                let op = read(&*app.store, |s| s.operations().operation(&operation_id)).unwrap();
+                if is_terminal(op.state) {
+                    assert_eq!(
+                        op.state,
+                        OperationState::ObservedComplete,
+                        "missing={missing}: {op:?}"
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }));
+        let head = app.head();
+        let repaired = read(&*app.store, |s| {
+            s.help()
+                .help_topic(head.generation_id.as_ref().unwrap(), &topic_id)
+        })
+        .unwrap();
+        assert_ne!(repaired.content_ref, old.content_ref);
+        assert_eq!(
+            read(&*app.store, |s| s
+                .help()
+                .help_topic(&old.generation_id, &topic_id))
+            .unwrap(),
+            old
+        );
+        let page = result(query(
+            &app,
+            &app.user(),
+            "help.read",
+            json!({"topicId":topic_id,"version":repaired.version,"maxChars":"65536"}),
+            3,
+        ));
+        assert_eq!(page["kind"], "Available");
+        let text = page["passage"]["text"].as_str().unwrap();
+        assert!(text.contains("help.search"));
+        assert!(text.contains("manual material") && text.contains("could not be recovered"));
+        assert_eq!(
+            result(query(
+                &app,
+                &app.user(),
+                "help.read",
+                json!({"topicId":"help","version":env!("CARGO_PKG_VERSION")}),
+                3
+            ))["kind"],
+            "Available"
+        );
+        finish(&rt, app);
+    }
+}
+
 struct PublicationAckLoss {
     stage_after: Option<u16>,
     fail_read: Arc<AtomicBool>,
