@@ -1552,7 +1552,7 @@ impl GraphPage {
             let metadata=match &self.result {
                 GraphResult::ScopeDetails{value}=>value.unavailable_reason.is_some(),
                 GraphResult::SchemaDetails{value}=>matches!(value.origin,CodeSchemaOrigin::Declared)&&value.unavailable_reason.is_some(),
-                GraphResult::RepositoryOverview{value}=>matches!(value.graph_coverage.state,CoverageState::Unavailable)&&value.unavailable_reason.is_some()&&value.dependencies.0.is_empty()&&value.graph_totals.is_none(),
+                GraphResult::RepositoryOverview{value}=>matches!(value.graph_coverage.state,CoverageState::Unavailable)&&value.unavailable_reason.is_some()&&value.dependencies.0.is_empty()&&value.graph_totals.is_none()&&value.internal_modules.0.is_empty()&&value.repositories.0.iter().all(|r|r.readme_source.is_none()),
                 _=>false
             };
             if !metadata{return Err("view-less graph response requires explicit unavailable metadata");}
@@ -1685,7 +1685,7 @@ let checked=match &self.result {
         }
                 match &self.result {
             GraphResult::Architecture{value}=>self.validate_modules(&value.internal_modules.0)?,
-            GraphResult::RepositoryOverview{value}=>self.validate_modules(&value.internal_modules.0)?,_=>{}
+            GraphResult::RepositoryOverview{value}=>{self.validate_modules(&value.internal_modules.0)?;for repository in &value.repositories.0{if let Some(source)=&repository.readme_source{if source.snapshot.repository_id!=repository.repository_id{return Err("README source repository mismatch");}self.current_source(source)?;}}},_=>{}
         }
 let mut identities=std::collections::HashMap::new();
         for node in nodes {
