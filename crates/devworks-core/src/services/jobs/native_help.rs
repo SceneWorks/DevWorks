@@ -41,6 +41,21 @@ pub(super) fn is_empty(value: &Value) -> bool {
     value.as_object().is_some_and(|m| m.is_empty())
 }
 
+/// Cancellation follows the actual Accepted child operation, never a reconstructed request
+/// key. The Help owner validates its own immutable delivery binding before touching the queue.
+pub(super) fn cancel_accepted(
+    tx: &mut dyn WriteTransaction,
+    run: &StoredJobRun,
+) -> Result<(), StorageError> {
+    let definition: JobDefinition = super::parse(&run.definition)?;
+    if matches!(definition,JobDefinition::Native{capability_id:ref id,..} if id==&super::capability_id(OPERATION))
+        && let Some(operation) = &run.inner_operation_id
+    {
+        crate::services::help::request_generation_cancel(tx, operation)?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CapturedInvocation {

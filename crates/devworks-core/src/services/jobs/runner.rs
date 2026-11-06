@@ -289,6 +289,7 @@ pub fn request_cancel(
         )?;
         return Ok(after);
     }
+    super::native_help::cancel_accepted(tx, run)?;
     let after = tx.jobs().update_run(
         &StoredJobRun {
             cancel_requested: true,
@@ -1424,13 +1425,21 @@ impl JobService {
                     json!({"decision": "applied"}),
                 )?
             }
-            DomainDecision::Accepted { operation_id } => tx.jobs().update_run(
-                &StoredJobRun {
-                    inner_operation_id: Some(operation_id.clone()),
-                    ..run.clone()
-                },
-                run.revision,
-            )?,
+            DomainDecision::Accepted { operation_id } => {
+                let after = tx.jobs().update_run(
+                    &StoredJobRun {
+                        inner_operation_id: Some(operation_id.clone()),
+                        ..run.clone()
+                    },
+                    run.revision,
+                )?;
+                // Cancellation can commit while the native gateway acknowledgment is still
+                // in flight. Forward it only once the actual Accepted operation is known.
+                if after.cancel_requested {
+                    super::native_help::cancel_accepted(tx, &after)?;
+                }
+                after
+            }
             DomainDecision::Refused { fault } => {
                 let target = fault
                     .target_kind
