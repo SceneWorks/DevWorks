@@ -39,6 +39,10 @@
 //! committed-sequence order, visible to the principals that may see the project. The gateway
 //! refuses to publish a command aggregate below revision 2.
 //!
+//! Revision 3 adds `newestFirst` to `history.events`: its first page reads the newest decisions
+//! and its cursor continues strictly backward. Direction is part of the cursor binding; it
+//! cannot be exchanged with the legacy forward feed. Older revisions remain forward-only.
+//!
 //! From revision 2, every history page (`HistoryPage`, `UsagePage`) carries `checkpoint`, the
 //! continuation after the last fact it covers, including at the current tail (an empty page keeps
 //! the position it was asked from), so a poller resumes without replaying the history; while
@@ -510,6 +514,7 @@ impl HistoryService {
     }
 
     /// One page of `history.events`; also the scope revision the page was read under.
+    #[allow(clippy::too_many_arguments)]
     fn events(
         &self,
         snapshot: &dyn ReadSnapshot,
@@ -517,6 +522,7 @@ impl HistoryService {
         scope: EventScope<'_>,
         after: Option<&str>,
         limit: u16,
+        newest_first: bool,
         revision: SchemaRevision,
     ) -> Result<(OperationResult, i64), Failure> {
         let read = snapshot.sessions();
@@ -524,7 +530,17 @@ impl HistoryService {
             EventScope::Root(root_id) => {
                 let root = visible_root(read, ctx, root_id)?;
                 (
-                    Self::binding(ctx, "history.events", &root, revision),
+                    Self::bind(
+                        ctx,
+                        "history.events",
+                        &if newest_first {
+                            vec![root.id.0.as_str(), "newest-first"]
+                        } else {
+                            vec![root.id.0.as_str()]
+                        },
+                        root.scope_revision,
+                        revision,
+                    ),
                     HistoryScope::Root(root.id.clone()),
                     root.scope_revision,
                 )
@@ -540,7 +556,11 @@ impl HistoryService {
                     Self::bind(
                         ctx,
                         "history.events",
-                        &["project", project.0.as_str()],
+                        &if newest_first {
+                            vec!["project", project.0.as_str(), "newest-first"]
+                        } else {
+                            vec!["project", project.0.as_str()]
+                        },
                         scope_revision,
                         revision,
                     ),
@@ -554,12 +574,16 @@ impl HistoryService {
             if from > snapshot.stamp().committed_sequence {
                 return Err(StorageError::CursorExpired.into());
             }
-            let rows = match &scope {
-                // Revision 1 publishes only the decisions its `Subject` union can type.
-                HistoryScope::Root(root) if revision.0 < 2 => {
-                    read.root_events(root, &["CommandDecided"], from, n)?
+            let rows = if newest_first {
+                read.decisions_before(&scope, after.map(|_| from), n)?
+            } else {
+                match &scope {
+                    // Revision 1 publishes only the decisions its `Subject` union can type.
+                    HistoryScope::Root(root) if revision.0 < 2 => {
+                        read.root_events(root, &["CommandDecided"], from, n)?
+                    }
+                    scope => read.decisions(scope, from, n)?,
                 }
-                scope => read.decisions(scope, from, n)?,
             };
             rows.into_iter()
                 .map(|e| {
@@ -1035,6 +1059,7 @@ impl QueryHandler for HistoryService {
                 Query::Events {
                     root_id,
                     project_id,
+                    newest_first,
                     after,
                     limit,
                 } => {
@@ -1045,7 +1070,15 @@ impl QueryHandler for HistoryService {
                         _ => Err(unsupported()),
                     };
                     scope.and_then(|s| {
-                        self.events(snapshot, ctx, s, after.as_deref(), *limit, revision)
+                        self.events(
+                            snapshot,
+                            ctx,
+                            s,
+                            after.as_deref(),
+                            *limit,
+                            newest_first.unwrap_or(false),
+                            revision,
+                        )
                     })
                 }
                 _ => Err(unsupported()),

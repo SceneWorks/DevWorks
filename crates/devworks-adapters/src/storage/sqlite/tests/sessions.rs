@@ -2962,7 +2962,7 @@ fn revision_two_publishes_lineage_only_decisions_with_a_command_aggregate() {
     assert!(matches!(&value.items.0[0].aggregate, EventSubject::Root(r) if *r == root("task-a")));
     // An unregistered revision is refused before the store is read.
     assert_eq!(
-        fault(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, Some(3))).code,
+        fault(fx.feed(&user, json!({"rootId": "root-a"}), None, 50, Some(4))).code,
         DomainErrorCode::SchemaMismatch
     );
 }
@@ -3736,3 +3736,107 @@ fn a_workspace_command_naming_a_project_belongs_to_that_projects_feed() {
 
 #[path = "sessions/evals.rs"]
 mod evals;
+
+#[test]
+fn newest_history_pages_preserve_legacy_order_and_bind_direction_scope_and_actor() {
+    let fx = Fx::new();
+    fx.decisions();
+    let user = fx.user();
+    let scope = json!({"projectId":"project-a"});
+    let legacy = events_page(fx.feed(&user, scope.clone(), None, 50, Some(2)));
+    let frame = |scope: Value, after: Option<&str>, revision: u32, newest: bool| {
+        let mut value = events_frame(scope, after, 1, Some(revision));
+        value["query"]["newestFirst"] = json!(newest);
+        value
+    };
+    let first =
+        events_page(fx.raw_query(&user, "history.events", frame(scope.clone(), None, 3, true)));
+    assert_eq!(
+        first.items.0[0].event_id,
+        legacy.items.0.last().unwrap().event_id
+    );
+    let cursor = first.next_cursor.unwrap().0;
+    let a = user
+        .clone()
+        .with_lineage(Some(project("project-a")), None, None);
+    fx.command(
+        &a,
+        "sessions.start",
+        json!({"scope":{"kind":"Project","projectId":"project-a"},"title":"after first page"}),
+    );
+    let second = events_page(fx.raw_query(
+        &user,
+        "history.events",
+        frame(scope.clone(), Some(&cursor), 3, true),
+    ));
+    assert_eq!(
+        second.items.0[0].event_id,
+        legacy.items.0[legacy.items.0.len() - 2].event_id,
+        "new appends cannot move the backward boundary"
+    );
+    let forward = events_page(fx.raw_query(
+        &user,
+        "history.events",
+        frame(scope.clone(), None, 3, false),
+    ));
+    assert_eq!(forward.items.0[0].event_id, legacy.items.0[0].event_id);
+    for revision in [1, 2] {
+        assert_eq!(
+            fault(fx.raw_query(
+                &user,
+                "history.events",
+                frame(json!({"rootId":"root-a"}), None, revision, true)
+            ))
+            .code,
+            DomainErrorCode::InvalidArgument
+        );
+    }
+    for (who, scope, newest) in [
+        (user.clone(), scope.clone(), false),
+        (user.clone(), json!({"projectId":"project-b"}), true),
+        (user.clone(), json!({"rootId":"root-a"}), true),
+        (
+            fx.ctx("user-b", PrincipalKind::Human, None),
+            scope.clone(),
+            true,
+        ),
+    ] {
+        assert_eq!(
+            fault(fx.raw_query(
+                &who,
+                "history.events",
+                frame(scope, Some(&cursor), 3, newest)
+            ))
+            .code,
+            DomainErrorCode::CursorExpired
+        );
+    }
+    let mut newest = events_frame(scope.clone(), None, 50, Some(3));
+    newest["query"]["newestFirst"] = json!(true);
+    let all = events_page(fx.raw_query(&user, "history.events", newest));
+    assert!(
+        all.items
+            .0
+            .windows(2)
+            .all(|pair| pair[0].sequence.get() > pair[1].sequence.get())
+    );
+    let plan = fx
+        .store
+        .with_writer_connection(|conn| {
+            let sql = super::super::sessions::decisions_before_sql("project_id", false);
+            let mut statement =
+                super::super::conn::db(conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")))?;
+            let rows = super::super::conn::db(
+                statement.query_map(rusqlite::params!["project-a", i64::MAX, 1], |row| {
+                    row.get::<_, String>(3)
+                }),
+            )?;
+            super::super::conn::db(rows.collect::<Result<Vec<_>, _>>())
+        })
+        .unwrap()
+        .join("\n");
+    assert!(
+        plan.contains("USING INDEX event_project_decisions (project_id=? AND seq<?)"),
+        "{plan}"
+    );
+}

@@ -168,7 +168,7 @@ fn features_board_issues_and_overview_share_the_agent_operations() {
     assert!(h.query_by_label("1 Features").is_some());
     assert!(h.query_by_label("1 Issues").is_some());
     click(&mut h, Role::Button, "Activity");
-    assert!(has_text(&h, "full history"));
+    assert!(has_text(&h, "older history on demand"));
     assert!(has_text(&h, "You"));
     // The archive confirmation counts the work it would stop.
     h.state_mut().navigate(Route::Portfolio);
@@ -776,6 +776,79 @@ fn plan_saves_pending_at_close_are_finished_at_the_next_launch() {
     );
 }
 
+struct CountHistory {
+    inner: std::sync::Arc<dyn Backend>,
+    requests: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+impl Backend for CountHistory {
+    fn query(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::QueryOutcome {
+        if operation == "history.events" {
+            self.requests
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(frame).unwrap());
+        }
+        self.inner.query(operation, frame)
+    }
+    fn command(&self, operation: &str, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        self.inner.command(operation, frame)
+    }
+    fn refresh_packages(&self) -> Result<(), String> {
+        self.inner.refresh_packages()
+    }
+    fn fetch_index_bundle(
+        &self,
+        package: &str,
+        digest: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        self.inner.fetch_index_bundle(package, digest)
+    }
+    fn stage_api_key(
+        &self,
+        key: devworks_core::ports::secrets::Secret,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.stage_api_key(key)
+    }
+    fn secret_store(&self) -> devworks_desktop::backend::SecretStoreStatus {
+        self.inner.secret_store()
+    }
+    fn mint_workspace_upload(
+        &self,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_workspace_upload(file)
+    }
+    fn mint_project_upload(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        file: &std::path::Path,
+    ) -> Result<devworks_core::protocol::Id, String> {
+        self.inner.mint_project_upload(project, file)
+    }
+    fn keep_awake_health(&self) -> devworks_core::settings::view::Health {
+        self.inner.keep_awake_health()
+    }
+    fn hints(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        None
+    }
+    fn set_waker(&self, waker: devworks_desktop::backend::Waker) {
+        self.inner.set_waker(waker)
+    }
+    fn token(&self, prefix: &str) -> String {
+        self.inner.token(prefix)
+    }
+    fn scratch_dir(&self) -> std::path::PathBuf {
+        self.inner.scratch_dir()
+    }
+    fn read_stream(
+        &self,
+        stream: &devworks_core::protocol::Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.inner.read_stream(stream, max)
+    }
+}
+
 #[test]
 fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
     use devworks_desktop::work_ops::ACTIVITY_PAGE;
@@ -817,13 +890,13 @@ fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
             .collect::<Vec<_>>()
     };
     let first = read(&h);
-    // Every page up to the newest change, not only the oldest page.
-    assert!(first.len() > usize::from(ACTIVITY_PAGE), "{}", first.len());
+    // One newest page first; older pages require an explicit native action.
+    assert_eq!(first.len(), usize::from(ACTIVITY_PAGE));
     assert!(
-        first.windows(2).all(|w| w[0] < w[1]),
-        "oldest first, once each"
+        first.windows(2).all(|w| w[0] > w[1]),
+        "newest first, once each"
     );
-    assert!(h.query_by_label("Load older changes").is_none());
+    assert!(h.query_by_label("Load older changes").is_some());
     // The newest change is shown first, above the one before it.
     let shown: Vec<(f64, String)> = h
         .query_all_by_label_contains(" · ")
@@ -839,7 +912,7 @@ fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
         .map(|(_, v)| v.clone())
         .expect("activity rows");
     assert!(
-        top.starts_with(&format!("#{} ·", first.last().unwrap())),
+        top.starts_with(&format!("#{} ·", first.first().unwrap())),
         "the top row is the newest change: {top}"
     );
     let row = |seq: u64| {
@@ -856,15 +929,19 @@ fn activity_reads_to_the_newest_change_and_refresh_adds_newer_ones() {
             .expect("laid out")
             .y0
     };
-    let last = *first.last().unwrap();
-    let before = first[first.len() - 2];
+    let last = *first.first().unwrap();
+    let before = first[1];
     assert!(row(last) < row(before), "newest first");
-    // Refresh adds what happened since, without reading the feed again.
+    click(&mut h, Role::Button, "Load older changes");
+    let complete = read(&h);
+    assert!(complete.len() > first.len());
+    assert!(h.query_by_label("Load older changes").is_none());
+    // Refresh replaces only the number of pages explicitly loaded.
     issue(n);
     click(&mut h, Role::Button, "Refresh");
     let after = read(&h);
-    assert_eq!(after.len(), first.len() + 1);
-    assert!(after.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(after.len(), complete.len() + 1);
+    assert!(after.windows(2).all(|w| w[0] > w[1]));
 }
 
 #[test]
@@ -923,7 +1000,7 @@ fn show_its_history_opens_overviews_activity_for_that_item() {
         1,
         "the Activity tab"
     );
-    assert!(has_text(&h, "full history"), "Activity is shown");
+    assert!(has_text(&h, "older history on demand"), "Activity is shown");
 }
 
 #[test]
@@ -1595,5 +1672,140 @@ fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() 
         h.state().route_memory(Route::Features).tab,
         0,
         "the explicit feature link opens its detail, not a previouslyselectedboard"
+    );
+}
+
+/// Seed recorded decisions through the real write owner, without executing 10,000 commands or
+/// their unrelated publication jobs. Rendering and every query still use the native gateway.
+fn seed_history(
+    engine: &devworks_desktop::host::Engine,
+    project: &str,
+    card: &str,
+    n: usize,
+) -> i64 {
+    use devworks_core::ports::storage::{NewEvent, write_job};
+    use devworks_core::protocol::{EventId, Id, ProjectId, RootId};
+    let project = ProjectId(Id::new(project).unwrap());
+    let root = RootId(Id::new(card).unwrap());
+    let actor = engine.host().user().principal().clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    engine.host().runtime().store().submit_write(Default::default(),write_job(move |tx| {
+        let mut last=0;
+        for i in 0..n {
+            last=tx.history().append(NewEvent {
+                id:EventId(Id::new(format!("history-fixture-event-{i}")).unwrap()),actor:actor.clone(),
+                project_id:Some(project.clone()),root_id:Some(root.clone()),operation_id:None,
+                aggregate_kind:"command".into(),aggregate_id:format!("history-fixture-command-{i}"),
+                aggregate_revision:1,kind:"CommandDecided".into(),
+                payload:json!({"subject":{"kind":"root","dimension":"Work","id":root.0.as_str(),"revision":1}}),
+            })?;
+        }
+        Ok(last)
+    }, move |result| {tx.send(result).unwrap();})).unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn ten_thousand_events_show_the_newest_page_after_one_native_request() {
+    use devworks_desktop::work_ops::ACTIVITY_PAGE;
+    let _case = native_runtime_case();
+    let root = Root::new("history-10000");
+    let engine = start(&root);
+    let real = engine.backend();
+    let pid = shop(&*real);
+    let status = default_status_id(
+        &devworks_core::protocol::ProjectId(devworks_core::protocol::Id::new(&pid).unwrap()),
+        "backlog",
+    );
+    let card = command(
+        &*real,
+        "issues.create",
+        json!({"projectId":pid,"title":"History card","description":"","repositoryIds":[],"statusId":status,"priority":0}),
+    );
+    let newest = seed_history(&engine, &pid, card.id.as_str(), 10000);
+    let counted = std::sync::Arc::new(CountHistory {
+        inner: real,
+        requests: Default::default(),
+    });
+    let mut h = harness(
+        shell_with(Ok(counted.clone()), &root, Script::default(), None),
+        1600.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Activity");
+    assert_eq!(
+        counted.requests.lock().unwrap().len(),
+        1,
+        "no automatic traversal of old history"
+    );
+    let feed = &h.state().work.activity;
+    assert_eq!(feed.items.len(), usize::from(ACTIVITY_PAGE));
+    assert_eq!(feed.items[0].sequence.as_str(), newest.to_string());
+    assert!(feed.more);
+    click(&mut h, Role::Button, "Load older changes");
+    assert_eq!(counted.requests.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.state().work.activity.items.len(),
+        2 * usize::from(ACTIVITY_PAGE)
+    );
+    // A card gets its own bounded root feed, even after project pages have been loaded.
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "History card  ·");
+    assert_eq!(counted.requests.lock().unwrap().len(), 3);
+    let feed = &h.state().work.histories[card.id.as_str()];
+    assert_eq!(feed.items.len(), usize::from(ACTIVITY_PAGE));
+    assert_eq!(feed.items[0].sequence.as_str(), newest.to_string());
+    click(&mut h, Role::Button, "Load older card changes");
+    assert_eq!(counted.requests.lock().unwrap().len(), 4);
+    assert_eq!(
+        h.state().work.histories[card.id.as_str()].items.len(),
+        2 * usize::from(ACTIVITY_PAGE)
+    );
+    click(&mut h, Role::Button, "Show its history");
+    assert_eq!(
+        counted.requests.lock().unwrap().len(),
+        4,
+        "opening the already loaded card feed does not fetch it again"
+    );
+    click(&mut h, Role::Button, "Load older changes");
+    assert_eq!(counted.requests.lock().unwrap().len(), 5);
+    let feed = &h.state().work.histories[card.id.as_str()];
+    assert_eq!(feed.items.len(), 3 * usize::from(ACTIVITY_PAGE));
+    assert!(
+        feed.items
+            .windows(2)
+            .all(|w| w[0].sequence.as_str().parse::<i64>().unwrap()
+                > w[1].sequence.as_str().parse::<i64>().unwrap())
+    );
+    // A genuinely refused continuation keeps visible rows and offers an explicit fresh reload.
+    h.state_mut()
+        .work
+        .histories
+        .get_mut(card.id.as_str())
+        .unwrap()
+        .resume = Some("expired".into());
+    click(&mut h, Role::Button, "Load older changes");
+    assert!(h.state().work.histories[card.id.as_str()].error.is_some());
+    assert_eq!(
+        h.state().work.histories[card.id.as_str()].items.len(),
+        3 * usize::from(ACTIVITY_PAGE)
+    );
+    click(&mut h, Role::Button, "Reload history");
+    let feed = &h.state().work.histories[card.id.as_str()];
+    assert!(feed.error.is_none());
+    assert_eq!(feed.items.len(), 3 * usize::from(ACTIVITY_PAGE));
+    assert_eq!(feed.items[0].sequence.as_str(), newest.to_string());
+    let requests = counted.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|v| v.pointer("/query/newestFirst") == Some(&json!(true)))
     );
 }

@@ -10815,6 +10815,20 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-binding-features.get",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.edit-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit\",\"workId\":\"id-a\",\"expectedRevision\":\"1\",\"changes\":{}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-features.edit",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
@@ -10832,6 +10846,13 @@
     "id": "dw13-r3-binding-features.list",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-features.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.create\",\"projectId\":\"project-a\",\"creation\":{\"kind\":\"Single\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[],\"statusId\":\"id-a\",\"priority\":1}},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -10920,6 +10941,13 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-features.edit_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-features.edit_plan",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"features.edit_plan\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[]}}",
@@ -10997,6 +11025,13 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-tasks.sync_plan-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"tasks.sync_plan\",\"featureId\":\"root-a\",\"expectedPlanRevision\":\"1\",\"expectedTaskSetRevision\":\"1\",\"tasks\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-binding-tasks.sync_plan",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"tasks.sync_plan\",\"value\":{\"items\":[],\"hasMore\":false}}",
@@ -11056,6 +11091,13 @@
     "id": "dw13-r3-admission-next_work.release_claim-Command",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"next_work.release_claim\",\"claimId\":\"id-a\",\"expectedFence\":\"0\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-projects.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"projects.create\",\"name\":\"fixture\",\"description\":\"Fixture content\",\"repositoryIds\":[]},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -11142,5 +11184,54 @@
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.price_status\",\"modelIds\":[],\"page\":{\"limit\":20}},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-root",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"rootId\":\"root-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-forward-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":false,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-direction-before-r3-1",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":1,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-direction-before-r3-2",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":2,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-null",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":null,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-string",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":\"true\",\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]
