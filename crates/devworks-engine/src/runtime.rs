@@ -4,6 +4,7 @@
 //! resource housekeeping, run supervision and the diagnostics monitor, and only then returns the
 //! [`Runtime`] through which commands and queries are admitted. See the crate documentation ("Boot
 //! sequence") for the order and why each step sits where it does.
+use crate::approvals::{ResumeAdmission, ResumeDispatcher};
 use crate::browser::{BrowserComposition, Supervision as BrowserSupervision};
 use crate::diagnostics::{self as diag, Monitor};
 use crate::dispatch::{self, Consumer, Dispatcher, DispatcherConfig, RecoveryReport};
@@ -24,6 +25,7 @@ use devworks_core::protocol::records::EvalSuiteSnapshot;
 use devworks_core::protocol::results::DomainDecision;
 use devworks_core::protocol::{CommandReply, Id};
 use devworks_core::services::UseCases;
+use devworks_core::services::approvals::{ApprovalCatalog, ApprovalService};
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::artifacts::lifecycle::{
     CollectReport, RecoveryReport as ArtifactRecoveryReport,
@@ -36,6 +38,7 @@ use devworks_core::services::jobs::runner::{
     InferenceJobs, JobLifecycle, NativeJobDispatch, NoInferencePipeline,
 };
 use devworks_core::services::jobs::{JobConfig, JobService, NativeCatalog};
+use devworks_core::services::notifications::NotificationService;
 use devworks_core::services::packages::PackageService;
 use devworks_core::services::power::{KeepAwake, KeepAwakeStatus};
 use devworks_core::services::process::{ProcessSupervisor, ShutdownReport};
@@ -217,6 +220,8 @@ pub struct RuntimeConfig {
     pub automatic_eval_suites: Vec<EvalSuiteSnapshot>,
     /// Maximum delay before a lost terminal-state wakeup is repaired by a durable sweep.
     pub eval_interval: Duration,
+    /// Periodic repair of missed approval/hold wakeups; saved operations retain their keys.
+    pub approval_resume_interval: Duration,
 }
 impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
@@ -234,6 +239,7 @@ impl RuntimeConfig {
             scheduler_interval: Duration::from_secs(5),
             automatic_eval_suites: Vec::new(),
             eval_interval: Duration::from_secs(30),
+            approval_resume_interval: Duration::from_secs(5),
         }
     }
 }
@@ -330,6 +336,9 @@ pub struct Runtime {
     scheduler: Arc<Scheduler>,
     evals: Arc<EvalSupervisor>,
     grading: Mutex<Option<JoinHandle<()>>>,
+    approvals: Arc<ApprovalService>,
+    resumes: Arc<ResumeDispatcher>,
+    resuming: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
     diagnostics: Arc<DiagnosticService>,
     monitor: Arc<Monitor>,
@@ -565,11 +574,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         None => use_cases,
     };
     // Native jobs may run only the maintenance commands this composition can execute.
-    let jobs = Arc::new(JobService::new(
-        NativeCatalog::qualified(&use_cases),
-        config.jobs,
-    ));
+    let jobs = Arc::new(
+        JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
+            .with_approval_control(runs.service.clone()),
+    );
     let use_cases = use_cases.with_jobs(jobs.clone());
+    let approvals = Arc::new(
+        ApprovalService::new(
+            ids.clone(),
+            clock.clone(),
+            Arc::new(devworks_core::authority::HostRoles {
+                store: store.clone(),
+            }),
+            runs.service.clone(),
+        )
+        .with_catalog(ApprovalCatalog::qualified(&use_cases)),
+    );
+    let use_cases = use_cases
+        .with_approvals(approvals.clone())
+        .with_notifications(Arc::new(NotificationService::new(ids.clone())));
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -749,6 +772,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         keep_awake: keep_awake.clone(),
         scheduler: OnceLock::new(),
         evals: evals.clone(),
+        resumes: OnceLock::new(),
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
     });
@@ -765,6 +789,11 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     }
     let _ = admitter.scheduler.set(Arc::downgrade(&scheduler));
     let scheduling = tokio::spawn(scheduler.clone().run(config.scheduler_interval));
+    // All recovery precedes saved-operation readmission. The core supplies the original
+    // identity and immutable reviewed frame; the existing gateway supplies fresh authority.
+    let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
+    let _ = admitter.resumes.set(Arc::downgrade(&resumes));
+    let resuming = tokio::spawn(resumes.clone().run(config.approval_resume_interval));
     Ok(Runtime {
         store,
         ids,
@@ -783,6 +812,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         scheduler,
         evals,
         grading: Mutex::new(Some(grading)),
+        approvals,
+        resumes,
+        resuming: Mutex::new(Some(resuming)),
         keep_awake,
         diagnostics,
         monitor,
@@ -1007,6 +1039,37 @@ impl Runtime {
         self.command_with(ctx, operation, raw, WriteOptions::default())
     }
 
+    /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
+    /// mint this private exact-content witness, even for a context whose kind is Human.
+    pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
+        const OPERATION: &str = "approvals.record_human_decision";
+        let decoded = devworks_core::admission::decode(
+            devworks_core::admission::Selection {
+                operation: OPERATION,
+                mode: devworks_core::registry::Mode::Command,
+            },
+            frame,
+        );
+        if let Ok(decoded) = decoded
+            && let devworks_core::operations::OperationInput::Approvals(
+                devworks_core::operations::approvals::Input::RecordHumanDecision(input),
+            ) = decoded.input
+            && let Some(bound) = devworks_core::context::HostIngress::new(&*self.store)
+                .human_decision_context(ctx, &input)
+        {
+            return self.command(&bound, OPERATION, frame);
+        }
+        // Preserve the normal typed admission/authority refusal. No fallback mints a witness.
+        self.command(ctx, OPERATION, frame)
+    }
+
+    pub fn approvals(&self) -> &Arc<ApprovalService> {
+        &self.approvals
+    }
+    pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
+        &self.resumes
+    }
+
     /// Admits a command. A command that may have committed (`Recorded`, or a lost
     /// acknowledgment) wakes delivery for the reply intent its receipt committed, an applied
     /// `artifacts.delete` starts a collection pass for the blobs it released, and an applied
@@ -1044,6 +1107,10 @@ impl Runtime {
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
         self.evals.stop();
+        self.resumes.stop();
+        // Preparation/admission/settlement are one drained unit: never orphan a blocking
+        // readmission or let its outbox CAS write after shutdown has returned.
+        self.resumes.drain().await;
         let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
         // The diagnostics monitor is only *signalled* here, and joined after the run-control
         // transition below: a pass in progress (a full integrity check of a large store, say)
@@ -1082,6 +1149,7 @@ impl Runtime {
             &self.supervision,
             &self.scheduling,
             &self.grading,
+            &self.resuming,
         ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
@@ -1143,6 +1211,7 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.resumes.stop();
         self.evals.stop();
         self.browser_supervision.stop();
         if let Some(ix) = &self.indexing {
@@ -1244,6 +1313,7 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop();
         self.evals.close();
+        self.resumes.close();
         // Package helpers are killed at once (no grace): their host threads would otherwise
         // keep the process owner, and so the helper trees, alive.
         if let Some(h) = &self.packages {
@@ -1271,6 +1341,7 @@ struct Admitter {
     keep_awake: Arc<KeepAwake>,
     scheduler: OnceLock<Weak<Scheduler>>,
     evals: Arc<EvalSupervisor>,
+    resumes: OnceLock<Weak<ResumeDispatcher>>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
     handle: tokio::runtime::Handle,
@@ -1295,6 +1366,17 @@ impl Admitter {
         raw: &[u8],
         options: WriteOptions,
     ) -> CommandOutcome {
+        self.command_with_wakeup(ctx, operation, raw, options, true)
+    }
+
+    fn command_with_wakeup(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+        wake_resumes: bool,
+    ) -> CommandOutcome {
         // Held until the command is decided and committed (or refused): shutdown's closing
         // transition waits for it, and a command after it is refused before admission.
         let open = self.admission.read().unwrap_or_else(|p| p.into_inner());
@@ -1318,6 +1400,9 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            if wake_resumes && let Some(resumes) = self.resumes.get().and_then(Weak::upgrade) {
+                resumes.notify();
+            }
             if operation == "sessions.end" || operation.starts_with("runs.") {
                 self.evals.notify();
             }
@@ -1389,5 +1474,18 @@ impl Admitter {
 impl NativeJobDispatch for Admitter {
     fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
         self.command_with(ctx, operation, raw, WriteOptions::default())
+    }
+}
+
+impl ResumeAdmission for Admitter {
+    fn readmit(
+        &self,
+        context: &InvocationContext,
+        operation: &str,
+        frame: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        // Unknown outcomes wait for the periodic sweep, never a self-notification hot loop.
+        self.command_with_wakeup(context, operation, frame, options, false)
     }
 }
