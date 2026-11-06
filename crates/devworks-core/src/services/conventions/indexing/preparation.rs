@@ -42,6 +42,23 @@ fn digest(value: &Value) -> Result<String, StorageError> {
             .as_bytes(),
     ))
 }
+fn query_key(
+    ctx: &InvocationContext,
+    query_id: &Id,
+    fingerprint: &str,
+) -> Result<String, StorageError> {
+    digest(
+        &json!({"storeId":ctx.store_id(),"restoreEpoch":ctx.restore_epoch(),"actor":ctx.principal(),"queryId":query_id,"fingerprint":fingerprint}),
+    )
+}
+fn stable_context(ctx: &InvocationContext) -> Result<Value, StorageError> {
+    let mut source = approvals::save_source_context(ctx);
+    source["invocationContext"]
+        .as_object_mut()
+        .ok_or_else(|| invalid("embedding context"))?
+        .remove("invocation");
+    Ok(source)
+}
 fn identity(prefix: &str, value: &str) -> Id {
     Id::new(format!("{prefix}{}", &sha256_hex(value.as_bytes())[..40])).expect("host digest ID")
 }
@@ -100,6 +117,75 @@ fn captured(
     })
 }
 impl IndexService {
+    /// Read only the authenticated query's existing operational owner, independently of the
+    /// current optional dense route. No slot, artifact or native request is created here.
+    fn query_preparation(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        query_id: &Id,
+        fingerprint: &str,
+    ) -> Result<Option<OperationRecord>, StorageError> {
+        if &read.stamp().store_id != ctx.store_id()
+            || read.stamp().restore_epoch != ctx.restore_epoch().get()
+            || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let operation_id = OperationId(identity("cprep_", &query_key(ctx, query_id, fingerprint)?));
+        let Some(op) = read.operations().operation(&operation_id)? else {
+            return Ok(None);
+        };
+        if op.capability != CAPABILITY
+            || op.payload["origin"]["kind"] != "Query"
+            || op.payload["origin"]["queryId"] != json!(query_id)
+            || op.payload["origin"]["fingerprint"] != fingerprint
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut original = op.payload["sourceContext"].clone();
+        original["invocationContext"]
+            .as_object_mut()
+            .ok_or_else(|| invalid("captured embedding context"))?
+            .remove("invocation");
+        if original != stable_context(ctx)? {
+            return Err(StorageError::CursorExpired);
+        }
+        Ok(Some(op))
+    }
+    /// Even a now-lexical/empty response must not discard a prior owned request or escape
+    /// its immutable configuration/context binding. This lookup never starts preparation.
+    pub fn validate_query_custody(
+        &self,
+        ctx: &InvocationContext,
+        origin: &EmbeddingOrigin,
+        configuration_source_digest: &str,
+    ) -> Result<(), StorageError> {
+        let EmbeddingOrigin::Query {
+            query_id,
+            fingerprint,
+            scope_digest,
+        } = origin
+        else {
+            return Ok(());
+        };
+        let context_digest = digest(
+            &json!({"context":stable_context(ctx)?,"configuration":configuration_source_digest}),
+        )?;
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            let Some(op) = self.query_preparation(read, ctx, query_id, fingerprint)? else {
+                return Ok(());
+            };
+            if op.payload["origin"]["scopeDigest"] != scope_digest.as_str()
+                || op.payload["contextDigest"] != context_digest
+                || op.payload["requestId"]
+                    != json!(identity("cemb_", &query_key(ctx, query_id, fingerprint)?))
+            {
+                return Err(StorageError::CursorExpired);
+            }
+            Ok(())
+        })
+    }
     /// Exact winner refs are reused across retries; concurrent losing files never become
     /// artifact rows. No source/provider bytes are read inside the publishing transaction.
     pub fn prepare_embedding_inputs(
@@ -147,13 +233,9 @@ impl IndexService {
         }
         let texts_bytes = texts.iter().map(|text| text.len() as u64).sum::<u64>();
         let source = approvals::save_source_context(context);
-        let mut stable_context = source.clone();
-        stable_context["invocationContext"]
-            .as_object_mut()
-            .ok_or_else(|| invalid("embedding context"))?
-            .remove("invocation");
-        let context_digest =
-            digest(&json!({"context":stable_context,"configuration":configuration_source_digest}))?;
+        let context_digest = digest(
+            &json!({"context":stable_context(context)?,"configuration":configuration_source_digest}),
+        )?;
         let input_digest = digest(&json!(
             texts
                 .iter()
@@ -165,10 +247,7 @@ impl IndexService {
                 query_id,
                 fingerprint,
                 ..
-            } => Some(digest(&json!({
-                "storeId":context.store_id(), "restoreEpoch":context.restore_epoch(), "actor":context.principal(),
-                "queryId":query_id, "fingerprint":fingerprint,
-            }))?),
+            } => Some(query_key(context, query_id, fingerprint)?),
             EmbeddingOrigin::Index { .. } => None,
         };
         let origin = match origin {
