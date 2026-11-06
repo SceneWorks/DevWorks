@@ -307,3 +307,14 @@ fn architecture_preserves_unknown_package_total_under_work_limit() {
     value["value"]["result"]["value"]["packageCount"] = Value::Null;
     assert!(result(value).is_err());
 }
+
+#[test]
+fn overview_readme_keeps_only_actual_same_view_source_provenance() {
+    let mut value = fixture("dw28-result-code.overview");
+    let source = fixture("dw28-result-code.source")["value"]["result"]["value"]["source"].clone();
+    assert!(source.is_object());
+    value["value"]["result"]["value"]["repositories"][0]["readmeSource"] = source;
+    result(value.clone()).unwrap();
+    value["value"]["result"]["value"]["repositories"][0]["readmeSource"] = Value::Null;
+    assert!(result(value).is_err());
+}
