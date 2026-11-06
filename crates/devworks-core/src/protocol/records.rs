@@ -13343,7 +13343,13 @@ pub struct CodeArchitecture {
     pub inbound: Rows<CodeRepositoryLink>,
     pub outbound: Rows<CodeRepositoryLink>,
     pub packages: Rows<CodePackageDependency>,
-    pub package_count: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub package_count: Option<Counter>,
     pub package_counts_by_ecosystem: Rows<CodeCount>,
     pub supertypes: Rows<CodeSupertype>,
     pub internal_modules: Rows<CodeModuleAnalysis>,
@@ -13377,6 +13383,9 @@ impl Revisioned for CodeArchitecture {
         }
         if revision < 3 {
             self.confidence = None;
+        }
+        if revision < 3 {
+            self.package_count = None;
         }
         self.inbound.retain_revision(revision);
         self.outbound.retain_revision(revision);
