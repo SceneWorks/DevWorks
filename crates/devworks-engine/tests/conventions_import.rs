@@ -11,13 +11,15 @@ use devworks_core::{
     gateway::Gateway,
     ports::storage::*,
     protocol::{
-        CommandReply, OperationId, OperationState, provider::ArtifactRef, results::DomainDecision,
+        CommandReply, OperationId, OperationState,
+        provider::ArtifactRef,
+        records::{ConventionReadOutcome, ConventionReadResult},
+        results::{DomainDecision, DomainQueryReply, OperationResult},
     },
     services::{
         UseCases,
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
         conventions::{ConventionService, importing::ImportService, indexing::IndexService, model},
-        sessions::Failure,
     },
 };
 use devworks_engine::dispatch;
@@ -138,6 +140,28 @@ impl Fx {
             },
             other => panic!("{other:?}"),
         }
+    }
+    fn status_reply(&self, ctx: &InvocationContext, op: &OperationId) -> DomainQueryReply {
+        let authority = HostAuthority {
+            store: self.store.as_ref(),
+            clock: &*self.h.clock,
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            store: self.store.as_ref(),
+            authority: &authority,
+            ids: &*self.h.ids,
+        };
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Query","queryId":"import-status","body":{"kind":"conventions.read","operationId":op,"scope":{"kind":"Workspace"}}});
+        UseCases::new()
+            .with_conventions(self.catalog.clone())
+            .query(
+                &gateway,
+                ctx,
+                "conventions.read",
+                frame.to_string().as_bytes(),
+            )
+            .unwrap()
     }
     fn dispatch(&self, op: &OperationId) -> OperationRecord {
         let dispatcher = dispatcher_with(
@@ -757,16 +781,55 @@ fn convention_only_owner_status_needs_no_history_and_revoke_blocks_the_actual_wo
     f.ctx = agent;
     let source = f.source(&serde_json::to_vec(&manifest(1)).unwrap());
     let op = f.admit(&source, "agent-owned-import");
-    let status = read(f.store.as_ref(), |r| {
-        Ok(f.service.status(r, &f.ctx, &op, None))
-    })
-    .unwrap();
+    let status = match f.status_reply(&f.ctx, &op) {
+        DomainQueryReply::Result {
+            result:
+                OperationResult::ConventionsRead {
+                    value:
+                        ConventionReadResult::Current(ConventionReadOutcome::Operation { status }),
+                },
+            ..
+        } => status,
+        other => panic!("{other:?}"),
+    };
     assert_eq!(status.operation.operation_id, op);
     assert!(status.can_cancel);
-    let foreign = read(f.store.as_ref(), |r| {
-        Ok(f.service.status(r, &other, &op, None))
-    });
-    assert!(matches!(foreign, Err(Failure::Refused(_))));
+    match f.status_reply(&other, &op) {
+        DomainQueryReply::Rejected { fault, .. } => assert_eq!(
+            fault.code,
+            devworks_core::protocol::DomainErrorCode::NotFound
+        ),
+        other => panic!("foreign private status leaked: {other:?}"),
+    };
+    let authority = HostAuthority {
+        store: f.store.as_ref(),
+        clock: &*f.h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: f.store.as_ref(),
+        authority: &authority,
+        ids: &*f.h.ids,
+    };
+    let frame = json!({"protocol":"1.0-draft.1","queryId":"no-history-grant","query":{"kind":"history.operation_status","operationId":op}});
+    let denied = UseCases::new()
+        .with_history(Arc::new(
+            devworks_core::services::history::HistoryService::new(f.h.ids.clone()),
+        ))
+        .query(
+            &gateway,
+            &f.ctx,
+            "history.operation_status",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+    match denied {
+        DomainQueryReply::Rejected { fault, .. } => assert_eq!(
+            fault.code,
+            devworks_core::protocol::DomainErrorCode::PermissionDenied
+        ),
+        other => panic!("Conventions-only actor unexpectedly reached History: {other:?}"),
+    };
     let (service, foreign, id, revision) = (
         f.service.clone(),
         other.clone(),
@@ -893,5 +956,99 @@ fn captured_root_stop_epoch_prevents_an_admitted_import_from_publishing() {
         ))
         .len(),
         1
+    );
+}
+
+#[test]
+fn current_parent_hold_blocks_work_owned_import_after_membership_move() {
+    let mut f = Fx::new();
+    let project = devworks_core::protocol::ProjectId(id("membership-project"));
+    let root = devworks_core::protocol::RootId(id("membership-task"));
+    let a = devworks_core::protocol::RootId(id("old-feature"));
+    let b = devworks_core::protocol::RootId(id("new-feature"));
+    let (p, r, old, new) = (project.clone(), root.clone(), a.clone(), b.clone());
+    write(f.store.as_ref(), move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p.clone(),
+            name: "Membership project".into(),
+            description: String::new(),
+            lifecycle: ACTIVE.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })?;
+        let mut work = StoredWork {
+            id: old.0.clone(),
+            project_id: p,
+            kind: FEATURE.into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Feature".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            created_by: None,
+            updated_by: None,
+            search_key: "feature".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        };
+        tx.work().insert_work(&work)?;
+        work.id = new.0.clone();
+        tx.work().insert_work(&work)?;
+        work.id = r.0.clone();
+        work.kind = TASK.into();
+        work.parent_feature_id = Some(old.0.clone());
+        tx.work().insert_work(&work)?;
+        for root in [r, old, new] {
+            tx.runs()
+                .insert_root_control(&StoredRootControl::initial(root))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    f.ctx = f
+        .ctx
+        .clone()
+        .with_lineage(Some(project.clone()), Some(root.clone()), None);
+    let source = f.source(&serde_json::to_vec(&manifest(0)).unwrap());
+    let op = f.admit(&source, "move-before-publication");
+    let before = read(f.store.as_ref(), |r| r.operations().operation(&op)).unwrap();
+    assert_eq!(before.payload["controls"][1][0], json!(a));
+    write(f.store.as_ref(), move |tx| {
+        let mut work = tx.work().work(&root.0)?.unwrap();
+        let expected = work.revision;
+        work.parent_feature_id = Some(b.0.clone());
+        work.revision += 1;
+        work.scope_revision += 1;
+        tx.work().update_work(&work, expected)?;
+        let mut control = tx.runs().root_control(&b)?.unwrap();
+        let expected = control.revision;
+        control.revision += 1;
+        control.stop_epoch += 1;
+        control.desired = DesiredExecution::Paused;
+        control.updated_at_ms = tx.now_ms();
+        tx.runs().update_root_control(&control, expected)
+    })
+    .unwrap();
+    let record = f.dispatch(&op);
+    assert_eq!(record.state, OperationState::Failed, "{record:?}");
+    let d = read(f.store.as_ref(), |r| r.conventions().convention_import(&op)).unwrap();
+    assert!(
+        read(f.store.as_ref(), |r| r.conventions().convention(
+            &d.convention_id,
+            None,
+            &[KnowledgeScope::Project(project.clone())]
+        ))
+        .is_none()
     );
 }

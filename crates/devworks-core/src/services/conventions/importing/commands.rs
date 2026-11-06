@@ -279,6 +279,30 @@ pub(super) fn validate(
             return Err(StorageError::ScopeDenied);
         }
     }
+    // Membership may change while the private source is parsed. Retain the original
+    // admission/stop witnesses above, and also honor the work's current inherited holds.
+    if let Some(root) = ctx.root_id()
+        && let Some(work) = tx.work().work(&root.0)?
+        && let Some(parent) = work.parent_feature_id
+        && !job
+            .controls
+            .iter()
+            .any(|(captured, _)| captured.0 == parent)
+    {
+        let parent = RootId(parent);
+        let control = tx
+            .runs()
+            .root_control(&parent)?
+            .unwrap_or_else(|| StoredRootControl::initial(parent.clone()));
+        if control.desired != DesiredExecution::Enabled
+            || !tx
+                .runs()
+                .blockers(&BlockerFilter::RootLevel(parent), None, 1)?
+                .is_empty()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+    }
     if let Some(id) = ctx.assignment_id() {
         let a = tx.runs().assignment(id)?.ok_or(StorageError::ScopeDenied)?;
         if Some(a.generation) != job.assignment_generation
