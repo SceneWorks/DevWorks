@@ -525,3 +525,45 @@ fn cancellation_drains_the_owned_admission_and_keeps_the_saved_operation_retryab
         app.shutdown().await;
     });
 }
+
+struct NormalAdmission(Arc<Runtime>);
+impl devworks_engine::approvals::ResumeAdmission for NormalAdmission {
+    fn readmit(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: WriteOptions,
+    ) -> CommandOutcome {
+        self.0.command_with(ctx, operation, raw, options)
+    }
+}
+#[test]
+fn paused_rows_at_the_head_do_not_starve_ready_approvals_beyond_one_page() {
+    let h = Harness::new();
+    runtime().block_on(async{
+        let store=h.open();seed_root(&h,"root-0");
+        let db=rusqlite::Connection::open(h.root.join("workspace.sqlite")).unwrap();
+        db.busy_timeout(Duration::from_secs(5)).unwrap();
+        db.execute("UPDATE work_items SET kind='issue' WHERE id='root-0'",[]).unwrap();
+        for n in 1..66{db.execute("INSERT INTO work_items(id,project_id,kind,parent_feature_id,associated_feature_id,status_id,title,priority,manual_order,revision,scope_revision,created_at,brief_json) VALUES(?1,'project-a','issue',NULL,NULL,NULL,?1,1,0,1,1,1,'{}')",[format!("root-{n}")]).unwrap();}
+        drop(db);
+        let (user,agent)=principals(&*store);let app=Arc::new(boot(composition(&h,store.clone())).await.unwrap());app.approval_resumes().drain().await;
+        let mut records=Vec::new();
+        for n in 0..66{
+            let root=RootId(id(&format!("root-{n}")));
+            let ctx=agent.clone().with_lineage(Some(ProjectId(id("project-a"))),Some(root.clone()),None);
+            let job=draft(&h,&app,&ctx,&format!("Paged reviewed job {n}"),true);
+            let proposal=propose_enable(&h,&app,&ctx,&job,true);
+            value(app.record_human_decision(&user,&decision(&h,&proposal)).unwrap());
+            records.push((proposal["id"].as_str().unwrap().to_owned(),root,job));
+        }
+        records.sort_by(|a,b|a.0.cmp(&b.0));
+        let waiting:Vec<_>=records.iter().take(65).map(|r|r.1.clone()).collect();
+        write(&*store,move|tx|{for root in waiting{tx.runs().insert_root_control(&StoredRootControl{desired:DesiredExecution::Paused,..StoredRootControl::initial(root)})?;}Ok(())}).unwrap();
+        let driver=devworks_engine::approvals::ResumeDispatcher::new(store.clone(),app.approvals().clone(),Arc::new(NormalAdmission(app.clone())));
+        let report=driver.tick().await.unwrap();assert_eq!(report.visited,66);assert_eq!(report.waiting,65);assert_eq!(report.submitted,1);
+        for (index,(_,_,job)) in records.iter().enumerate(){assert_eq!(enabled(&*store,job),index==65);}
+        driver.drain().await;app.shutdown().await;
+    });
+}
