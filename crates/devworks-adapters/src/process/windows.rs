@@ -26,9 +26,10 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, GetExitCodeProcess, GetProcessTimes, OpenProcess,
-    OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess, WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, GetCurrentProcess, GetExitCodeProcess,
+    GetProcessTimes, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess,
+    WaitForSingleObject,
 };
 
 fn last_error(what: &str) -> String {
@@ -339,6 +340,15 @@ impl Drop for JobTree {
 }
 
 fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe> {
+    if !identity
+        .birth
+        .parse::<u64>()
+        .is_ok_and(|n| n.to_string() == identity.birth)
+    {
+        return Err(Probe::Unknown(
+            "the recorded start time was unavailable".into(),
+        ));
+    }
     // SAFETY: opening a process by pid for query (and optionally terminate) access.
     let handle =
         Owned(unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, 0, identity.pid) });
@@ -357,6 +367,17 @@ fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe>
         Some(_) => Err(Probe::Gone),
         None => Err(Probe::Unknown(last_error("read the process start time"))),
     }
+}
+
+pub(super) fn current_identity() -> Option<NativeIdentity> {
+    // SAFETY: GetCurrentProcess returns a valid pseudo-handle for this process. It is not an
+    // owned handle and must not be closed. The existing helper reads its OS creation time.
+    let birth = creation_time(unsafe { GetCurrentProcess() })?;
+    Some(NativeIdentity {
+        pid: std::process::id(),
+        birth,
+        group: None,
+    })
 }
 
 pub(super) fn probe(identity: &NativeIdentity) -> Probe {

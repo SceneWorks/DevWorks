@@ -229,7 +229,9 @@ impl ProcessTree for UnixTree {
         // exited once it is a zombie (or gone).
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            Ok(start_time(self.identity.pid as libc::pid_t, false).is_none())
+            observed_start_time(self.identity.pid as libc::pid_t, false)
+                .map(|birth| birth.is_none())
+                .map_err(ProcessError::Control)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -262,21 +264,83 @@ impl Drop for UnixTree {
     }
 }
 
+pub(super) fn current_identity() -> Option<NativeIdentity> {
+    let pid = std::process::id();
+    let birth = start_time(pid as libc::pid_t, false)?;
+    Some(NativeIdentity {
+        pid,
+        birth,
+        // The host is not one of our launched group leaders. Its liveness is process-only.
+        group: None,
+    })
+}
+
 pub(super) fn probe(identity: &NativeIdentity) -> Probe {
-    let pid = identity.pid as libc::pid_t;
-    if identity.birth == UNAVAILABLE {
+    probe_birth(
+        identity,
+        observed_start_time(identity.pid as libc::pid_t, false),
+    )
+}
+
+fn probe_birth(identity: &NativeIdentity, birth: Result<Option<String>, String>) -> Probe {
+    if !valid_recorded_birth(&identity.birth) {
         return Probe::Unknown("the recorded start time was unavailable".into());
     }
-    match start_time(pid, false) {
-        Some(b) if b == identity.birth => Probe::Alive,
-        // The recorded root is gone (or its pid now belongs to another process).
-        _ => match identity.group.map(|g| members(g as libc::pid_t)) {
+    match birth {
+        Ok(Some(b)) if !valid_recorded_birth(&b) => {
+            Probe::Unknown("the process birth token was malformed".into())
+        }
+        Ok(Some(b)) if b == identity.birth => Probe::Alive,
+        Err(reason) => Probe::Unknown(reason),
+        // A confirmed absence, zombie, or known different birth is not this live root.
+        Ok(_) => match identity.group.map(|g| members(g as libc::pid_t)) {
             None => Probe::Gone,
             Some(Ok(m)) if m.is_empty() => Probe::Gone,
             Some(Ok(_)) => Probe::Unknown(LINGERING.into()),
             Some(Err(e)) => Probe::Unknown(e.to_string()),
         },
     }
+}
+
+/// A missing proc entry is not enough when the process table itself may be unavailable.
+/// Signal zero checks OS existence without delivering a signal or changing the process.
+fn confirm_absent(pid: libc::pid_t) -> Result<(), String> {
+    if pid <= 0 {
+        return Err("invalid process identity".into());
+    }
+    // SAFETY: a positive PID and signal zero only query process existence/permission.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return Err("the process exists but its birth token could not be read".into());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!("could not establish process absence: {error}"))
+    }
+}
+
+fn process_read_failure<T>(pid: libc::pid_t, error: std::io::Error) -> Result<Option<T>, String> {
+    classify_read_failure(error, || confirm_absent(pid))
+}
+
+fn classify_read_failure<T>(
+    error: std::io::Error,
+    absent: impl FnOnce() -> Result<(), String>,
+) -> Result<Option<T>, String> {
+    if error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH) {
+        absent()?;
+        Ok(None)
+    } else {
+        Err(format!("read process birth information: {error}"))
+    }
+}
+
+fn start_time(pid: libc::pid_t, allow_zombie: bool) -> Option<String> {
+    observed_start_time(pid, allow_zombie)
+        .ok()
+        .flatten()
+        .filter(|birth| valid_recorded_birth(birth))
 }
 
 pub(super) fn terminate(identity: &NativeIdentity) -> Probe {
@@ -333,14 +397,18 @@ fn members(pgid: libc::pid_t) -> Result<Vec<libc::pid_t>, ProcessError> {
             continue;
         }
         buf.truncate(n);
-        return Ok(buf
-            .into_iter()
-            .filter(|p| *p > 0 && bsd_info(*p).is_some_and(|i| i.pbi_status != libc::SZOMB))
-            .collect());
+        let mut live = Vec::new();
+        for pid in buf.into_iter().filter(|pid| *pid > 0) {
+            match bsd_info(pid).map_err(ProcessError::Control)? {
+                Some(info) if info.pbi_status != libc::SZOMB => live.push(pid),
+                _ => {}
+            }
+        }
+        return Ok(live);
     }
 }
 #[cfg(target_os = "macos")]
-fn bsd_info(pid: libc::pid_t) -> Option<libc::proc_bsdinfo> {
+fn bsd_info(pid: libc::pid_t) -> Result<Option<libc::proc_bsdinfo>, String> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: `info` is a properly sized, writable proc_bsdinfo.
@@ -348,62 +416,146 @@ fn bsd_info(pid: libc::pid_t) -> Option<libc::proc_bsdinfo> {
         libc::proc_pidinfo(
             pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            // Include zombies so their known exit is distinct from an unreadable live PID.
+            1,
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size,
         )
     };
-    (n == size).then_some(info)
+    if n == size {
+        return Ok(Some(info));
+    }
+    let error = std::io::Error::last_os_error();
+    if n <= 0 {
+        return process_read_failure(pid, error);
+    }
+    Err("incomplete process birth information".into())
 }
 #[cfg(target_os = "macos")]
-fn start_time(pid: libc::pid_t, allow_zombie: bool) -> Option<String> {
-    let info = bsd_info(pid)?;
+fn valid_recorded_birth(birth: &str) -> bool {
+    let Some((seconds, micros)) = birth.split_once('.') else {
+        return false;
+    };
+    seconds
+        .parse::<u64>()
+        .is_ok_and(|n| n.to_string() == seconds)
+        && micros.len() == 6
+        && micros.bytes().all(|b| b.is_ascii_digit())
+}
+#[cfg(target_os = "linux")]
+fn valid_recorded_birth(birth: &str) -> bool {
+    valid_linux_birth(birth)
+}
+#[cfg(any(target_os = "linux", test))]
+fn valid_linux_birth(birth: &str) -> bool {
+    let Some((boot, ticks)) = birth.split_once(':') else {
+        return false;
+    };
+    checked_boot_identity(boot).is_ok()
+        && ticks.parse::<u64>().is_ok_and(|n| n.to_string() == ticks)
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn valid_recorded_birth(_: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn observed_start_time(pid: libc::pid_t, allow_zombie: bool) -> Result<Option<String>, String> {
+    let Some(info) = bsd_info(pid)? else {
+        return Ok(None);
+    };
     if !allow_zombie && info.pbi_status == libc::SZOMB {
-        return None;
+        return Ok(None);
     }
-    Some(format!(
+    Ok(Some(format!(
         "{}.{:06}",
         info.pbi_start_tvsec, info.pbi_start_tvusec
-    ))
+    )))
 }
 
 /// `(state, pgrp, starttime)` of `/proc/<pid>/stat`.
 #[cfg(target_os = "linux")]
-fn stat(pid: libc::pid_t) -> Option<(char, i64, String)> {
-    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+fn stat(pid: libc::pid_t) -> Result<Option<(char, i64, String)>, String> {
+    let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(value) => value,
+        Err(error) => return process_read_failure(pid, error),
+    };
+    parse_stat(&text).map(Some)
+}
+#[cfg(any(target_os = "linux", test))]
+fn parse_stat(text: &str) -> Result<(char, i64, String), String> {
+    let invalid = || "malformed process birth information".to_owned();
     // The command name is parenthesized and may contain anything: fields follow the last ')'.
-    let rest = &text[text.rfind(')')? + 1..];
+    let rest = &text[text.rfind(')').ok_or_else(invalid)? + 1..];
     let fields: Vec<&str> = rest.split_whitespace().collect();
-    // fields[0] is the state (field 3), fields[2] the process group (field 5) and fields[19]
-    // the start time in clock ticks since boot (field 22).
-    let state = fields.first()?.chars().next()?;
-    let pgrp = fields.get(2)?.parse().ok()?;
-    let start = (*fields.get(19)?).to_owned();
-    Some((state, pgrp, start))
+    let state = fields
+        .first()
+        .and_then(|s| s.chars().next())
+        .ok_or_else(invalid)?;
+    let pgrp = fields
+        .get(2)
+        .ok_or_else(invalid)?
+        .parse()
+        .map_err(|_| invalid())?;
+    let start = fields.get(19).ok_or_else(invalid)?;
+    let _: u64 = start.parse().map_err(|_| invalid())?;
+    Ok((state, pgrp, (*start).to_owned()))
 }
 #[cfg(target_os = "linux")]
 fn members(pgid: libc::pid_t) -> Result<Vec<libc::pid_t>, ProcessError> {
     let dir = std::fs::read_dir("/proc")
         .map_err(|e| ProcessError::Control(format!("read the process table: {e}")))?;
-    Ok(dir
-        .filter_map(Result::ok)
-        .filter_map(|e| e.file_name().to_str()?.parse::<libc::pid_t>().ok())
-        .filter(|pid| {
-            stat(*pid).is_some_and(|(state, pgrp, _)| {
-                pgrp == i64::from(pgid) && !matches!(state, 'Z' | 'X' | 'x')
-            })
-        })
-        .collect())
+    let mut live = Vec::new();
+    for entry in dir {
+        let entry =
+            entry.map_err(|e| ProcessError::Control(format!("read the process table: {e}")))?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        if let Some((state, group, _)) = stat(pid).map_err(ProcessError::Control)?
+            && group == i64::from(pgid)
+            && !matches!(state, 'Z' | 'X' | 'x')
+        {
+            live.push(pid);
+        }
+    }
+    Ok(live)
 }
 #[cfg(target_os = "linux")]
-fn start_time(pid: libc::pid_t, allow_zombie: bool) -> Option<String> {
-    let (state, _, start) = stat(pid)?;
+fn observed_start_time(pid: libc::pid_t, allow_zombie: bool) -> Result<Option<String>, String> {
+    let Some((state, _, start)) = stat(pid)? else {
+        return Ok(None);
+    };
     if !allow_zombie && matches!(state, 'Z' | 'X' | 'x') {
-        return None;
+        return Ok(None);
     }
-    // Boot-relative ticks: include the boot identity so a token never matches across reboots.
-    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap_or_default();
-    Some(format!("{}:{start}", boot.trim()))
+    // Boot-relative ticks need the real kernel boot identity; an unreadable boot file never
+    // becomes an empty marker that could later falsely look like a different process.
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map_err(|e| format!("read process boot identity: {e}"))?;
+    let boot = checked_boot_identity(&boot)?;
+    Ok(Some(format!("{boot}:{start}")))
+}
+#[cfg(any(target_os = "linux", test))]
+fn checked_boot_identity(value: &str) -> Result<&str, String> {
+    let value = value.trim();
+    if value.len() != 36
+        || !value.bytes().enumerate().all(|(index, b)| {
+            if [8, 13, 18, 23].contains(&index) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+    {
+        Err("the process boot identity was unavailable or malformed".into())
+    } else {
+        Ok(value)
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -413,6 +565,103 @@ fn members(_: libc::pid_t) -> Result<Vec<libc::pid_t>, ProcessError> {
     ))
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn start_time(_: libc::pid_t, _: bool) -> Option<String> {
-    None
+fn observed_start_time(_: libc::pid_t, _: bool) -> Result<Option<String>, String> {
+    Err("process birth identity is not qualified on this platform".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn unavailable_birth_is_unknown_and_only_confirmed_absence_is_gone() {
+        let identity = current_identity().expect("actual host identity");
+        let missing = classify_read_failure::<String>(
+            Error::new(ErrorKind::NotFound, "missing proc entry"),
+            || Ok(()),
+        );
+        assert_eq!(probe_birth(&identity, missing), Probe::Gone);
+        let unreadable = classify_read_failure::<String>(
+            Error::new(ErrorKind::PermissionDenied, "denied"),
+            || panic!("denied reads cannot establish absence"),
+        );
+        assert!(matches!(
+            probe_birth(&identity, unreadable),
+            Probe::Unknown(_)
+        ));
+        let table_missing = classify_read_failure::<String>(
+            Error::new(ErrorKind::NotFound, "proc unavailable"),
+            || Err("the process exists".into()),
+        );
+        assert!(matches!(
+            probe_birth(&identity, table_missing),
+            Probe::Unknown(_)
+        ));
+        assert!(matches!(
+            probe_birth(&identity, Ok(Some("malformed-birth".into()))),
+            Probe::Unknown(_)
+        ));
+        let mut other = identity.clone();
+        let last = other.birth.pop().expect("birth digit");
+        other.birth.push(if last == '0' { '1' } else { '0' });
+        assert_eq!(probe_birth(&identity, Ok(Some(other.birth))), Probe::Gone);
+        assert_eq!(
+            probe_birth(&identity, Ok(Some(identity.birth.clone()))),
+            Probe::Alive
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn missing_identity_data_of_the_live_host_does_not_prove_absence() {
+        let pid = std::process::id() as libc::pid_t;
+        assert!(
+            process_read_failure::<String>(
+                pid,
+                Error::new(ErrorKind::NotFound, "birth read failed")
+            )
+            .is_err()
+        );
+        assert!(
+            process_read_failure::<String>(
+                pid,
+                Error::new(ErrorKind::PermissionDenied, "birth read denied")
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            probe(&current_identity().expect("actual host identity")),
+            Probe::Alive
+        ));
+    }
+
+    #[test]
+    fn missing_boot_identity_and_malformed_proc_records_are_unavailable() {
+        assert!(checked_boot_identity("").is_err());
+        assert!(checked_boot_identity("\n").is_err());
+        assert!(!valid_linux_birth(":12345"));
+        assert!(!valid_linux_birth("invalid-boot:12345"));
+        assert!(!valid_linux_birth(
+            "01234567-89ab-cdef-0123-456789abcdef:invalid-ticks"
+        ));
+        let legacy = NativeIdentity {
+            pid: std::process::id(),
+            birth: ":12345".into(),
+            group: None,
+        };
+        assert!(matches!(
+            probe_birth(
+                &legacy,
+                observed_start_time(std::process::id() as libc::pid_t, false)
+            ),
+            Probe::Unknown(_)
+        ));
+        assert!(parse_stat("malformed process record").is_err());
+        assert_eq!(
+            checked_boot_identity("01234567-89ab-cdef-0123-456789abcdef\n").unwrap(),
+            "01234567-89ab-cdef-0123-456789abcdef"
+        );
+    }
 }
