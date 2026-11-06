@@ -1216,3 +1216,31 @@ impl CommandHandler for SettingsService {
         })
     }
 }
+
+/// The current inherited allowance for one feature/issue's children. Host schedulers share the
+/// same descriptor, defaults and revisioned configuration chain as Settings UI and tools.
+pub fn max_subagents(
+    read: &dyn ConfigurationRead,
+    project: &ProjectId,
+) -> Result<usize, StorageError> {
+    let source = effective_entries(
+        read,
+        &ConfigScope::Project(project.clone()),
+        &["agents.maxSubagents"],
+    )
+    .map_err(|error| match error {
+        Failure::Storage(error) => error,
+        _ => StorageError::InvalidRecord("effective subagent allowance".into()),
+    })?
+    .remove(0);
+    source
+        .value
+        .value
+        .0
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            StorageError::InvalidRecord("effective subagent allowance is a positive integer".into())
+        })
+}

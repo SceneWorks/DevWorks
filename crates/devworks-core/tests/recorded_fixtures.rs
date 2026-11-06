@@ -63,6 +63,7 @@ fn at_revision<T: Revisioned + Clone + serde::Serialize>(
     v: &T,
     revision: u32,
 ) -> Result<(), String> {
+    v.check_revision(revision)?;
     let mut at = v.clone();
     at.retain_revision(revision);
     if serde_json::to_value(&at).unwrap() != serde_json::to_value(v).unwrap() {
@@ -246,8 +247,21 @@ fn check(case: &Fixture) -> Result<(), String> {
         | "session-command-request"
         | "session-query-request"
         | "addon-command-request" => request(case),
-        "domain-query-reply" => dto::<DomainQueryReply>(raw, |v| v.validate()),
-        "domain-command-reply" => dto::<DomainCommandReply>(raw, validate_command_reply),
+        "domain-query-reply" => dto::<DomainQueryReply>(raw, |v| {
+            if let DomainQueryReply::Result { result, .. } = v {
+                at_revision(result, revision)?;
+            }
+            v.validate()
+        }),
+        "domain-command-reply" => dto::<DomainCommandReply>(raw, |v| {
+            if let CommandReply::Recorded { receipt, .. } = v
+                && let DomainDecision::Applied { result } | DomainDecision::NoChange { result } =
+                    &receipt.decision
+            {
+                at_revision(result, revision)?;
+            }
+            validate_command_reply(v)
+        }),
         "operation-result" => dto::<OperationResult>(raw, |v| {
             at_revision(v, revision)?;
             // A union alternative introduced later (the command aggregate of an event) cannot be
@@ -260,7 +274,12 @@ fn check(case: &Fixture) -> Result<(), String> {
             }
             v.check()
         }),
-        "operation-completion" => dto::<OperationCompletion>(raw, |v| v.validate()),
+        "operation-completion" => dto::<OperationCompletion>(raw, |v| {
+            if let OperationCompletion::Succeeded { result, .. } = v {
+                at_revision(result, revision)?;
+            }
+            v.validate()
+        }),
         "command-reply" => dto::<CommandReply>(raw, |v| s(v.validate())),
         "query-reply" => dto::<QueryReply>(raw, |v| s(v.validate())),
         "event" => dto::<Event>(raw, |v| s(v.validate())),
@@ -326,7 +345,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1369), 1369);
+    assert_eq!(run("domain-fixtures.json", 1456), 1456);
 }
 
 #[test]

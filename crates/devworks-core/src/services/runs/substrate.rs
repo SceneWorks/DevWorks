@@ -54,6 +54,8 @@ pub struct Admission {
     pub control_revision: i64,
     pub generation: i64,
     pub owner_epoch: i64,
+    /// Captured at dispatch; the result must retain this value across asynchronous work.
+    pub assignment_generation: Option<i64>,
     pub plan_revision: Option<i64>,
     pub readiness_revision: Option<i64>,
     pub instruction_revision: i64,
@@ -116,6 +118,8 @@ pub struct Disposition {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResultClaim {
     pub assignment: AssignmentId,
+    /// Captured from the original assignment/dispatch admission, never looked up on arrival.
+    pub assignment_generation: i64,
     pub execution_id: Id,
     pub owner_epoch: i64,
     /// The plan revision the work was dispatched under.
@@ -715,11 +719,11 @@ impl ControlService {
             } => Some(x.clone()),
             _ => None,
         };
+        let mut assignment_generation = None;
         if let Some(id) = assignment {
-            let bound = tx
-                .runs()
-                .assignment(&id)?
-                .is_some_and(|x| x.execution_id.as_ref() == Some(&a.id));
+            let bound = tx.runs().assignment(&id)?;
+            assignment_generation = bound.as_ref().map(|bound| bound.generation);
+            let bound = bound.is_some_and(|x| x.execution_id.as_ref() == Some(&a.id));
             if !bound {
                 return Ok(Err(Fenced::LeaseLost(format!(
                     "assignment {} is not bound to this activation",
@@ -731,6 +735,7 @@ impl ControlService {
             control_revision: e.control_revision,
             generation: e.generation,
             owner_epoch: a.owner_epoch,
+            assignment_generation,
             plan_revision: e.plan_revision,
             readiness_revision: e.readiness_revision,
             instruction_revision: e.instruction_revision,
@@ -754,6 +759,17 @@ impl ControlService {
         let Some(work) = tx.sessions().work_root(&new.work)? else {
             return Ok(Err(Fenced::NotFound("work")));
         };
+        if active_blockers(tx.runs(), &BlockerFilter::RootLevel(work.id.clone()))?
+            .iter()
+            .any(|blocker| {
+                blocker.cause == HoldCause::Policy
+                    && blocker.clearance.get("membershipHandoff") == Some(&Value::Bool(true))
+            })
+        {
+            let blocked =
+                self.evaluate(tx.runs(), &work, &Target::Root, ActivationPurpose::Planning)?;
+            return Ok(Err(Fenced::Blocked(Box::new(blocked))));
+        }
         if work.id != root.id && work.parent_feature_id.as_ref() != Some(&root.id) {
             return Ok(Err(Fenced::Invalid(
                 "the work is outside the root's hierarchy".into(),
@@ -887,6 +903,9 @@ impl ControlService {
         };
         let mut after = a.clone();
         after.state = state;
+        if state != AssignmentState::Active {
+            after.slot_held = false;
+        }
         after.revision += 1;
         if checkpoint.is_some() {
             after.checkpoint = checkpoint;
@@ -1132,6 +1151,15 @@ impl ControlService {
                 )));
             }
         }
+        let eligibility = self.evaluate(
+            tx.runs(),
+            &root,
+            &Target::Assignment(assignment.clone()),
+            ActivationPurpose::Planning,
+        )?;
+        if !eligibility.eligible {
+            return Ok(Err(Fenced::Blocked(Box::new(eligibility))));
+        }
         let actor = host(tx);
         if let Some(t) = tx.runs().session_turn(session)? {
             let current = &t.execution_id == execution && t.owner_epoch == epoch;
@@ -1228,7 +1256,9 @@ impl ControlService {
             _ => true,
         };
         let current_revision = active_revision.max(a.plan_revision);
-        let verdict = if !a.state.is_live() {
+        let verdict = if a.generation != claim.assignment_generation {
+            ResultAcceptance::Stale("the result comes from an earlier assignment generation".into())
+        } else if !a.state.is_live() {
             ResultAcceptance::Stale(format!("the assignment is {}", a.state.as_str()))
         } else if a.execution_id.as_ref() != Some(&claim.execution_id) {
             ResultAcceptance::Stale("the result comes from an earlier activation".into())
@@ -1260,6 +1290,7 @@ impl ControlService {
                 json!({
                     "executionId": claim.execution_id.as_str(),
                     "ownerEpoch": claim.owner_epoch,
+                    "assignmentGeneration":claim.assignment_generation,
                     "planRevision": claim.plan_revision,
                     "reason": reason,
                 }),

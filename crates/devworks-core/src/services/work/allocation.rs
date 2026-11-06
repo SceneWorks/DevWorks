@@ -392,8 +392,17 @@ fn eligible(
     let PlanState::Approved { feature: unit, .. } = &plan else {
         return Ok(false);
     };
+    if matches!(unit.readiness, Readiness::Blocked { .. }) {
+        return Ok(false);
+    }
+    if super::membership::needs_root_activation(tx, &r.id)? {
+        return Ok(true);
+    }
     let (_, tasks) = super::queue::queue(tx.work(), &w.project_id, Some(&w.id))?;
     if tasks.is_empty() {
+        if super::membership::awaiting_outgoing_handoff(tx, &r.id)? {
+            return Ok(false);
+        }
         if let PlanState::Approved { units, .. } = &plan
             && units
                 .values()
