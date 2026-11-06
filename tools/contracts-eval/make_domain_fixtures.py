@@ -41,6 +41,11 @@ def sample(t):
  if t=='HelpSnapshot':v['canGenerate']=True
  if t=='HelpCapabilityMetadata':v['available']=True
  if t=='ProcessOutput':v['nextByte']=str(len(v['content'].encode()))
+ if t=='EmbeddingSpacePage':v['availabilityReason']='Qualification is unavailable in this recorded fixture'
+ if t=='ConventionRecord':v['content']=copy.deepcopy(ART)
+ if t=='ConventionRetrieval':v['reason']='No compatible embedding space is selected'
+ if t=='ConventionReadView':v['passage']=sample('ConventionPassage')
+ if t=='ConventionMutation':v['convention']=sample('ConventionRecord')
  return v
 
 def request(name,mode):

@@ -4258,7 +4258,7 @@
   {
     "id": "result-router.embedding_spaces",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"router.embedding_spaces\",\"value\":{\"items\":[],\"hasMore\":false,\"selectionRevision\":\"1\",\"qualificationAvailable\":false}}",
+    "raw": "{\"kind\":\"router.embedding_spaces\",\"value\":{\"items\":[],\"hasMore\":false,\"selectionRevision\":\"1\",\"qualificationAvailable\":false,\"availabilityReason\":\"Qualification is unavailable in this recorded fixture\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12441,7 +12441,7 @@
   {
     "id": "dw13-r3-binding-conventions.search",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false}}}",
+    "raw": "{\"kind\":\"conventions.search\",\"value\":{\"items\":[],\"hasMore\":false,\"scopeRevision\":\"1\",\"retrieval\":{\"mode\":\"Lexical\",\"gaps\":[],\"moreGaps\":false,\"reason\":\"No compatible embedding space is selected\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12469,7 +12469,7 @@
   {
     "id": "dw13-r3-binding-conventions.read",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.read\",\"value\":{\"kind\":\"Document\",\"view\":{\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}},\"format\":\"Markdown\",\"availability\":\"Available\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}}",
+    "raw": "{\"kind\":\"conventions.read\",\"value\":{\"kind\":\"Document\",\"view\":{\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"format\":\"Markdown\",\"availability\":\"Available\",\"manifestSchema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"passage\":{\"text\":\"fixture source\",\"offset\":\"0\",\"hasMore\":false}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12497,7 +12497,7 @@
   {
     "id": "dw13-r3-binding-conventions.edit",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12511,7 +12511,7 @@
   {
     "id": "dw13-r3-binding-conventions.applicability",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.applicability\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.applicability\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12525,7 +12525,7 @@
   {
     "id": "dw13-r3-binding-conventions.retire",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.retire\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.retire\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12539,7 +12539,7 @@
   {
     "id": "dw13-r3-binding-conventions.index",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.index\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12553,7 +12553,7 @@
   {
     "id": "dw13-r3-binding-conventions.delete",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12567,7 +12567,7 @@
   {
     "id": "dw13-r3-binding-conventions.delete_resource",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.delete_resource\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
+    "raw": "{\"kind\":\"conventions.delete_resource\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false,\"convention\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12581,7 +12581,7 @@
   {
     "id": "dw13-r3-binding-conventions.import",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.import\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.import\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -12595,7 +12595,7 @@
   {
     "id": "dw13-r3-binding-conventions.move",
     "entry": "operation-result.r3",
-    "raw": "{\"kind\":\"conventions.move\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"}}}",
+    "raw": "{\"kind\":\"conventions.move\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"slug\":\"fixture source\",\"title\":\"fixture source\",\"sortOrder\":\"-1\",\"lifecycle\":\"Active\",\"applicability\":[],\"provenance\":{\"kind\":\"Authored\",\"actorId\":\"actor-a\"},\"authorId\":\"actor-a\",\"createdAtMs\":\"0\",\"updatedAtMs\":\"0\",\"legacyApproved\":false,\"index\":{\"status\":\"NotIndexed\"},\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
   }
