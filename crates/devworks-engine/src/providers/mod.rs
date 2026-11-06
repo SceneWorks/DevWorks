@@ -15,3 +15,5 @@ pub mod driver;
 pub mod schemas;
 pub mod sink;
 pub mod source;
+
+mod wire_model;

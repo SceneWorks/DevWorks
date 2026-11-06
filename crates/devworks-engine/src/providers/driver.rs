@@ -226,16 +226,18 @@ impl NativePreparation {
                     model_id: request.query.catalog_model_id.clone(),
                     context_epoch,
                 };
+                let model = s.router().route_model(&request.query.catalog_model_id)?;
+                let upstream = super::wire_model::registered_upstream(
+                    &current,
+                    model.as_ref(),
+                    &request.query,
+                )?;
                 let caps = self.owner.capabilities(
                     &self.request,
                     &binding,
                     &current,
-                    s.router().route_model(&request.query.catalog_model_id)?,
-                    request
-                        .query
-                        .provider_model_id
-                        .as_deref()
-                        .ok_or(StorageError::ScopeDenied)?,
+                    model,
+                    &upstream,
                     &request.selection,
                 )?;
                 Some(
@@ -657,11 +659,8 @@ impl NativeProviders {
             model_id: attempt.catalog_model_id.clone(),
             context_epoch,
         };
-        let upstream = bound
-            .query
-            .provider_model_id
-            .clone()
-            .ok_or(StorageError::ScopeDenied)?;
+        let upstream =
+            super::wire_model::registered_upstream(&connection, model.as_ref(), &bound.query)?;
         let capabilities = self.capabilities(
             request,
             &binding,

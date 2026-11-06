@@ -879,3 +879,6 @@ let mut script=Script::aggregate(r#"{"error":{"message":"provider refused"}}"#);
 let f=Fx::new("CodexSubscriptionResponses",Script::sse("event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"usage_not_included\",\"message\":\"plan has no model access despite rate limit wording\"}}\n\n"),false);let result=f.produce(f.generation(vec![])).await.unwrap();assert!(result.result.faults.iter().any(|s|s=="ModelUnavailable:usage_not_included"));assert!(read(f.store.as_ref(),|s|s.router().cooldowns()).is_empty());
 });
 }
+
+#[path = "providers/auto_routes.rs"]
+mod auto_routes;
