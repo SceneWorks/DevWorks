@@ -80,6 +80,9 @@ pub struct PreparedEmbeddingProbe {
     pub(super) operation_state: crate::protocol::OperationState,
 }
 impl PreparedEmbeddingProbe {
+    pub fn authority_fences(&self) -> &[crate::ports::AuthorityFence] {
+        &self.probe.authority_fences
+    }
     pub fn candidate_id(&self) -> &Id {
         &self.candidate.id
     }
