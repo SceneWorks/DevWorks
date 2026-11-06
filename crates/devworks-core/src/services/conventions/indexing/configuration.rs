@@ -68,12 +68,10 @@ impl IndexService {
         Ok(resolved_configuration(&resolved, self.native_available()))
     }
     pub(super) fn native_available(&self) -> bool {
-        !self.is_stopped()
-            && self
-                .embeddings
-                .read()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_ref()
-                .is_some_and(|p| p.is_available())
+        self.embeddings
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|p| p.is_available())
     }
 }

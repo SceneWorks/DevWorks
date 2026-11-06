@@ -111,7 +111,7 @@ impl IndexService {
                     .map(|r| json!({"scope":s.key(),"revision":r}))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint=sha256_hex(crate::jcs::canonicalize(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"lifecycles":input.lifecycles,"topK":top_k,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?.as_bytes());
+        let fingerprint=sha256_hex(crate::jcs::canonicalize(&json!({"scope":input.scope,"text":input.text,"applicability":input.applicability,"lifecycles":input.lifecycles,"topK":top_k,"pageLimit":input.page.limit,"schema":query.schema_revision().0})).map_err(|_|invalid("search identity"))?.as_bytes());
         let principal = read.authority().principal(ctx.principal())?;
         let policy =
             crate::authority::policy::resolve_policy(read.configuration(), ctx.project_id())?
@@ -175,6 +175,43 @@ impl IndexService {
                 return Ok(prepared);
             }
             let cancel = env.cancellation.cloned().unwrap_or_default();
+            let (context, authorization, expected, available, selected, requested) = (
+                ctx.clone(),
+                query.authorization().clone(),
+                snapshot.configuration.source_digest.clone(),
+                self.native_available(),
+                space.clone(),
+                input.scope.clone(),
+            );
+            self.write_options(
+                WriteOptions {
+                    cancellation: Some(cancel.clone()),
+                    deadline_ms: env.deadline_ms,
+                    ..Default::default()
+                },
+                move |tx| {
+                    if &tx.store().store_id != context.store_id()
+                        || tx.store().restore_epoch != context.restore_epoch().get()
+                        || tx.actors().actor_kind(context.principal())?
+                            != Some(context.principal_kind())
+                        || !crate::authority::authorization_holds_in(tx, &context, &authorization)?
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                    access::scope_in(tx, &context, Some(&requested), false)
+                        .map_err(|_| StorageError::ScopeDenied)?;
+                    let now = super::configuration::resolved_configuration(
+                        &crate::services::router::embedding_spaces::resolve_selected_in(
+                            tx, &context,
+                        )?,
+                        available,
+                    );
+                    if now.source_digest != expected || now.space.as_ref() != Some(&selected) {
+                        return Err(StorageError::CursorExpired);
+                    }
+                    tx.conventions().put_convention_embedding_space(&selected)
+                },
+            )?;
             let origin = EmbeddingOrigin::Query {
                 query_id,
                 fingerprint: snapshot.fingerprint,
@@ -207,7 +244,11 @@ impl IndexService {
                 cancellation: cancel,
                 deadline_ms: env.deadline_ms,
             };
-            let result = self.embed_batch(&inputs.context, request);
+            let result = if position.is_some() {
+                self.observe_batch(&inputs.context, request)
+            } else {
+                self.embed_batch(&inputs.context, request)
+            };
             match result {
                 Ok(result) if result.request_id==inputs.request_id && result.space==space && result.vectors.len()==1 && result.vectors[0].len()==space.dimensions as usize && result.vectors[0].iter().all(|v|v.is_finite())=>{prepared.vector=result.vectors.into_iter().next();prepared.request_id=Some(inputs.request_id);prepared.reason=None;}
                 Ok(_)=>return Err(invalid("query embedding population/binding mismatch").into()),
@@ -215,6 +256,7 @@ impl IndexService {
                 Err(EmbeddingFailure::Storage(error))=>return Err(error.into()),
                 Err(_) if position.is_some()=>return Err(StorageError::CursorExpired.into()),
                 Err(EmbeddingFailure::Unknown{..})=>prepared.reason=Some("The native query embedding outcome is unknown; results use lexical retrieval.".into()),
+                Err(EmbeddingFailure::NotStarted{..})=>return Err(invalid("native send returned observer-only absence").into()),
                 Err(EmbeddingFailure::Unavailable(_))=>prepared.reason=Some("The configured native embedding route is unavailable; results use lexical retrieval.".into()),
             }
         }
@@ -249,7 +291,7 @@ impl IndexService {
         let average = if stats.documents == 0 {
             1.0
         } else {
-            stats.total_tokens as f64 / stats.documents as f64
+            (stats.total_tokens as f64 / stats.documents as f64).max(1.0)
         };
         let rows = read.conventions().convention_ranked_chunks(
             &snapshot.filter,

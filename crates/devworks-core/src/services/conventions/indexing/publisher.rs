@@ -175,15 +175,38 @@ fn recorded(operation: &OperationRecord) -> Option<Value> {
 impl IndexService {
     fn index_write<T: Send + 'static>(
         &self,
-        op: &OperationRecord,
-        job: &IndexJob,
+        run: &Publish<'_>,
         work: impl FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     ) -> Result<T, StorageError> {
-        let (op, job, available) = (op.clone(), job.clone(), self.native_available());
-        self.write(move |tx| {
-            current(tx, &op, &job, available)?;
-            work(tx)
-        })
+        self.index_bounded(run.cancel, run.deadline)?;
+        let _phase = self.closed.enter()?;
+        let (op, job, available, closed, clock, cancel, deadline) = (
+            run.op.clone(),
+            run.job.clone(),
+            self.native_available(),
+            self.closed.clone(),
+            self.clock.clone(),
+            run.cancel.clone(),
+            run.deadline,
+        );
+        run_write(
+            &*self.store,
+            WriteOptions {
+                cancellation: Some(cancel.clone()),
+                deadline_ms: deadline,
+                ..Default::default()
+            },
+            move |tx| {
+                if closed.is_closed()
+                    || cancel.is_cancelled()
+                    || deadline.is_some_and(|d| clock.now_ms().get() >= d)
+                {
+                    return Err(StorageError::Cancelled);
+                }
+                current(tx, &op, &job, available)?;
+                work(tx)
+            },
+        )
     }
     fn index_bounded(
         &self,
@@ -206,7 +229,6 @@ impl IndexService {
         seen: &mut BTreeSet<u64>,
         source: &str,
     ) -> Result<(), StorageError> {
-        let (op, job) = (run.op, run.job);
         self.index_bounded(run.cancel, run.deadline)?;
         if seen.contains(&section.index) {
             return Ok(());
@@ -250,7 +272,7 @@ impl IndexService {
             source_length: section.source_span.as_ref().map(|s| s.byte_length as i64),
             token_count: rank::tokens(&section.heading).count() as i64,
         };
-        self.index_write(op, job, move |tx| {
+        self.index_write(run, move |tx| {
             tx.conventions().stage_convention_section(&row)
         })?;
         self.index_terms(run, generation, &id, &section.heading, true)?;
@@ -265,7 +287,6 @@ impl IndexService {
         text: &str,
         section: bool,
     ) -> Result<(), StorageError> {
-        let (op, job) = (run.op, run.job);
         for (n, terms) in rank::term_batches(text).enumerate() {
             self.index_bounded(run.cancel, run.deadline)?;
             let terms = terms
@@ -280,7 +301,7 @@ impl IndexService {
                 .as_bytes(),
             );
             let (g, id) = (generation.clone(), id.clone());
-            self.index_write(op, job, move |tx| {
+            self.index_write(run, move |tx| {
                 if section {
                     tx.conventions()
                         .stage_convention_section_terms(&g, &id, n as i64, &digest, &terms)
@@ -320,7 +341,7 @@ impl IndexService {
             candidate = existing;
         }
         let g = candidate.clone();
-        self.index_write(op, job, move |tx| {
+        self.index_write(run, move |tx| {
             if tx
                 .conventions()
                 .convention_index_generation(&g.generation_id)?
@@ -493,7 +514,19 @@ impl IndexService {
                     cancellation: cancel.clone(),
                     deadline_ms: deadline,
                 };
-                match self.embed_batch(&prepared.context, request) {
+                let result = if op.state == OperationState::OutcomeUnknown {
+                    match self.observe_batch(&prepared.context, request.clone()) {
+                        Err(EmbeddingFailure::NotStarted { request_id })
+                            if request_id == prepared.request_id =>
+                        {
+                            self.embed_batch(&prepared.context, request)
+                        }
+                        result => result,
+                    }
+                } else {
+                    self.embed_batch(&prepared.context, request)
+                };
+                match result {
                     Ok(result)
                         if result.request_id == prepared.request_id
                             && result.space == *space
@@ -509,6 +542,9 @@ impl IndexService {
                     }
                     Ok(_) => return Err(invalid("native embedding population/binding mismatch")),
                     Err(EmbeddingFailure::Unknown { reason, .. }) => return Ok(Err(reason)),
+                    Err(EmbeddingFailure::NotStarted { .. }) => {
+                        return Err(invalid("native send returned observer-only absence"));
+                    }
                     Err(EmbeddingFailure::Unavailable(_)) => dense = false,
                     Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled),
                     Err(EmbeddingFailure::Storage(error)) => return Err(error),
@@ -516,7 +552,7 @@ impl IndexService {
             }
             let generation = candidate.generation_id.clone();
             let stage = rows.clone();
-            self.index_write(op, job, move |tx| {
+            self.index_write(run, move |tx| {
                 tx.conventions()
                     .stage_convention_chunks(&generation, &stage)
             })?;
@@ -530,7 +566,7 @@ impl IndexService {
         let revision = owner.revision;
         let lexical = space.is_none() || !dense;
         let operation_id = op.id.clone();
-        self.index_write(op, job, move |tx| {
+        self.index_write(run, move |tx| {
             if lexical {tx.conventions().set_convention_index_status(&generation,&operation_id,"Indexing","Indexing",Some("Compatible native vectors are unavailable; the full lexical index is published."))?;}
             tx.conventions().publish_convention_index(&generation, revision, head.as_ref(), count)
         })?;
@@ -554,8 +590,14 @@ impl IndexService {
         }
         let job: IndexJob = serde_json::from_value(operation.payload.clone())
             .map_err(|_| invalid("invalid index journal"))?;
+        let run = Publish {
+            op: operation,
+            job: &job,
+            cancel: cancellation,
+            deadline: deadline_ms,
+        };
         let (op, j, available) = (operation.clone(), job.clone(), self.native_available());
-        let ctx = self.write(move |tx| current(tx, &op, &j, available))?;
+        let ctx = self.index_write(&run, move |tx| current(tx, &op, &j, available))?;
         let mut after = None;
         let mut processed = 0;
         loop {
@@ -609,7 +651,7 @@ impl IndexService {
         let result = json!({"operationId":operation.id,"indexed":processed});
         let value = result.clone();
         let op = operation.clone();
-        self.index_write(operation, &job, move |tx| {
+        self.index_write(&run, move |tx| {
             let attempt = op
                 .latest_attempt()
                 .ok_or_else(|| invalid("index attempt missing"))?;

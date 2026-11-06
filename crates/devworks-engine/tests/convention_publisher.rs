@@ -290,3 +290,152 @@ fn retired_source_is_not_reembedded_or_made_searchable() {
         .is_none()
     );
 }
+
+// A thin native gateway adapter to the SAME core owner, while the operation family composes.
+struct Search(Arc<IndexService>);
+fn search_input(
+    q: &devworks_core::gateway::AdmittedQuery,
+) -> &devworks_core::operations::conventions::SearchInput {
+    match q.input() {
+        devworks_core::operations::OperationInput::Conventions(
+            devworks_core::operations::conventions::Input::Search(input),
+        ) => input,
+        _ => panic!("selected actual search input"),
+    }
+}
+fn fault(
+    error: devworks_core::services::sessions::Failure,
+) -> devworks_core::protocol::DomainFault {
+    use devworks_core::{
+        protocol::{CorrelationId, DomainErrorCode},
+        services::sessions::{Failure, Refusal},
+    };
+    let refusal = match error {
+        Failure::Refused(r) => r,
+        Failure::Storage(StorageError::CursorExpired) => {
+            Refusal::new(DomainErrorCode::CursorExpired, "search", None)
+        }
+        Failure::Storage(StorageError::Cancelled) => {
+            Refusal::new(DomainErrorCode::Cancelled, "search", None)
+        }
+        Failure::Storage(e) => panic!("unexpected storage fault: {e:?}"),
+    };
+    refusal.fault(CorrelationId(id("search-fault")))
+}
+impl devworks_core::ports::QueryHandler for Search {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        q: &devworks_core::gateway::AdmittedQuery,
+        env: &devworks_core::ports::Preparation<'_>,
+    ) -> Result<Option<devworks_core::ports::Prepared>, devworks_core::protocol::DomainFault> {
+        self.0
+            .prepare_search(ctx, q, env, search_input(q))
+            .map(|p| Some(devworks_core::ports::Prepared::new(p)))
+            .map_err(fault)
+    }
+    fn query(
+        &self,
+        ctx: &InvocationContext,
+        q: &devworks_core::gateway::AdmittedQuery,
+        read: &dyn ReadSnapshot,
+    ) -> Result<devworks_core::ports::QueryAnswer, devworks_core::protocol::DomainFault> {
+        let result = self
+            .0
+            .search(
+                read,
+                ctx,
+                q,
+                search_input(q),
+                q.prepared().expect("real preparation"),
+            )
+            .map_err(fault)?;
+        Ok(devworks_core::ports::QueryAnswer {
+            stamp: read
+                .stamp()
+                .read_stamp(ctx.policy_revision().clone(), result.scope_revision.clone()),
+            result: devworks_core::protocol::results::OperationResult::ConventionsSearch {
+                value: devworks_core::protocol::records::ConventionSearchPageResult::Current(
+                    result,
+                ),
+            },
+        })
+    }
+}
+fn search(f: &Fixture, query: &str, cursor: Option<&str>, top_k: i64) -> serde_json::Value {
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &Authority,
+        store: &*f.store,
+        ids: f.h.ids.as_ref(),
+    };
+    let mut body = json!({"kind":"conventions.search","scope":{"kind":"Workspace"},"page":{"limit":1},"applicability":[],"text":"alpha","topK":top_k.to_string()});
+    if let Some(cursor) = cursor {
+        body["page"]["cursor"] = json!(cursor);
+    }
+    let frame = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":query,"schemaRevision":3,"body":body});
+    serde_json::to_value(
+        gateway
+            .query(
+                &f.ctx,
+                "conventions.search",
+                frame.to_string().as_bytes(),
+                &Search(f.index.clone()),
+            )
+            .unwrap(),
+    )
+    .unwrap()
+}
+#[test]
+fn actual_gateway_search_ranks_full_corpus_and_pages_the_same_bounded_top_k() {
+    let f = Fixture::new();
+    for name in ["a", "b", "c", "d"] {
+        let (_, op) = f.source(name, "# Policy\nalpha authoritative rule");
+        f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    }
+    let first = search(&f, "query-first", None, 3);
+    let page = &first["result"]["value"];
+    assert_eq!(page["items"].as_array().unwrap().len(), 1, "{first}");
+    assert_eq!(page["retrieval"]["mode"], "Lexical");
+    assert!(
+        page["items"][0]["sectionPath"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Policy")
+    );
+    assert_eq!(page["items"][0]["convention"]["id"], "a");
+    let cursor = page["nextCursor"].as_str().unwrap();
+    let second = search(&f, "query-second", Some(cursor), 3);
+    let page = &second["result"]["value"];
+    assert_eq!(page["items"][0]["convention"]["id"], "b");
+    let cursor = page["nextCursor"].as_str().unwrap();
+    let third = search(&f, "query-third", Some(cursor), 3);
+    assert_eq!(
+        third["result"]["value"]["items"][0]["convention"]["id"],
+        "c"
+    );
+    assert_eq!(third["result"]["value"]["hasMore"], false);
+}
+#[test]
+fn search_cursor_expires_on_changed_source_and_changed_top_k() {
+    let f = Fixture::new();
+    let (mut owner, op) = f.source("a", "alpha");
+    f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    let (_, op) = f.source("b", "alpha");
+    f.index.run_index(&op, &Cancellation::new(), None).unwrap();
+    let first = search(&f, "query-first", None, 2);
+    let cursor = first["result"]["value"]["nextCursor"].as_str().unwrap();
+    assert_eq!(
+        search(&f, "query-changed-k", Some(cursor), 3)["fault"]["code"],
+        "CursorExpired"
+    );
+    owner.revision += 1;
+    owner.title = "changed title".into();
+    write(&*f.store, move |tx| {
+        tx.conventions().revise_convention(&owner, 1)
+    })
+    .unwrap();
+    assert_eq!(
+        search(&f, "query-changed-source", Some(cursor), 2)["fault"]["code"],
+        "CursorExpired"
+    );
+}

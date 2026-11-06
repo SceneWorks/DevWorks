@@ -88,9 +88,21 @@ impl IndexService {
         T: Send + 'static,
         F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     {
+        self.write_options(WriteOptions::default(), work)
+    }
+
+    pub(crate) fn write_options<T, F>(
+        &self,
+        options: WriteOptions,
+        work: F,
+    ) -> Result<T, StorageError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
+    {
         let _phase = self.closed.enter()?;
         let closed = self.closed.clone();
-        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), options, move |tx| {
             if closed.is_closed() {
                 return Err(StorageError::Cancelled);
             }
