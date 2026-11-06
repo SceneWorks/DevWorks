@@ -3,6 +3,7 @@
 use super::meter::{InputSemantics, Quantities};
 use super::money::{CostAccumulator, MoneyError, Rounding};
 use crate::ports::usage::{CostClassification, PriceQuote};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PricingContext {
@@ -123,14 +124,14 @@ fn highest_rate<'a>(
     }
     // Different known lifetimes are valid reservation alternatives. Overlapping rows at
     // any lifetime are ambiguous, even when one of them has no TTL restriction.
-    if ttl_alternatives
-        && rates.iter().enumerate().any(|(i, a)| {
-            rates[..i]
-                .iter()
-                .any(|b| a.ttl_ms.is_none() || b.ttl_ms.is_none() || a.ttl_ms == b.ttl_ms)
-        })
-    {
-        return Ok(None);
+    if ttl_alternatives && rates.len() > 1 {
+        let mut lifetimes = BTreeSet::new();
+        if rates
+            .iter()
+            .any(|rate| rate.ttl_ms.is_none() || !lifetimes.insert(rate.ttl_ms))
+        {
+            return Ok(None);
+        }
     }
     most_expensive(rates)
 }
@@ -322,11 +323,14 @@ pub fn estimate(
             if measured < total {
                 unknown.push(format!("unmeasured {name} modality remainder"));
             }
+        } else if matches!(kind, "Input" | "Output") {
+            unknown.push(format!("unmeasured {name} aggregate"));
         }
     }
     for quantity in &quantities.additional {
-        if ambiguous_audio_cache
-            && quantity.modality == "Audio"
+        if (ambiguous_audio_cache
+            || ((unexpected_read || unexpected_write)
+                && context.input_semantics == InputSemantics::Inclusive))
             && quantity.charge_kind == "Input"
             && quantity.unit == "Token"
         {
@@ -358,6 +362,11 @@ pub fn estimate(
     // Non-token/modal rates in this quote require their own observed dimensional quantity.
     // Alternative TTL rows describe one write category; they are not separate charges.
     for tariff in &quote.tariffs {
+        if (tariff.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (tariff.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            continue;
+        }
         if tariff.unit == "Token" && matches!(tariff.modality.as_str(), "Text" | "Any") {
             continue;
         }
@@ -448,13 +457,14 @@ pub fn cache_estimates(
     ))
 }
 
-/// Reserve validated total input plus output headroom. Cache reads never grant a provisional
-/// discount; if cache writes may occur, use the highest applicable complete write/input rate.
+/// Reserve validated total input plus output headroom at the highest host-applicable
+/// input/read/write rate. Provisional cache hits never grant a discount; missing rates stay
+/// explicit rather than supplying an invented maximum.
 pub fn reservation(
     quote: &PriceQuote,
     input_tokens: i64,
     output_headroom: i64,
-    cache_write_possible: bool,
+    context: &PricingContext,
     unit_headroom: &[super::meter::MeasuredQuantity],
 ) -> Result<Estimate, MoneyError> {
     if input_tokens < 0 || output_headroom < 0 {
@@ -499,6 +509,14 @@ pub fn reservation(
                     .ok_or(MoneyError::InvalidDecimal)?;
             }
         }
+        if (quantity.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (quantity.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            if quantity.quantity > 0 {
+                unknown.push("profile contradicts reserved cache unit".into());
+            }
+            continue;
+        }
         if quantity.quantity == 0 {
             known = true;
             continue;
@@ -515,14 +533,35 @@ pub fn reservation(
                 quantity.modality, quantity.charge_kind, quantity.unit
             ));
         }
-        if cache_write_possible && quantity.unit == "Token" && quantity.charge_kind == "Input" {
-            let write = super::meter::MeasuredQuantity {
-                charge_kind: "CacheWrite".into(),
+        if context.cache_read_possible
+            && quantity.unit == "Token"
+            && quantity.charge_kind == "Input"
+        {
+            let read = super::meter::MeasuredQuantity {
+                charge_kind: "CacheRead".into(),
                 cache_write_ttl_ms: None,
                 ..quantity.clone()
             };
+            let options = measured_rates(quote, &read, true);
+            if let Some(read) = highest_rate(&options.choices, false)? {
+                alternatives.push(read);
+            } else {
+                unknown.push(format!("{} cache read reservation", quantity.modality));
+            }
+        }
+        if context.cache_write_possible
+            && quantity.unit == "Token"
+            && quantity.charge_kind == "Input"
+        {
+            let write = super::meter::MeasuredQuantity {
+                charge_kind: "CacheWrite".into(),
+                cache_write_ttl_ms: context.cache_write_ttl_ms,
+                ..quantity.clone()
+            };
             let options = measured_rates(quote, &write, true);
-            if let Some(write) = highest_rate(&options.choices, true)? {
+            if let Some(write) =
+                highest_rate(&options.choices, context.cache_write_ttl_ms.is_none())?
+            {
                 alternatives.push(write);
             } else {
                 unknown.push(format!("{} cache write reservation", quantity.modality));
@@ -534,6 +573,11 @@ pub fn reservation(
         }
     }
     for tariff in &quote.tariffs {
+        if (tariff.charge_kind == "CacheRead" && !context.cache_read_possible)
+            || (tariff.charge_kind == "CacheWrite" && !context.cache_write_possible)
+        {
+            continue;
+        }
         if tariff.unit == "Token" && matches!(tariff.modality.as_str(), "Text" | "Any") {
             continue;
         }
@@ -565,9 +609,17 @@ pub fn reservation(
     } else if input_remainder > 0 {
         unknown.push("input reservation".into());
     }
-    if cache_write_possible && input_remainder > 0 {
-        let write = token_rates(quote, "CacheWrite", None, true);
-        if let Some(rate) = highest_rate(&write.choices, true)? {
+    if context.cache_read_possible && input_remainder > 0 {
+        let read = token_rates(quote, "CacheRead", None, true);
+        if let Some(rate) = highest_rate(&read.choices, false)? {
+            alternatives.push(rate);
+        } else {
+            unknown.push("cache read reservation".into());
+        }
+    }
+    if context.cache_write_possible && input_remainder > 0 {
+        let write = token_rates(quote, "CacheWrite", context.cache_write_ttl_ms, true);
+        if let Some(rate) = highest_rate(&write.choices, context.cache_write_ttl_ms.is_none())? {
             alternatives.push(rate);
         } else {
             unknown.push("cache write reservation".into());
@@ -706,11 +758,11 @@ mod tests {
         .unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(1));
         assert!(cost.monetary_complete);
-        let reserve = reservation(&quote, 0, 0, false, &units).unwrap();
+        let reserve = reservation(&quote, 0, 0, &plain_context(), &units).unwrap();
         assert_eq!(reserve.tracked_micro_usd, Some(1));
         assert!(reserve.monetary_complete);
         assert!(
-            !reservation(&quote, 0, 0, false, &[])
+            !reservation(&quote, 0, 0, &plain_context(), &[])
                 .unwrap()
                 .monetary_complete
         );
@@ -728,7 +780,7 @@ mod tests {
             ..Default::default()
         }));
         assert_eq!(
-            reservation(&quote, 100, 10, true, &[]).unwrap(),
+            reservation(&quote, 100, 10, &writing_context(), &[]).unwrap(),
             Estimate {
                 tracked_micro_usd: Some(480),
                 monetary_complete: true,
@@ -765,7 +817,7 @@ mod tests {
                 quantity: 1,
             },
         ];
-        let cost = reservation(&quote, 0, 0, true, &units).unwrap();
+        let cost = reservation(&quote, 0, 0, &writing_context(), &units).unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(2));
         assert!(cost.monetary_complete);
     }
@@ -881,5 +933,293 @@ mod tests {
         .unwrap();
         assert_eq!(cost.tracked_micro_usd, Some(5_000_000));
         assert!(cost.monetary_complete);
+    }
+    fn token_tariff(
+        kind: &str,
+        modality: &str,
+        amount: &str,
+        units: i64,
+        ttl: Option<i64>,
+    ) -> crate::ports::usage::PublishedTariff {
+        crate::ports::usage::PublishedTariff {
+            upstream_model_id: "priced".into(),
+            service_tier: "Standard".into(),
+            context_lower_exclusive: None,
+            context_upper_inclusive: None,
+            modality: modality.into(),
+            charge_kind: kind.into(),
+            cache_ttl_seconds: ttl,
+            unit: "Token".into(),
+            units,
+            amount_usd: amount.into(),
+            region: None,
+            endpoint_profile: None,
+        }
+    }
+    fn writing_context() -> PricingContext {
+        PricingContext {
+            cache_write_possible: true,
+            ..plain_context()
+        }
+    }
+    fn plain_context() -> PricingContext {
+        PricingContext {
+            input_semantics: InputSemantics::Disjoint,
+            cache_read_possible: false,
+            cache_write_possible: false,
+            cache_write_ttl_ms: None,
+        }
+    }
+    #[test]
+    fn exact_aggregate_and_explicit_text_tokens_round_once_without_legacy_double_charges() {
+        let mut priced = quote(Some(UsageRates {
+            input_usd_per_million: Some("99".into()),
+            output_usd_per_million: Some("99".into()),
+            ..Default::default()
+        }));
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.000001", 3, None),
+            token_tariff("Output", "Text", "0.000001", 3, None),
+        ];
+        let mut quantities = Quantities {
+            input_tokens: Some(1),
+            output_tokens: Some(1),
+            ..Default::default()
+        };
+        for explicit in [false, true] {
+            if explicit {
+                quantities.additional = ["Input", "Output"]
+                    .map(|kind| MeasuredQuantity {
+                        modality: "Text".into(),
+                        charge_kind: kind.into(),
+                        unit: "Token".into(),
+                        cache_write_ttl_ms: None,
+                        quantity: 1,
+                    })
+                    .to_vec();
+            }
+            let cost = estimate(&priced, &quantities, &plain_context()).unwrap();
+            assert_eq!(cost.tracked_micro_usd, Some(1), "explicit={explicit}");
+            assert!(cost.monetary_complete);
+            let reserved =
+                reservation(&priced, 1, 1, &plain_context(), &quantities.additional).unwrap();
+            assert_eq!(reserved.tracked_micro_usd, Some(1), "explicit={explicit}");
+            assert!(reserved.monetary_complete);
+        }
+        let missing_total = estimate(
+            &priced,
+            &Quantities {
+                input_tokens: None,
+                ..quantities.clone()
+            },
+            &plain_context(),
+        )
+        .unwrap();
+        assert!(
+            !missing_total.monetary_complete,
+            "a measured modality subset does not establish an absent aggregate"
+        );
+        let legacy = quote(Some(UsageRates {
+            input_usd_per_million: Some("0.333333333333".into()),
+            output_usd_per_million: Some("0.333333333333".into()),
+            ..Default::default()
+        }));
+        assert_eq!(
+            estimate(&legacy, &quantities, &plain_context())
+                .unwrap()
+                .tracked_micro_usd,
+            Some(1)
+        );
+        assert_eq!(
+            reservation(&legacy, 1, 1, &plain_context(), &quantities.additional)
+                .unwrap()
+                .tracked_micro_usd,
+            Some(1)
+        );
+    }
+    #[test]
+    fn aggregate_large_denominators_cancel_before_rounding_and_zero_is_known() {
+        let mut priced = quote(None);
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "999999999999", i64::MAX, None),
+            token_tariff("Output", "Text", "0.000001", 3, None),
+        ];
+        let quantities = Quantities {
+            input_tokens: Some(i64::MAX),
+            output_tokens: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            estimate(&priced, &quantities, &plain_context())
+                .unwrap()
+                .tracked_micro_usd,
+            Some(999_999_999_999_000_000)
+        );
+        assert_eq!(
+            reservation(&priced, i64::MAX, 1, &plain_context(), &[])
+                .unwrap()
+                .tracked_micro_usd,
+            Some(999_999_999_999_000_001)
+        );
+        for row in &mut priced.tariffs {
+            row.amount_usd = "0".into();
+        }
+        let free = estimate(&priced, &quantities, &plain_context()).unwrap();
+        assert_eq!(free.tracked_micro_usd, Some(0));
+        assert!(free.monetary_complete);
+        assert_eq!(
+            reservation(&priced, i64::MAX, 1, &plain_context(), &[])
+                .unwrap()
+                .tracked_micro_usd,
+            Some(0)
+        );
+        let absent = reservation(&quote(None), 100, 0, &plain_context(), &[]).unwrap();
+        assert_eq!(absent.tracked_micro_usd, None);
+        assert!(!absent.monetary_complete);
+    }
+    #[test]
+    fn exact_write_rates_preserve_ttl_ambiguity_and_compare_ratios_not_decimal_amounts() {
+        let mut priced = quote(Some(UsageRates {
+            input_usd_per_million: Some("0".into()),
+            cache_write_usd_per_million: Some("0".into()),
+            ..Default::default()
+        }));
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.001", 1000, None),
+            token_tariff("CacheWrite", "Text", "0.002", 1000, Some(300)),
+            token_tariff("CacheWrite", "Text", "0.0004", 100, Some(3600)),
+        ];
+        let quantities = Quantities {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            cache_write_tokens: Some(100),
+            ..Default::default()
+        };
+        let context = PricingContext {
+            cache_write_possible: true,
+            cache_write_ttl_ms: Some(300_000),
+            ..plain_context()
+        };
+        assert_eq!(
+            estimate(&priced, &quantities, &context)
+                .unwrap()
+                .tracked_micro_usd,
+            Some(200)
+        );
+        let reserved = reservation(&priced, 100, 0, &writing_context(), &[]).unwrap();
+        assert_eq!(reserved.tracked_micro_usd, Some(400));
+        assert!(reserved.monetary_complete);
+        assert!(
+            !estimate(
+                &priced,
+                &quantities,
+                &PricingContext {
+                    cache_write_ttl_ms: None,
+                    ..context.clone()
+                }
+            )
+            .unwrap()
+            .monetary_complete
+        );
+        priced
+            .tariffs
+            .push(token_tariff("CacheWrite", "Text", "0.001", 1000, None));
+        assert!(
+            !estimate(&priced, &quantities, &context)
+                .unwrap()
+                .monetary_complete
+        );
+        assert!(
+            !reservation(&priced, 100, 0, &writing_context(), &[])
+                .unwrap()
+                .monetary_complete
+        );
+        priced
+            .tariffs
+            .push(token_tariff("Input", "Any", "0", 1_000_000, None));
+        assert!(
+            !estimate(
+                &priced,
+                &Quantities {
+                    input_tokens: Some(100),
+                    output_tokens: Some(0),
+                    ..Default::default()
+                },
+                &plain_context()
+            )
+            .unwrap()
+            .monetary_complete
+        );
+    }
+    #[test]
+    fn exact_audio_subsets_and_explicit_text_remainders_are_priced_and_reserved_once() {
+        let mut priced = quote(None);
+        priced.tariffs = vec![
+            token_tariff("Input", "Text", "0.002", 1000, None),
+            token_tariff("Output", "Text", "0.004", 1000, None),
+            token_tariff("Input", "Audio", "0.000001", 3, None),
+            token_tariff("Output", "Audio", "0.000001", 7, None),
+        ];
+        let mut quantities = Quantities {
+            input_tokens: Some(10),
+            output_tokens: Some(4),
+            additional: vec![
+                MeasuredQuantity {
+                    modality: "Audio".into(),
+                    charge_kind: "Input".into(),
+                    unit: "Token".into(),
+                    cache_write_ttl_ms: None,
+                    quantity: 4,
+                },
+                MeasuredQuantity {
+                    modality: "Audio".into(),
+                    charge_kind: "Output".into(),
+                    unit: "Token".into(),
+                    cache_write_ttl_ms: None,
+                    quantity: 1,
+                },
+            ],
+            ..Default::default()
+        };
+        for explicit in [false, true] {
+            if explicit {
+                quantities
+                    .additional
+                    .extend([("Input", 6), ("Output", 3)].map(|(kind, quantity)| {
+                        MeasuredQuantity {
+                            modality: "Text".into(),
+                            charge_kind: kind.into(),
+                            unit: "Token".into(),
+                            cache_write_ttl_ms: None,
+                            quantity,
+                        }
+                    }));
+            }
+            let cost = estimate(&priced, &quantities, &plain_context()).unwrap();
+            assert_eq!(cost.tracked_micro_usd, Some(25));
+            assert!(cost.monetary_complete);
+            let reserved =
+                reservation(&priced, 10, 4, &plain_context(), &quantities.additional).unwrap();
+            assert_eq!(reserved.tracked_micro_usd, Some(26));
+            assert!(reserved.monetary_complete);
+        }
+        quantities.cached_read_tokens = Some(1);
+        let uncertain = estimate(
+            &priced,
+            &quantities,
+            &PricingContext {
+                input_semantics: InputSemantics::Inclusive,
+                cache_read_possible: true,
+                ..plain_context()
+            },
+        )
+        .unwrap();
+        assert!(!uncertain.monetary_complete);
+        assert_eq!(uncertain.tracked_micro_usd, Some(12));
+        assert!(
+            uncertain
+                .unknown_components
+                .contains(&"input_modality_cache_breakdown".into())
+        );
     }
 }
