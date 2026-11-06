@@ -51,12 +51,8 @@ pub struct NotificationDraft {
     pub requires_input: bool,
     pub priority: i64,
 }
-fn limited(value: &str, bytes: usize) -> String {
-    let mut end = value.len().min(bytes);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].into()
+fn limited(value: &str, characters: usize) -> String {
+    value.chars().take(characters).collect()
 }
 fn wire_source(source: &str) -> Id {
     Id::new(source).unwrap_or_else(|_| {
