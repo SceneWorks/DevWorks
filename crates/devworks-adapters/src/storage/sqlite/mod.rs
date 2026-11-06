@@ -283,6 +283,10 @@ impl SqliteStore {
             previous_shutdown = record_boot(&writer_conn, &config, &boot, now)?;
             (Some(writer_conn), runtime, meta, access, Some(boot))
         };
+        // Pure expected metadata belongs to store boot, before a runtime can schedule its
+        // monitor. Replaying the catalogue after shutdown could otherwise strand Tokio's
+        // blocking-pool destructor. This never validates or substitutes the actual schema.
+        diagnostics::prepare_expected_schema(meta.schema_version);
         let store_id = StoreId(
             Id::new(meta.store_id.clone())
                 .map_err(|_| StorageError::IncompatibleSchema("invalid store identity".into()))?,
