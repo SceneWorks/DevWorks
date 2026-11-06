@@ -31,7 +31,9 @@ The first budgeted default run completed all 19 cases in 86.05s: all three previ
 startup observers passed, with 18 overall passes and a separate More-fixture row-count failure.
 A default run with added failure-only cursor/event diagnostics passed 19/19 in 86.28s; that rerun
 alone does not disposition the intermittent More premise. This pure allocation commit preserves
-all prior test bodies; separate fixture control and final strict qualification remain pending.
+all prior test bodies. A separately reviewed actual writer-slot control makes the positive
+More premise explicit; see `paging-snapshot-control.md`. On that controlled source the final
+default Usage suite passed 19/19 in 81.25s; final strict qualification is recorded with that tail.
 
 Tests use actual temporary SQLite/runtime composition with SessionSecrets and recorded/no-network
 provider ports; no learned computation or OS secrets. No startup failure is being reclassified as
