@@ -4383,7 +4383,7 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `inbound` | `Rows<CodeRepositoryLink>` |
 | `outbound` | `Rows<CodeRepositoryLink>` |
 | `packages` | `Rows<CodePackageDependency>` |
-| `packageCount` | `Counter` |
+| `packageCount` | `?Counter` · *revision 3+* |
 | `packageCountsByEcosystem` | `Rows<CodeCount>` |
 | `supertypes` | `Rows<CodeSupertype>` |
 | `internalModules` | `Rows<CodeModuleAnalysis>` |

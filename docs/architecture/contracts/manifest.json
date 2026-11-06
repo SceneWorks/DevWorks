@@ -86,11 +86,11 @@
     },
     {
       "file": "domain-command-reply.r3.schema.json",
-      "sha256": "2dab4fff3ee4769aa93717ce8b972b493de029702519c65c0f3cf5458e5532a2"
+      "sha256": "e250d736991a3c16d85c7d2e010c220268c988078e94156d9c6ed39059abe39f"
     },
     {
       "file": "domain-command-reply.r4.schema.json",
-      "sha256": "10fe1b06282455fd35cf5abea85908a5f0202527e129a438245620eda7ab1000"
+      "sha256": "3eb108aea48c9615ecec910c95721201d1b0f9c034e384ee8e71f2e623d46ce7"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -102,11 +102,11 @@
     },
     {
       "file": "domain-query-reply.r3.schema.json",
-      "sha256": "247925f9b601121e20613480a6986b523fcbd3aef1641fb14e85580f3510403c"
+      "sha256": "70531bd8a89b6a4614f8e100c270fbdcd0190a2dd6303d113aeea1fa6278a040"
     },
     {
       "file": "domain-query-reply.r4.schema.json",
-      "sha256": "dca1dc9e47ed55caff0cf8a29417fd0a2265005151c698448ffed9a142f7294f"
+      "sha256": "7c4e9b0fc5a8f515a75a12fd0b62d7b7f0a929f05d8361153a9214112db03066"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -142,7 +142,7 @@
     },
     {
       "file": "graph-page.r3.schema.json",
-      "sha256": "a8423dcbb1977086f4b96921ed07352615329a40bb06f1c7338d7f8cd54352f1"
+      "sha256": "8a0fca57389284b194d494e378cbcda7be09bd813fa7a0fc79bc88856b020983"
     },
     {
       "file": "graph-page.schema.json",
@@ -182,11 +182,11 @@
     },
     {
       "file": "operation-completion.r3.schema.json",
-      "sha256": "88884c620fa6ff8d7e9f74e0b543ef69cacc39c9960354c7149e07ba69ec1a23"
+      "sha256": "0884508956c2ae0905eb6d244c852da0e8c8286e07c5ec1aa13e1d86cd695c92"
     },
     {
       "file": "operation-completion.r4.schema.json",
-      "sha256": "146723dccb06f7c92d455425b6fbeee2c91f717f5979b34c99825f29146c8688"
+      "sha256": "f9e14daccc4385c61bcdc6c56b7e4d109f4282ebc9649999f029ca08b0ff1a46"
     },
     {
       "file": "operation-completion.schema.json",
@@ -198,11 +198,11 @@
     },
     {
       "file": "operation-result.r3.schema.json",
-      "sha256": "705245630d4060bd67e65066058e9c806a946e6c61c5a9a53827315979716e9b"
+      "sha256": "8d82ed98e54e47c603e68ab56aab2cf0c244e00aa3eeee4e9792f965c66cb895"
     },
     {
       "file": "operation-result.r4.schema.json",
-      "sha256": "8ecdec62db4631c1cb7296768c71a05ac49ac170a157499752c029c8cd880805"
+      "sha256": "d4205aad9431dffb944503c9b7fb70b75ec391444a1115c6abab2406bc1cb371"
     },
     {
       "file": "operation-result.schema.json",

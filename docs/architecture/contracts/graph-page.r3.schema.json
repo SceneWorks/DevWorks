@@ -223,7 +223,8 @@
           "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
         },
         "packageCount": {
-          "$ref": "#/$defs/Counter"
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
         },
         "packageCountsByEcosystem": {
           "$ref": "#/$defs/List_CodeCount_0_500"
@@ -249,7 +250,6 @@
         "inbound",
         "outbound",
         "packages",
-        "packageCount",
         "packageCountsByEcosystem",
         "supertypes",
         "internalModules"

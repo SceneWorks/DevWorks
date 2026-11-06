@@ -127,3 +127,5 @@ retained caller pin ID. An explicitly invalid pin never selects another view.
 Legacy old-view execution needs its retained caller witness; a new current view
 can validate its actual immutable lifecycle without a pin. These are references
 for current scope/membership validation, not caller-minted authority.
+
+The bounded package-total delta (`b34c1f71`) makes `CodeArchitecture.packageCount` optional: it is present only when the aggregate completed. The two added probe fixtures and one native DTO regression passed, including strict present-null refusal; all 56 legacy schemas remain byte-identical. This adds two domain fixtures (1757 total), with the same 570 operation/mode/revision admissions. See [package-total-qualification.json](package-total-qualification.json). Prior full-pass reports retain their original source checkpoints; this delta does not establish GraphService execution.

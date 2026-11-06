@@ -1,0 +1,151 @@
+{
+  "sourceCheckpoint": "b34c1f71",
+  "change": "Optional packageCount: unknown when aggregate is incomplete; present-null rejected",
+  "legacySchemasByteExact": 56,
+  "domainFixtures": 1757,
+  "operationRevisionAdmissions": 570,
+  "newFixtureCheck": {
+    "allPassed": true,
+    "cases": [
+      {
+        "entry": "operation-result.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw28-work-limited-architecture-unknown-package-count",
+        "normalized": {
+          "kind": "code.architecture",
+          "value": {
+            "completion": "WorkLimit",
+            "protocol": "1.0-draft.1",
+            "queryId": "query-a",
+            "result": {
+              "kind": "Architecture",
+              "value": {
+                "confidence": "high",
+                "hotspots": [
+                  {
+                    "fanIn": "20",
+                    "name": "Widget",
+                    "qualifiedName": "module.Widget",
+                    "reason": "High fan-in method"
+                  }
+                ],
+                "inbound": [
+                  {
+                    "confidenceBand": "medium",
+                    "count": "3",
+                    "edgeKind": "REFERENCES_PACKAGE",
+                    "sourceRepositoryId": "repo-b",
+                    "targetRepositoryId": "repo-a"
+                  }
+                ],
+                "internalModules": [],
+                "nodeCounts": [
+                  {
+                    "count": "100",
+                    "name": "Function"
+                  }
+                ],
+                "outbound": [],
+                "packageCountsByEcosystem": [],
+                "packages": [
+                  {
+                    "dependentCount": "2",
+                    "ecosystem": "cargo",
+                    "name": "pkg",
+                    "version": "1.0"
+                  }
+                ],
+                "repositoryId": "repo-a",
+                "summary": "Exact current repository summary",
+                "supertypes": [
+                  {
+                    "external": true,
+                    "name": "Base",
+                    "nodeKind": "Interface",
+                    "qualifiedName": "module.Base",
+                    "subtypeCount": "5"
+                  }
+                ]
+              }
+            },
+            "scopeCoverage": {
+              "coverage": {
+                "gaps": [],
+                "moreGaps": false,
+                "state": "Complete"
+              },
+              "unavailableRepositories": []
+            },
+            "view": {
+              "expiresAtMs": "100",
+              "pinId": "pin-a",
+              "stamp": {
+                "policyRevision": "1",
+                "restoreEpoch": "0",
+                "scopeRevision": "1",
+                "sequence": "1",
+                "storeId": "store-a"
+              },
+              "views": [
+                {
+                  "baseline": {
+                    "generationId": "g-base",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  },
+                  "branch": {
+                    "generationId": "g-branch",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "parentGenerationId": "g-base"
+                  },
+                  "coverage": {
+                    "gaps": [],
+                    "moreGaps": false,
+                    "state": "Complete"
+                  },
+                  "snapshot": {
+                    "base": {
+                      "format": "Sha1",
+                      "hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    "captureDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "head": {
+                      "format": "Sha1",
+                      "hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    },
+                    "repositoryId": "repo-a",
+                    "worktreeId": "work-a"
+                  },
+                  "sourceRevision": "1",
+                  "viewId": "view-a",
+                  "worktree": {
+                    "generationId": "g-capture",
+                    "manifestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "parentGenerationId": "g-branch"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": "a revision-gated member is omitted, never null",
+        "expectedSchemaValid": false,
+        "id": "dw28-reject-null-architecture-package-count",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      }
+    ],
+    "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"
+  },
+  "nativeTest": {
+    "command": "cargo test --locked -p devworks-core --test graph_contracts architecture_preserves_unknown_package_total_under_work_limit",
+    "passed": 1,
+    "failed": 0
+  }
+}
