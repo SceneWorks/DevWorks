@@ -244,15 +244,22 @@ fn build(
     if !edges.unmapped.is_empty() {
         reader.gaps.push("unresolved_impact_edges");
     }
-    let start_keys: BTreeSet<Key> = starts.iter().map(dataset::node_key).collect();
-    let start_repositories: BTreeSet<String> = starts
-        .iter()
-        .map(|n| n.repository_id.as_str().to_owned())
-        .collect();
+    let found = !starts.is_empty();
+    let mut start_keys = BTreeSet::new();
+    let mut start_repositories = BTreeSet::new();
     let mut reached = BTreeMap::<Key, Reached>::new();
     for raw in starts {
+        let key = dataset::node_key(&raw);
+        if !reader
+            .budget
+            .retain(1024 + 2 * (key.0.len() + key.1.len() + key.2.len()))
+        {
+            break;
+        }
+        start_keys.insert(key.clone());
+        start_repositories.insert(raw.repository_id.as_str().to_owned());
         reached.insert(
-            dataset::node_key(&raw),
+            key,
             Reached {
                 origin: raw.repository_id.clone(),
                 raw,
@@ -336,8 +343,10 @@ fn build(
     }
     let mut links = Links::new();
     let mut direct = BTreeSet::<String>::new();
+    let mut direct_complete = true;
     for edge in &edges.linked {
         if !reader.budget.visit() {
+            direct_complete = false;
             break;
         }
         if edge.source.repository_id == edge.target.repository_id {
@@ -359,7 +368,7 @@ fn build(
             );
         }
     }
-    if let Some(start) = start_repositories.first() {
+    if let Some(start) = start_repositories.first().filter(|_| direct_complete) {
         for reached in reached.values().filter(|n| {
             n.depth > 0
                 && !start_repositories.contains(n.raw.repository_id.as_str())
@@ -396,6 +405,7 @@ fn build(
         .collect::<BTreeSet<_>>()
         .len();
     let unmapped = unmapped_count(reader, &edges.unmapped, &reached, file, selection);
+    reader.retain_wire(&repositories)?;
     let mut changed = Vec::new();
     let mut affected = Vec::new();
     let mut cross_repository = Vec::new();
@@ -490,7 +500,7 @@ fn build(
     };
     Ok(GraphResult::Impact {
         value: CodeImpact {
-            found: !start_keys.is_empty(),
+            found,
             path: file.map(|(_, p)| model::wire(json!(p))).transpose()?,
             language,
             language_indexed,
