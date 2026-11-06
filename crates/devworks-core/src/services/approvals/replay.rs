@@ -241,32 +241,30 @@ impl ApprovalService {
             let identity =
                 crate::context::ReceiptIdentity::bind(&ctx, RequestKey(r.request_key.clone()));
             let replay = s.receipts().lookup(&identity)?.is_some();
-            if !replay {
-                if let Some(root) = ctx.root_id() {
-                    let Some(w) = s.sessions().work_root(root)? else {
-                        return Ok(ResumePreparation::Waiting {
-                            reason: "work scope no longer exists".into(),
-                        });
-                    };
-                    let target = ctx
-                        .assignment_id()
-                        .map_or(crate::services::runs::Target::Root, |a| {
-                            crate::services::runs::Target::Assignment(a.clone())
-                        });
-                    let e = self.control.evaluate(
-                        s.runs(),
-                        &w,
-                        &target,
-                        ActivationPurpose::Implementation,
-                    )?;
-                    if !e.eligible {
-                        return Ok(ResumePreparation::Waiting {
-                            reason: e
-                                .conditions
-                                .first()
-                                .map_or_else(|| "work held".into(), |c| c.reason.clone()),
-                        });
-                    }
+            if !replay && let Some(root) = ctx.root_id() {
+                let Some(w) = s.sessions().work_root(root)? else {
+                    return Ok(ResumePreparation::Waiting {
+                        reason: "work scope no longer exists".into(),
+                    });
+                };
+                let target = ctx
+                    .assignment_id()
+                    .map_or(crate::services::runs::Target::Root, |a| {
+                        crate::services::runs::Target::Assignment(a.clone())
+                    });
+                let e = self.control.evaluate(
+                    s.runs(),
+                    &w,
+                    &target,
+                    ActivationPurpose::Implementation,
+                )?;
+                if !e.eligible {
+                    return Ok(ResumePreparation::Waiting {
+                        reason: e
+                            .conditions
+                            .first()
+                            .map_or_else(|| "work held".into(), |c| c.reason.clone()),
+                    });
                 }
             }
             let request = self

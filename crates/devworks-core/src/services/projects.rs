@@ -823,6 +823,12 @@ impl ProjectService {
         ctx: &InvocationContext,
         i: &pops::ArchiveInput,
     ) -> Result<DomainDecision, Failure> {
+        validate_reviewed_project_command(
+            tx,
+            ctx,
+            "projects.archive",
+            serde_json::to_value(i).expect("typed input"),
+        )?;
         let before = visible_project(tx.projects(), ctx, &i.project_id)?;
         no_proposal(i.proposal_id.as_ref())?;
         revision_conflict(&before, i.expected_revision.get())?;
@@ -932,7 +938,6 @@ impl ProjectService {
     /// What of the project may still be running: live activations, unfinished stops and
     /// unsettled owned processes (bounded to the first few, which a refusal names).
     fn activity(
-        &self,
         tx: &mut dyn WriteTransaction,
         project: &ProjectId,
     ) -> Result<Vec<Id>, StorageError> {
@@ -983,6 +988,12 @@ impl ProjectService {
         ctx: &InvocationContext,
         i: &pops::DeleteInput,
     ) -> Result<DomainDecision, Failure> {
+        validate_reviewed_project_command(
+            tx,
+            ctx,
+            "projects.delete",
+            serde_json::to_value(i).expect("typed input"),
+        )?;
         let before = visible_project(tx.projects(), ctx, &i.project_id)?;
         no_proposal(i.proposal_id.as_ref())?;
         revision_conflict(&before, i.expected_revision.get())?;
@@ -1001,7 +1012,7 @@ impl ProjectService {
         if before.archive_stop_pending {
             return Err(stopping(&before.id));
         }
-        let live = self.activity(tx, &before.id)?;
+        let live = Self::activity(tx, &before.id)?;
         if !live.is_empty() {
             let mut r = Refusal::new(
                 DomainErrorCode::Conflict,
@@ -1268,6 +1279,12 @@ impl RepositoryService {
         ctx: &InvocationContext,
         i: &rops::RemoveIndexInput,
     ) -> Result<DomainDecision, Failure> {
+        validate_reviewed_project_command(
+            tx,
+            ctx,
+            "repositories.remove_index",
+            serde_json::to_value(i).expect("typed input"),
+        )?;
         let r = visible_repository(tx.projects(), ctx, &i.repository_id)?;
         let expected = i.expected_revision.get();
         if r.revision != expected {
@@ -1458,6 +1475,148 @@ impl CommandHandler for RepositoryService {
         };
         decided(tx, outcome)
     }
+}
+
+/// Exact owner preview for the existing project/index destructive commands. It shares the
+/// target visibility and revision guards with their normal handlers; source files are untouched.
+pub(crate) fn approval_preview(
+    read: &dyn ProjectRead,
+    ctx: &InvocationContext,
+    request: &crate::admission::DecodedRequest,
+) -> Result<crate::services::approvals::OwnerPreview, Failure> {
+    use crate::services::approvals::OwnerPreview;
+    match &request.input {
+        OperationInput::Projects(pops::Input::Archive(i)) => project_approval(
+            read,
+            ctx,
+            &i.project_id,
+            i.expected_revision.get(),
+            i.proposal_id.as_ref(),
+            false,
+        ),
+        OperationInput::Projects(pops::Input::Delete(i)) => project_approval(
+            read,
+            ctx,
+            &i.project_id,
+            i.expected_revision.get(),
+            i.proposal_id.as_ref(),
+            true,
+        ),
+        OperationInput::Repositories(rops::Input::RemoveIndex(i)) => {
+            let r = visible_repository(read, ctx, &i.repository_id)?;
+            if r.revision != i.expected_revision.get() {
+                return Err(StorageError::conflict(
+                    RevisionDimension::Registry,
+                    "repository",
+                    r.id.clone(),
+                    rev(i.expected_revision.get()),
+                    rev(r.revision),
+                )
+                .into());
+            }
+            let views=read.index_views(&r.id)?.into_iter().map(|v|json!({"id":v.view_id,"sourceRevision":v.source_revision,"coverage":v.coverage,"publishedAtMs":v.published_at_ms})).collect::<Vec<_>>();
+            let binding = json!({"repositoryId":r.id,"revision":r.revision,"location":r.location,"lifecycle":r.lifecycle,"projects":read.repository_projects(&r.id)?,"indexViews":views});
+            Ok(OwnerPreview {
+                scope: ctx
+                    .project_id()
+                    .cloned()
+                    .map_or(ConfigScope::Workspace, ConfigScope::Project),
+                target_id: r.id,
+                target_revision: r.revision,
+                summary: format!("Remove app index of {}", r.name),
+                reviewed: json!({"effect":"Remove app index, overlays and cancel index runs; registered source, memberships and history stay","repository":binding}),
+                binding,
+            })
+        }
+        _ => Err(Refusal::new(
+            DomainErrorCode::UnsupportedCapability,
+            "approval_operation",
+            None,
+        )
+        .into()),
+    }
+}
+fn project_approval(
+    read: &dyn ProjectRead,
+    ctx: &InvocationContext,
+    id: &ProjectId,
+    expected: i64,
+    proposal: Option<&Id>,
+    delete: bool,
+) -> Result<crate::services::approvals::OwnerPreview, Failure> {
+    let p = visible_project(read, ctx, id)?;
+    no_proposal(proposal)?;
+    revision_conflict(&p, expected)?;
+    if !delete && p.lifecycle == DELETED {
+        return Err(conflict("project_deleted", &p.id.0));
+    }
+    if delete && p.lifecycle == ACTIVE {
+        return Err(conflict("project_active", &p.id.0));
+    }
+    if delete && p.archive_stop_pending {
+        return Err(stopping(&p.id));
+    }
+    let binding = json!({"projectId":p.id,"revision":p.revision,"scopeRevision":p.scope_revision,"lifecycle":p.lifecycle,"archiveEpoch":p.archive_epoch,"archiveStopPending":p.archive_stop_pending,"repositories":read.members(&p.id)?});
+    Ok(crate::services::approvals::OwnerPreview {
+        scope: ConfigScope::Project(p.id.clone()),
+        target_id: p.id.0,
+        target_revision: p.revision,
+        summary: format!(
+            "{} project {}",
+            if delete {
+                "Delete app records of"
+            } else {
+                "Archive and stop"
+            },
+            p.name
+        ),
+        reviewed: json!({"effect":if delete{"Tombstone project and detach repositories; source files and retained history stay"}else{"Archive project, pause all work and stop owned processes"},"project":binding}),
+        binding,
+    })
+}
+pub(crate) fn validate_approval_preview(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    request: &crate::admission::DecodedRequest,
+    reviewed: &crate::services::approvals::OwnerPreview,
+) -> Result<(), Failure> {
+    let current = approval_preview(tx.projects(), ctx, request)?;
+    if current != *reviewed {
+        return Err(conflict("approval_scope_changed", &reviewed.target_id));
+    }
+    if let OperationInput::Projects(pops::Input::Delete(i)) = &request.input
+        && !ProjectService::activity(tx, &i.project_id)?.is_empty()
+    {
+        return Err(conflict("project_not_quiescent", &i.project_id.0));
+    }
+    Ok(())
+}
+fn validate_reviewed_project_command(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    operation: &str,
+    input: serde_json::Value,
+) -> Result<(), Failure> {
+    let Some(reviewed) = ctx.reviewed_operation() else {
+        return Ok(());
+    };
+    let request = crate::services::approvals::requests::decode(
+        operation,
+        reviewed.schema_revision(),
+        &input,
+        true,
+    )
+    .map_err(|_| conflict("reviewed_operation", reviewed.approval_id()))?;
+    if reviewed.operation() != operation
+        || reviewed.request_digest() != request.fingerprint.as_str()
+    {
+        return Err(conflict("reviewed_operation", reviewed.approval_id()));
+    }
+    let current = approval_preview(tx.projects(), ctx, &request)?;
+    if &current.binding != reviewed.owner_binding() {
+        return Err(conflict("reviewed_scope_changed", &current.target_id));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

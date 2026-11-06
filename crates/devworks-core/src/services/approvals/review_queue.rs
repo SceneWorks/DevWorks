@@ -26,9 +26,11 @@ pub(crate) fn query(
     let scoped = knowledge::resolve_scope(s.artifacts(), s.authority(), ctx, &requested, false)?;
     let scopes = scoped.readable.clone();
     let thresholds = knowledge::thresholds(s.configuration(), &scopes)?;
-    let mut q = ClaimQuery::default();
-    q.scopes = scopes.iter().map(KnowledgeScope::key).collect();
-    q.lifecycles = vec!["Active".into()];
+    let q = ClaimQuery {
+        scopes: scopes.iter().map(KnowledgeScope::key).collect(),
+        lifecycles: vec!["Active".into()],
+        ..ClaimQuery::default()
+    };
     let mut claims = BTreeMap::new();
     let mut after: Option<(i64, String)> = None;
     loop {
@@ -66,7 +68,7 @@ pub(crate) fn query(
             let since = challenges
                 .first()
                 .map_or(c.updated_at_ms, |ch| ch.opened_at_ms);
-            let rows:Vec<Value>=challenges.iter().take(3).map(|ch|json!({"id":ch.id,"state":ch.state,"reason":ch.reason,"evidenceIds":ch.evidence_ids,"author":ch.author,"openedAtMs":ch.opened_at_ms.to_string(),"resolvedAtMs":ch.resolved_at_ms.map(|v|v.to_string()),"resolvedBy":ch.resolved_by,"resolution":ch.resolution})).collect();
+            let rows:Vec<Value>=challenges.iter().take(3).map(|ch|json!({"id":ch.id,"state":ch.state,"reason":ch.reason,"evidenceIds":ch.evidence_ids,"authorId":ch.author,"openedAtMs":ch.opened_at_ms.to_string(),"resolvedAtMs":ch.resolved_at_ms.map(|v|v.to_string()),"resolution":ch.resolution})).collect();
             let v = json!({"kind":"Challenge","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":since.max(0).to_string(),"challenges":rows,"moreChallenges":(open-rows.len() as i64).max(0).to_string(),"author":c.author,"informational":true});
             items.push((rank, -events, since, c.id.as_str().to_owned(), v));
             nc += 1;
