@@ -28,4 +28,4 @@ cargo test --locked -p devworks-core --test registry --test schema_revisions --t
 cargo fmt --all --check
 ```
 
-The verifier's Python must have compatible jsonschema/rpds wheels. The native core command requires the assembled DW-14 service constructors; its integrated result is recorded separately in qualification.json rather than inferred from probe output.
+The verifier's Python must have compatible jsonschema/rpds wheels. All 20 native contract tests passed on exact contract snapshot `0bb7c6d`: seven recorded-fixture, five registry and eight schema-revision tests. They prove actual native admission of all 541 registered mode/revision bindings and legacy byte preservation. Regeneration and formatting checks pass. This contract-only snapshot does not establish the separately integrated DW-14 owner service or UI acceptance.

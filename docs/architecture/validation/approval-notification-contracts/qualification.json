@@ -33,8 +33,16 @@
   "negativeDomainFixtures": 344,
   "contractChecksPassed": true,
   "nativeCoreChecks": {
-    "status": "awaiting assembled DW-14 service constructors",
-    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures"
+    "status": "passed",
+    "snapshot": "0bb7c6d",
+    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures",
+    "tests": {
+      "recorded_fixtures": 7,
+      "registry": 5,
+      "schema_revisions": 8
+    },
+    "passed": 20,
+    "scope": "Native contract-only snapshot; actual typed admission, generated schemas and revision receipts; integrated DW-14 owner services/UI not claimed"
   },
   "word": {
     "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
@@ -179,5 +187,7 @@
   "retainedProjectionTests": {
     "passed": 3,
     "source": "tools/contracts-eval/tests/allocation_projection.rs"
-  }
+  },
+  "regenerationDrift": false,
+  "formatCheckPassed": true
 }
