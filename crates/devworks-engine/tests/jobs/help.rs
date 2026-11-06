@@ -77,6 +77,7 @@ fn boot_help_with_files(
             .scheduler()
             .drain(tokio::time::Instant::now() + Duration::from_secs(10))
             .await;
+        let _diagnostics = crate::common::help_startup_diagnostics(&*store, runtime.dispatcher());
         within("native Help startup generation", async {
             loop {
                 runtime.dispatcher().run_until_idle().await.unwrap();
@@ -271,6 +272,7 @@ fn captured(run: &StoredJobRun) -> Value {
 #[test]
 fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit_stale_stays_stale()
 {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -405,6 +407,7 @@ fn empty_scheduled_help_jobs_capture_current_revisions_for_each_run_and_explicit
 
 #[test]
 fn unknown_ack_requeue_reuses_persisted_help_frame_and_invocation_after_metadata_changes() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -453,6 +456,7 @@ fn unknown_ack_requeue_reuses_persisted_help_frame_and_invocation_after_metadata
 
 #[test]
 fn empty_help_adapter_keeps_disabled_cancelled_held_and_stopped_runs_undispatched() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
@@ -536,6 +540,7 @@ fn empty_help_adapter_keeps_disabled_cancelled_held_and_stopped_runs_undispatche
 
 #[test]
 fn a_lost_committed_help_ack_replays_one_exact_generation_operation() {
+    let _native_case = crate::common::native_runtime_case();
     let h = Harness::new();
     drop(h.open());
     seed(&h);
