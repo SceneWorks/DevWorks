@@ -390,6 +390,9 @@ impl ReadSnapshot for MemSnapshot {
     fn evals(&self) -> &dyn EvalRead {
         &self.unsupported
     }
+    fn help(&self) -> &dyn HelpRead {
+        &self.unsupported
+    }
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
@@ -494,6 +497,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
+        &mut self.unsupported
+    }
+    fn help(&mut self) -> &mut dyn HelpRepository {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
@@ -3123,6 +3129,75 @@ impl UsageRepository for Unsupported {
         _override_: &StoredPriceOverride,
         _expected: i64,
     ) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl HelpRead for Unsupported {
+    fn help_head(&self) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn help_drafts(&self, _: Option<&Id>, _: u16) -> Result<Vec<StoredHelpDraft>, StorageError> {
+        nope()
+    }
+    fn help_topic(&self, _: &Id, _: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn help_topics(
+        &self,
+        _: &Id,
+        _: &HelpFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn help_passage(&self, _: &Id, _: &Id, _: i64, _: u32) -> Result<Option<String>, StorageError> {
+        nope()
+    }
+}
+impl HelpRepository for Unsupported {
+    fn set_help_generation_operation(
+        &mut self,
+        _: i64,
+        _: i64,
+        _: &OperationId,
+    ) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn stage_help_document(
+        &mut self,
+        _: &StoredHelpDocument,
+    ) -> Result<StoredHelpTopic, StorageError> {
+        nope()
+    }
+    fn staged_help_topic(&self, _: &Id, _: &Id) -> Result<Option<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn staged_help_topics(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredHelpTopic>, StorageError> {
+        nope()
+    }
+    fn publish_help_generation(
+        &mut self,
+        _: i64,
+        _: i64,
+        _: Option<&OperationId>,
+        _: &StoredHelpHead,
+        _: i64,
+    ) -> Result<StoredHelpHead, StorageError> {
+        nope()
+    }
+    fn discard_help_draft(
+        &mut self,
+        _: &Id,
+        _: &OperationId,
+        _: u16,
+    ) -> Result<bool, StorageError> {
         nope()
     }
 }
