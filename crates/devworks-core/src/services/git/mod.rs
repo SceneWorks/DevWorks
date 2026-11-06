@@ -86,6 +86,10 @@ fn read_failure(error: GitFault, repository: &Id) -> Failure {
             DomainErrorCode::UnsupportedCapability,
             "git_dirty_qualification",
         ),
+        GitFault::ReviewedUnavailable => (
+            DomainErrorCode::UnsupportedCapability,
+            "git_reviewed_process_policy",
+        ),
         GitFault::Unborn => (DomainErrorCode::UnsupportedCapability, "git_unborn"),
         GitFault::Malformed(_) => (DomainErrorCode::ExternalFailure, "git_output"),
         GitFault::Helper(HelperFault::Cancelled) => (DomainErrorCode::Cancelled, "git_read"),

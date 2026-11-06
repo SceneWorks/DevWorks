@@ -101,6 +101,8 @@ pub enum GitFault {
     SourceChanged,
     Unborn,
     Unqualified,
+    /// The reviewed mutation cannot run Git with its required helper-free launch policy.
+    ReviewedUnavailable,
     /// Output that does not parse as Git's documented format.
     Malformed(String),
 }
@@ -111,6 +113,9 @@ impl std::fmt::Display for GitFault {
             Self::SourceChanged => f.write_str("Git HEAD changed during observation"),
             Self::Unqualified => {
                 f.write_str("dirty-state reading cannot safely qualify this checkout")
+            }
+            Self::ReviewedUnavailable => {
+                f.write_str("helper-free reviewed Git execution is unavailable")
             }
             Self::Unborn => f.write_str("unborn HEAD has no tested revision"),
             Self::Malformed(m) => write!(f, "unexpected git output: {m}"),
@@ -203,6 +208,51 @@ fn windows_component_safe(part: &str) -> bool {
                 "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
             )
         })
+}
+
+fn supported_reviewed_version(version: &str) -> bool {
+    if version.lines().count() != 1 {
+        return false;
+    }
+    let Some(number) = version
+        .strip_prefix("git version ")
+        .and_then(|v| v.split_whitespace().next())
+    else {
+        return false;
+    };
+    let mut parts = number.split('.');
+    matches!((parts.next().and_then(|v| v.parse::<u64>().ok()), parts.next().and_then(|v| v.parse::<u64>().ok())), (Some(major), Some(minor)) if (major, minor) >= (2, 31))
+}
+
+/// Git for Windows' cmd/git.exe is a launcher. The --exec-path from the trusted configured
+/// distribution identifies the actual mingw binary; never guess a different installation.
+#[cfg(any(windows, test))]
+fn windows_reviewed_program(exec_path: &str) -> Option<String> {
+    let path = windows_path_argument(exec_path)?.replace('\\', "/");
+    let rest = if path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().get(2) == Some(&b'/')
+    {
+        &path[3..]
+    } else if let Some(rest) = path.strip_prefix("//") {
+        rest
+    } else {
+        return None;
+    };
+    if rest
+        .split('/')
+        .any(|p| p.is_empty() || !windows_component_safe(p))
+    {
+        return None;
+    }
+    let distribution = path.strip_suffix("/libexec/git-core")?;
+    if !matches!(
+        distribution.rsplit('/').next()?,
+        "mingw64" | "mingw32" | "clangarm64" | "ucrt64"
+    ) {
+        return None;
+    }
+    Some(format!("{distribution}/bin/git.exe"))
 }
 
 #[cfg(test)]
@@ -320,8 +370,52 @@ impl Git<'_> {
         )?)
     }
 
+    /// Qualify the actual executable under the same process policy used by reviewed writes.
+    /// This runs before proposal creation, outside any storage writer. A Windows Git launcher
+    /// cannot spawn its real Git under this policy, so locate the trusted distribution first.
+    fn reviewed_program(&self, dir: &Path) -> Result<(String, String), GitFault> {
+        #[cfg(windows)]
+        let program = {
+            let path = self
+                .line(dir, &["--exec-path"])?
+                .ok_or(GitFault::ReviewedUnavailable)?;
+            windows_reviewed_program(&path).ok_or(GitFault::ReviewedUnavailable)?
+        };
+        #[cfg(not(windows))]
+        let program = self.program.to_owned();
+        let mut spec = self.spec(dir, &["--version"], None);
+        spec.program = program.clone();
+        spec.no_child_processes = true;
+        let output = self
+            .runner
+            .run(
+                self.ctx,
+                spec,
+                HelperLimits {
+                    deadline: self.deadline,
+                    max_stdout: 64 * 1024,
+                },
+                self.stop,
+            )
+            .map_err(|error| match error {
+                HelperFault::Cancelled
+                | HelperFault::TimedOut
+                | HelperFault::Storage(_)
+                | HelperFault::Uncertain(_) => GitFault::Helper(error),
+                _ => GitFault::ReviewedUnavailable,
+            })?;
+        let version = std::str::from_utf8(&output)
+            .map_err(|_| GitFault::ReviewedUnavailable)?
+            .trim();
+        if !supported_reviewed_version(version) {
+            return Err(GitFault::ReviewedUnavailable);
+        }
+        Ok((program, version.to_owned()))
+    }
+
     /// Names only: hook command bodies may contain secrets and never enter approval evidence.
     pub fn reviewed_commit_policy(&self, dir: &Path) -> Result<serde_json::Value, GitFault> {
+        let (program, version) = self.reviewed_program(dir)?;
         let output = match self.run(
             dir,
             &[
@@ -353,7 +447,7 @@ impl Git<'_> {
                 return Err(GitFault::Unqualified);
             }
         }
-        Ok(serde_json::json!({"gitVersion":self.version(dir)?,"hookNames":names}))
+        Ok(serde_json::json!({"gitVersion":version,"gitProgram":program,"hookNames":names}))
     }
 
     /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
@@ -371,7 +465,18 @@ impl Git<'_> {
             return Err(GitFault::SourceChanged);
         }
         let mut spec = self.spec(dir, args, stdin);
+        spec.program = policy["gitProgram"]
+            .as_str()
+            .ok_or(GitFault::ReviewedUnavailable)?
+            .to_owned();
+        spec.no_child_processes = true;
         let mut overrides = vec![
+            ("index.threads".to_owned(), "1".to_owned()),
+            ("pack.threads".to_owned(), "1".to_owned()),
+            ("core.preloadIndex".to_owned(), "false".to_owned()),
+            ("checkout.workers".to_owned(), "1".to_owned()),
+            ("gc.auto".to_owned(), "0".to_owned()),
+            ("maintenance.auto".to_owned(), "false".to_owned()),
             ("core.hooksPath".to_owned(), "/dev/null".to_owned()),
             ("commit.gpgSign".to_owned(), "false".to_owned()),
         ];
