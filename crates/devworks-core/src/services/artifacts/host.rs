@@ -310,7 +310,10 @@ impl ArtifactService {
         if stopped() {
             return Err(StorageError::Cancelled);
         }
-        result.map_err(|_| StorageError::ViewUnavailable)
+        result.map_err(|error| match error {
+            FileFault::NotFound | FileFault::Corrupt(_) => StorageError::ViewUnavailable,
+            other => super::file_failure(other),
+        })
     }
     pub(crate) fn read_help_range(
         &self,

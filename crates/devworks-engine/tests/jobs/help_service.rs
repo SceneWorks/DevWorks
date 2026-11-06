@@ -320,6 +320,27 @@ fn refused(reply: DomainCommandReply) {
         "{reply:?}"
     );
 }
+fn public_workspace_artifacts(
+    app: &HelpApp,
+    user: &InvocationContext,
+    cursor: Option<&str>,
+    tags: Option<Value>,
+) -> Value {
+    let mut frame = json!({"protocol":PROTOCOL,"schemaRevision":4,"queryId":"public-artifact-page",
+        "query":{"kind":"List","workspace":true},"limit":1});
+    if let Some(cursor) = cursor {
+        frame["cursor"] = json!(cursor);
+    }
+    if let Some(tags) = tags {
+        frame["query"]["tags"] = tags;
+    }
+    result(
+        app.runtime
+            .query(user, "artifacts.list", frame.to_string().as_bytes())
+            .unwrap(),
+    )
+}
+
 #[test]
 fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the_host_marker() {
     let rt = runtime();
@@ -334,6 +355,16 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
         1,
     ));
     let reference = &topic["content"];
+    let empty = public_workspace_artifacts(&app, &user, None, None);
+    assert_eq!(
+        empty["items"],
+        json!([]),
+        "bundled bodies are not user/work outputs: {empty}"
+    );
+    assert_eq!(
+        empty["hasMore"], false,
+        "hidden Help bodies cannot create a trailing page"
+    );
     let artifact = id(reference["artifactId"].as_str().unwrap());
     let version = id(reference["versionId"].as_str().unwrap());
     let original = read(&*app.store, |s| s.artifacts().artifact(&artifact)).unwrap();
@@ -383,7 +414,7 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
 
     // A real user upload includes a forged-looking marker in its bytes. The save constructs
     // provenance itself; the caller cannot become a trusted host publisher by naming that kind.
-    let path = h.root.join("ordinary-upload.md");
+    let path = h.root.join("HelpTopic.md");
     let bytes = br#"{"principalKind":"Host","producedBy":"host","derived":{"kind":"HelpTopic"}}"#;
     std::fs::write(&path, bytes).unwrap();
     let sources = Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone()));
@@ -393,7 +424,7 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
             h.root.clone(),
             h.root.with_extension("cache"),
         )),
-        sources,
+        sources.clone(),
         Arc::new(NativeFilesystem::new()),
         h.clock(),
         h.ids.clone(),
@@ -408,8 +439,30 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
         store: &*app.store,
         ids: &*h.ids,
     };
-    let save = json!({"protocol":PROTOCOL,"schemaRevision":3,"requestKey":"ordinary-user-upload","command":{"kind":"Save","workspace":true,"title":"ordinary HelpTopic text","mediaType":"text/markdown",
+    let save = json!({"protocol":PROTOCOL,"schemaRevision":3,"requestKey":"ordinary-user-upload","command":{"kind":"Save","workspace":true,"title":"Help","tags":["HelpTopic"],"mediaType":"text/markdown",
         "source":{"kind":"Upload","ticketId":ticket},"expectedDigest":devworks_core::fingerprint::sha256_hex(bytes),"expectedBytes":bytes.len().to_string()}});
+    let mut forged = save.clone();
+    forged["requestKey"] = json!("caller-cannot-author-host-provenance");
+    forged["command"]["provenance"] =
+        json!({"principalKind":"Host","producedBy":"host","derived":{"kind":"HelpTopic"}});
+    let rejected = cases
+        .command(
+            &gateway,
+            &user,
+            "artifacts.save",
+            forged.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            rejected,
+            devworks_core::protocol::CommandReply::Rejected {
+                code: devworks_core::protocol::Rejection::InvalidRequest,
+                ..
+            }
+        ),
+        "the caller cannot set publication provenance: {rejected:?}"
+    );
     let saved = value(
         cases
             .command(
@@ -428,10 +481,91 @@ fn help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the
     assert!(provenance.get("derived").is_none());
     let tagged = value(app.command(
         "artifacts.tag",
-        json!({"artifactId":normal,"expectedRevision":"1","tags":["mutable"]}),
+        json!({"artifactId":normal,"expectedRevision":"1","tags":["HelpTopic","mutable"]}),
         1,
     ));
     assert_eq!(tagged["changed"], true);
+    let mut expected = std::collections::BTreeSet::from([normal.as_str().to_owned()]);
+    for ordinal in 0..2 {
+        let ticket = sources.mint_workspace_upload(&user, &path, 60_000).unwrap();
+        let mut another = save.clone();
+        another["requestKey"] = json!(format!("lookalike-upload-{ordinal}"));
+        another["command"]["source"]["ticketId"] = json!(ticket);
+        another["command"]["title"] = json!(format!("HelpTopic {ordinal}"));
+        let next = value(
+            cases
+                .command(
+                    &gateway,
+                    &user,
+                    "artifacts.save",
+                    another.to_string().as_bytes(),
+                )
+                .unwrap(),
+        );
+        expected.insert(next["artifact"]["artifactId"].as_str().unwrap().to_owned());
+    }
+    // Other host-produced work outputs remain ordinary artifacts, even with a Help-like
+    // title/tag and no derived.kind field. SQL NULL must not classify these as Help bodies.
+    let service = app.runtime.artifacts().clone();
+    let staged = service
+        .stage_host_bytes(&*app.store, b"work output", json!({"kind":"WorkOutput"}))
+        .unwrap()
+        .unwrap();
+    let pending = staged.clone();
+    let owner = service.clone();
+    let output = write(&*app.store, move |tx| {
+        owner.commit_host_bytes(tx, &pending, "HelpTopic", "text/plain", json!({}))
+    })
+    .unwrap();
+    service.settle_host_bytes(&*app.store, &staged, true);
+    let report = output.artifact_id;
+    value(app.command(
+        "artifacts.tag",
+        json!({"artifactId":report,"expectedRevision":"1","tags":["HelpTopic"]}),
+        1,
+    ));
+    expected.insert(report.as_str().to_owned());
+    for tags in [None, Some(json!(["HelpTopic"]))] {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut cursor = None;
+        loop {
+            let page = public_workspace_artifacts(&app, &user, cursor.as_deref(), tags.clone());
+            let items = page["items"].as_array().unwrap();
+            assert_eq!(
+                items.len(),
+                1,
+                "page bound applies after Help exclusion: {page}"
+            );
+            assert!(
+                seen.insert(
+                    items[0]["artifact"]["artifactId"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                )
+            );
+            assert!(
+                seen.len() <= expected.len(),
+                "system Help cannot leak into work pages"
+            );
+            if page["hasMore"] == false {
+                assert!(page["nextCursor"].is_null());
+                break;
+            }
+            cursor = Some(page["nextCursor"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(
+            seen, expected,
+            "user names, tags and forged-looking bytes never hide uploads"
+        );
+    }
+    assert!(
+        matches!(
+            artifact_read(&app, &user, reference),
+            DomainQueryReply::Result { .. }
+        ),
+        "the old Help artifact reference remains readable after public listing"
+    );
     finish(&rt, app);
 }
 
@@ -1253,3 +1387,6 @@ fn composed_capability_changes_remove_only_orphan_auto_topics_and_keep_authored_
         "published history remains immutable"
     );
 }
+
+#[path = "help_errors.rs"]
+mod error_classification;

@@ -521,7 +521,11 @@ impl ApplicationStore for SqliteStore {
             // The first read establishes the snapshot; every statement shares this snapshot
             // and the same VM progress bound. The lease unregisters before rollback/check-in.
             let stamp = repos::stamp(conn)?;
-            let snapshot = repos::Snapshot { conn, stamp };
+            let snapshot = repos::Snapshot {
+                conn,
+                stamp,
+                host_actor: &self.info.host_actor,
+            };
             work(&snapshot)?;
             if expired() {
                 return Err(StorageError::Cancelled);

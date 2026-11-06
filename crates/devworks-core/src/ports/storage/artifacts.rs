@@ -314,7 +314,8 @@ pub trait ArtifactRead {
     /// Live artifacts with a current version that `project` owns or is shared with and that carry
     /// every tag in `tags` (all-of; empty means no tag filter), newest first after `after`, at
     /// most `limit` (1..=500). `tags` holds distinct values. Receipt replies are not listed: they
-    /// are reached from their receipt.
+    /// are reached from their receipt. Trusted host-managed Help bodies are reached through
+    /// Help or their exact artifact reference, rather than ordinary work-output discovery.
     fn list(
         &self,
         project: &ProjectId,
@@ -324,7 +325,8 @@ pub trait ArtifactRead {
     ) -> Result<Vec<StoredArtifact>, StorageError>;
     /// Live, explicitly retained workspace-scoped artifacts with a current version, owned by
     /// `owner` (`None`: every owner) and carrying every tag in `tags`, newest first after
-    /// `after`, at most `limit` (1..=500). Receipt replies are not listed.
+    /// `after`, at most `limit` (1..=500). Receipt replies and trusted host-managed Help bodies
+    /// are not listed. Apply these exclusions before the page bound/cursor.
     fn list_workspace(
         &self,
         owner: Option<&ActorId>,
