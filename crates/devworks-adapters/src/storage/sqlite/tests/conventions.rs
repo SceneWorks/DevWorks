@@ -539,3 +539,48 @@ fn source_metadata_limits_nul_and_organization_fuzzy_filters_precede_sql_paging(
     q.name_pattern = Some("not-a-match_%".into());
     assert!(read(&store, |r| r.conventions().conventions(&q, None, 2)).is_empty());
 }
+
+#[test]
+fn revision_editor_changes_without_rewriting_original_provenance() {
+    let h = Harness::new();
+    let store = h.store();
+    run_write(&store, WriteOptions::default(), |tx| {
+        let alice = ActorId(id("alice"));
+        let bob = ActorId(id("bob"));
+        tx.actors().register(
+            &alice,
+            devworks_core::context::PrincipalKind::Human,
+            "Alice",
+        )?;
+        tx.actors()
+            .register(&bob, devworks_core::context::PrincipalKind::Human, "Bob")?;
+        let mut original = record("authored", KnowledgeScope::Workspace, None);
+        original.author_id = alice;
+        original.provenance = json!({"kind":"Authored","actorId":"alice"});
+        tx.conventions().create_convention(&original)?;
+        let mut changed = next(&original);
+        changed.author_id = bob;
+        changed.lifecycle = "Retired".into();
+        tx.conventions().revise_convention(&changed, 1)?;
+        assert_eq!(
+            tx.conventions()
+                .convention(&original.id, Some(1), &[KnowledgeScope::Workspace])?
+                .unwrap()
+                .author_id,
+            ActorId(id("alice"))
+        );
+        assert_eq!(
+            tx.conventions()
+                .convention(&original.id, None, &[KnowledgeScope::Workspace])?
+                .unwrap()
+                .author_id,
+            ActorId(id("bob"))
+        );
+        assert_eq!(changed.provenance, original.provenance);
+        let mut forged = next(&changed);
+        forged.provenance = json!({"kind":"Authored","actorId":"bob"});
+        assert!(tx.conventions().revise_convention(&forged, 2).is_err());
+        Ok(())
+    })
+    .unwrap();
+}

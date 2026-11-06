@@ -1,4 +1,5 @@
 //! Scoped immutable convention revisions, exact resource history and generation-fenced retrieval.
+mod imports;
 mod index;
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
@@ -265,7 +266,7 @@ fn validate(conn: &Connection, r: &StoredConvention) -> Result<(), StorageError>
     {
         return Err(invalid("invalid convention metadata"));
     }
-    let collision:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE h.id!=?1 AND v.scope_key=?2 AND v.slug=?3 AND v.lifecycle!='Deleted')",params![r.id.as_str(),r.scope.key(),r.slug],|v|v.get(0)))?;
+    let collision:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM convention_heads h JOIN convention_versions v ON v.convention_id=h.id AND v.revision=h.revision WHERE h.id!=?1 AND v.scope_key=?2 AND v.slug=?3 AND v.parent_id IS ?4 AND v.lifecycle!='Deleted')",params![r.id.as_str(),r.scope.key(),r.slug,r.parent_id.as_ref().map(Id::as_str)],|v|v.get(0)))?;
     if r.lifecycle != "Deleted" && collision {
         return Err(invalid(
             "convention slug already belongs to a live scoped identity",
@@ -314,7 +315,7 @@ fn validate_resource(
     if r.convention_revision != expected
         || owner.lifecycle == "Deleted"
         || !text(&r.name, 1, 255)
-        || !text(&r.media_type, 1, 200)
+        || !(0..=200).contains(&r.media_type.chars().count())
         || r.revision < 1
         || r.created_at_ms < 0
         || r.deleted_at_ms.is_some_and(|t| t < r.created_at_ms)
@@ -429,6 +430,7 @@ impl ConventionRepository for Unit<'_> {
         if Some(r.revision) != expected.checked_add(1)
             || r.created_at_ms != old.created_at_ms
             || r.updated_at_ms < old.updated_at_ms
+            || r.provenance != old.provenance
         {
             return Err(invalid("convention revision/creation identity changed"));
         }
@@ -638,7 +640,7 @@ fn validate_provenance(row: &StoredConvention) -> Result<(), StorageError> {
             actor_id
         }
     };
-    if actor != row.author_id {
+    if row.revision == 1 && actor != row.author_id {
         return Err(invalid(
             "convention provenance actor differs from native author",
         ));

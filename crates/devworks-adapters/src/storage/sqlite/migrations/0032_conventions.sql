@@ -129,3 +129,61 @@ CREATE TABLE convention_index_scope_revisions (
  scope_key TEXT PRIMARY KEY, project_id TEXT REFERENCES projects, revision INTEGER NOT NULL CHECK(revision>0),
  CHECK((project_id IS NULL AND scope_key='workspace') OR(project_id IS NOT NULL AND scope_key='project:'||project_id))
 ) STRICT;
+-- Streamed imports bind actual staged blobs privately; public artifact/catalog rows appear
+-- together only after final source/scope/parent/count/journal validation.
+CREATE TABLE convention_imports (
+ operation_id TEXT PRIMARY KEY REFERENCES operations, convention_id TEXT NOT NULL UNIQUE,
+ scope_key TEXT NOT NULL, project_id TEXT REFERENCES projects, author_id TEXT NOT NULL REFERENCES actors,
+ source_ref_json TEXT NOT NULL CHECK(json_valid(source_ref_json)), source_version_id TEXT NOT NULL REFERENCES artifact_versions,
+ expected_scope_revision INTEGER NOT NULL CHECK(expected_scope_revision>0), revision INTEGER NOT NULL CHECK(revision>0),
+ phase TEXT NOT NULL CHECK(phase IN('Queued','Parsing','Ready','Published','Failed','Cancelled')),
+ checkpoint_json TEXT NOT NULL CHECK(json_valid(checkpoint_json)), processed_resources INTEGER NOT NULL CHECK(processed_resources>=0),
+ total_resources INTEGER CHECK(total_resources IS NULL OR total_resources>=0), error TEXT,
+ created_at INTEGER NOT NULL CHECK(created_at>=0), updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
+ CHECK((project_id IS NULL AND scope_key='workspace') OR(project_id IS NOT NULL AND scope_key='project:'||project_id)),
+ CHECK(source_version_id=json_extract(source_ref_json,'$.versionId'))
+) STRICT;
+CREATE INDEX convention_import_scope ON convention_imports(project_id,operation_id);
+CREATE TABLE convention_import_metadata (
+ operation_id TEXT PRIMARY KEY REFERENCES convention_imports,
+ convention_id TEXT NOT NULL, scope_key TEXT NOT NULL, project_id TEXT REFERENCES projects,
+ revision INTEGER NOT NULL CHECK(revision=1), slug TEXT NOT NULL,title TEXT NOT NULL,
+ title_folded TEXT NOT NULL,slug_folded TEXT NOT NULL,parent_id TEXT REFERENCES convention_heads,
+ expected_parent_revision INTEGER CHECK(expected_parent_revision IS NULL OR expected_parent_revision>0),
+ sort_order INTEGER NOT NULL,lifecycle TEXT NOT NULL CHECK(lifecycle IN('Active','Retired','Deleted')),
+ content_ref_json TEXT NOT NULL CHECK(json_valid(content_ref_json)),raw_content_ref_json TEXT CHECK(raw_content_ref_json IS NULL OR json_valid(raw_content_ref_json)),
+ applicability_json TEXT NOT NULL CHECK(json_valid(applicability_json)),provenance_json TEXT NOT NULL CHECK(json_valid(provenance_json)),
+ author_id TEXT NOT NULL REFERENCES actors,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,legacy_approved INTEGER NOT NULL CHECK(legacy_approved IN(0,1)),
+ CHECK((parent_id IS NULL)=(expected_parent_revision IS NULL))
+) STRICT;
+CREATE TABLE convention_import_artifacts (
+ operation_id TEXT NOT NULL REFERENCES convention_imports,ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+ kind TEXT NOT NULL CHECK(kind IN('Markdown','Raw','Resource')),
+ resource_id TEXT UNIQUE,resource_key TEXT,resource_name TEXT,resource_lifecycle TEXT,resource_media_type TEXT,
+ artifact_id TEXT NOT NULL UNIQUE,version_id TEXT NOT NULL UNIQUE,
+ artifact_json TEXT NOT NULL CHECK(json_valid(artifact_json)),version_json TEXT NOT NULL CHECK(json_valid(version_json)),
+ blob_digest TEXT NOT NULL REFERENCES blobs,blob_generation TEXT NOT NULL,byte_count INTEGER NOT NULL CHECK(byte_count>=0),
+ staging_operation_id TEXT NOT NULL REFERENCES operations,staging_attempt INTEGER NOT NULL CHECK(staging_attempt>0),
+ staging_generation INTEGER,managed_path TEXT NOT NULL,
+ PRIMARY KEY(operation_id,ordinal),
+ CHECK((kind='Resource')=(resource_id IS NOT NULL)),CHECK((kind='Resource')=(resource_key IS NOT NULL)),
+ CHECK((kind='Resource')=(resource_name IS NOT NULL)),CHECK((kind='Resource')=(resource_lifecycle IS NOT NULL)),
+ CHECK((kind='Resource')=(resource_media_type IS NOT NULL)),
+ CHECK(json_extract(artifact_json,'$.id')=artifact_id AND json_extract(version_json,'$.id')=version_id),
+ CHECK(json_extract(version_json,'$.artifact_id')=artifact_id AND json_extract(version_json,'$.blob_digest')=blob_digest)
+) STRICT;
+CREATE UNIQUE INDEX convention_import_entry_key ON convention_import_artifacts(operation_id,resource_key) WHERE kind='Resource';
+CREATE UNIQUE INDEX convention_import_document ON convention_import_artifacts(operation_id,kind) WHERE kind!='Resource';
+CREATE INDEX convention_import_blob ON convention_import_artifacts(blob_digest,operation_id);
+CREATE TRIGGER convention_import_binding_immutable BEFORE UPDATE ON convention_imports
+ WHEN NEW.operation_id!=OLD.operation_id OR NEW.convention_id!=OLD.convention_id OR NEW.scope_key!=OLD.scope_key
+ OR NEW.project_id IS NOT OLD.project_id OR NEW.author_id!=OLD.author_id OR NEW.source_ref_json!=OLD.source_ref_json
+ OR NEW.expected_scope_revision!=OLD.expected_scope_revision OR NEW.created_at!=OLD.created_at
+ BEGIN SELECT RAISE(ABORT,'immutable convention import binding'); END;
+CREATE TRIGGER convention_import_metadata_immutable_update BEFORE UPDATE ON convention_import_metadata BEGIN SELECT RAISE(ABORT,'immutable convention import metadata'); END;
+CREATE TRIGGER convention_import_metadata_immutable_delete BEFORE DELETE ON convention_import_metadata BEGIN SELECT RAISE(ABORT,'retained convention import metadata'); END;
+CREATE TRIGGER convention_import_artifacts_immutable_update BEFORE UPDATE ON convention_import_artifacts BEGIN SELECT RAISE(ABORT,'immutable convention import capture'); END;
+CREATE TRIGGER convention_import_artifacts_cleanup_guard BEFORE DELETE ON convention_import_artifacts
+ WHEN NOT EXISTS(SELECT 1 FROM convention_imports d JOIN operations o ON o.id=d.operation_id WHERE d.operation_id=OLD.operation_id
+ AND d.phase IN('Failed','Cancelled') AND o.state IN('Failed','NeedsInput','CancelledBeforeDispatch','ObservedComplete'))
+ BEGIN SELECT RAISE(ABORT,'live convention import capture'); END;

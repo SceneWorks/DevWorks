@@ -91,7 +91,7 @@ pub struct ConventionResourceQuery {
     pub lifecycles: Vec<String>,
 }
 
-pub trait ConventionRead: ConventionIndexRead {
+pub trait ConventionRead: ConventionIndexRead + ConventionImportRead {
     /// The current head and the requested historical snapshot must both have an allowed scope.
     fn convention(
         &self,
@@ -131,7 +131,9 @@ pub trait ConventionRead: ConventionIndexRead {
     fn convention_scope_revision(&self, scope: &KnowledgeScope) -> Result<i64, StorageError>;
 }
 
-pub trait ConventionRepository: ConventionRead + ConventionIndexRepository {
+pub trait ConventionRepository:
+    ConventionRead + ConventionIndexRepository + ConventionImportRepository
+{
     fn create_convention(&mut self, row: &StoredConvention) -> Result<(), StorageError>;
     fn revise_convention(
         &mut self,
