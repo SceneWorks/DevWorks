@@ -243,15 +243,20 @@ impl QueryHandler for GraphService {
                     |read| {
                         let mut budget = Budget::new(&request.limits);
                         budget.start_at(started, env.cancellation.cloned());
+                        let prepared_source=(|| {
+                        let cursors=bound_cursors(ctx,query,&request,Some(selected),read)?;
+                        let position=request.cursor.as_ref().map(|c|cursors.decode(c)).transpose()?.unwrap_or_default();
                         let mut reader = Reader::new(
                             read,
                             selected,
                             budget,
-                            Position::default(),
+                            position,
                             request.limits.max_results as usize,
                         )
                         .with_indexing(self.indexing.as_deref());
-                        Ok(source::prepare(&mut reader, &self.artifacts, &selection))
+                        source::prepare(&mut reader, &self.artifacts, &selection)
+                        })();
+                        Ok(prepared_source)
                     },
                 )??
                 .into()
@@ -323,18 +328,7 @@ impl GraphService {
         let stamp = read
             .stamp()
             .read_stamp(ctx.policy_revision().clone(), rev(scope_revision));
-        let mut canonical =
-            json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
-        if let Some(s) = selected {
-            canonical["selection"] = json!(s.pin.intent_digest);
-        }
-        let binding = crate::services::cursor::CursorBinding::new(
-            ctx,
-            query.descriptor().name,
-            &[&canonical.to_string()],
-            scope_revision,
-        );
-        let cursors = Cursors::new(binding, selected.map(|s| s.pin.id.clone()));
+        let cursors = bound_cursors(ctx, query, request, selected, read)?;
         let position = request
             .cursor
             .as_ref()
@@ -432,7 +426,7 @@ impl GraphService {
             Some("graph_deadline") => GraphCompletion::Deadline,
             Some(_) => GraphCompletion::WorkLimit,
             None if next_cursor.is_some() => GraphCompletion::ResultLimit,
-            None if partial || unavailable => GraphCompletion::Partial,
+            None if partial => GraphCompletion::Partial,
             None => GraphCompletion::Complete,
         };
         let resolved = selected
@@ -456,7 +450,7 @@ impl GraphService {
             },
             next_cursor,
         };
-        value.validate().map_err(|_| scope::unavailable(None))?;
+        value.validate().map_err(|_|scope::unavailable(None))?;
         Ok(QueryAnswer {
             stamp,
             result: operation_result(query.descriptor().name, value)?,
@@ -1024,4 +1018,14 @@ impl CommandHandler for GraphService {
 }
 fn dataset_identity(node: &GraphNode) -> GraphNodeIdentity {
     super::dataset::identity(node)
+}
+
+fn bound_cursors(ctx:&InvocationContext,query:&AdmittedQuery,request:&GraphReadRequest,selected:Option<&lease::Selected>,read:&dyn ReadSnapshot)->Result<Cursors,Failure>{
+ let revision=if let Some(selected)=selected{read.graph().graph_trust_revision(&selected.pin.scope)?}else{read.stamp().committed_sequence.max(1)};
+ let mut canonical=json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
+ if let Some(selected)=selected{
+ canonical["selection"]=json!(selected.pin.intent_digest);
+ let mut registrations=Vec::new();for view in &selected.pin.scope.views {let repository=read.projects().repository(&view.repository_id)?.ok_or_else(||scope::unavailable(Some(view.repository_id.clone())))?;registrations.push(json!({"id":repository.id,"revision":repository.revision,"name":repository.name,"remote":repository.remote_url}));}canonical["registrations"]=json!(registrations);
+ }
+ let binding=crate::services::cursor::CursorBinding::new(ctx,query.descriptor().name,&[&canonical.to_string()],revision);Ok(Cursors::new(binding,selected.map(|s|s.pin.id.clone())))
 }

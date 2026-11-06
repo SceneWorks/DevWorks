@@ -115,6 +115,7 @@ pub(super) fn edges(
     mut visit: impl FnMut(Result<Edge, Unmapped>, &mut Budget) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {
     let mut after = None;
+    let mut packages = None;
     let mut sessions =
         std::collections::HashMap::<String, crate::services::indexing::worker::ViewLinker>::new();
     loop {
@@ -210,7 +211,19 @@ pub(super) fn edges(
                 }),
                 _ => Err(Unmapped { raw, original }),
             };
+            let derived = if let Ok(edge) = &linked {
+                if edge.raw.edge.kind == "REFERENCES_PACKAGE" {
+                    if packages.is_none() {
+                        packages = Some(super::packages::Packages::load(read, scope, budget)?);
+                    }
+                    packages.as_ref().expect("loaded packages").link(read, scope, edge, budget)?
+                } else { None }
+            } else { None };
             if !visit(linked, budget)? {
+                return Ok(());
+            }
+            if let Some(derived) = derived
+                && !visit(Ok(derived), budget)? {
                 return Ok(());
             }
         }

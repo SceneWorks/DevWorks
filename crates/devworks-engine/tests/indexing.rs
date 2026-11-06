@@ -503,3 +503,6 @@ fn shutdown_stops_a_run_within_its_deadline_and_the_next_boot_resumes_it() {
 
 #[path = "indexing/graph_analysis.rs"]
 mod graph_analysis;
+
+#[path="indexing/graph_reads.rs"]
+mod graph_reads;

@@ -159,12 +159,18 @@ pub(super) fn select(
                 .iter()
                 .filter_map(|w| w.expires_at_ms)
                 .fold(tx.now_ms().saturating_add(GRAPH_PIN_TTL_MS), i64::min);
-            selected.pin = tx.graph().renew_graph_pin(
-                &selected.pin.id,
-                &selected.pin.owner_namespace,
-                current.revision,
-                expiry,
-            )?;
+            selected.pin = if expiry > current.expires_at_ms {
+                tx.graph().renew_graph_pin(
+                    &selected.pin.id,
+                    &selected.pin.owner_namespace,
+                    current.revision,
+                    expiry,
+                )?
+            } else {
+                // A repeated page in the same clock tick (or at the overlay's hard
+                // expiry ceiling) reuses the still-live lease without a false renewal.
+                current
+            };
         } else {
             selected.pin.created_at_ms = tx.now_ms();
             selected.pin.expires_at_ms = selected

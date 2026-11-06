@@ -118,36 +118,14 @@ pub(super) fn by_file(
         };
         span(a).cmp(&span(b))
     });
-    if let Some(line) = &selection.line {
-        let line = line
-            .0
-            .parse::<u64>()
-            .map_err(|_| crate::ports::storage::StorageError::CursorExpired)?;
-        let containing: Vec<_> = rows
-            .iter()
-            .filter(|n| {
-                n.node.payload["span"]["startLine"]
-                    .as_u64()
-                    .is_some_and(|s| s <= line)
-                    && n.node.payload["span"]["endLine"]
-                        .as_u64()
-                        .is_some_and(|e| line <= e)
-            })
-            .cloned()
-            .collect();
-        rows = if containing.is_empty() {
-            rows.into_iter()
-                .filter(|n| n.node.kind == "File")
-                .take(1)
-                .collect()
-        } else {
-            containing
-        };
-    }
-    let nodes = reader.page_nodes(&rows)?;
-    Ok(GraphResult::CodeNodes {
-        value: model::wire(json!({"nodes":nodes}))?,
-    })
+    let selected=if let Some(line)=&selection.line {
+        let line=line.0.parse::<u64>().map_err(|_|StorageError::CursorExpired)?;
+        rows.iter().find(|n|n.node.payload["span"]["startLine"].as_u64().is_some_and(|s|s<=line)&&n.node.payload["span"]["endLine"].as_u64().is_some_and(|e|line<=e)).or_else(||rows.iter().find(|n|n.node.kind=="File")).or_else(||rows.first()).map(|n|n.node.node_id.clone())
+    }else{None};
+    let total=if reader.budget.exhausted.is_none(){Some(model::count(rows.len()as u64)?)}else{None};
+    let low=rows.iter().filter(|n|dataset::low_node(n)).count();
+    let nodes=reader.page_nodes(&rows)?;
+    Ok(GraphResult::CodeNodes{value:CodeNodesResult{nodes:crate::protocol::support::BoundedList(nodes),total,low_confidence_count:model::count(low as u64)?,selected_node_id:selected.map(|id|model::wire(json!(id))).transpose()?}})
 }
 
 pub(super) struct Walk<'a> {
