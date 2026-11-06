@@ -451,7 +451,7 @@ fn valid_linux_birth(birth: &str) -> bool {
     let Some((boot, ticks)) = birth.split_once(':') else {
         return false;
     };
-    checked_boot_identity(boot).is_ok()
+    checked_boot_identity(boot).is_ok_and(|canonical| canonical == boot)
         && ticks.parse::<u64>().is_ok_and(|n| n.to_string() == ticks)
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -642,6 +642,12 @@ mod tests {
         assert!(checked_boot_identity("").is_err());
         assert!(checked_boot_identity("\n").is_err());
         assert!(!valid_linux_birth(":12345"));
+        assert!(!valid_linux_birth(
+            " 01234567-89ab-cdef-0123-456789abcdef:12345"
+        ));
+        assert!(!valid_linux_birth(
+            "01234567-89ab-cdef-0123-456789abcdef :12345"
+        ));
         assert!(!valid_linux_birth("invalid-boot:12345"));
         assert!(!valid_linux_birth(
             "01234567-89ab-cdef-0123-456789abcdef:invalid-ticks"
