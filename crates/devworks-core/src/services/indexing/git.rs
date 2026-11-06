@@ -492,20 +492,15 @@ impl Git<'_> {
         Ok(serde_json::json!({"gitVersion":version,"gitProgram":program,"hookNames":names}))
     }
 
-    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
-    /// The current hook-name/version witness is checked on either side of every index write.
-    pub(crate) fn reviewed_mutation(
+    /// Fixed helper-free launch profile shared by reviewed writes and their patch evidence.
+    /// The policy carries the already-qualified actual Git executable, including Windows.
+    fn reviewed_spec(
         &self,
         dir: &Path,
         args: &[&str],
         stdin: Option<Vec<u8>>,
-        operation: &OperationId,
-        expected: &serde_json::Value,
-    ) -> Result<Vec<u8>, GitFault> {
-        let policy = self.reviewed_commit_policy(dir)?;
-        if &policy != expected {
-            return Err(GitFault::SourceChanged);
-        }
+        policy: &serde_json::Value,
+    ) -> Result<ProcessSpec, GitFault> {
         let mut spec = self.spec(dir, args, stdin);
         spec.program = policy["gitProgram"]
             .as_str()
@@ -541,6 +536,42 @@ impl Git<'_> {
             .find(|(key, _)| key == "GIT_CONFIG_COUNT")
             .expect("fixed helper configuration")
             .1 = count.to_string();
+        Ok(spec)
+    }
+
+    fn reviewed_read(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        max: usize,
+        policy: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        Ok(self.runner.run(
+            self.ctx,
+            self.reviewed_spec(dir, args, None, policy)?,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: max,
+            },
+            self.stop,
+        )?)
+    }
+
+    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
+    /// The current hook-name/version witness is checked on either side of every index write.
+    pub(crate) fn reviewed_mutation(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        operation: &OperationId,
+        expected: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        if &policy != expected {
+            return Err(GitFault::SourceChanged);
+        }
+        let spec = self.reviewed_spec(dir, args, stdin, &policy)?;
         let result = self.runner.run_recorded(
             self.ctx,
             spec,
@@ -1235,7 +1266,7 @@ impl Git<'_> {
         ]);
         args.extend(committed);
         args.push("--");
-        let changed = self.run(dir, &args, MAX_LISTING_BYTES)?;
+        let changed = self.reviewed_read(dir, &args, MAX_LISTING_BYTES, &execution_policy)?;
         let mut paths = std::collections::BTreeMap::new();
         for raw in changed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
             let path =
@@ -1272,7 +1303,7 @@ impl Git<'_> {
             let mut bytes = if untracked {
                 self.runner.run_difference(
                     self.ctx,
-                    self.spec(
+                    self.reviewed_spec(
                         dir,
                         &[
                             "diff",
@@ -1289,7 +1320,8 @@ impl Git<'_> {
                             &path,
                         ],
                         None,
-                    ),
+                        &execution_policy,
+                    )?,
                     HelperLimits {
                         deadline: self.deadline,
                         max_stdout: BOUND,
@@ -1313,7 +1345,7 @@ impl Git<'_> {
                 ]);
                 args.extend(committed);
                 args.extend(["--", &path]);
-                self.run(dir, &args, BOUND)?
+                self.reviewed_read(dir, &args, BOUND, &execution_policy)?
             };
             // No-index diff uses raw filesystem modes. Git add ignores a new regular file's
             // executable bit when core.fileMode=false; match its mode without altering patch
