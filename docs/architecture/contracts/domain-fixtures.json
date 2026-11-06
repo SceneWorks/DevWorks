@@ -10582,5 +10582,54 @@
     "raw": "{\"kind\":\"notifications.acknowledge\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"body\":\"Fixture content\",\"acknowledged\":false,\"createdAtMs\":\"0\"}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-root",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"rootId\":\"root-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-newest-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-r3-forward-project",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":false,\"projectId\":\"project-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw89-direction-before-r3-1",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":1,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-direction-before-r3-2",
+    "entry": "query-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":2,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":true,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-null",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":null,\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw89-invalid-direction-string",
+    "entry": "query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"newest-events\",\"schemaRevision\":3,\"query\":{\"kind\":\"history.events\",\"limit\":200,\"newestFirst\":\"true\",\"projectId\":\"project-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

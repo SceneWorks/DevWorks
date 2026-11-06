@@ -965,6 +965,30 @@ fn decisions(
         .collect()
 }
 
+pub(crate) fn decisions_before_sql(column: &str, inclusive: bool) -> String {
+    let comparison = if inclusive { "<=" } else { "<" };
+    format!(
+        "SELECT {EVENT_COLUMNS} FROM events WHERE {column} IS ?1 AND kind='CommandDecided' AND seq{comparison}?2 ORDER BY seq DESC LIMIT ?3"
+    )
+}
+
+fn decisions_before(
+    conn: &Connection,
+    scope: &HistoryScope,
+    before: Option<i64>,
+    limit: u16,
+) -> Result<Vec<EventRecord>, StorageError> {
+    let n = bounded(limit)?;
+    let (column, value) = scope_column(scope);
+    let sql = decisions_before_sql(column, before.is_none());
+    let mut statement = db(conn.prepare_cached(&sql))?;
+    let rows = db(statement.query_map(params![value, before.unwrap_or(i64::MAX), n], event_row))?;
+    db(rows.collect::<rusqlite::Result<Vec<_>>>())?
+        .into_iter()
+        .map(event_of)
+        .collect()
+}
+
 macro_rules! session_reads {
     ($t:ty) => {
         impl SessionRead for $t {
@@ -1195,6 +1219,11 @@ macro_rules! session_reads {
             ) -> Result<Vec<EventRecord>, StorageError> {
                 decisions(self.conn, scope, after, limit)
             }
+            fn decisions_before(&self, scope: &HistoryScope, before: Option<i64>, limit: u16)
+                -> Result<Vec<EventRecord>, StorageError> {
+                decisions_before(self.conn,scope,before,limit)
+            }
+
         }
     };
 }

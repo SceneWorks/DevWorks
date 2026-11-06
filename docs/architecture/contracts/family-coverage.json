@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-05",
+  "date": "2026-11-06",
   "catalogSha256": "605c2b629d94df4257fe563b03b8fe80d440a5492c03ae7fbba902570d4fbe2a",
   "familyCount": 49,
   "operationCount": 359,
@@ -3618,6 +3618,14 @@
               "inputSchema": "query-request.r2.schema.json",
               "resultSchema": "operation-result.r2.schema.json",
               "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
