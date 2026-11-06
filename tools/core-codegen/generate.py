@@ -44,7 +44,7 @@ DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage Deli
            'ArtifactTags'.split())
 SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
-              'DynamicJson DomainErrorCode DomainFault'.split())
+              'DynamicJson SavedCommandInput DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
 GATED_SUPPORT = {'HistoryPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}

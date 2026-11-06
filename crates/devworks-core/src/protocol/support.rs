@@ -388,6 +388,40 @@ impl Probability {
         self.0
     }
 }
+/// Closed selected-command arguments retained for exact human review and re-admission.
+/// The outer frame and actual selected operation enforce their own limits. In particular, a
+/// legal inner DynamicJson retains its own byte/depth/node bounds, without applying those
+/// narrower bounds again to the aggregate argument object.
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct SavedCommandInput(pub serde_json::Value);
+impl<'de> Deserialize<'de> for SavedCommandInput {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = Self(serde_json::Value::deserialize(d)?);
+        value.check().map_err(D::Error::custom)?;
+        Ok(value)
+    }
+}
+impl JsonSchema for SavedCommandInput {
+    fn schema_name() -> Cow<'static, str> {
+        "SavedCommandInput".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"type":"object","not":{"required":["kind"]},"description":"Closed selected-operation argument object, bounded by the existing 1MiB/100-container frame ceiling; no aggregate DynamicJson node limit. The actual selected admission rechecks operation schema, inner JSON bounds and authority. Outer proposal framing remains unchanged."})
+    }
+}
+impl Check for SavedCommandInput {
+    fn check(&self) -> Result<(), String> {
+        if !self.0.is_object() || self.0.get("kind").is_some() {
+            return Err(
+                "saved command input is the closed argument object without operation kind".into(),
+            );
+        }
+        let encoded = serde_json::to_vec(&self.0).map_err(|e| e.to_string())?;
+        crate::framing::parse(&encoded).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct DynamicJson(pub serde_json::Value);
