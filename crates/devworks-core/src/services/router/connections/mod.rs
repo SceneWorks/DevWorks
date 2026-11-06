@@ -2973,7 +2973,8 @@ fn apply_discovery(
                 ) || crate::services::router::latest::parse(&m.id).is_some()
                     || d.conversational.contains(&m.id))
         }) {
-            if found.id == select::OPEN_ROUTER_AUTO_UPSTREAM
+            if (c.profile == select::OPEN_ROUTER_PROFILE
+                && crate::ports::router::is_open_router_auto(&found.id))
                 || models.iter().any(|m| {
                     m.endpoint_profile == c.profile
                         && m.upstream_model_id == found.id
@@ -3026,7 +3027,8 @@ fn apply_discovery(
     for m in models.iter().filter(|m| {
         m.endpoint_profile == c.profile && m.connection_id.as_ref().is_none_or(|b| b == &c.id)
     }) {
-        if m.upstream_model_id == select::OPEN_ROUTER_AUTO_UPSTREAM
+        if (c.profile == select::OPEN_ROUTER_PROFILE
+            && crate::ports::router::is_open_router_auto(&m.upstream_model_id))
             || !select::lists(&c.profile, &listed, &m.upstream_model_id)
         {
             continue;

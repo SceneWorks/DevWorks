@@ -128,8 +128,8 @@ impl InferenceRouter {
                 }
                 // An upstream auto route is unresolved until the provider responds. It cannot
                 // borrow a concrete model's tariff merely because both share a connection.
-                if model.upstream_model_id == "openrouter/auto"
-                    || model.upstream_model_id == "openrouter/auto:beta"
+                if model.endpoint_profile == select::OPEN_ROUTER_PROFILE
+                    && crate::ports::router::is_open_router_auto(&model.upstream_model_id)
                 {
                     if query.provider_model_id.is_some() {
                         return Ok(Some(

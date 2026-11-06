@@ -1565,6 +1565,48 @@ fn open_router_model(cx: &Cx, model: &str, upstream: &str) {
         "efforts": [], "imageInput": false, "tools": true, "revision": "1"});
     assert!(summary(cx.configure(json!({"kind": "Model", "model": m}))).2);
 }
+
+#[test]
+fn open_router_auto_beta_discovery_retains_configured_identity_and_dynamic_facts() {
+    let cx = Cx::new();
+    let key = cx.stage("fixture-openrouter-key");
+    cx.add("or", "OpenRouterChat", OPENROUTER, Some(&key));
+    open_router_model(&cx, "my-beta", "openrouter/auto-beta");
+    open_router_model(&cx, "my-colon-model", "openrouter/auto:beta");
+    cx.http.on(
+        Method::Get,
+        OPENROUTER,
+        200,
+        json!({"data":[
+            {"id":"openrouter/auto-beta", "context_length":1234, "supported_parameters":[],
+             "architecture":{"input_modalities":["text"], "output_modalities":["text"]}},
+            {"id":"openrouter/auto:beta", "context_length":4096, "supported_parameters":[],
+             "architecture":{"input_modalities":["text"], "output_modalities":["text"]}}
+        ]}),
+    );
+    summary(cx.configure(json!({"kind":"SignIn", "connectionId":"or", "action":"Inspect"})));
+    let beta = cx.read(|r| r.router().route_model(&id("my-beta"))).unwrap();
+    assert_eq!(beta.upstream_model_id, "openrouter/auto-beta");
+    assert_eq!(beta.context_tokens, None);
+    assert!(
+        beta.tools,
+        "dynamic route cannot acquire fixed inventory facts"
+    );
+    let custom = cx
+        .read(|r| r.router().route_model(&id("my-colon-model")))
+        .unwrap();
+    assert_eq!(custom.upstream_model_id, "openrouter/auto:beta");
+    assert_eq!(custom.context_tokens, Some(4096));
+    assert!(!custom.tools, "a custom prefix uses its own reported facts");
+
+    cx.http.on(Method::Get, OPENROUTER, 200, json!({"data":[]}));
+    summary(cx.configure(json!({"kind":"SignIn", "connectionId":"or", "action":"Inspect"})));
+    assert!(
+        cx.availability("my-beta").available,
+        "auto is not an inventory member"
+    );
+    assert!(!cx.availability("my-colon-model").available);
+}
 fn edit_connection(
     cx: &Cx,
     connection: &str,

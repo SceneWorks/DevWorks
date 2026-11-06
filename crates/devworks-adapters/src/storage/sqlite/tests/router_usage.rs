@@ -18,14 +18,18 @@ struct NativeFx {
 }
 impl NativeFx {
     fn new() -> Self {
+        Self::with_upstream("OpenAiResponses", "upstream/accounted")
+    }
+    fn with_upstream(profile: &str, upstream: &str) -> Self {
         let fx = Fx::new();
         fx.dir.set(
-            "OpenAiResponses",
+            profile,
             "api",
             ConnectionState::Connected,
-            Some(&["upstream/accounted"]),
+            Some(&[upstream]),
         );
-        let mut model = custom("accounted", "OpenAiResponses", false, Some(128_000));
+        let mut model = custom("accounted", profile, false, Some(128_000));
+        model.upstream_model_id = upstream.into();
         model.connection_id = Some(id("api"));
         fx.add_model(model);
         fx.write(|tx| {
@@ -48,7 +52,7 @@ impl NativeFx {
                 catalog_model_id: choice.model_id,
                 provider_model_id: pin.upstream_model_id,
                 connection_id: id("api"),
-                endpoint_profile: "OpenAiResponses".into(),
+                endpoint_profile: profile.into(),
                 access_mode: "NotBillingAuthority".into(),
                 service_tier: None,
                 input_tokens: Some(100),
@@ -138,6 +142,57 @@ impl NativeFx {
             self.fx.router.clone(),
         )
     }
+}
+
+#[test]
+fn native_open_router_auto_beta_admission_waits_for_actual_provider_identity() {
+    for upstream in ["openrouter/auto", "openrouter/auto-beta"] {
+        let mut f = NativeFx::with_upstream("OpenRouterChat", upstream);
+        // The catalog route is known, but its concrete provider model is unresolved.
+        assert!(
+            matches!(f.admit(), Admission::SourceChanged(reason) if reason == "upstream auto model is not resolved at admission")
+        );
+        f.request.query.provider_model_id = None;
+        let attempt = f.admitted();
+        assert_eq!(attempt.provider_model_id, None);
+        assert_eq!(
+            f.fx.pin_row("s1").unwrap().upstream_model_id.as_deref(),
+            Some(upstream)
+        );
+        let mut observed = observation("actual-model", 1, Some(100), Some("0.000100"));
+        observed.provider_model_id = Some("vendor/actual-served".into());
+        let (source, _) = source(
+            vec![
+                InferenceFrame::Usage(observed),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        assert!(matches!(
+            f.host()
+                .drive(attempt.attempt_id.clone(), source, Cancellation::new())
+                .unwrap(),
+            DriveOutcome::Settled(_)
+        ));
+        let stored =
+            f.fx.read(|read| read.usage().inference_attempt(&attempt.attempt_id))
+                .unwrap();
+        assert_eq!(
+            stored.provider_model_id.as_deref(),
+            Some("vendor/actual-served")
+        );
+    }
+    // A configured colon ID remains an exact custom model, not an undocumented alias.
+    let mut f = NativeFx::with_upstream("OpenRouterChat", "openrouter/auto:beta");
+    f.request.query.provider_model_id = None;
+    assert!(
+        matches!(f.admit(), Admission::SourceChanged(reason) if reason == "concrete upstream identity changed before admission")
+    );
+    let mut f = NativeFx::with_upstream("CompatibleChat", "openrouter/auto-beta");
+    f.request.query.provider_model_id = None;
+    assert!(
+        matches!(f.admit(), Admission::SourceChanged(reason) if reason == "concrete upstream identity changed before admission")
+    );
 }
 struct Source {
     frames: VecDeque<InferenceFrame>,
