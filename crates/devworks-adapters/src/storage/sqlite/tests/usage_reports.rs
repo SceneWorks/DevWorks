@@ -933,3 +933,28 @@ fn full_dimensional_unknown_cost_reasons_are_current_and_never_truncated_to_a_qu
     assert_eq!(row["cost"]["monetaryComplete"], false);
     assert!(gap(&v, "monetary-coverage-incomplete"));
 }
+#[test]
+fn aggregate_observed_subtotals_never_claim_complete_coverage_of_an_unknown_remote_tail() {
+    let h = Harness::new();
+    let s = seed(&h);
+    request(&h, "tail", "Assistant", T0);
+    attempt(&h, &s, "tail-attempt", "tail", 1, (Some(4), Some(2), 3));
+    run_write(&s, WriteOptions::default(), |tx| {
+        let mut b = tx.usage().attempt_balance(&id("tail-attempt"))?.unwrap();
+        b.revision += 1;
+        b.unknown_tail = true;
+        b.incomplete = true;
+        b.monetary_complete = false;
+        tx.usage().put_attempt_balance(&b, Some(1))
+    })
+    .unwrap();
+    let v = query(&s, &input("AssistantUsage"));
+    assert_eq!(
+        metric(&v, "totalTokens"),
+        Some(6),
+        "the measured subtotal remains observable"
+    );
+    assert!(gap(&v, "remote-outcome-unknown"));
+    assert!(gap(&v, "usage-observation-incomplete"));
+    assert_eq!(v["report"]["coverage"]["state"], "Partial");
+}
