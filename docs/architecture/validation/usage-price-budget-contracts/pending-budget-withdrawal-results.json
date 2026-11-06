@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-06",
+  "baseCommit": "12da4556723d7589f5aa844d1d7e9d7fdc514d47",
+  "review": "https://github.com/SceneWorks/DevWorks/pull/39#discussion_r4489821276",
+  "scope": "Pending feature-plan budget proposal withdrawal; no Graph, Help, provider or inference changes",
+  "wire": {
+    "operation": "features.edit_plan",
+    "schemaRevision": 3,
+    "member": "clearBudgetProposal",
+    "value": true,
+    "omission": "Retain existing pending proposal",
+    "budgetOff": "Explicit proposed effective-budget removal",
+    "reject": [
+      "null",
+      "false",
+      "budget with clearBudgetProposal",
+      "clearBudgetProposal before revision 3"
+    ]
+  },
+  "native": {
+    "uiRegression": {
+      "test": "withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_explicit",
+      "oldUiOmission": "Failed at pending.budget.is_none after reopened checkbox uncheck/save",
+      "fixed": "Passed",
+      "seconds": 7.39,
+      "outcomes": [
+        "Legacy omission retained proposed $12.50 cap",
+        "Actual reopened native editor unchecked proposal and saved explicit withdrawal",
+        "Exact Human approval retained existing $5 active budget including budget revision",
+        "Subsequent explicit Off proposal changed the active cap only after exact Human approval"
+      ]
+    },
+    "existingPendingApproval": {
+      "passed": true,
+      "seconds": 6.42
+    },
+    "sqliteWithdrawal": {
+      "passed": true,
+      "seconds": 0.5,
+      "outcomes": [
+        "Omission retained pending digest and cap",
+        "Stale revision refused",
+        "Unbound actor permission denied",
+        "Refusals preserved current revision-3 feature record",
+        "Withdrawal changed pending digest and kept effective budget"
+      ]
+    },
+    "coreContractTests": 20,
+    "generatorTests": 11,
+    "schemaAndTypedFixtures": 1921,
+    "schemaFiles": 67,
+    "legacySchemasByteIdentical": 56,
+    "scriptedScenarios": 12,
+    "scriptedSteps": 26,
+    "strictClippy": [
+      "core and adapters all targets",
+      "desktop all targets"
+    ],
+    "formatAndDiffCheck": "Passed",
+    "inferenceCompute": false,
+    "liveNetwork": false
+  }
+}

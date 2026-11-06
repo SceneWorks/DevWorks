@@ -195,6 +195,131 @@ fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
     assert!(applied.attempts.0.is_empty());
 }
 #[test]
+fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_explicit() {
+    let root = Root::new("usage-native-withdraw-cap");
+    let engine = start(&root);
+    let b = engine.backend();
+    let p = project(&*b, "Withdraw cap project");
+    let mut h = open_features(&engine, &root, &p);
+    press(&mut h, "New feature");
+    replace(&mut h, "Title", "Withdraw captured cap");
+    click(&mut h, Role::CheckBox, "Limit feature spending");
+    replace(&mut h, "Feature spending limit USD", "5");
+    press(&mut h, "Create");
+    let f = features(&*b, &p).remove(0);
+    let active_budget = f.budget.as_ref().unwrap().clone();
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    replace(&mut h, "Plan text", "The exact retained plan scope.");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    replace(&mut h, "Feature spending limit USD", "12.50");
+    press(&mut h, "Save plan draft");
+    let saved = feature(&*b, f.id.as_str());
+    let pending = saved.pending_plan.as_ref().unwrap();
+    let old_digest = pending.plan_digest.clone();
+    assert!(
+        matches!(&pending.budget, Some(FeatureBudgetInput::Limit { micro_usd }) if micro_usd.as_str() == "12500000")
+    );
+    // An old client omitting both fields retains the already saved proposal.
+    let legacy = wops::work_changed(b.command(
+        "features.edit_plan",
+        &wops::work_command(
+            &*b,
+            "features.edit_plan",
+            json!({
+                "featureId":f.id,"expectedRevision":saved.revision,"plan":pending.draft
+            }),
+        ),
+    ))
+    .unwrap();
+    assert_eq!(
+        legacy.pending_plan.as_ref().unwrap().plan_digest,
+        old_digest
+    );
+    assert!(legacy.pending_plan.as_ref().unwrap().budget.is_some());
+    // Reopen a new native editor from durable backend state before unchecking.
+    drop(h);
+    let mut h = open_features(&engine, &root, &p);
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    assert!(h.state().work.plan.as_ref().unwrap().budget.is_some());
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    press(&mut h, "Save plan draft");
+    let withdrawn = feature(&*b, f.id.as_str());
+    let pending = withdrawn.pending_plan.as_ref().unwrap();
+    assert!(pending.budget.is_none());
+    assert_ne!(pending.plan_digest, old_digest);
+    assert_eq!(
+        serde_json::to_value(&withdrawn.budget).unwrap(),
+        serde_json::to_value(Some(&active_budget)).unwrap()
+    );
+    approve_pending_cap(&mut h, &*b, f.id.as_str());
+    let approved = feature(&*b, f.id.as_str());
+    assert!(approved.pending_plan.is_none());
+    assert_eq!(
+        serde_json::to_value(&approved.budget).unwrap(),
+        serde_json::to_value(Some(&active_budget)).unwrap()
+    );
+    // A new explicit Off proposal has different meaning and changes the active policy only
+    // after approval of that exact pending plan.
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    click(&mut h, Role::CheckBox, "Limit feature spending");
+    press(&mut h, "Save plan draft");
+    let off = feature(&*b, f.id.as_str());
+    assert!(matches!(
+        off.pending_plan.as_ref().unwrap().budget,
+        Some(FeatureBudgetInput::Off {})
+    ));
+    assert_eq!(
+        off.budget
+            .as_ref()
+            .unwrap()
+            .limit_micro_usd
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "5000000"
+    );
+    approve_pending_cap(&mut h, &*b, f.id.as_str());
+    assert!(
+        feature(&*b, f.id.as_str())
+            .budget
+            .unwrap()
+            .limit_micro_usd
+            .is_none()
+    );
+}
+fn approve_pending_cap(h: &mut Ui, b: &dyn Backend, id: &str) {
+    press(h, "Request approval");
+    let pending = feature(b, id).pending_plan.unwrap();
+    let proposal = pending.approval.unwrap().proposal_id;
+    h.state_mut().navigate(Route::Approvals);
+    settle(h);
+    press(h, &format!("Inspect proposal {}", proposal.as_str()));
+    replace(
+        h,
+        "Decision rationale",
+        "Approve this exact saved plan and budget intent.",
+    );
+    press(h, "Approve exact proposal");
+}
+#[test]
 fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
     let root = Root::new("usage-native-local-policy");
     let mut config = config(&root.0);

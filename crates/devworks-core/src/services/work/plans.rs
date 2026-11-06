@@ -256,11 +256,16 @@ fn save_pending(
     f: &StoredWork,
     draft: &PlanDraft,
     budget: Option<&crate::protocol::records::FeatureBudgetInput>,
+    clear_budget_proposal: bool,
 ) -> R<(StoredFeaturePlan, Option<Id>)> {
     let before = slot(tx, &f.id)?;
-    let budget = budget
-        .cloned()
-        .or_else(|| pending_of(before.pending.as_ref()).and_then(|pending| pending.budget));
+    let budget = if clear_budget_proposal {
+        None
+    } else {
+        budget
+            .cloned()
+            .or_else(|| pending_of(before.pending.as_ref()).and_then(|pending| pending.budget))
+    };
     let digest = super::model::pending_digest(draft, budget.as_ref());
     if pending_of(before.pending.as_ref()).is_some_and(|p| p.digest == digest) {
         return Ok((before, None));
@@ -374,6 +379,7 @@ impl WorkService {
                 } else {
                     None
                 },
+                false,
             )?;
         }
         if !budget_requires_approval && let Some(budget) = budget {
@@ -618,7 +624,7 @@ impl WorkService {
                 let draft = keep_plan_state(tx, &f.id, &fd.plan)?;
                 check_draft(tx, ctx, project, Some(&f), &draft)?;
                 // Saving a draft never touches the active plan or its approval.
-                let (_, superseded) = save_pending(tx, &f, &draft, fd.budget.as_ref())?;
+                let (_, superseded) = save_pending(tx, &f, &draft, fd.budget.as_ref(), false)?;
                 let mut next = f.clone();
                 let mut brief = WorkBrief::of(&f)?;
                 let metadata_changed = apply_metadata(
@@ -1003,7 +1009,13 @@ impl WorkService {
         let draft = keep_plan_state(tx, &f.id, &i.plan)?;
         check_draft(tx, ctx, &f.project_id, Some(&f), &draft)?;
         let before = slot(tx, &f.id)?;
-        let (after_slot, superseded) = save_pending(tx, &f, &draft, i.budget.as_ref())?;
+        let (after_slot, superseded) = save_pending(
+            tx,
+            &f,
+            &draft,
+            i.budget.as_ref(),
+            i.clear_budget_proposal == Some(true),
+        )?;
         if after_slot.revision == before.revision {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesEditPlan {
