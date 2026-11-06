@@ -2802,7 +2802,11 @@ impl DecisionRead for Unsupported {
     fn approval_resume(&self, _: &Id) -> Result<Option<StoredApprovalResume>, StorageError> {
         nope()
     }
-    fn pending_approval_resumes(&self, _: u16) -> Result<Vec<StoredApprovalResume>, StorageError> {
+    fn pending_approval_resumes(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredApprovalResume>, StorageError> {
         nope()
     }
     fn notification(

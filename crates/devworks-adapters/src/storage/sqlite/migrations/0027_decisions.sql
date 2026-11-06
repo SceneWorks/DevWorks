@@ -64,7 +64,7 @@ CREATE TABLE approval_resumes (
  updated_at INTEGER NOT NULL CHECK(updated_at>=created_at),
  result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json))
 ) STRICT;
-CREATE INDEX approval_resumes_pending ON approval_resumes(state,created_at,approval_id);
+CREATE INDEX approval_resumes_pending ON approval_resumes(approval_id) WHERE state IN ('Pending','Unknown');
 CREATE TABLE notifications (
  id TEXT PRIMARY KEY,
  revision INTEGER NOT NULL CHECK(revision>0),

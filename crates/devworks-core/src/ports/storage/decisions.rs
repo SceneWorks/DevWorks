@@ -160,6 +160,7 @@ pub trait DecisionRead {
     fn approval_resume(&self, approval: &Id) -> Result<Option<StoredApprovalResume>, StorageError>;
     fn pending_approval_resumes(
         &self,
+        after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredApprovalResume>, StorageError>;
     fn notification(
