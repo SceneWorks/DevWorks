@@ -357,7 +357,13 @@ impl EmbeddingRepository for Unit<'_> {
         if &p.operation_id != operation_id
             || p.store_id != self.info.store_id
             || p.restore_epoch != self.info.restore_epoch
-            || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        // Recording an exact negative journal fact cannot activate a space or change proof.
+        // Revoking the original proposer must prevent publication, not erase failure history.
+        if state == EmbeddingQualificationState::Qualified
+            && !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }

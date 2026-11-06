@@ -103,7 +103,13 @@ fn intent(tx: &mut dyn WriteTransaction, name: &str) -> Result<OperationRecord, 
     })
 }
 fn start(s: &SqliteStore) -> AttemptFence {
-    run_write(s, WriteOptions::default(), |tx| {
+    start_with_authority(s, vec![])
+}
+fn start_with_authority(
+    s: &SqliteStore,
+    authority_fences: Vec<devworks_core::ports::AuthorityFence>,
+) -> AttemptFence {
+    run_write(s, WriteOptions::default(), move |tx| {
         let op = intent(tx, "qualification-operation")?;
         let event = EventId(id("qualification-event"));
         let actor = tx.store().host_actor.clone();
@@ -142,7 +148,7 @@ fn start(s: &SqliteStore) -> AttemptFence {
             scope: DataScope::Workspace,
             connection_revision: 1,
             source_context: json!({"version":1,"fixture":"original source context"}),
-            authority_fences: vec![],
+            authority_fences,
         };
         assert_eq!(
             tx.router()
@@ -1053,4 +1059,127 @@ fn inventory_fence_tracks_exact_retained_artifact_metadata() {
     let linked = inventory_stamp(&s);
     assert!(linked.0 > blob.0);
     assert_eq!(linked.1, blob.1);
+}
+
+fn set_policy(s: &SqliteStore, expected: i64, value: &'static str) {
+    run_write(s, WriteOptions::default(), move |tx| {
+        let schema = serde_json::to_value(
+            devworks_core::settings::catalog::descriptor("safety.accessProfile")
+                .unwrap()
+                .schema_ref(),
+        )
+        .unwrap();
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            expected,
+            1,
+            json!({"values":{"safety.accessProfile":{"schema":schema,"value":value}}}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_outcomes() {
+    for state in [
+        EmbeddingQualificationState::Failed,
+        EmbeddingQualificationState::Unknown,
+        EmbeddingQualificationState::Cancelled,
+    ] {
+        let h = Harness::new();
+        let s = seeded(&h);
+        set_policy(&s, 1, "full");
+        let digest = read_snapshot(&s, &ReadOptions::default(), |r| {
+            Ok(devworks_core::authority::policy::resolve_policy(r.configuration(), None)?.digest())
+        })
+        .unwrap();
+        let fence = start_with_authority(
+            &s,
+            vec![devworks_core::ports::AuthorityFence::Policy {
+                project_id: None,
+                digest,
+            }],
+        );
+        let evidence = native_facts(&s);
+        stage(&s, fence.clone(), evidence.clone());
+        set_policy(&s, 2, "projectScope");
+        let f = fence.clone();
+        let e = evidence.clone();
+        assert!(matches!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .router()
+                .stage_embedding_probe_evidence(
+                    &id("candidate"),
+                    3,
+                    &OperationId(id("qualification-operation")),
+                    &f,
+                    &e
+                )),
+            Err(StorageError::ScopeDenied)
+        ));
+        let q = run_write(&s, WriteOptions::default(), move |tx| {
+            let terminal = match state {
+                EmbeddingQualificationState::Failed => OperationState::Failed,
+                EmbeddingQualificationState::Unknown => OperationState::OutcomeUnknown,
+                EmbeddingQualificationState::Cancelled => {
+                    tx.queue().cancel(&id("qualification-delivery"))?;
+                    OperationState::ObservedComplete
+                }
+                _ => unreachable!(),
+            };
+            tx.operations().transition(
+                &OperationId(id("qualification-operation")),
+                3,
+                Some(&fence),
+                terminal,
+                None,
+            )?;
+            assert!(matches!(
+                tx.router().finish_embedding_qualification(
+                    &id("candidate"),
+                    3,
+                    &OperationId(id("qualification-operation")),
+                    &fence,
+                    EmbeddingQualificationState::Qualified,
+                    None
+                ),
+                Err(StorageError::ScopeDenied)
+            ));
+            let mut stale = fence.clone();
+            stale.attempt_no += 1;
+            assert!(matches!(
+                tx.router().finish_embedding_qualification(
+                    &id("candidate"),
+                    3,
+                    &OperationId(id("qualification-operation")),
+                    &stale,
+                    state,
+                    None
+                ),
+                Err(StorageError::LeaseLost { .. })
+            ));
+            tx.router().finish_embedding_qualification(
+                &id("candidate"),
+                3,
+                &OperationId(id("qualification-operation")),
+                &fence,
+                state,
+                Some("exact journal outcome retained after authority changed"),
+            )
+        })
+        .unwrap();
+        assert_eq!(q.state, state);
+        assert_eq!(
+            serde_json::to_value(q.evidence.unwrap()).unwrap(),
+            serde_json::to_value(evidence).unwrap()
+        );
+        assert_eq!(
+            h.raw()
+                .query_row("SELECT count(*) FROM embedding_spaces", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 }
