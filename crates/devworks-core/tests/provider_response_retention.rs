@@ -69,7 +69,10 @@ fn measured<T>(run: impl FnOnce() -> T) -> (T, usize, usize) {
     )
 }
 
-const ITEM: &str = r#"{ "type":"message", "opaque":{"amount":1.2300e+004,"integer":9007199254740993,"escaped":"\u0061"}, "content":[{"type":"output_text","text":"native text"}] }"#;
+const ITEM_FIELDS: &str = r#""type":"message", "opaque":{"amount":1.2300e+004,"integer":9007199254740993,"escaped":"\u0061"}, "content":[{"type":"output_text","text":"native text","annotations":[]}]"#;
+fn item(index: usize) -> String {
+    format!(r#"{{ "id":"msg_{index}", "role":"assistant", "status":"completed", {ITEM_FIELDS} }}"#)
+}
 fn body(count: usize) -> String {
     let mut raw = String::from(
         r#"{ "id":"native-response", "model":"native-model", "status":"completed", "opaque-envelope":{ "escaped":"\u0062", "amount":9.8700e-009 }, "output":["#,
@@ -78,7 +81,7 @@ fn body(count: usize) -> String {
         if i != 0 {
             raw.push(',');
         }
-        raw.push_str(ITEM);
+        raw.push_str(&item(i));
     }
     raw.push_str("] }");
     raw
@@ -148,7 +151,8 @@ fn aggregate_and_stream_terminal_many_item_retention_and_allocations_are_linear(
                 for (i, item) in items.iter().enumerate() {
                     assert_eq!(item.ordinal, Some(i as u64));
                     assert_eq!(
-                        item.raw_json, ITEM,
+                        item.raw_json,
+                        self::item(i),
                         "exact escapes, decimal lexemes and opaque fields"
                     );
                     assert!(item.continuation.is_none());
