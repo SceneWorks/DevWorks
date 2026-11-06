@@ -261,9 +261,52 @@ fn the_plan_editor_keeps_what_it_does_not_show() {
     click(&mut h, Role::Button, "Edit plan");
     form.snapshot = feature;
     h.state_mut().work.plan = Some(form);
-    click(&mut h, Role::Button, "Add requirement");
-    click(&mut h, Role::Button, "Add acceptance criterion");
-    click(&mut h, Role::Button, "Remove acceptance criterion 2");
+    // Record the geometry actually used by the same pointer path as common::click. Check
+    // each action immediately so a missed Add is distinct from a later removal or reset.
+    let plan_click = |h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, label| {
+        settle(h);
+        h.get_by_role_and_label(Role::Button, label).scroll_to_me();
+        settle(h);
+        let node = h.get_by_role_and_label(Role::Button, label);
+        let rect = node.rect();
+        let clips: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                eframe::egui::Shape::Text(text) if text.galley.text() == label => Some(s.clip_rect),
+                _ => None,
+            })
+            .take(4)
+            .collect();
+        let geometry = format!(
+            "{label}: target={rect:?}, text clips={clips:?}, viewport={:?}, layer={:?}",
+            h.ctx.viewport_rect(),
+            h.ctx.layer_id_at(rect.center())
+        );
+        node.click();
+        settle(h);
+        geometry
+    };
+    for (label, acceptance_count) in [
+        ("Add requirement", 1),
+        ("Add acceptance criterion", 2),
+        ("Remove acceptance criterion 2", 1),
+    ] {
+        let geometry = plan_click(&mut h, label);
+        let form = h
+            .state()
+            .work
+            .plan
+            .as_ref()
+            .unwrap_or_else(|| panic!("the editor closed after {geometry}"));
+        assert_eq!(
+            form.requirements.last().map(|e| e.id.as_str()),
+            Some("E3"),
+            "{geometry}"
+        );
+        assert_eq!(form.acceptance.len(), acceptance_count, "{geometry}");
+    }
     let form = h.state().work.plan.as_ref().unwrap();
     assert_eq!(form.requirements.last().unwrap().id, "E3");
     let mut form = form.clone();
