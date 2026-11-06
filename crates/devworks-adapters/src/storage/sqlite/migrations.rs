@@ -381,6 +381,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0029_connection_account_identity.sql"),
         rebuilds_tables: false,
     },
+    // Earlier writers cannot preserve Help generation and artifact reference invariants.
+    Migration {
+        version: 30,
+        minimum_reader: 8,
+        minimum_writer: 30,
+        sql: include_str!("migrations/0030_help.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -706,3 +714,7 @@ pub const MIGRATION_0028_SHA256: &str =
 /// Recorded checksum of migration 29.
 pub const MIGRATION_0029_SHA256: &str =
     "34b910f48479921f154101e42d04a27d05c129997c3ad38b33a1a9ba97ed3947";
+
+/// Recorded checksum of migration 30.
+pub const MIGRATION_0030_SHA256: &str =
+    "173fa5720b9913758994fc2c8c0526476f5468f7758659d9902e21762150cdec";

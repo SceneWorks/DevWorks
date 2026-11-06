@@ -1065,6 +1065,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn evals(&self) -> &dyn EvalRead {
         self
     }
+    fn help(&self) -> &dyn HelpRead {
+        self
+    }
     fn router(&self) -> &dyn RouterRead {
         self
     }
@@ -1306,6 +1309,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
+        self
+    }
+    fn help(&mut self) -> &mut dyn HelpRepository {
         self
     }
     fn router(&mut self) -> &mut dyn RouterRepository {

@@ -2258,6 +2258,9 @@ impl WriteTransaction for Lying<'_> {
     fn evals(&mut self) -> &mut dyn EvalRepository {
         self.inner.evals()
     }
+    fn help(&mut self) -> &mut dyn HelpRepository {
+        self.inner.help()
+    }
     fn router(&mut self) -> &mut dyn devworks_core::ports::storage::RouterRepository {
         self.inner.router()
     }

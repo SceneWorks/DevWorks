@@ -502,6 +502,7 @@ pub trait WriteTransaction {
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
     fn browser(&mut self) -> &mut dyn BrowserRepository;
     fn evals(&mut self) -> &mut dyn EvalRepository;
+    fn help(&mut self) -> &mut dyn HelpRepository;
     fn decisions(&mut self) -> &mut dyn DecisionRepository;
     fn git(&mut self) -> &mut dyn GitRepository;
     fn router(&mut self) -> &mut dyn RouterRepository;
@@ -553,6 +554,7 @@ pub trait ReadSnapshot {
     fn diagnostics(&self) -> &dyn DiagnosticRead;
     fn browser(&self) -> &dyn BrowserRead;
     fn evals(&self) -> &dyn EvalRead;
+    fn help(&self) -> &dyn HelpRead;
     fn decisions(&self) -> &dyn DecisionRead;
     fn git(&self) -> &dyn GitRead;
     fn router(&self) -> &dyn RouterRead;
