@@ -6,3 +6,4 @@ pub mod ingest;
 pub mod meter;
 pub mod money;
 pub mod pricing;
+pub mod reports;
