@@ -467,13 +467,25 @@ pub(super) fn run_case(writer_race: bool) {
         drop(job);
         assert_eq!(inference.0.load(Ordering::SeqCst), 0);
         assert_eq!(http.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            read_snapshot(store.as_ref(), &ReadOptions::default(), |s| Ok(s
-                .stamp()
-                .committed_sequence))
-            .unwrap(),
-            before
-        );
+        let after = read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
+            Ok(s.stamp().committed_sequence)
+        })
+        .unwrap();
+        if after != before {
+            let events = read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
+                s.history().page(&EventFilter::All, before, 32)
+            })
+            .unwrap();
+            eprintln!(
+                "provider shutdown delta external_secret={external_secret} writer_race={writer_race}: before={before} after={after}; identities={:?}",
+                events
+                    .events
+                    .iter()
+                    .map(|e| (&e.kind, &e.aggregate_kind, &e.aggregate_id, &e.operation_id))
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(after, before);
         drop(app);
         drop(store);
         let _ = std::fs::remove_dir_all(root);
