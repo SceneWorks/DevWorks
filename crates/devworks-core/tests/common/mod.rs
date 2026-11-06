@@ -3276,6 +3276,14 @@ impl GraphRead for Unsupported {
     ) -> Result<GraphPage<StoredView>, StorageError> {
         nope()
     }
+    fn graph_expired_pins(
+        &self,
+        _: i64,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<GraphPage<StoredGraphReadPin>, StorageError> {
+        nope()
+    }
     fn graph_pin(&self, _: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
         nope()
     }

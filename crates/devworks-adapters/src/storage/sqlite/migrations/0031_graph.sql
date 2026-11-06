@@ -22,9 +22,11 @@ CREATE TABLE graph_read_pins (
  intent_digest TEXT NOT NULL CHECK(length(intent_digest)=64),
  scope_json TEXT NOT NULL CHECK(json_valid(scope_json) AND json_type(scope_json)='object'),
  witness_json TEXT NOT NULL CHECK(json_valid(witness_json) AND json_type(witness_json)='array'),
+ missing_json TEXT NOT NULL CHECK(json_valid(missing_json) AND json_type(missing_json)='array'),
  revision INTEGER NOT NULL CHECK(revision>0),
  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL CHECK(expires_at>created_at)
 ) STRICT;
+CREATE INDEX graph_read_pin_expiry ON graph_read_pins(expires_at,id);
 CREATE TABLE graph_read_pin_views (
  pin_id TEXT NOT NULL REFERENCES graph_read_pins ON DELETE CASCADE,
  repository_id TEXT NOT NULL REFERENCES repositories,

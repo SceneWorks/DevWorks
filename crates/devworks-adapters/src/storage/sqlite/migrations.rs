@@ -728,4 +728,4 @@ pub const MIGRATION_0030_SHA256: &str =
 
 /// Recorded checksum of migration 31.
 pub const MIGRATION_0031_SHA256: &str =
-    "2d4b99400eed51a1f8c289bad574d6b544d31355e0b9aa9b0087a2ce89c8e0bb";
+    "4d3d1401b9da77b2511dbef64f1a1cc057a56f0818f970b7976ba967d7892963";

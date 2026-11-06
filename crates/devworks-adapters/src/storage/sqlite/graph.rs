@@ -207,6 +207,13 @@ macro_rules! graph_reads {($t:ty)=>{impl GraphRead for $t {
         let views=rows.into_iter().map(|v|IndexRead::view(self,&id(v)?).and_then(|v|v.ok_or_else(||corrupt("retirable graph view vanished")))).collect::<Result<Vec<_>,_>>()?;
         Ok(page(views,limit))
     }
+    fn graph_expired_pins(&self,now:i64,after:Option<&Id>,limit:u16)->Result<GraphPage<StoredGraphReadPin>,StorageError>{
+        let(n,_)=bounded(limit,None)?;
+        let mut statement=db(self.conn.prepare_cached("SELECT id FROM graph_read_pins WHERE expires_at<=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"))?;
+        let ids=db(db(statement.query_map(params![now,after.map(Id::as_str),n],|row|row.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
+        let rows=ids.into_iter().map(|key|pin(self.conn,&id(key)?).and_then(|row|row.ok_or_else(||corrupt("expired graph pin vanished")))).collect::<Result<Vec<_>,_>>()?;
+        Ok(page(rows,limit))
+    }
     fn graph_pin(&self,key:&Id)->Result<Option<StoredGraphReadPin>,StorageError>{pin(self.conn,key)}
     fn graph_source_capture(&self,key:&Id)->Result<Option<StoredGraphSourceCapture>,StorageError>{capture(self.conn,key)}
 
@@ -249,18 +256,21 @@ type PinRaw = (
     String,
     String,
     String,
+    String,
     i64,
     i64,
     i64,
 );
 fn pin(conn: &Connection, key: &Id) -> Result<Option<StoredGraphReadPin>, StorageError> {
-    let raw:Option<PinRaw>=db(conn.query_row("SELECT owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,revision,created_at,expires_at FROM graph_read_pins WHERE id=?1",[key.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?))).optional())?;
+    let raw:Option<PinRaw>=db(conn.query_row("SELECT owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,missing_json,revision,created_at,expires_at FROM graph_read_pins WHERE id=?1",[key.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?))).optional())?;
     raw.map(|r|{
         let scope:GraphScope=serde_json::from_str(&r.5).map_err(|_|corrupt("invalid stored graph pin scope"))?;
         if scope.views.is_empty() || scope.views.len()>GRAPH_MAX_VIEWS || scope.views.iter().map(|v|v.repository_id.as_str()).collect::<BTreeSet<_>>().len()!=scope.views.len(){return Err(corrupt("invalid stored graph pin scope"));}
-        let count:i64=db(conn.query_row("SELECT count(*) FROM graph_read_pin_views v JOIN index_pins p ON p.id=v.index_pin_id JOIN json_each(?3,'$.views') j ON v.repository_id=json_extract(j.value,'$.repository_id') AND v.view_id=json_extract(j.value,'$.view_id') AND v.view_digest=json_extract(j.value,'$.view_digest') WHERE v.pin_id=?1 AND p.view_id=v.view_id AND p.lease_until=?2",params![key.as_str(),r.9,r.5],|row|row.get(0)))?;
+        let unavailable:Vec<GraphUnavailableRepository>=serde_json::from_str(&r.7).map_err(|_|corrupt("invalid graph unavailable repositories"))?;
+        validate_unavailable(&scope,&unavailable).map_err(|_|corrupt("invalid graph unavailable repository scope"))?;
+        let count:i64=db(conn.query_row("SELECT count(*) FROM graph_read_pin_views v JOIN index_pins p ON p.id=v.index_pin_id JOIN json_each(?3,'$.views') j ON v.repository_id=json_extract(j.value,'$.repository_id') AND v.view_id=json_extract(j.value,'$.view_id') AND v.view_digest=json_extract(j.value,'$.view_digest') WHERE v.pin_id=?1 AND p.view_id=v.view_id AND p.lease_until=?2",params![key.as_str(),r.10,r.5],|row|row.get(0)))?;
         if count!=scope.views.len() as i64{return Err(corrupt("graph pin lost a child lease"));}
-        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,view_witnesses:serde_json::from_str(&r.6).map_err(|_|corrupt("invalid graph pin witnesses"))?,revision:r.7,created_at_ms:r.8,expires_at_ms:r.9})
+        Ok(StoredGraphReadPin{id:key.clone(),owner_namespace:r.0,store_id:devworks_core::protocol::StoreId(id(r.1)?),restore_epoch:r.2,scope_digest:r.3,intent_digest:r.4,scope,view_witnesses:serde_json::from_str(&r.6).map_err(|_|corrupt("invalid graph pin witnesses"))?,unavailable_repositories:unavailable,revision:r.8,created_at_ms:r.9,expires_at_ms:r.10})
     }).transpose()
 }
 fn capture(conn: &Connection, key: &Id) -> Result<Option<StoredGraphSourceCapture>, StorageError> {
@@ -334,6 +344,17 @@ impl GraphRepository for Unit<'_> {
     }
     fn acquire_graph_pin(&mut self, record: &StoredGraphReadPin) -> Result<(), StorageError> {
         let scope = scope_json(self.conn, &record.scope)?;
+        validate_unavailable(&record.scope, &record.unavailable_repositories)?;
+        for missing in &record.unavailable_repositories {
+            let registered: bool = db(self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM repositories WHERE id=?1)",
+                [missing.repository_id.as_str()],
+                |r| r.get(0),
+            ))?;
+            if !registered {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
         if record.owner_namespace.is_empty()
             || record.owner_namespace.len() > 512
             || record.owner_namespace.contains('\0')
@@ -380,7 +401,7 @@ impl GraphRepository for Unit<'_> {
             .boot_id
             .as_ref()
             .ok_or_else(|| invalid("graph pin requires a native boot"))?;
-        db(self.conn.execute("INSERT INTO graph_read_pins(id,owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,revision,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9,?10)",params![record.id.as_str(),record.owner_namespace,record.store_id.0.as_str(),record.restore_epoch,record.scope_digest,record.intent_digest,scope,serde_json::to_string(&record.view_witnesses).map_err(|_|invalid("graph witness encoding"))?,record.created_at_ms,record.expires_at_ms]))?;
+        db(self.conn.execute("INSERT INTO graph_read_pins(id,owner_namespace,store_id,restore_epoch,scope_digest,intent_digest,scope_json,witness_json,missing_json,revision,created_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,?11)",params![record.id.as_str(),record.owner_namespace,record.store_id.0.as_str(),record.restore_epoch,record.scope_digest,record.intent_digest,scope,serde_json::to_string(&record.view_witnesses).map_err(|_|invalid("graph witness encoding"))?,serde_json::to_string(&record.unavailable_repositories).map_err(|_|invalid("graph unavailable encoding"))?,record.created_at_ms,record.expires_at_ms]))?;
         for view in &record.scope.views {
             let child = format!(
                 "graphlease_{}",
@@ -538,6 +559,32 @@ fn validate_witness(
     };
     if !valid {
         return Err(StorageError::ScopeDenied);
+    }
+    Ok(())
+}
+
+fn validate_unavailable(
+    scope: &GraphScope,
+    missing: &[GraphUnavailableRepository],
+) -> Result<(), StorageError> {
+    if scope.views.len() + missing.len() > GRAPH_MAX_VIEWS {
+        return Err(invalid("graph selected repository limit exceeded"));
+    }
+    let mut seen = scope
+        .views
+        .iter()
+        .map(|v| v.repository_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for row in missing {
+        if !seen.insert(row.repository_id.as_str())
+            || row.reason.trim().is_empty()
+            || row.reason.chars().count() > 256
+            || row.reason.contains('\0')
+        {
+            return Err(invalid(
+                "graph unavailable repositories must be unique, disjoint and qualified",
+            ));
+        }
     }
     Ok(())
 }

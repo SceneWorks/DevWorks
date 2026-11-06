@@ -127,6 +127,13 @@ pub trait GraphRead {
         content_digest: &str,
     ) -> Result<Option<StoredGraphTrust>, StorageError>;
     fn graph_trust_revision(&self, scope: &GraphScope) -> Result<i64, StorageError>;
+    /// Expired current-view leases also need bounded cleanup; they are not retirable views.
+    fn graph_expired_pins(
+        &self,
+        now_ms: i64,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<GraphPage<StoredGraphReadPin>, StorageError>;
     fn graph_pin(&self, id: &Id) -> Result<Option<StoredGraphReadPin>, StorageError>;
     fn graph_retirable_views(
         &self,
@@ -173,6 +180,7 @@ pub struct StoredGraphReadPin {
     pub intent_digest: String,
     pub scope: GraphScope,
     pub view_witnesses: Vec<GraphViewWitness>,
+    pub unavailable_repositories: Vec<GraphUnavailableRepository>,
     pub revision: i64,
     pub created_at_ms: i64,
     pub expires_at_ms: i64,
@@ -183,6 +191,11 @@ pub struct GraphViewWitness {
     pub source_revision: i64,
     pub overlay_id: Option<Id>,
     pub expires_at_ms: Option<i64>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphUnavailableRepository {
+    pub repository_id: Id,
+    pub reason: String,
 }
 /// Private retained source bytes. No public artifact/version row is created; the blob is held
 /// by generation/unit bindings, with the same reader, backup and physical-removal guards.
