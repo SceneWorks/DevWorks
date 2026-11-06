@@ -447,10 +447,24 @@ impl devworks_core::ports::http::HttpTransport for PublicPriceHttp {
     }
 }
 fn start_native_price_refresh(h: &mut Ui) {
+    // A provider publication precedes the operation's terminal journal write. A quiet GUI
+    // can still display that legitimate earlier status, so confirm it before a new gesture.
+    h.state_mut().usage.last_refresh = None;
+    step_until(
+        h,
+        "previous price refresh reaches its recorded terminal state",
+        |shell| shell.usage.refresh.is_none(),
+    );
     settle(h);
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .scroll_to_me();
     settle(h);
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Refresh official price sources")
+            .accesskit_node()
+            .is_disabled(),
+        "the refresh control is enabled before the single user gesture"
+    );
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .click();
     // A live operation deliberately schedules periodic repaints. Step the command receipt,
@@ -459,6 +473,12 @@ fn start_native_price_refresh(h: &mut Ui) {
         h.step();
         assert!(h.state().wait_idle());
     }
+    h.step();
+    assert!(
+        h.state().usage.refresh.is_some(),
+        "the single gesture has an accepted durable receipt: {:?}",
+        h.state().usage.price_error
+    );
 }
 fn wait_for_price_publication(b: &dyn Backend, snapshots: usize) -> PriceCatalogView {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
@@ -545,6 +565,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         .operation_id
         .clone();
     assert_ne!(first, second);
+    let delayed_second_status = h.state().usage.refresh.clone().unwrap();
     assert!(
         h.state()
             .usage
@@ -595,8 +616,26 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
             .as_str(),
         snapshot.as_str()
     );
+    // Reapply the real pre-publication GUI observation to deterministically exercise a
+    // delayed status reply: publication is committed before the operation journal settles.
+    // The next user action must wait for the actual recorded terminal state, not click a
+    // control that remains disabled because this earlier observation is still displayed.
+    h.state_mut().usage.refresh = Some(delayed_second_status);
+    h.state_mut().usage.last_refresh = Some(std::time::Instant::now());
     http.next();
     start_native_price_refresh(&mut h);
+    let third = h
+        .state()
+        .usage
+        .refresh
+        .as_ref()
+        .unwrap()
+        .operation_id
+        .clone();
+    assert_ne!(
+        second, third,
+        "the third user action admitted a fresh durable refresh"
+    );
     http.release();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
     loop {
