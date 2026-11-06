@@ -315,6 +315,10 @@ pub fn record(
                     })
                 });
             pending_plan = Some(PendingFeaturePlan {
+                plan_digest: Some(Digest::try_from(p.digest.clone()).map_err(|_| {
+                    StorageError::InvalidRecord("invalid pending plan digest".into())
+                })?),
+                budget: p.budget.clone(),
                 revision: rev(prev),
                 draft: p.draft,
                 approval,

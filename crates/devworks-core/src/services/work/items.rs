@@ -1005,7 +1005,11 @@ impl WorkService {
                 || tx.actors().actor_kind(ctx.principal())?
                     != Some(crate::context::PrincipalKind::Human)
             {
-                return Err(crate::ports::storage::StorageError::ScopeDenied.into());
+                return Err(super::refuse(
+                    DomainErrorCode::PermissionDenied,
+                    "feature_budget",
+                    Some(&before.id),
+                ));
             }
             let changed_budget =
                 crate::services::usage::budget::configure(tx, &before, ctx.principal(), budget)?;

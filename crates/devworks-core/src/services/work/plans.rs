@@ -318,7 +318,11 @@ impl WorkService {
             && (ctx.principal_kind() != PrincipalKind::Human
                 || tx.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human))
         {
-            return Err(crate::ports::storage::StorageError::ScopeDenied.into());
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "feature_budget",
+                None,
+            ));
         }
         if i32::try_from(priority).is_err() {
             return Err(invalid("priority", None));
@@ -425,7 +429,7 @@ impl WorkService {
                 plan.as_ref(),
                 labels.as_ref().map(|l| l.0.as_slice()),
                 budget.as_ref(),
-                false,
+                plan.is_some(),
             )?],
             FeatureCreation::AtomicPlan { plan } => {
                 self.apply_atomic(tx, ctx, &i.project_id, plan, false)?
@@ -999,7 +1003,7 @@ impl WorkService {
         let draft = keep_plan_state(tx, &f.id, &i.plan)?;
         check_draft(tx, ctx, &f.project_id, Some(&f), &draft)?;
         let before = slot(tx, &f.id)?;
-        let (after_slot, superseded) = save_pending(tx, &f, &draft, None)?;
+        let (after_slot, superseded) = save_pending(tx, &f, &draft, i.budget.as_ref())?;
         if after_slot.revision == before.revision {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesEditPlan {
@@ -1114,7 +1118,9 @@ pub fn decide_plan_approval(
     expected_proposal_revision: i64,
     approve: bool,
 ) -> R<WorkRecord> {
-    if ctx.principal_kind() != PrincipalKind::Human {
+    if ctx.principal_kind() != PrincipalKind::Human
+        || tx.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
+    {
         return Err(refuse(
             DomainErrorCode::PermissionDenied,
             "plan_approval",

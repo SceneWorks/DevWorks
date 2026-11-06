@@ -212,9 +212,6 @@ fn reconcile_latch(
     let Some(limit) = budget.limit_micro_usd else {
         return Ok(false);
     };
-    if tx.usage().usage_bootstrap()?.phase != "Complete" {
-        return Ok(false);
-    }
     let totals = tx.usage().feature_usage_totals(&feature.id)?;
     let actor = tx.store().host_actor.clone();
     if budget.warning_revision.is_none()
