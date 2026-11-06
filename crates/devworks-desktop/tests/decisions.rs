@@ -529,3 +529,54 @@ fn finding_specific_native_risk_acceptance_keeps_prerequisites_blocking_and_ack_
     ));
     assert!(current.attempts.0.is_empty());
 }
+
+#[test]
+fn native_notification_preferences_use_their_own_revision_and_keep_in_app_access() {
+    let root = Root::new("notification-native-settings");
+    let engine = start(&root);
+    let b = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1400.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Settings);
+    settle(&mut h);
+    press(&mut h, "Notification preferences");
+    click(&mut h, Role::DisclosureTriangle, "Notification preferences");
+    click(&mut h, Role::CheckBox, "Desktop notifications");
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .type_text("Completion, ");
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Notification kinds")
+        .type_text("Approval");
+    h.step();
+    h.step();
+    press(&mut h, "Save notification preferences");
+    match ops::query_result(b.query(
+        "notifications.settings",
+        &ops::query_frame(&*b, "notifications.settings", json!({})),
+    ))
+    .unwrap()
+    .0
+    {
+        devworks_core::protocol::results::OperationResult::NotificationsSettings { value } => {
+            assert_eq!(value.revision.as_str(), "2");
+            assert!(!value.config.desktop_enabled);
+            assert_eq!(
+                value
+                    .config
+                    .kinds
+                    .0
+                    .iter()
+                    .map(|k| k.0.as_str())
+                    .collect::<Vec<_>>(),
+                ["Completion", "Approval"]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(has_text(&h, "Preferences revision 2"));
+    assert!(has_text(&h, "In-app history remains available"));
+    assert!(has_text(&h, "No notifications in this view."));
+}

@@ -45,6 +45,8 @@ pub struct DecisionsUi {
     pub config: Option<(NotificationConfig, String)>,
     pub config_draft: Option<NotificationConfig>,
     config_saving: Option<NotificationConfig>,
+    config_kinds: String,
+    config_kinds_saving: Option<String>,
 }
 
 struct ApprovalStatus {
@@ -402,32 +404,30 @@ impl Shell {
                     .selected
                     .as_ref()
                     .is_some_and(|p| p.id.as_str() == id)
+                    && let Some(text) = &mut self.decisions.text
                 {
-                    if let Some(text) = &mut self.decisions.text {
-                        match ops::read_content(q) {
-                            Ok(devworks_core::protocol::records::ArtifactReadContent::Text {
-                                artifact,
-                                content,
-                                next_byte,
-                                truncated,
-                                ..
-                            }) if artifact.version_id.as_str()
-                                == text.artifact.version_id.as_str()
-                                && artifact.sha256.as_str() == text.artifact.sha256.as_str() =>
-                            {
-                                text.pages.push(content.0);
-                                text.page = text.pages.len() - 1;
-                                text.next = truncated.then(|| next_byte.as_str().to_owned());
-                                text.error = None;
-                            }
-                            Ok(_) => {
-                                text.error = Some(
-                                    "The exact proposal artifact could not be displayed as text."
-                                        .into(),
-                                )
-                            }
-                            Err(e) => text.error = Some(e.describe()),
+                    match ops::read_content(q) {
+                        Ok(devworks_core::protocol::records::ArtifactReadContent::Text {
+                            artifact,
+                            content,
+                            next_byte,
+                            truncated,
+                            ..
+                        }) if artifact.version_id.as_str() == text.artifact.version_id.as_str()
+                            && artifact.sha256.as_str() == text.artifact.sha256.as_str() =>
+                        {
+                            text.pages.push(content.0);
+                            text.page = text.pages.len() - 1;
+                            text.next = truncated.then(|| next_byte.as_str().to_owned());
+                            text.error = None;
                         }
+                        Ok(_) => {
+                            text.error = Some(
+                                "The exact proposal artifact could not be displayed as text."
+                                    .into(),
+                            )
+                        }
+                        Err(e) => text.error = Some(e.describe()),
                     }
                 }
             }
@@ -515,6 +515,14 @@ impl Shell {
             (Slot::NotificationSettings, Reply::Query(q)) => match ops::query_result(q) {
                 Ok((OperationResult::NotificationsSettings { value }, _)) => {
                     if self.decisions.config_draft.is_none() {
+                        self.decisions.config_kinds = value
+                            .config
+                            .kinds
+                            .0
+                            .iter()
+                            .map(|k| k.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         self.decisions.config_draft = Some(value.config.clone());
                     }
                     self.decisions.config =
@@ -530,10 +538,21 @@ impl Shell {
                 Ok(OperationResult::NotificationsSettings { value }) => {
                     if serde_json::to_value(&self.decisions.config_draft).ok()
                         == serde_json::to_value(&self.decisions.config_saving).ok()
+                        && self.decisions.config_kinds_saving.as_deref()
+                            == Some(self.decisions.config_kinds.as_str())
                     {
+                        self.decisions.config_kinds = value
+                            .config
+                            .kinds
+                            .0
+                            .iter()
+                            .map(|k| k.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         self.decisions.config_draft = Some(value.config.clone());
                     }
                     self.decisions.config_saving = None;
+                    self.decisions.config_kinds_saving = None;
                     self.decisions.config =
                         Some((value.config, value.revision.as_str().to_owned()));
                 }
@@ -617,8 +636,20 @@ impl Shell {
                     if let (Some((_, revision)), Some(config)) =
                         (&self.decisions.config, &self.decisions.config_draft)
                     {
+                        let mut config = config.clone();
+                        config.kinds.0 = self
+                            .decisions
+                            .config_kinds
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|x| !x.is_empty())
+                            .map(|x| devworks_core::protocol::support::BoundedText(x.into()))
+                            .collect();
                         let body = json!({"expectedRevision":revision,"config":config});
                         self.decisions.config_saving = Some(config.clone());
+                        self.decisions.config_draft = Some(config);
+                        self.decisions.config_kinds_saving =
+                            Some(self.decisions.config_kinds.clone());
                         self.command(
                             Slot::NotificationSettingsSave,
                             "Saving notification settings",
@@ -705,7 +736,8 @@ impl Shell {
         }
     }
     pub(super) fn approvals_screen(&mut self, ui: &mut Ui) {
-        let online = self.online().is_ok();
+        let offline = self.online().err();
+        let online = offline.is_none();
         let mut actions = Vec::new();
         let projects: Vec<_> = self
             .projects
@@ -786,9 +818,12 @@ impl Shell {
                     },
                     |ui, state, tab| {
                         let (d, actions) = state;
-                        if !online {
-                            ui.label(
-                                "Application offline. Decisions require a connected native host.",
+                        if let Some(reason) = &offline {
+                            widgets::state_block(
+                                ui,
+                                &ViewState::Offline {
+                                    reason: reason.clone(),
+                                },
                             );
                         }
                         if let Some(e) = &d.error {
@@ -798,7 +833,7 @@ impl Shell {
                             .id_salt("approval-inbox")
                             .show(ui, |ui| {
                                 if tab == 2 {
-                                    if !d.reviews_loaded {
+                                    if !d.reviews_loaded && online && d.error.is_none() {
                                         ui.label("Loading Knowledge review queue…");
                                     }
                                     if d.reviews_loaded && d.reviews.is_empty() {
@@ -827,7 +862,7 @@ impl Shell {
                                         });
                                     }
                                 } else {
-                                    if !d.loaded {
+                                    if !d.loaded && online && d.error.is_none() {
                                         ui.label("Loading approvals…");
                                     }
                                     if d.loaded && d.approvals.is_empty() {
@@ -945,8 +980,17 @@ impl Shell {
             });
             if let Some(n)=&d.notification {
                 ui.separator();ui.heading(&n.title.0);ui.label(&n.body.0);ui.label(format!("Notification {} @ {}",n.id.as_str(),n.revision.as_str()));
-                if let Some(id)=&n.decision_id {if ui.button("Open linked decision").clicked(){actions.push(Action::Approval(id.as_str().into()));}}
-                if let Some(links)=&n.links {for link in &links.0 {if let Some(url)=&link.url {ui.hyperlink_to(&link.kind.0,&url.0);}if link.target_id.is_some()||link.artifact.is_some(){if ui.button(format!("Open {}",link.kind.0)).clicked(){actions.push(Action::Link(link.clone()));}}}}
+                if let Some(id)=&n.decision_id && ui.button("Open linked decision").clicked() {
+                    actions.push(Action::Approval(id.as_str().into()));
+                }
+                if let Some(links)=&n.links {
+                    for link in &links.0 {
+                        if let Some(url)=&link.url {ui.hyperlink_to(&link.kind.0,&url.0);}
+                        if (link.target_id.is_some()||link.artifact.is_some()) && ui.button(format!("Open {}",link.kind.0)).clicked() {
+                            actions.push(Action::Link(link.clone()));
+                        }
+                    }
+                }
             }
             ui.collapsing("Notification preferences",|ui|{
                 if let Some(config)=&mut d.config_draft {
@@ -954,9 +998,9 @@ impl Shell {
                     ui.label("Required-input desktop notifications are attempted only while the app is unfocused and permission allows them. In-app history remains available.");
                     if let Some(permission)=&d.permission { ui.label(permission_label(permission)); }
                     if ui.add_enabled(!requesting_permission,egui::Button::new("Request notification permission")).clicked() { actions.push(Action::RequestPermission); }
-                    let mut kinds=config.kinds.0.iter().map(|k|k.0.clone()).collect::<Vec<_>>().join(", ");
                     ui.label("Notification kinds (comma separated)");
-                    if ui.text_edit_singleline(&mut kinds).changed(){config.kinds.0=kinds.split(',').map(str::trim).filter(|x|!x.is_empty()).map(|x|devworks_core::protocol::support::BoundedText(x.into())).collect();}
+                    let input=ui.text_edit_singleline(&mut d.config_kinds);
+                    input.widget_info(||egui::WidgetInfo::labeled(egui::Role::TextInput,true,"Notification kinds"));
                     if ui.add_enabled(!preferences_busy,egui::Button::new("Save notification preferences")).clicked(){actions.push(Action::SaveConfig);}
                     if ui.button("Discard preference draft and reload").clicked(){actions.push(Action::ReloadConfig);}
                     if let Some((_,revision))=&d.config {ui.label(format!("Preferences revision {revision}"));}
@@ -1030,6 +1074,9 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if let Some(scope) = &p.scope {
         json_view(ui, "Scope", scope);
     }
+    if let Some(artifact) = &p.artifact {
+        json_view(ui, "Reviewed artifact identity", artifact);
+    }
     if let Some(digest) = &p.scope_digest {
         ui.label(format!("Scope digest: {}", digest.as_str()));
     }
@@ -1045,13 +1092,13 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
         || d.current
             .as_ref()
             .is_some_and(|current| current.stale == Some(true));
-    if let Some(current) = &d.current {
-        if changed || !matches!(current.state, ApprovalState::Pending) {
-            ui.label(format!(
-                "Current proposal: {:?} @ {}",
-                current.state, current.revision
-            ));
-        }
+    if let Some(current) = &d.current
+        && (changed || !matches!(current.state, ApprovalState::Pending))
+    {
+        ui.label(format!(
+            "Current proposal: {:?} @ {}",
+            current.state, current.revision
+        ));
     }
     if stale {
         ui.colored_label(
