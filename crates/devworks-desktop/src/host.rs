@@ -892,6 +892,16 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn stage_database_password(&self, password: Secret) -> Result<Id, String> {
+        self.host
+            .runtime
+            .schemas()
+            .ok_or_else(|| "Database metadata is unavailable".to_owned())?
+            .stage_password(&self.host.ctx, password)
+            .map_err(|_| {
+                "Database password could not be saved in the credential facility".to_owned()
+            })
+    }
     fn stage_setting_secret(&self, value: Secret) -> Result<String, String> {
         self.host
             .connections

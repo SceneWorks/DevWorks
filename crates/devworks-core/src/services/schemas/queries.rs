@@ -208,6 +208,7 @@ impl QueryHandler for SchemaService {
                 )?;
                 let after = after(&input.page, &binding)?;
                 let filter = SchemaObjectFilter {
+                    object_id: input.object_id.clone(),
                     kinds: input
                         .kinds
                         .0

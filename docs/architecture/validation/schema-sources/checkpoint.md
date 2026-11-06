@@ -86,3 +86,30 @@ Tests use SessionSecrets or no credentials; they never access a fixture OS keych
 DW36 is still incomplete: native Databases manager/navigation, retained schema pin semantics,
 scheduled/sync-all ownership, and remaining adapter/auth/TLS qualification must be implemented
 and verified before item acceptance. SQLServer emulation is functional evidence only.
+
+## Native database manager checkpoint (2026-11-06)
+
+The Databases route now uses the same selected-operation gateway as agents. It manages source
+creation/editing, file selection, human password intake, exact CA artifact attachment, project
+access/exposure settings, connection tests, indexing and source/index removal. Structural reads
+retain an explicit immutable view, with object/filter/child/relationship paging and exact endpoint
+inspection. Source definitions, columns, keys/constraints, routines, adapter limits and freshness
+are inspectable. Password text is excluded from saved draft state; pending commands retain their
+original frames. Sync-all enumerates every catalog page before revision-checked admissions,
+retains remaining work across a close, and reports admissions separately from actual completion.
+
+Actual native UI cases pass3/3 in17.82s: real SQLite create/index/multiple object pages/column
+inspection/removal preserving the original row sentinel; draft restart without password bytes;
+and101-source sync-all beyond the first100-source page. The full workflow repeat passes7.59s.
+Native read-only storage/worker/credential/source authority cases pass8/8 in6.71s. Seven recorded
+contract checks pass0.26s over1865 domain cases/597 admissions. Independent jsonschema4.25.1
+validates38 DW36 cases. All1859 previous fixture semantics and all earlier schema files are
+unchanged. Strict workspace/all-target checks pass (latest cached final check0.22s).
+
+Native testing caught unlabeled selectors, an invalid form TLS value, an unreachable long-page
+paging control, and controls whose automatic egui IDs changed with live metadata. Selectors now
+carry accessible labels, TLS values match the declared modes, the page scrolls, and interactive
+buttons use explicit UI roots. Temporary geometry/timing diagnostics were removed.
+
+These are local implementation checkpoints, not item acceptance. Retained schema pins,
+scheduled sync, remaining adapter/TLS qualification and full reviewed CI/merge acceptance remain.

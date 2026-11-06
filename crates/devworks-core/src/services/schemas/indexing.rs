@@ -98,18 +98,18 @@ impl SchemaService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         command: &AdmittedCommand,
-        id: &Id,
-        expected: &crate::protocol::Revision,
-        test_only: bool,
+        request: (&Id, &crate::protocol::Revision, bool, Option<&DataScope>),
     ) -> Result<DomainDecision, Failure> {
+        let (id, expected, test_only, requested_scope) = request;
         if self.is_stopped() {
             return Err(StorageError::Cancelled.into());
         }
-        let scope = ctx
-            .project_id()
-            .map_or(DataScope::Workspace, |p| DataScope::Project {
-                project_id: p.clone(),
-            });
+        let scope = requested_scope.cloned().unwrap_or_else(|| {
+            ctx.project_id()
+                .map_or(DataScope::Workspace, |p| DataScope::Project {
+                    project_id: p.clone(),
+                })
+        });
         let reach = crate::services::knowledge::reach(tx.authority(), ctx)?;
         crate::services::knowledge::resolve_scope_with(&reach, ctx, &scope, true, |p| {
             tx.artifacts().project_exists(p)
@@ -123,8 +123,11 @@ impl SchemaService {
         })?;
         let visibility = SchemaVisibility {
             actor_id: ctx.principal().clone(),
-            workspace: ctx.project_id().is_none(),
-            project_id: ctx.project_id().map(|p| p.0.clone()),
+            workspace: matches!(scope, DataScope::Workspace) && ctx.project_id().is_none(),
+            project_id: match &scope {
+                DataScope::Project { project_id } => Some(project_id.0.clone()),
+                DataScope::Workspace => ctx.project_id().map(|p| p.0.clone()),
+            },
             exposed_only: !matches!(
                 ctx.principal_kind(),
                 crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host
@@ -190,7 +193,10 @@ impl SchemaService {
         tx.history().append(NewEvent {
             id: event.clone(),
             actor: ctx.principal().clone(),
-            project_id: ctx.project_id().cloned(),
+            project_id: match &job.scope {
+                DataScope::Project { project_id } => Some(project_id.clone()),
+                DataScope::Workspace => None,
+            },
             root_id: ctx.root_id().cloned(),
             operation_id: Some(op.clone()),
             aggregate_kind: "schema_connection".into(),
@@ -558,8 +564,11 @@ fn current(
         .ok_or(StorageError::ScopeDenied)?;
     let visibility = SchemaVisibility {
         actor_id: ctx.principal().clone(),
-        workspace: ctx.project_id().is_none(),
-        project_id: ctx.project_id().map(|p| p.0.clone()),
+        workspace: matches!(job.scope, DataScope::Workspace) && ctx.project_id().is_none(),
+        project_id: match &job.scope {
+            DataScope::Project { project_id } => Some(project_id.0.clone()),
+            DataScope::Workspace => ctx.project_id().map(|p| p.0.clone()),
+        },
         exposed_only: !matches!(
             kind,
             crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host

@@ -32,6 +32,7 @@ pub struct StoredSchemaView {
 }
 #[derive(Clone, Debug, Default)]
 pub struct SchemaObjectFilter {
+    pub object_id: Option<Id>,
     pub kinds: Vec<String>,
     pub parent_id: Option<Id>,
     pub text: Option<String>,

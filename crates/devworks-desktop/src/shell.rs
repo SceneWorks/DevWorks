@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 mod conventions;
+mod databases;
 pub mod decisions;
 pub mod graph;
 pub mod help;
@@ -200,6 +201,7 @@ pub struct Shell {
     pub work: work::WorkUi,
     pub usage: crate::usage_screen::UsageScreen,
     pub graph: crate::graph_screen::GraphScreen,
+    pub databases: crate::databases_screen::DatabasesScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -351,6 +353,7 @@ impl Shell {
             work: work::WorkUi::default(),
             usage: crate::usage_screen::UsageScreen::default(),
             graph: crate::graph_screen::GraphScreen::default(),
+            databases: Default::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -483,6 +486,7 @@ impl Shell {
             Route::Settings if self.settings.view.is_none() && !self.settings.loading => {
                 self.load_settings();
             }
+            Route::Databases => self.load_databases(false),
             Route::Help if !self.help.loaded && !self.help.loading => self.refresh_help(),
             Route::Artifacts => self.load_artifacts(),
             Route::Resources => self.load_resources(),
@@ -1753,6 +1757,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_conventions(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_databases(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_graph(slot, reply) else {
             return;
         };
@@ -2855,6 +2862,13 @@ impl Shell {
             self.load_connections();
         }
         match self.route {
+            Route::Databases
+                if !self.databases.loading
+                    && !self.databases.batch_scanning
+                    && self.databases.connections.len() <= 100 =>
+            {
+                self.load_databases(false)
+            }
             Route::Help if !self.help.loading => self.probe_help(),
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),
@@ -3384,6 +3398,7 @@ impl Shell {
         };
         PendingMemory {
             conventions: self.conventions_pending_memory(),
+            databases: self.databases.pending_memory(),
             starting: self
                 .chat
                 .starting
@@ -3428,6 +3443,7 @@ impl Shell {
     /// Puts back what [`Self::pending_memory`] kept; the first frame confirms it.
     fn restore_pending(&mut self, pending: crate::memory::PendingMemory) {
         self.restore_conventions_pending(&pending.conventions);
+        self.databases.restore_pending(&pending.databases);
         if let Some(i) = &pending.knowledge_import {
             self.knowledge.import = Some(knowledge_screen::ImportStage::Unconfirmed {
                 name: i.name.clone(),
@@ -3443,6 +3459,7 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::DatabaseCa | Slot::DatabaseCommand(_) => self.databases.busy = true,
                 Slot::ConventionArtifact(key, _) | Slot::ConventionCommand(key, _) => {
                     if let Some(scope) = self
                         .conventions
@@ -3534,6 +3551,7 @@ impl Shell {
             .filter_map(|v| serde_json::from_value(v).ok())
             .collect();
         self.restore_plan_saves(plans, &confirming);
+        self.resume_database_batch();
         for r in pending.removed {
             let local = self.chat.next_local();
             self.chat.removed.insert(
@@ -4248,6 +4266,7 @@ impl Shell {
                 let ctx = ui.ctx().clone();
                 self.poll_connections(&ctx);
             }
+            Route::Databases => self.databases_screen(ui),
             Route::Help => self.help_screen(ui),
             Route::Indexing => self.indexing_screen(ui),
             Route::Artifacts => self.artifacts_screen(ui),

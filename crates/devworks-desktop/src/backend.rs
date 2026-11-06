@@ -124,6 +124,9 @@ pub trait Backend: Send + Sync {
     /// Writes an API key the user typed into the OS secret store and returns its opaque handle
     /// for the user's `router.configure` `Connection` action (user ingress only; DW-18). The
     /// key never passes through a frame, receipt or log.
+    fn stage_database_password(&self, _password: Secret) -> Result<Id, String> {
+        Err("Database credential intake is unavailable".into())
+    }
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
@@ -168,6 +171,13 @@ pub struct SecretStoreStatus {
 /// Who is waiting for a reply. Equal slots supersede each other.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Slot {
+    DatabaseList(u64, bool),
+    DatabaseObjects(u64, bool),
+    DatabaseRelations(u64, bool),
+    DatabasePrepare,
+    DatabaseCaPrepare,
+    DatabaseCa,
+    DatabaseCommand(String),
     GraphRead(u64),
     GraphTrust(String),
     Usage(u64, bool),

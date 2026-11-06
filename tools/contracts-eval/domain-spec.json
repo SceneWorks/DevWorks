@@ -7344,12 +7344,16 @@
         "kinds": "Items<MetadataObjectKind>",
         "parent_id": "?Id",
         "text": "?Text",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "object_id": "?Id"
       },
       "result": "Page<SchemaObject>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained."
+      "rules": " Revision5 publishes source access/profile/freshness and typed metadata details; scope and current authority precede pagination. No source row values are retained.",
+      "since": {
+        "object_id": 5
+      }
     },
     "schemas.relationships": {
       "operation": "schemas.relationships",
@@ -7372,14 +7376,16 @@
       "fields": {
         "connection_id": "Id",
         "expected_revision": "Revision",
-        "test_only": "?bool"
+        "test_only": "?bool",
+        "scope": "?DataScope"
       },
       "result": "IndexRunRecord",
       "effect": "External",
       "authority": "Scoped",
       "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly validates the actual metadata connection/profile without publishing a schema view; normal indexing atomically publishes an immutable scoped metadata snapshot, preserving last-good data on failure.",
       "since": {
-        "test_only": 5
+        "test_only": 5,
+        "scope": 5
       }
     },
     "schemas.refresh": {
@@ -7388,14 +7394,16 @@
       "fields": {
         "connection_id": "Id",
         "expected_revision": "Revision",
-        "test_only": "?bool"
+        "test_only": "?bool",
+        "scope": "?DataScope"
       },
       "result": "IndexRunRecord",
       "effect": "External",
       "authority": "Scoped",
       "rules": "Metadata-only credential/profile; never persist source row values. Qualify actual read-only metadata enforcement for engine. Revision5 testOnly uses the same bounded native metadata probe. Native sync-all independently admits every eligible source through this operation and reports each outcome.",
       "since": {
-        "test_only": 5
+        "test_only": 5,
+        "scope": 5
       }
     },
     "schemas.remove_index": {

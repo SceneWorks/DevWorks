@@ -74,3 +74,15 @@ def append_metadata_cases(case, sample, request, artifact):
         frame=request('schemas.configure','Command');frame['schemaRevision']=5
         frame['body']['config']=copy.deepcopy(config);frame['body']['config'][field]=None
         case('dw36-null-'+field,'domain-request.r5',frame,False,False)
+
+    for name in ['schemas.index','schemas.refresh']:
+        scoped=request(name,'Command');scoped['schemaRevision']=5
+        scoped['body']['scope']=dict(kind='Project',projectId='project-a')
+        case('dw36-r5-project-admission-'+name,'domain-request.r5',scoped)
+        old=copy.deepcopy(scoped);old['schemaRevision']=1
+        case('dw36-before5-project-'+name,'domain-request',old,False,False)
+
+    exact=request('schemas.objects','Query');exact['schemaRevision']=5;exact['body']['objectId']='exact-schema-object'
+    case('dw36-r5-exact-object','domain-request.r5',exact)
+    old=copy.deepcopy(exact);old['schemaRevision']=1
+    case('dw36-before5-exact-object','domain-request',old,False,False)

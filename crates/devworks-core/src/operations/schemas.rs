@@ -49,6 +49,13 @@ pub struct ObjectsInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Text>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 5))]
+    pub object_id: Option<Id>,
 }
 impl Check for ObjectsInput {
     fn check(&self) -> Result<(), String> {
@@ -59,11 +66,16 @@ impl Check for ObjectsInput {
         self.parent_id.check()?;
         self.text.check()?;
         self.page.check()?;
+        self.object_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for ObjectsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 5 {
+            self.object_id = None;
+        }
+    }
 }
 
 /// `schemas.relationships` Query input.
@@ -103,12 +115,20 @@ pub struct IndexInput {
     )]
     #[schemars(with = "bool", extend("x-since" = 5))]
     pub test_only: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 5))]
+    pub scope: Option<DataScope>,
 }
 impl Check for IndexInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
         self.test_only.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
@@ -116,6 +136,9 @@ impl Revisioned for IndexInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 5 {
             self.test_only = None;
+        }
+        if revision < 5 {
+            self.scope = None;
         }
     }
 }
@@ -133,12 +156,20 @@ pub struct RefreshInput {
     )]
     #[schemars(with = "bool", extend("x-since" = 5))]
     pub test_only: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 5))]
+    pub scope: Option<DataScope>,
 }
 impl Check for RefreshInput {
     fn check(&self) -> Result<(), String> {
         self.connection_id.check()?;
         self.expected_revision.check()?;
         self.test_only.check()?;
+        self.scope.check()?;
         Ok(())
     }
 }
@@ -146,6 +177,9 @@ impl Revisioned for RefreshInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 5 {
             self.test_only = None;
+        }
+        if revision < 5 {
+            self.scope = None;
         }
     }
 }

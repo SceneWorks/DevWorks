@@ -3251,6 +3251,10 @@
               "const": "schemas.index",
               "type": "string"
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 5
+            },
             "testOnly": {
               "type": "boolean",
               "x-since": 5
@@ -3275,6 +3279,10 @@
             "kind": {
               "const": "schemas.refresh",
               "type": "string"
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 5
             },
             "testOnly": {
               "type": "boolean",
@@ -8042,6 +8050,10 @@
             },
             "kinds": {
               "$ref": "#/$defs/List_MetadataObjectKind_0_128"
+            },
+            "objectId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 5
             },
             "page": {
               "$ref": "#/$defs/PageRequest"

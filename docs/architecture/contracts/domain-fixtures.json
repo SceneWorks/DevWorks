@@ -13011,5 +13011,47 @@
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.configure\",\"scope\":{\"kind\":\"Workspace\"},\"config\":{\"name\":\"Shared metadata fixture\",\"engine\":\"MySql\",\"endpoint\":\"mysql://fixture.invalid/catalog\",\"catalogs\":[\"catalog\"],\"schemas\":[\"public\"],\"includePatterns\":[\"*\"],\"excludePatterns\":[\"excluded.*\"],\"writesEnabled\":false,\"credentialRef\":\"schema-password-handle\",\"enabled\":true,\"projectAccess\":[{\"projectId\":\"project-a\",\"metadataEnabled\":true,\"dataReadEnabled\":true,\"dataWriteEnabled\":false}],\"workspaceExposed\":false,\"authentication\":\"Password\",\"username\":\"metadata_reader\",\"tls\":\"VerifyFull\",\"caCertificate\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"exposureMode\":null,\"displayName\":\"Fixture database\",\"environment\":\"Fixture\"}},\"schemaRevision\":5}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-project-admission-schemas.index",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-project-schemas.index",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.index\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-project-admission-schemas.refresh",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-project-schemas.refresh",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"schemas.refresh\",\"connectionId\":\"id-a\",\"expectedRevision\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw36-r5-exact-object",
+    "entry": "domain-request.r5",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.objects\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"kinds\":[],\"page\":{\"limit\":20},\"objectId\":\"exact-schema-object\"},\"schemaRevision\":5}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw36-before5-exact-object",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"schemas.objects\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"connectionId\":\"id-a\",\"kinds\":[],\"page\":{\"limit\":20},\"objectId\":\"exact-schema-object\"},\"schemaRevision\":1}",
+    "typedValid": false,
+    "schemaValid": false
   }
 ]

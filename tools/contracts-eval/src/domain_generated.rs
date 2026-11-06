@@ -17208,6 +17208,13 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<Text>,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 5))]
+        object_id: Option<Id>,
     },
     #[serde(rename = "schemas.relationships")]
     SchemasRelationships {
@@ -18690,6 +18697,7 @@ impl Check for DomainQuery {
                 parent_id,
                 text,
                 page,
+                object_id,
             } => {
                 scope.check()?;
                 views.check()?;
@@ -18698,6 +18706,7 @@ impl Check for DomainQuery {
                 parent_id.check()?;
                 text.check()?;
                 page.check()?;
+                object_id.check()?;
             }
             Self::SchemasRelationships {
                 scope,
@@ -19552,6 +19561,11 @@ impl Revisioned for DomainQuery {
                     *kinds = None;
                 }
             }
+            Self::SchemasObjects { object_id, .. } => {
+                if revision < 5 {
+                    *object_id = None;
+                }
+            }
             Self::KnowledgeSearch {
                 states,
                 entry_kinds,
@@ -20387,6 +20401,13 @@ pub enum DomainCommand {
         )]
         #[schemars(with = "bool", extend("x-since" = 5))]
         test_only: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 5))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "schemas.refresh")]
     SchemasRefresh {
@@ -20399,6 +20420,13 @@ pub enum DomainCommand {
         )]
         #[schemars(with = "bool", extend("x-since" = 5))]
         test_only: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 5))]
+        scope: Option<DataScope>,
     },
     #[serde(rename = "schemas.remove_index")]
     SchemasRemoveIndex {
@@ -22290,19 +22318,23 @@ impl Check for DomainCommand {
                 connection_id,
                 expected_revision,
                 test_only,
+                scope,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
                 test_only.check()?;
+                scope.check()?;
             }
             Self::SchemasRefresh {
                 connection_id,
                 expected_revision,
                 test_only,
+                scope,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
                 test_only.check()?;
+                scope.check()?;
             }
             Self::SchemasRemoveIndex {
                 connection_id,
@@ -23673,14 +23705,24 @@ impl Revisioned for DomainCommand {
                     *idempotency_key = None;
                 }
             }
-            Self::SchemasIndex { test_only, .. } => {
+            Self::SchemasIndex {
+                test_only, scope, ..
+            } => {
                 if revision < 5 {
                     *test_only = None;
                 }
+                if revision < 5 {
+                    *scope = None;
+                }
             }
-            Self::SchemasRefresh { test_only, .. } => {
+            Self::SchemasRefresh {
+                test_only, scope, ..
+            } => {
                 if revision < 5 {
                     *test_only = None;
+                }
+                if revision < 5 {
+                    *scope = None;
                 }
             }
             Self::SchemasConfigure { config, action, .. } => {

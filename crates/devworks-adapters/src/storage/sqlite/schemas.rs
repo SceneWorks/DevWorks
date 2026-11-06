@@ -85,7 +85,7 @@ fn objects(
     n: u16,
 ) -> Result<Vec<SchemaObject>, StorageError> {
     let kinds = encode(&f.kinds)?;
-    let mut q=db(conn.prepare_cached("SELECT o.body_json FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.sealed=1 AND o.view_id=?1 AND (json_array_length(?2)=0 OR o.kind IN(SELECT value FROM json_each(?2))) AND (?3 IS NULL OR o.parent_id=?3) AND (?4 IS NULL OR devworks_graph_name_matches(json_extract(o.body_json,'$.metadata.name'),o.qualified_name,?4,1)) AND (?5 IS NULL OR o.id>?5) ORDER BY o.id LIMIT ?6"))?;
+    let mut q=db(conn.prepare_cached("SELECT o.body_json FROM schema_objects o JOIN schema_views v ON v.id=o.view_id WHERE v.sealed=1 AND o.view_id=?1 AND (json_array_length(?2)=0 OR o.kind IN(SELECT value FROM json_each(?2))) AND (?3 IS NULL OR o.parent_id=?3) AND (?4 IS NULL OR devworks_graph_name_matches(json_extract(o.body_json,'$.metadata.name'),o.qualified_name,?4,1)) AND (?5 IS NULL OR o.id>?5) AND (?7 IS NULL OR o.id=?7) ORDER BY o.id LIMIT ?6"))?;
     let rows = db(db(q.query_map(
         params![
             view.as_str(),
@@ -93,7 +93,8 @@ fn objects(
             f.parent_id.as_ref().map(Id::as_str),
             f.text,
             after.map(Id::as_str),
-            limit(n)?
+            limit(n)?,
+            f.object_id.as_ref().map(Id::as_str)
         ],
         |r| r.get::<_, String>(0),
     ))?
