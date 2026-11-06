@@ -818,8 +818,10 @@ impl NativeEmbeddings {
                 return Err(unavailable("Embedding dimension mismatch"));
             }
             let vector: Vec<_> = bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().expect("fourbytes")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
                 .collect();
             if vector.iter().any(|v| !v.is_finite())
                 || vector

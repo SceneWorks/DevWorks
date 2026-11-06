@@ -212,3 +212,141 @@ fn fixed_probe_uses_actual_native_accounting_and_observation_never_resends() {
     );
     assert!(f.transcript().is_empty());
 }
+
+#[test]
+fn invalid_native_vectors_and_model_identity_never_qualify_but_keep_actual_usage() {
+    for body in [
+        r#"{"model":"fixture-model","data":[{"index":0,"embedding":[0,0]}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#,
+        r#"{"model":"fixture-model","data":[{"index":0,"embedding":[1]}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#,
+        r#"{"model":"different-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#,
+    ] {
+        let f = Fx::new("Embedding", Script::aggregate(body), true);
+        let (service, operation) = probe(&f);
+        let executor = NativeEmbeddings::new(
+            f.store.clone(),
+            f.artifacts.clone(),
+            f.driver.clone(),
+            service.clone(),
+            f.h.clock(),
+        );
+        let ProbePreparation::Ready(prepared) = service.prepare_probe(&operation).unwrap() else {
+            panic!("ready");
+        };
+        assert!(executor.execute_probe(*prepared, false).is_err());
+        let q = read(f.store.as_ref(), |s| {
+            s.router().embedding_qualification(&id("actual-candidate"))
+        })
+        .unwrap();
+        assert_ne!(q.state, EmbeddingQualificationState::Qualified);
+        assert!(q.evidence.is_none());
+        let native = read(f.store.as_ref(), |s| {
+            let route = s
+                .router()
+                .route_request(&id("actual-probe-request"))?
+                .unwrap();
+            s.operations().operation(&route.operation_id)
+        })
+        .unwrap();
+        let balance = read(f.store.as_ref(), |s| {
+            s.usage()
+                .attempt_balance(&native.latest_attempt().unwrap().id.0)
+        })
+        .unwrap();
+        assert!(balance.local_quiescent);
+        assert_eq!(
+            accounting::summary(&balance)
+                .unwrap()
+                .meter
+                .quantities
+                .input_tokens,
+            Some(7)
+        );
+        assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn probe_shutdown_after_send_retains_unknown_tail_and_observation_never_resends() {
+    let mut script = Script::aggregate(r#"{"data":[{"index":0,"embedding":[0.25,0.75]}]}"#);
+    script.wait_for_cancel = true;
+    let waiting = script.waiting.clone();
+    let f = Fx::new("Embedding", script, true);
+    let (service, operation) = probe(&f);
+    let executor = NativeEmbeddings::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.driver.clone(),
+        service.clone(),
+        f.h.clock(),
+    );
+    let ProbePreparation::Ready(prepared) = service.prepare_probe(&operation).unwrap() else {
+        panic!("ready");
+    };
+    let observer = *prepared.clone();
+    let worker = executor.clone();
+    let running = std::thread::spawn(move || worker.execute_probe(*prepared, false));
+    common::runtime().block_on(common::within("probe sent", waiting.notified()));
+    executor.stop();
+    assert!(running.join().unwrap().is_err());
+    assert!(f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+    let q = read(f.store.as_ref(), |s| {
+        s.router().embedding_qualification(&id("actual-candidate"))
+    })
+    .unwrap();
+    assert!(q.evidence.is_none());
+    let fresh = NativeEmbeddings::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.driver.clone(),
+        service,
+        f.h.clock(),
+    );
+    assert!(matches!(
+        fresh.execute_probe(observer, true),
+        Err(
+            devworks_core::services::conventions::indexing::embedding::EmbeddingFailure::Unknown { .. }
+        )
+    ));
+    assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn probe_evidence_is_unavailable_until_physical_native_close() {
+    let mut script = Script::aggregate(
+        r#"{"model":"fixture-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":7}}"#,
+    );
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    script.close_gate = Some(gate.clone());
+    let closing = script.closing.clone();
+    let f = Fx::new("Embedding", script, true);
+    let (service, operation) = probe(&f);
+    let executor = NativeEmbeddings::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.driver.clone(),
+        service.clone(),
+        f.h.clock(),
+    );
+    let ProbePreparation::Ready(prepared) = service.prepare_probe(&operation).unwrap() else {
+        panic!("ready");
+    };
+    let running = std::thread::spawn(move || executor.execute_probe(*prepared, false));
+    common::runtime().block_on(common::within("probe close gate", closing.notified()));
+    let q = read(f.store.as_ref(), |s| {
+        s.router().embedding_qualification(&id("actual-candidate"))
+    })
+    .unwrap();
+    assert!(q.evidence.is_none());
+    assert!(!f.http.lock().unwrap().closed.load(Ordering::SeqCst));
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    running.join().unwrap().unwrap();
+    assert!(
+        read(f.store.as_ref(), |s| s
+            .router()
+            .embedding_qualification(&id("actual-candidate")))
+        .unwrap()
+        .evidence
+        .is_some()
+    );
+}

@@ -68,7 +68,9 @@ pub fn ownership(
         return Err(missing());
     }
     let mut work_id = root.as_ref().map(|id| id.0.clone());
-    let dispatch = if root.is_some() && ctx.principal_kind() != PrincipalKind::Human {
+    let dispatch = if let Some(root) = root.as_ref()
+        && ctx.principal_kind() != PrincipalKind::Human
+    {
         let session = ctx.session_id().ok_or_else(missing)?;
         let turn = read.runs().session_turn(session)?.ok_or_else(missing)?;
         let assignment = read
@@ -81,7 +83,7 @@ pub fn ownership(
             .ok_or_else(missing)?;
         if Some(&turn.boot_id) != store.boot_id.as_ref()
             || activation.boot_id != turn.boot_id
-            || assignment.root_id != *root.as_ref().unwrap()
+            || assignment.root_id != *root
             || assignment.session_id != *session
             || assignment.execution_id.as_ref() != Some(&turn.execution_id)
             || !assignment.state.is_live()
