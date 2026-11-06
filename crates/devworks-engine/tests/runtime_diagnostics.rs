@@ -291,6 +291,11 @@ fn boot_feeds_health_and_records_recovery_and_failures() {
         readiness.message.0
     );
     rt.block_on(app.shutdown());
+    drop(app);
+    // An independently retained diagnostics view observes the end of the dispatcher;
+    // it cannot keep the dispatcher and all of its consumer services alive.
+    let released = parts.diagnostics.health_entries(&user).unwrap();
+    assert_eq!(health(check(&released, "queue.dispatcher")), "Unavailable");
 }
 
 #[test]
