@@ -282,7 +282,10 @@ impl GitService {
                     }
                 };
                 let (tree, repository, work) = self.owned_command(tx, ctx, id)?;
-                if tree.head != *head {
+                if tree.head.format != head.format
+                    || (matches!(request.input, OperationInput::Git(ops::Input::Commit(_)))
+                        && tree.head != *head)
+                {
                     return Err(refuse(DomainErrorCode::SourceChanged, "git_head", id));
                 }
                 if let GitCommand::Push {

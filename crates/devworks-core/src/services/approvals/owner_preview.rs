@@ -254,10 +254,9 @@ pub(crate) fn approved_binding_for(
         .decisions()
         .human_decision(ApprovalSource::Generic, evidence.approval_id())?
         .ok_or_else(denied)?;
-    let scope_digest = crate::fingerprint::sha256_hex(
-        crate::jcs::canonicalize(&serde_json::json!({"owner":evidence.owner_binding(),"authority":proposal.payload.get("authority")}))
-            .map_err(|e| crate::ports::storage::StorageError::InvalidRecord(e.to_string()))?
-            .as_bytes(),
+    let scope_digest = crate::services::approvals::scope_digest(
+        evidence.owner_binding(),
+        proposal.payload.get("authority"),
     );
     if proposal.state != "Approved"
         || proposal.author != *ctx.principal()

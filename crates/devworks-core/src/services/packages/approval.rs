@@ -712,11 +712,9 @@ impl PackageService {
                 after.as_ref(),
                 500,
             )?;
-            let digest = crate::fingerprint::sha256_hex(
-                crate::jcs::canonicalize(&json!({"owner":preview.binding,"authority":crate::services::approvals::authority_binding(tx,ctx)?}))
-                    .map_err(|e| StorageError::InvalidRecord(e.to_string()))?
-                    .as_bytes(),
-            );
+            let authority = crate::services::approvals::authority_binding(tx, ctx)?;
+            let digest =
+                crate::services::approvals::scope_digest(&preview.binding, Some(&authority));
             for row in &rows {
                 if row.source == crate::ports::storage::ApprovalSource::Generic
                     && let Some(existing) = tx.decisions().approval(&row.id)?

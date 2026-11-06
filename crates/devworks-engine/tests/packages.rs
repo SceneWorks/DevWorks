@@ -4463,3 +4463,6 @@ fn a_runtime_probe_launched_after_shutdown_is_stopped_immediately() {
         "late outcomes must not replace the runtime cache"
     );
 }
+
+#[path = "packages/approvals.rs"]
+mod approvals;
