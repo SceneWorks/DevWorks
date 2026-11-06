@@ -60,16 +60,20 @@ impl Fx {
             Ok(())
         })
         .unwrap();
-        let svc = Arc::new(ApprovalService::new(
-            h.ids.clone(),
-            h.clock.clone(),
-            Arc::new(Roles),
-            Arc::new(ControlService::new(h.ids.clone())),
+        let control = Arc::new(ControlService::new(h.ids.clone()));
+        let base = UseCases::new().with_projects(Arc::new(
+            devworks_core::services::projects::ProjectService::new(h.ids.clone(), control.clone()),
         ));
+        let svc = Arc::new(
+            ApprovalService::new(h.ids.clone(), h.clock.clone(), Arc::new(Roles), control)
+                .with_catalog(
+                    devworks_core::services::approvals::ApprovalCatalog::qualified(&base),
+                ),
+        );
         Self {
             h,
             s,
-            cases: UseCases::new().with_approvals(svc),
+            cases: base.with_approvals(svc),
             n: AtomicU64::new(0),
         }
     }
@@ -382,4 +386,114 @@ fn legal_multibyte_settings_snapshot_exceeds_dynamic_json_but_inspects_without_t
         json!({"scope":{"kind":"Workspace"},"page":{"limit":20}}),
     );
     assert!(serde_json::to_vec(&list).unwrap().len() < 2000);
+}
+#[test]
+fn saved_project_archive_preserves_workspace_agent_scope_and_replays_exact_receipt() {
+    let f = Fx::new();
+    let human = f.ctx("user");
+    let agent = f.ctx("agent");
+    run_write(&f.s, WriteOptions::default(), move |tx| {
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &human,
+            NewPrincipalBinding {
+                actor: actor("agent"),
+                kind: PrincipalKind::Agent,
+                role: Some(AgentRole::WorkspaceCoordinator),
+                project_id: None,
+                tool_families: None,
+                bound_by: actor("user"),
+            },
+            None,
+        )
+        .unwrap();
+        tx.projects().insert_project(&StoredProject {
+            id: devworks_core::protocol::ProjectId(id("project")),
+            name: "Project".into(),
+            description: String::new(),
+            lifecycle: "Active".into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: None,
+            deleted_at_ms: None,
+            archive_epoch: 0,
+            archive_stop_pending: false,
+        })
+    })
+    .unwrap();
+    let input = json!({"projectId":"project","expectedRevision":"1"});
+    let decoded =
+        devworks_core::services::approvals::requests::decode("projects.archive", 1, &input, true)
+            .unwrap();
+    let digest = decoded.fingerprint.as_str().to_owned();
+    let DomainDecision::Applied{result}=f.command(&agent,"approvals.propose",json!({"scope":{"kind":"Project","projectId":"project"},"operationKind":"projects.archive","target":{"id":"project","revision":"1"},"contentDigest":digest,"summary":"caller text is not authoritative","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}))else{panic!("stage archive failed")};
+    let p = proposal(result);
+    assert_ne!(p.summary.0, "caller text is not authoritative");
+    let decision = json!({"proposalId":p.id,"expectedRevision":"1","contentDigest":digest,"decision":"Approve","rationale":"Archive this exact project"});
+    let typed = serde_json::from_value(decision.clone()).unwrap();
+    let bound = HostIngress::new(&f.s)
+        .human_decision_context(&f.ctx("user"), &typed)
+        .unwrap();
+    assert!(matches!(
+        f.command(&bound, "approvals.record_human_decision", decision),
+        DomainDecision::Applied { .. }
+    ));
+    let r = read_snapshot(&f.s, &ReadOptions::default(), |s| {
+        s.decisions().approval_resume(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    let marker = read_snapshot(&f.s, &ReadOptions::default(), |s| {
+        s.decisions().approval(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(marker.author_kind, PrincipalKind::Agent);
+    assert_eq!(r.principal, actor("agent"));
+    assert_eq!(r.invocation["project"], Value::Null);
+    let frame = devworks_core::services::approvals::requests::frame(
+        "projects.archive",
+        1,
+        &input,
+        r.request_key.as_str(),
+    )
+    .unwrap();
+    let agent = agent.with_authority_source(r.grant_id.unwrap());
+    let authority = devworks_core::authority::HostAuthority {
+        store: &f.s,
+        clock: &*f.h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: &f.s,
+        ids: &*f.h.ids,
+    };
+    let first = f
+        .cases
+        .command(
+            &gateway,
+            &agent,
+            "projects.archive",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(
+        matches!(first,CommandReply::Recorded{receipt,..}if matches!(receipt.decision,DomainDecision::Applied{..}))
+    );
+    let again = f
+        .cases
+        .command(
+            &gateway,
+            &agent,
+            "projects.archive",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(matches!(
+        again,
+        CommandReply::Recorded { replayed: true, .. }
+    ));
 }

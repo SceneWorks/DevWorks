@@ -251,6 +251,9 @@ impl ApprovalService {
                         else {
                             unreachable!()
                         };
+                        if p.payload["authority"] != authority_binding(tx, &original)? {
+                            return Err(conflict(id));
+                        }
                         let request = self.decoded(
                             &p.operation_kind,
                             schema_revision.0.parse().unwrap_or(0),
@@ -360,14 +363,24 @@ pub fn stage_saved(
     {
         return Err(invalid("reviewed_binding"));
     }
+    let authority = authority_binding(tx, ctx)?;
     let mut input = i.clone();
     input.summary = crate::services::sessions::content(&preview.summary);
+    input.artifact = preview
+        .reviewed
+        .get("artifact")
+        .map(|v| serde_json::from_value(v.clone()).map_err(|_| invalid("owner_artifact")))
+        .transpose()?;
+    if let Some(a) = &input.artifact {
+        a.validate().map_err(|_| invalid("owner_artifact"))?;
+    }
+
     stage_generic(
         tx,
         ctx,
         &input,
         preview.scope.clone(),
-        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"invocation":super::replay::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
+        json!({"content":i.payload,"reviewed":preview.reviewed,"binding":preview.binding,"authority":authority,"invocation":super::replay::save_context(ctx),"operationPreview":{"effect":format!("{:?}",request.effect),"targetIds":request.targets,"projectIds":request.project_targets,"requestDigest":request.fingerprint.as_str()}}),
     )
 }
 fn stage_generic(
@@ -386,7 +399,9 @@ fn stage_generic(
         target_id: i.target.id.clone(),
         target_revision: i.target.revision.get(),
         content_digest: i.content_digest.0.clone(),
-        scope_digest: model::hash(&payload["binding"]),
+        scope_digest: model::hash(
+            &json!({"owner":payload["binding"],"authority":payload.get("authority")}),
+        ),
         summary: payload["reviewed"]
             .get("summary")
             .and_then(Value::as_str)
@@ -442,4 +457,16 @@ fn settings_failure(f: crate::settings::service::Failure) -> Failure {
             })
         }
     }
+}
+
+pub(crate) fn authority_binding(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+) -> Result<Value, StorageError> {
+    let policy =
+        crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?.digest();
+    let principal=tx.authority().principal(ctx.principal())?.map(|p|json!({"revision":p.revision,"active":p.active,"kind":format!("{:?}",p.kind),"role":p.role.map(|r|r.as_str()),"projectId":p.project_id,"tools":p.tool_families}));
+    Ok(
+        json!({"policyDigest":policy,"principal":principal,"projectId":ctx.project_id(),"rootId":ctx.root_id(),"assignmentId":ctx.assignment_id(),"restoreEpoch":ctx.restore_epoch()}),
+    )
 }

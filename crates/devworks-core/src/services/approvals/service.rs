@@ -142,6 +142,28 @@ impl ApprovalService {
         request: &DecodedRequest,
         preview: &OwnerPreview,
     ) -> Result<(), Failure> {
+        let principal = match ctx.principal_kind() {
+            crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host => None,
+            _ => tx.authority().principal(ctx.principal())?,
+        };
+        let policy =
+            crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?;
+        let actual = crate::ports::AuthorityRequest {
+            descriptor: request.descriptor,
+            binding: request.binding,
+            effect: request.effect,
+            action: request.action,
+            input: &request.input,
+            fingerprint: &request.fingerprint,
+        };
+        if tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+            || matches!(
+                crate::authority::policy::evaluate(ctx, principal.as_ref(), &policy, &actual, &[]),
+                crate::authority::policy::Verdict::Deny(_)
+            )
+        {
+            return Err(denied("saved_operation_current_authority"));
+        }
         if builtin(request.descriptor.name) {
             crate::services::projects::validate_approval_preview(tx, ctx, request, preview)
         } else {

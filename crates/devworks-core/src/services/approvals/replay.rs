@@ -145,9 +145,10 @@ impl ApprovalService {
                 GrantKind::Operation
             };
         let now = tx.now_ms();
-        let g = crate::authority::service::mint_grant(
+        let g = crate::authority::service::mint_reviewed_grant(
             tx,
             human,
+            &p.id,
             p.author.clone(),
             kind,
             crate::authority::service::GrantBinding {
