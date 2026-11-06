@@ -11,9 +11,17 @@ pub const OVERLAP: usize = 64;
 /// A single retained heading segment. Parent sharing bounds the entire generation's
 /// breadcrumb bytes by its source, including repeated large ancestor headings.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadingSpan {
+    pub level: u8,
+    pub first_byte: u64,
+    pub byte_length: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkdownSection {
     pub index: u64,
     pub heading: Arc<str>,
+    /// Exact trimmed title in the ORIGINAL source bytes, excluding hashes/whitespace.
+    pub source_span: Option<HeadingSpan>,
     pub parent: Option<Arc<MarkdownSection>>,
 }
 impl MarkdownSection {
@@ -102,6 +110,8 @@ impl Section {
 /// truncated: a single long word or heading can exceed an ordinary display-field bound.
 pub struct MarkdownChunks {
     source: String,
+    original: String,
+    raw_scan: usize,
     root: Arc<MarkdownSection>,
     scan: usize,
     section_start: usize,
@@ -130,10 +140,23 @@ impl MarkdownChunks {
         let root = Arc::new(MarkdownSection {
             index: 0,
             heading: Arc::from(section_path),
+            source_span: None,
             parent: None,
         });
+        let original = markdown.to_owned();
+        let mut raw_scan = 0;
+        let mut normalized = 0;
+        while normalized < start {
+            if original.as_bytes()[raw_scan..].starts_with(b"\r\n") {
+                raw_scan += 1;
+            }
+            raw_scan += 1;
+            normalized += 1;
+        }
         Self {
             source,
+            original,
+            raw_scan,
             root: root.clone(),
             scan: start,
             section_start: start,
@@ -151,6 +174,7 @@ impl MarkdownChunks {
             let mut next = None;
             while self.scan < self.source.len() {
                 let start = self.scan;
+                let raw_start = self.raw_scan;
                 let line_end = self.source[start..]
                     .find('\n')
                     .map_or(self.source.len(), |n| start + n);
@@ -159,16 +183,30 @@ impl MarkdownChunks {
                 } else {
                     line_end
                 };
+                self.raw_scan += line_end - start;
+                if line_end < self.source.len() {
+                    if self.original.as_bytes()[self.raw_scan..].starts_with(b"\r\n") {
+                        self.raw_scan += 1;
+                    }
+                    self.raw_scan += 1;
+                }
                 if let Some((level, title)) = heading(&self.source[start..line_end]) {
+                    let title_offset =
+                        title.as_ptr() as usize - self.source[start..line_end].as_ptr() as usize;
+                    let span = HeadingSpan {
+                        level: level as u8,
+                        first_byte: (raw_start + title_offset) as u64,
+                        byte_length: title.len() as u64,
+                    };
                     end = start;
-                    next = Some((level, title.to_owned(), self.scan));
+                    next = Some((level, title.to_owned(), self.scan, span));
                     break;
                 }
             }
             let text = self.source[self.section_start..end].trim();
             let section = (!text.is_empty() && !pure_code(text))
                 .then(|| Section::new(text, self.section_breadcrumb.clone()));
-            if let Some((level, title, start)) = next {
+            if let Some((level, title, start, span)) = next {
                 self.breadcrumb.retain(|key, _| *key < level);
                 let parent = self
                     .breadcrumb
@@ -177,6 +215,7 @@ impl MarkdownChunks {
                 let heading = Arc::new(MarkdownSection {
                     index: self.next_section,
                     heading: Arc::from(format!("{} {title}", "#".repeat(level))),
+                    source_span: Some(span),
                     parent: Some(parent),
                 });
                 self.next_section += 1;
@@ -331,5 +370,28 @@ mod tests {
         }
         assert!(count > 1_000);
         assert_eq!(ancestor.heading.len(), heading.len() + 2);
+    }
+    #[test]
+    fn heading_spans_point_to_original_utf8_titles_through_crlf_frontmatter_and_trim() {
+        let source =
+            "---\r\nx: true\r\n---\r\n#  é root \t\r\nbody\r\n### \t child\0末 \t\r\nother";
+        let chunks: Vec<_> = MarkdownChunks::new(source, "Owner title").collect();
+        assert_eq!(chunks.len(), 2);
+        let root = chunks[0].section.source_span.as_ref().unwrap();
+        assert_eq!(
+            &source[root.first_byte as usize..(root.first_byte + root.byte_length) as usize],
+            "é root"
+        );
+        assert_eq!(root.level, 1);
+        let child = chunks[1].section.source_span.as_ref().unwrap();
+        assert_eq!(
+            &source[child.first_byte as usize..(child.first_byte + child.byte_length) as usize],
+            "child\0末"
+        );
+        assert_eq!(child.level, 3);
+        assert_eq!(
+            chunks[1].section.path(),
+            "Owner title > # é root > ### child\0末"
+        );
     }
 }

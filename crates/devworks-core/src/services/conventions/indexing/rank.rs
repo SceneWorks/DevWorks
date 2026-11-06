@@ -3,26 +3,43 @@
 use std::collections::BTreeMap;
 
 /// CodeGraph's [a-z0-9][a-z0-9_-]* tokenizer, independently of SQLite unicode61 rules.
+pub fn tokens(text: &str) -> impl Iterator<Item = String> + '_ {
+    let mut chars = text.chars().flat_map(char::to_lowercase).peekable();
+    std::iter::from_fn(move || {
+        loop {
+            let first = chars.next()?;
+            if !first.is_ascii_alphanumeric() {
+                continue;
+            }
+            let mut token = String::from(first);
+            while chars
+                .peek()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            {
+                token.push(chars.next().expect("peeked character"));
+            }
+            return Some(token);
+        }
+    })
+}
 pub fn terms(text: &str) -> BTreeMap<String, u32> {
     let mut terms = BTreeMap::new();
-    let lower = text.to_lowercase();
-    let bytes = lower.as_bytes();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if !bytes[offset].is_ascii_alphanumeric() {
-            offset += 1;
-            continue;
-        }
-        let start = offset;
-        offset += 1;
-        while offset < bytes.len()
-            && (bytes[offset].is_ascii_alphanumeric() || matches!(bytes[offset], b'_' | b'-'))
-        {
-            offset += 1;
-        }
-        *terms.entry(lower[start..offset].to_owned()).or_default() += 1;
+    for token in tokens(text) {
+        *terms.entry(token).or_default() += 1;
     }
     terms
+}
+/// Bounded, additive posting batches. A single source-legal whitespace word may contain
+/// millions of distinct ASCII terms; the publisher never constructs its full frequency map.
+pub fn term_batches(text: &str) -> impl Iterator<Item = BTreeMap<String, u32>> + '_ {
+    let mut tokens = tokens(text);
+    std::iter::from_fn(move || {
+        let mut batch = BTreeMap::new();
+        for token in tokens.by_ref().take(500) {
+            *batch.entry(token).or_default() += 1;
+        }
+        (!batch.is_empty()).then_some(batch)
+    })
 }
 pub fn inverse_document_frequency(documents: u64, frequency: u64) -> f64 {
     (1.0 + ((documents as f64 - frequency as f64 + 0.5) / (frequency as f64 + 0.5))).ln()
@@ -92,5 +109,25 @@ mod tests {
         assert!(excerpt.contains("IDEMPOTENT consumers"));
         assert!(!excerpt.contains('\n'));
         assert!(excerpt.chars().count() <= 360);
+    }
+    #[test]
+    fn punctuated_single_word_terms_are_streamed_in_bounded_additive_batches() {
+        let source = (0..50_001)
+            .map(|i| format!("term{i},repeat,"))
+            .collect::<String>();
+        assert_eq!(source.split_whitespace().count(), 1);
+        let mut combined = BTreeMap::new();
+        let mut batches = 0;
+        for batch in term_batches(&source) {
+            batches += 1;
+            assert!(batch.len() <= 500);
+            assert!(batch.values().sum::<u32>() <= 500);
+            for (term, count) in batch {
+                *combined.entry(term).or_insert(0) += count;
+            }
+        }
+        assert_eq!(combined, terms(&source));
+        assert_eq!(combined["repeat"], 50_001);
+        assert!(batches > 100);
     }
 }
