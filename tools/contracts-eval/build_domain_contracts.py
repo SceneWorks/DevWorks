@@ -60,7 +60,7 @@ lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no 
  'use super::domain_support::*;',
  'use crate::{Id,Revision,Counter,ProjectId,RootId,ActorId,AssignmentId,OperationId,QueryId,RequestKey,CommandId,EventId,StoreId,ResourceId,CorrelationId,Protocol,ReadStamp,OperationState,RootControl,Activation,Blockers,EligibilityTarget,Purpose,Event,CommandReply};',
  'use crate::provider::{Digest,ArtifactRef,SchemaRef,TranscriptPage};',
- 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags};',
+ 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags,Citation,RepositorySnapshot,ResolvedViewSet};',
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
@@ -121,8 +121,8 @@ lines += ['}}}', 'impl Check for OperationResult {fn check(&self)->Result<(),Str
 for n in results:lines += [f' Self::{pascal(n)} {{value}}=>value.check()?,']
 lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value(self).map_err(|e|e.to_string())?) }}', '']
 # HistoryPage is a support type with its own revision-2 member (the tail checkpoint).
-projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage'})]
-lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned'],'_=>Ok(())}}','}','']
+projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage','GraphPage'})]
+lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned' or t=='GraphPage'],'_=>Ok(())}}','}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.
 lines += [TAG+'''pub enum DomainDecision {

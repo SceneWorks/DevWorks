@@ -491,6 +491,9 @@ fn decode_domain_body<T: DeserializeOwned + Serialize + Check + Revisioned + Clo
 /// member of every envelope schema at the revision before it.
 pub(crate) trait SpecializedEnvelope: DeserializeOwned + Serialize + Clone {
     fn validate_envelope(&self) -> Result<(), String>;
+    fn validate_revision(&self, _revision: u32) -> Result<(), String> {
+        Ok(())
+    }
     fn normalize(&mut self) {}
     fn retain_revision(&mut self, revision: u32);
 }
@@ -514,6 +517,9 @@ fn decode_specialized<T: SpecializedEnvelope>(
     );
     admit_revision(&input, revision)?;
     let Revised(mut input) = input;
+    input
+        .validate_revision(revision.0)
+        .map_err(AdmissionError::Rule)?;
     input.validate_envelope().map_err(AdmissionError::Rule)?;
     input.normalize();
     let mut normalized =
@@ -542,7 +548,6 @@ macro_rules! specialized {
     )*};
 }
 specialized!(
-    data::GraphReadRequest => |v| v.validate(),
     data::ArtifactDeletionRequest => |_| Ok(()),
     data::ReleaseCommandRequest => |v| v.validate(),
     data::RetrievalRequest => |v| v.validate(),
@@ -567,6 +572,15 @@ macro_rules! revisioned_artifact {
     )*};
 }
 revisioned_artifact!(data::ArtifactCommandRequest, data::ArtifactQueryRequest);
+impl SpecializedEnvelope for data::GraphReadRequest {
+    fn validate_envelope(&self) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
+    }
+    fn retain_revision(&mut self, revision: u32) {
+        Revisioned::retain_revision(self, revision)
+    }
+}
+
 /// Revision 2 adds explicit grouped-task PR coverage (a set).
 impl SpecializedEnvelope for data::GitCommandRequest {
     fn validate_envelope(&self) -> Result<(), String> {
@@ -581,6 +595,10 @@ impl SpecializedEnvelope for data::GitCommandRequest {
 }
 /// Revision 2 adds the ref-only overlay (`ref` instead of `worktreeId`).
 impl SpecializedEnvelope for data::IndexCommandRequest {
+    fn validate_revision(&self, revision: u32) -> Result<(), String> {
+        data::IndexCommandRequest::validate_revision(self, revision).map_err(str::to_owned)
+    }
+
     fn validate_envelope(&self) -> Result<(), String> {
         self.validate().map_err(str::to_owned)
     }

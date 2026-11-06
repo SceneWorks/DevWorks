@@ -561,6 +561,9 @@ macro_rules! validated_leaf {($($t:ty),*)=>{$(impl Check for $t{fn check(&self)-
 validated_leaf!(
     super::provider::ArtifactRef,
     super::provider::TranscriptPage,
+    super::data::Citation,
+    super::data::RepositorySnapshot,
+    super::data::ResolvedViewSet,
     super::data::GitOid,
     super::data::GraphPage,
     super::data::RetrievalPage,

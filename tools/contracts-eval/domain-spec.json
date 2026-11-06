@@ -4558,6 +4558,481 @@
         "cache_write_ttl_ms": "?Counter",
         "quantity": "Counter"
       }
+    },
+    "CodeSearchMode": {
+      "kind": "enum",
+      "values": [
+        "RankedNodes",
+        "NodeList",
+        "Unified"
+      ]
+    },
+    "CodeSearchSelection": {
+      "kind": "record",
+      "fields": {
+        "mode": "CodeSearchMode",
+        "text": "Content",
+        "repository_id": "?Id",
+        "node_kind": "?Label",
+        "internal_module": "?Content"
+      }
+    },
+    "CodeNodeSelection": {
+      "kind": "union",
+      "variants": {
+        "Node": {
+          "node_id": "Id"
+        },
+        "Name": {
+          "name": "Content",
+          "repository_id": "?Id"
+        }
+      }
+    },
+    "CodeTraceDirection": {
+      "kind": "enum",
+      "values": [
+        "Inbound",
+        "Outbound",
+        "Both"
+      ]
+    },
+    "CodeCallSelection": {
+      "kind": "record",
+      "fields": {
+        "target": "CodeNodeSelection",
+        "direction": "CodeTraceDirection",
+        "depth": "Depth"
+      }
+    },
+    "CodeImpactSelection": {
+      "kind": "record",
+      "fields": {
+        "target": "CodeNodeSelection",
+        "depth": "Depth"
+      }
+    },
+    "CodeSourceMode": {
+      "kind": "enum",
+      "values": [
+        "NodeWindow",
+        "WholeFile"
+      ]
+    },
+    "CodeSourceSelection": {
+      "kind": "union",
+      "variants": {
+        "Node": {
+          "node_id": "Id",
+          "mode": "CodeSourceMode"
+        },
+        "File": {
+          "repository_id": "Id",
+          "path": "RelativePath",
+          "start_line": "Counter",
+          "end_line": "Counter"
+        }
+      }
+    },
+    "CodeFileSelection": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "path": "RelativePath",
+        "line": "?PositiveCounter",
+        "depth": "?Depth"
+      }
+    },
+    "CodeRepositorySelection": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id"
+      }
+    },
+    "CodeSourceLocation": {
+      "kind": "record",
+      "fields": {
+        "citation": "Citation",
+        "path": "Content",
+        "start_line": "Counter",
+        "end_line": "Counter",
+        "start_byte": "?Counter",
+        "end_byte": "?Counter",
+        "language": "?Label"
+      }
+    },
+    "CodeProperty": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "json_text": "Content",
+        "offset": "Counter",
+        "total_bytes": "Counter",
+        "next_offset": "?Counter"
+      }
+    },
+    "CodeNode": {
+      "kind": "record",
+      "fields": {
+        "node_id": "Id",
+        "repository_id": "Id",
+        "view_id": "Id",
+        "unit_key": "Id",
+        "node_kind": "Label",
+        "name": "Content",
+        "qualified_name": "Content",
+        "internal_module": "?Content",
+        "parent_id": "?Id",
+        "source": "?CodeSourceLocation",
+        "properties": "Rows<CodeProperty>",
+        "properties_complete": "bool",
+        "do_not_trust": "bool",
+        "trust_score": "?Probability",
+        "description": "?Content",
+        "analysis_confidence": "?Label",
+        "confidence": "?Label",
+        "extraction_source": "?Label",
+        "fallback_reason": "?Content"
+      }
+    },
+    "CodeEdge": {
+      "kind": "record",
+      "fields": {
+        "edge_id": "Id",
+        "source_id": "Id",
+        "target_id": "Id",
+        "source_repository_id": "Id",
+        "target_repository_id": "Id",
+        "producing_unit": "?Id",
+        "edge_kind": "Label",
+        "resolution": "?Label",
+        "confidence": "?Probability",
+        "confidence_band": "?Label",
+        "properties": "Rows<CodeProperty>",
+        "properties_complete": "bool",
+        "source_unit_key": "Id",
+        "target_unit_key": "Id"
+      }
+    },
+    "CodeSearchRepository": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "name": "Content",
+        "description": "?Content",
+        "language": "?Label",
+        "framework": "?Label",
+        "foundational": "bool"
+      }
+    },
+    "CodeSearchHit": {
+      "kind": "union",
+      "variants": {
+        "Node": {
+          "node": "CodeNode"
+        },
+        "Repository": {
+          "repository": "CodeSearchRepository"
+        }
+      }
+    },
+    "CodeSearchResult": {
+      "kind": "record",
+      "fields": {
+        "mode": "CodeSearchMode",
+        "items": "Rows<CodeSearchHit>",
+        "total": "?Counter",
+        "low_confidence_count": "Counter"
+      }
+    },
+    "CodeNodesResult": {
+      "kind": "record",
+      "fields": {
+        "nodes": "Rows<CodeNode>",
+        "total": "?Counter",
+        "low_confidence_count": "Counter",
+        "selected_node_id": "?Id"
+      }
+    },
+    "CodeGraphResult": {
+      "kind": "record",
+      "fields": {
+        "nodes": "Rows<CodeNode>",
+        "edges": "Rows<CodeEdge>",
+        "low_confidence_count": "Counter",
+        "unmapped_inbound_edges": "?Counter"
+      }
+    },
+    "CodeNodeDetail": {
+      "kind": "record",
+      "fields": {
+        "node": "CodeNode",
+        "neighbors": "Rows<CodeNode>",
+        "incoming": "Rows<CodeEdge>",
+        "outgoing": "Rows<CodeEdge>",
+        "cross_repository": "Rows<CodeEdge>",
+        "relationships_complete": "bool"
+      }
+    },
+    "CodeSourceText": {
+      "kind": "record",
+      "fields": {
+        "source": "CodeSourceLocation",
+        "node_id": "?Id",
+        "text": "Content",
+        "start_byte": "Counter",
+        "end_byte": "Counter",
+        "total_bytes": "Counter",
+        "first_line": "Counter",
+        "last_line": "Counter",
+        "node_start_line": "?Counter",
+        "node_end_line": "?Counter"
+      }
+    },
+    "CodeCount": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "count": "Counter"
+      }
+    },
+    "CodeRepositoryLink": {
+      "kind": "record",
+      "fields": {
+        "source_repository_id": "Id",
+        "target_repository_id": "Id",
+        "edge_kind": "Label",
+        "count": "Counter",
+        "confidence_band": "?Label"
+      }
+    },
+    "CodeOverviewRepository": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "name": "Content",
+        "source_group": "?Content",
+        "language": "?Label",
+        "framework": "?Label",
+        "foundational": "bool"
+      }
+    },
+    "CodeOverview": {
+      "kind": "record",
+      "fields": {
+        "repositories": "Rows<CodeOverviewRepository>",
+        "dependencies": "Rows<CodeRepositoryLink>"
+      }
+    },
+    "CodeHotspot": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "qualified_name": "Content",
+        "fan_in": "Counter",
+        "reason": "Content"
+      }
+    },
+    "CodeSupertype": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "qualified_name": "Content",
+        "node_kind": "Label",
+        "subtype_count": "Counter",
+        "external": "bool"
+      }
+    },
+    "CodePackageDependency": {
+      "kind": "record",
+      "fields": {
+        "name": "Content",
+        "ecosystem": "Label",
+        "version": "?Content",
+        "dependent_count": "Counter"
+      }
+    },
+    "CodeArchitecture": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "summary": "?Content",
+        "confidence": "?Label",
+        "node_counts": "Rows<CodeCount>",
+        "hotspots": "Rows<CodeHotspot>",
+        "inbound": "Rows<CodeRepositoryLink>",
+        "outbound": "Rows<CodeRepositoryLink>",
+        "packages": "Rows<CodePackageDependency>",
+        "package_count": "Counter",
+        "package_counts_by_ecosystem": "Rows<CodeCount>",
+        "supertypes": "Rows<CodeSupertype>"
+      }
+    },
+    "CodeRisk": {
+      "kind": "enum",
+      "values": [
+        "Critical",
+        "High",
+        "Medium",
+        "Low",
+        "None"
+      ]
+    },
+    "CodeAffectedNode": {
+      "kind": "record",
+      "fields": {
+        "node": "CodeNode",
+        "depth": "Counter",
+        "edge_kind": "Label",
+        "risk": "CodeRisk",
+        "risk_factors": "Rows<Content>",
+        "low_confidence": "bool"
+      }
+    },
+    "CodeImpactSummary": {
+      "kind": "record",
+      "fields": {
+        "total_affected": "Counter",
+        "cross_repository_count": "Counter",
+        "critical_count": "Counter",
+        "high_count": "Counter",
+        "medium_count": "Counter",
+        "low_count": "Counter",
+        "affected_repository_ids": "Rows<Id>",
+        "low_confidence_count": "Counter"
+      }
+    },
+    "CodeImpact": {
+      "kind": "record",
+      "fields": {
+        "found": "bool",
+        "path": "?Content",
+        "language": "?Label",
+        "language_indexed": "?bool",
+        "blast_radius": "CodeRisk",
+        "changed": "Rows<CodeAffectedNode>",
+        "affected": "Rows<CodeAffectedNode>",
+        "cross_repository": "Rows<CodeRepositoryLink>",
+        "summary": "CodeImpactSummary",
+        "unmapped_inbound_edges": "?Counter"
+      }
+    },
+    "CodeTraversalEntry": {
+      "kind": "record",
+      "fields": {
+        "node": "CodeNode",
+        "depth": "Counter",
+        "parent_id": "?Id",
+        "edge_kind": "?Label",
+        "edge_id": "?Id"
+      }
+    },
+    "CodeCallTrace": {
+      "kind": "record",
+      "fields": {
+        "start": "?CodeNode",
+        "entries": "Rows<CodeTraversalEntry>",
+        "low_confidence_count": "Counter",
+        "unmapped_inbound_edges": "?Counter"
+      }
+    },
+    "CodeLineage": {
+      "kind": "record",
+      "fields": {
+        "model_name": "Content",
+        "model": "?CodeNode",
+        "producers": "Rows<CodeTraversalEntry>",
+        "consumers": "Rows<CodeTraversalEntry>",
+        "cross_repository": "Rows<CodeEdge>",
+        "related_nodes": "Rows<CodeNode>",
+        "low_confidence_count": "Counter",
+        "unmapped_inbound_edges": "?Counter"
+      }
+    },
+    "CodeRelatedNode": {
+      "kind": "record",
+      "fields": {
+        "node": "CodeNode",
+        "edge_kind": "Label",
+        "low_confidence": "bool"
+      }
+    },
+    "CodeRelated": {
+      "kind": "record",
+      "fields": {
+        "nodes": "Rows<CodeRelatedNode>",
+        "low_confidence_count": "Counter",
+        "unmapped_inbound_edges": "?Counter"
+      }
+    },
+    "CodeSemanticGroup": {
+      "kind": "record",
+      "fields": {
+        "index": "Counter",
+        "crates": "Rows<Content>",
+        "outcome": "Label",
+        "failure_code": "?Label",
+        "detail_code": "?Label"
+      }
+    },
+    "CodeRustSemantic": {
+      "kind": "record",
+      "fields": {
+        "status": "Label",
+        "manifest": "?Content",
+        "group_count": "Counter",
+        "semantic_groups": "Counter",
+        "fallback_groups": "Counter",
+        "skipped_groups": "Counter",
+        "tree_sitter_groups": "Rows<CodeSemanticGroup>"
+      }
+    },
+    "CodeDependencies": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "inbound": "Rows<CodeRepositoryLink>",
+        "outbound": "Rows<CodeRepositoryLink>",
+        "rust_semantic": "CodeRustSemantic"
+      }
+    },
+    "CodeSchemaProperty": {
+      "kind": "record",
+      "fields": {
+        "owner_kind": "Label",
+        "name": "Content",
+        "description": "Content"
+      }
+    },
+    "CodeSchema": {
+      "kind": "record",
+      "fields": {
+        "node_kinds": "Rows<Label>",
+        "edge_kinds": "Rows<Label>",
+        "properties": "Rows<CodeSchemaProperty>",
+        "notes": "Rows<Content>",
+        "artifact": "?ArtifactRef"
+      }
+    },
+    "CodeRepositoryStatus": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "freshness": "IndexFreshness",
+        "languages": "Rows<LanguageCoverage>",
+        "semantic_packs": "Rows<SemanticPackStatus>",
+        "overlays": "Rows<OverlayStatus>"
+      }
+    },
+    "CodeScopeStatus": {
+      "kind": "record",
+      "fields": {
+        "stamp": "ReadStamp",
+        "coverage": "Coverage",
+        "current": "bool",
+        "unavailable_reason": "?Label",
+        "repositories": "Rows<CodeRepositoryStatus>"
+      }
     }
   },
   "operations": {
@@ -8401,13 +8876,30 @@
       "mode": "Query",
       "fields": {
         "repository_id": "Id",
-        "views": "ViewSelection",
-        "page": "PageRequest"
+        "views": "?ViewSelection",
+        "current": "?bool",
+        "page": "PageRequest",
+        "node_kind": "?Label",
+        "internal_module": "?Content"
       },
       "result": "GraphPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one of explicit views or current:true. Current resolves only the actual host context; unavailable own views never fall back to Published. Kind and internal module filters apply before counts/pagination; cursor binds authority and exact view set.",
+      "since": {
+        "current": 3,
+        "node_kind": 3,
+        "internal_module": 3
+      },
+      "exactlyOne": [
+        "views",
+        "current"
+      ],
+      "fieldSchema": {
+        "current": {
+          "const": true
+        }
+      }
     },
     "repositories.remove_index": {
       "operation": "repositories.remove_index",
@@ -9445,6 +9937,86 @@
       3
     ],
     "router.price_override": [
+      1,
+      3
+    ],
+    "code.set_trust": [
+      1,
+      3
+    ],
+    "code.search": [
+      1,
+      3
+    ],
+    "code.architecture": [
+      1,
+      3
+    ],
+    "code.dependency": [
+      1,
+      3
+    ],
+    "code.impact": [
+      1,
+      3
+    ],
+    "code.source": [
+      1,
+      3
+    ],
+    "code.traverse": [
+      1,
+      3
+    ],
+    "code.graph_scope_status": [
+      1,
+      3
+    ],
+    "code.overview": [
+      1,
+      3
+    ],
+    "code.nodes_by_file": [
+      1,
+      3
+    ],
+    "code.node_detail": [
+      1,
+      3
+    ],
+    "code.file_impact": [
+      1,
+      3
+    ],
+    "code.graph_schema": [
+      1,
+      3
+    ],
+    "code.call_path": [
+      1,
+      3
+    ],
+    "code.data_lineage": [
+      1,
+      3
+    ],
+    "code.consumers": [
+      1,
+      3
+    ],
+    "code.publishers": [
+      1,
+      3
+    ],
+    "code.snippet": [
+      1,
+      3
+    ],
+    "code.repository_dependencies": [
+      1,
+      3
+    ],
+    "repositories.nodes": [
       1,
       3
     ]

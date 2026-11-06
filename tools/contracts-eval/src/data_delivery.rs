@@ -1,6 +1,8 @@
 //! Architecture candidates for graph/retrieval, immutable artifacts and delivery; no services.
 use crate::provider::{ArtifactRef, Digest};
 use crate::*;
+use crate::domain_generated::*;
+use crate::domain_support::{Check, Revisioned};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ObjectFormat {
     Sha1,
@@ -232,69 +234,137 @@ pub enum Direction {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphQuery {
-    Search {
-        #[schemars(length(min = 1, max = 8192))]
-        text: String,
-        #[schemars(length(max = 64))]
-        node_kinds: Vec<Id>,
-    },
-    Overview,
-    Schema,
-    Node {
-        node_id: Id,
-    },
-    Source {
-        node_id: Id,
-        #[schemars(range(min = 1, max = 2000))]
-        max_lines: u16,
-    },
-    Traverse {
-        #[schemars(length(min = 1, max = 64))]
-        start_ids: Vec<Id>,
-        direction: Direction,
-        #[schemars(length(max = 64))]
-        edge_kinds: Vec<Id>,
-        #[schemars(range(min = 0, max = 128))]
-        max_depth: u16,
-    },
-    Path {
-        from_id: Id,
-        to_id: Id,
-        #[schemars(range(min = 1, max = 128))]
-        max_depth: u16,
-    },
-    NodeImpact {
-        node_id: Id,
-    },
-    FileImpact {
-        repository_id: Id,
-        unit_key: Id,
-    },
-    NodesByFile {
-        repository_id: Id,
-        unit_key: Id,
-    },
-    RepositoryDependencies {
-        repository_id: Id,
-    },
-    Consumers {
-        node_id: Id,
-    },
-    Publishers {
-        node_id: Id,
-    },
-    DataLineage {
-        node_id: Id,
-    },
-    ScopeStatus,
+#[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+Search {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "String", length(min = 1, max = 8192))]
+text: Option<String>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Vec<Id>", length(max = 64))]
+node_kinds: Option<Vec<Id>>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeSearchSelection", extend("x-since" = 3))]
+selection: Option<CodeSearchSelection>,
+},
+Overview {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id", extend("x-since" = 3))]
+repository_id: Option<Id>,
+},
+Schema,
+Node { node_id: Id },
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+Source {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+node_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "u16", range(min = 1, max = 2000))]
+max_lines: Option<u16>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeSourceSelection", extend("x-since" = 3))]
+selection: Option<CodeSourceSelection>,
+},
+Traverse {
+#[schemars(length(min = 1, max = 64))]
+start_ids: Vec<Id>,
+direction: Direction,
+#[schemars(length(max = 64))]
+edge_kinds: Vec<Id>,
+#[schemars(range(min = 0, max = 128))]
+max_depth: u16,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+Path {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+from_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+to_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "u16", range(min = 1, max = 128))]
+max_depth: Option<u16>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeCallSelection", extend("x-since" = 3))]
+selection: Option<CodeCallSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+NodeImpact {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+node_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeImpactSelection", extend("x-since" = 3))]
+selection: Option<CodeImpactSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+Consumers {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+node_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
+selection: Option<CodeNodeSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+Publishers {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+node_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
+selection: Option<CodeNodeSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+DataLineage {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+node_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
+selection: Option<CodeNodeSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+FileImpact {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+repository_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+unit_key: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeFileSelection", extend("x-since" = 3))]
+selection: Option<CodeFileSelection>,
+},
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+NodesByFile {
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+repository_id: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "Id")]
+unit_key: Option<Id>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "CodeFileSelection", extend("x-since" = 3))]
+selection: Option<CodeFileSelection>,
+},
+RepositoryDependencies { repository_id: Id },
+ScopeStatus,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "scope", "view", "query", "limits"]}, {"required": ["protocol", "queryId", "scope", "current", "query", "limits"], "x-since": 3}]))]
 pub struct GraphReadRequest {
     pub protocol: Protocol,
     pub query_id: QueryId,
     pub scope: DataScope,
-    pub view: ViewSelection,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "ViewSelection")]
+pub view: Option<ViewSelection>,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "bool", extend("const" = true), extend("x-since" = 3))]
+pub current: Option<bool>,
     pub query: GraphQuery,
     pub limits: QueryLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -303,58 +373,39 @@ pub struct GraphReadRequest {
 }
 impl GraphReadRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.limits.max_results == 0
-            || self.limits.max_results > 500
-            || self.limits.max_visited == 0
-            || self.limits.max_visited > 1000000
-            || self.limits.deadline_ms == 0
-            || self.limits.deadline_ms > 300000
-        {
-            return Err("unbounded graph query");
-        }
-        match &self.view {
-            ViewSelection::SchemaPublished { connection_ids } => {
-                unique_ids(connection_ids, 1, 256)?
-            }
-            ViewSelection::Published { repository_ids } => unique_ids(repository_ids, 1, 256)?,
-            ViewSelection::Exact { view_ids } => unique_ids(view_ids, 1, 256)?,
-            _ => {}
-        }
+        if self.limits.max_results == 0 || self.limits.max_results > 500 || self.limits.max_visited == 0 || self.limits.max_visited > 1000000 || self.limits.deadline_ms == 0 || self.limits.deadline_ms > 300000 { return Err("unbounded graph query"); }
+        match (&self.view, self.current) { (Some(_),None) | (None,Some(true))=>{}, _=>return Err("exactly one explicit or current graph view is required") }
+        if let Some(view)=&self.view { match view { ViewSelection::SchemaPublished{connection_ids}=>unique_ids(connection_ids,1,256)?, ViewSelection::Published{repository_ids}=>unique_ids(repository_ids,1,256)?, ViewSelection::Exact{view_ids}=>unique_ids(view_ids,1,256)?, _=>{} } }
         match &self.query {
-            GraphQuery::Search { text, node_kinds } => {
-                if text.is_empty() || text.len() > 8192 || node_kinds.len() > 64 {
-                    return Err("invalid search bounds");
-                }
-            }
-            GraphQuery::Traverse {
-                start_ids,
-                edge_kinds,
-                max_depth,
-                ..
-            } => {
-                unique_ids(start_ids, 1, 64)?;
-                if edge_kinds.len() > 64 || *max_depth > 128 {
-                    return Err("invalid traversal bounds");
-                }
-            }
-            GraphQuery::Source { max_lines, .. } if *max_lines == 0 || *max_lines > 2000 => {
-                return Err("invalid source limit");
-            }
-            GraphQuery::Path { max_depth, .. } if *max_depth == 0 || *max_depth > 128 => {
-                return Err("invalid path depth");
-            }
-            _ => {}
+            GraphQuery::Search{text,node_kinds,selection} => match (text,node_kinds,selection) {
+                (Some(text),Some(kinds),None) if !text.is_empty() && text.len()<=8192 && kinds.len()<=64=>{},
+                (None,None,Some(selection))=>selection.check().map_err(|_|"invalid search selection")?,
+                _=>return Err("exactly one search selection is required")
+            },
+            GraphQuery::Traverse{start_ids,edge_kinds,max_depth,..}=>{unique_ids(start_ids,1,64)?; if edge_kinds.len()>64 || *max_depth>128{return Err("invalid traversal bounds");}},
+            GraphQuery::Source{node_id,max_lines,selection}=>match (node_id,max_lines,selection) {
+                (Some(_),Some(lines),None) if *lines>0 && *lines<=2000=>{},
+                (None,None,Some(selection))=>selection.check().map_err(|_|"invalid source selection")?,
+                _=>return Err("exactly one source selection is required")
+            },
+            GraphQuery::Path{from_id,to_id,max_depth,selection}=>match (from_id,to_id,max_depth,selection) {
+                (Some(_),Some(_),Some(depth),None) if *depth>0 && *depth<=128=>{},
+                (None,None,None,Some(selection))=>selection.check().map_err(|_|"invalid call selection")?,
+                _=>return Err("exactly one path selection is required")
+            },
+            GraphQuery::NodeImpact{node_id,selection}=>{one_target(node_id.is_some(),selection.is_some())?; if let Some(v)=selection{v.check().map_err(|_|"invalid impact selection")?;}},
+            GraphQuery::Consumers{node_id,selection}|GraphQuery::Publishers{node_id,selection}|GraphQuery::DataLineage{node_id,selection}=>{one_target(node_id.is_some(),selection.is_some())?; if let Some(v)=selection{v.check().map_err(|_|"invalid named selection")?;}},
+            GraphQuery::FileImpact{repository_id,unit_key,selection}|GraphQuery::NodesByFile{repository_id,unit_key,selection}=>match (repository_id,unit_key,selection){
+                (Some(_),Some(_),None)=>{},(None,None,Some(v))=>v.check().map_err(|_|"invalid file selection")?,_=>return Err("exactly one file selection is required")
+            },
+            _=>{}
         }
-        if self
-            .cursor
-            .as_ref()
-            .is_some_and(|s| s.is_empty() || s.len() > 4096)
-        {
-            return Err("invalid cursor");
-        }
+        if self.cursor.as_ref().is_some_and(|s|s.is_empty()||s.len()>4096){return Err("invalid cursor");}
         Ok(())
     }
 }
+fn one_target(old:bool,current:bool)->Result<(), &'static str>{if old==current{Err("exactly one graph target is required")}else{Ok(())}}
+
 fn unique_ids(ids: &[Id], minimum: usize, maximum: usize) -> Result<(), &'static str> {
     let mut set = HashSet::new();
     if ids.len() < minimum || ids.len() > maximum || ids.iter().any(|id| !set.insert(&id.0)) {
@@ -663,6 +714,7 @@ pub enum IndexCommand {
     Cancel {
         operation_id: OperationId,
     },
+#[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted"], "x-until": 3}, {"required": ["kind", "repositoryId", "nodeId", "expectedRevision", "viewId", "expectedContentDigest", "trusted", "unitKey", "expectedViewDigest"], "x-since": 3}]))]
     SetTrust {
         repository_id: Id,
         node_id: Id,
@@ -670,6 +722,12 @@ pub enum IndexCommand {
         view_id: Id,
         expected_content_digest: Digest,
         trusted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        unit_key: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+        #[schemars(with = "Digest", extend("x-since" = 3))]
+        expected_view_digest: Option<Digest>,
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -698,6 +756,11 @@ pub fn overlay_ref_ok(s: &str) -> bool {
         && !s.split('/').any(|c| c.starts_with('.')))
 }
 impl IndexCommandRequest {
+    pub fn validate_revision(&self, revision:u32)->Result<(), &'static str>{
+        if revision>=3 && matches!(&self.command,IndexCommand::SetTrust{unit_key,expected_view_digest,..} if unit_key.is_none()||expected_view_digest.is_none()){return Err("current trust change requires complete unit and view identity");}
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if let IndexCommand::RefreshOverlay {
             worktree_id,
@@ -717,6 +780,8 @@ impl IndexCommandRequest {
 }
 impl crate::domain_support::Revisioned for IndexCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
+        if revision<3 && let IndexCommand::SetTrust{unit_key,expected_view_digest,..}=&mut self.command{*unit_key=None;*expected_view_digest=None;}
+
         if let IndexCommand::RefreshOverlay { git_ref, .. } = &mut self.command
             && revision < 2
         {
@@ -1383,13 +1448,45 @@ pub enum GraphResult {
     ScopeStatus {
         coverage: Coverage,
     },
+    #[schemars(extend("x-since" = 3))]
+    CodeSearch { value: CodeSearchResult },
+    #[schemars(extend("x-since" = 3))]
+    CodeNodes { value: CodeNodesResult },
+    #[schemars(extend("x-since" = 3))]
+    CodeGraph { value: CodeGraphResult },
+    #[schemars(extend("x-since" = 3))]
+    NodeDetail { value: CodeNodeDetail },
+    #[schemars(extend("x-since" = 3))]
+    SourceText { value: CodeSourceText },
+    #[schemars(extend("x-since" = 3))]
+    RepositoryOverview { value: CodeOverview },
+    #[schemars(extend("x-since" = 3))]
+    Architecture { value: CodeArchitecture },
+    #[schemars(extend("x-since" = 3))]
+    Impact { value: CodeImpact },
+    #[schemars(extend("x-since" = 3))]
+    CallTrace { value: CodeCallTrace },
+    #[schemars(extend("x-since" = 3))]
+    Lineage { value: CodeLineage },
+    #[schemars(extend("x-since" = 3))]
+    Related { value: CodeRelated },
+    #[schemars(extend("x-since" = 3))]
+    Dependencies { value: CodeDependencies },
+    #[schemars(extend("x-since" = 3))]
+    SchemaDetails { value: CodeSchema },
+    #[schemars(extend("x-since" = 3))]
+    ScopeDetails { value: CodeScopeStatus },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["protocol", "queryId", "view", "completion", "result"]}, {"required": ["protocol", "queryId", "completion", "result"], "not": {"required": ["view"]}, "properties": {"result": {"properties": {"kind": {"const": "ScopeDetails"}}}}, "x-since": 3}]))]
 pub struct GraphPage {
     pub protocol: Protocol,
     pub query_id: QueryId,
-    pub view: ResolvedViewSet,
+#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+#[schemars(with = "ResolvedViewSet")]
+pub view: Option<ResolvedViewSet>,
+
     pub completion: QueryCompletion,
     pub result: GraphResult,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1397,7 +1494,10 @@ pub struct GraphPage {
 }
 impl GraphPage {
     pub fn validate(&self) -> Result<(), &'static str> {
-        self.view.validate()?;
+        if let Some(view)=&self.view { view.validate()?; }
+        else if !matches!(&self.result, GraphResult::ScopeDetails{value} if value.unavailable_reason.is_some()) { return Err("only unavailable scope status can omit its graph view"); }
+        self.validate_current()?;
+        let Some(view)=&self.view else { return Ok(()); };
         match &self.result {
             GraphResult::Nodes { nodes } | GraphResult::Graph { nodes, .. } => {
                 if nodes.len() > 500 {
@@ -1408,7 +1508,7 @@ impl GraphPage {
                     n.citation.validate()?;
                     match &n.citation.source {
                         CitationSource::Repository { snapshot, .. } => {
-                            if !self.view.views.iter().any(|v| {
+                            if !view.views.iter().any(|v| {
                                 serde_json::to_value(&v.snapshot).unwrap()
                                     == serde_json::to_value(snapshot).unwrap()
                             }) {
@@ -1420,7 +1520,7 @@ impl GraphPage {
                             snapshot_id,
                             schema_digest,
                         } => {
-                            if !self.view.schema_views.iter().any(|v| {
+                            if !view.schema_views.iter().any(|v| {
                                 &v.connection_id == connection_id
                                     && &v.snapshot_id == snapshot_id
                                     && &v.schema_digest == schema_digest
@@ -1449,7 +1549,7 @@ impl GraphPage {
                 citation.validate()?;
                 match &citation.source {
                     CitationSource::Repository { snapshot, .. }
-                        if self.view.views.iter().any(|v| {
+                        if view.views.iter().any(|v| {
                             serde_json::to_value(&v.snapshot).unwrap()
                                 == serde_json::to_value(snapshot).unwrap()
                         }) => {}
@@ -1457,7 +1557,7 @@ impl GraphPage {
                         connection_id,
                         snapshot_id,
                         schema_digest,
-                    } if self.view.schema_views.iter().any(|v| {
+                    } if view.schema_views.iter().any(|v| {
                         &v.connection_id == connection_id
                             && &v.snapshot_id == snapshot_id
                             && &v.schema_digest == schema_digest
@@ -1473,6 +1573,97 @@ impl GraphPage {
         Ok(())
     }
 }
+impl Revisioned for GraphReadRequest {
+    fn retain_revision(&mut self, revision:u32) {
+        if revision>=3{return;}
+        self.current=None;
+        match &mut self.query {
+            GraphQuery::Search{selection,..}=>*selection=None,
+            GraphQuery::Overview{repository_id}=>*repository_id=None,
+            GraphQuery::Source{selection,..}=>*selection=None,
+            GraphQuery::Path{selection,..}=>*selection=None,
+            GraphQuery::NodeImpact{selection,..}=>*selection=None,
+            GraphQuery::Consumers{selection,..}|GraphQuery::Publishers{selection,..}|GraphQuery::DataLineage{selection,..}=>*selection=None,
+            GraphQuery::FileImpact{selection,..}|GraphQuery::NodesByFile{selection,..}=>*selection=None,
+            _=>{}
+        }
+    }
+}
+impl GraphPage {
+    fn validate_current(&self)->Result<(), &'static str> {
+        let checked=match &self.result {
+            GraphResult::CodeSearch{value}=>value.check(), GraphResult::CodeNodes{value}=>value.check(),
+            GraphResult::CodeGraph{value}=>value.check(), GraphResult::NodeDetail{value}=>value.check(),
+            GraphResult::SourceText{value}=>value.check(), GraphResult::RepositoryOverview{value}=>value.check(),
+            GraphResult::Architecture{value}=>value.check(),GraphResult::Impact{value}=>value.check(),
+            GraphResult::CallTrace{value}=>value.check(),GraphResult::Lineage{value}=>value.check(),
+            GraphResult::Related{value}=>value.check(),GraphResult::Dependencies{value}=>value.check(),
+            GraphResult::SchemaDetails{value}=>value.check(),GraphResult::ScopeDetails{value}=>value.check(),
+            _=>Ok(())
+        };
+        checked.map_err(|_|"invalid typed graph result")?;
+        let mut nodes=Vec::new(); let mut edges=Vec::new();
+        match &self.result {
+            GraphResult::CodeSearch{value}=>for hit in &value.items.0{if let CodeSearchHit::Node{node}=hit{nodes.push(node);}},
+            GraphResult::CodeNodes{value}=>nodes.extend(value.nodes.0.iter()),
+            GraphResult::CodeGraph{value}=>{nodes.extend(value.nodes.0.iter());edges.extend(value.edges.0.iter());},
+            GraphResult::NodeDetail{value}=>{nodes.push(&value.node);nodes.extend(value.neighbors.0.iter());edges.extend(value.incoming.0.iter());edges.extend(value.outgoing.0.iter());edges.extend(value.cross_repository.0.iter());},
+            GraphResult::Impact{value}=>{nodes.extend(value.changed.0.iter().map(|n|&n.node));nodes.extend(value.affected.0.iter().map(|n|&n.node));},
+            GraphResult::CallTrace{value}=>{nodes.extend(value.start.iter());nodes.extend(value.entries.0.iter().map(|e|&e.node));},
+            GraphResult::Lineage{value}=>{nodes.extend(value.model.iter());nodes.extend(value.producers.0.iter().map(|e|&e.node));nodes.extend(value.consumers.0.iter().map(|e|&e.node));nodes.extend(value.related_nodes.0.iter());edges.extend(value.cross_repository.0.iter());},
+            GraphResult::Related{value}=>nodes.extend(value.nodes.0.iter().map(|n|&n.node)),
+            GraphResult::SourceText{value}=>self.current_citation(&value.source.citation)?,
+            _=>{}
+        }
+        let mut identities=std::collections::HashMap::new();
+        for node in nodes {
+            let Some(view)=&self.view else{return Err("node without resolved graph view")};
+            if !view.views.iter().any(|v|v.view_id==node.view_id&&v.snapshot.repository_id==node.repository_id){return Err("node outside resolved graph view");}
+            if let Some(source)=&node.source{self.current_citation(&source.citation)?;
+                if !matches!(&source.citation.source,CitationSource::Repository{snapshot,unit_key,..} if snapshot.repository_id==node.repository_id&&unit_key==&node.unit_key){return Err("node source identity mismatch");}
+            }
+            identities.insert((&node.repository_id.0,&node.unit_key.0,&node.node_id.0),node);
+        }
+        for edge in edges {
+            if !identities.contains_key(&(&edge.source_repository_id.0,&edge.source_unit_key.0,&edge.source_id.0)) || !identities.contains_key(&(&edge.target_repository_id.0,&edge.target_unit_key.0,&edge.target_id.0)){return Err("edge endpoint outside returned scoped graph");}
+        }
+        if self.next_cursor.as_ref().is_some_and(|s|s.is_empty()||s.len()>4096){return Err("invalid graph continuation");}
+        Ok(())
+    }
+    fn current_citation(&self,citation:&Citation)->Result<(), &'static str>{
+        citation.validate()?;
+        let Some(view)=&self.view else{return Err("source without resolved graph view")};
+        match &citation.source {
+            CitationSource::Repository{snapshot,..} if view.views.iter().any(|v|serde_json::to_value(&v.snapshot).unwrap()==serde_json::to_value(snapshot).unwrap())=>Ok(()),
+            CitationSource::DatabaseSchema{connection_id,snapshot_id,schema_digest} if view.schema_views.iter().any(|v|&v.connection_id==connection_id&&&v.snapshot_id==snapshot_id&&&v.schema_digest==schema_digest)=>Ok(()),
+            _=>Err("citation outside resolved graph view")
+        }
+    }
+}
+fn legacy_node(node:&CodeNode)->Option<NodeView>{Some(NodeView{node_id:node.node_id.clone(),unit_key:node.unit_key.clone(),kind:Id::new(node.node_kind.0.clone()).ok()?,name:node.name.0.clone(),citation:node.source.as_ref()?.citation.clone()})}
+fn legacy_nodes<'a>(nodes:impl IntoIterator<Item=&'a CodeNode>)->Option<Vec<NodeView>>{let nodes:Vec<_>=nodes.into_iter().map(legacy_node).collect::<Option<_>>()?;let mut ids=HashSet::new();if nodes.iter().all(|n|ids.insert(n.node_id.0.clone())&&n.name.len()<=1024){Some(nodes)}else{None}}
+impl Revisioned for GraphPage {
+    fn retain_revision(&mut self,revision:u32){
+        if revision>=3{return;}
+        let projected=match &self.result {
+            GraphResult::CodeNodes{value}=>legacy_nodes(&value.nodes.0).map(|nodes|GraphResult::Nodes{nodes}),
+            GraphResult::CodeSearch{value}=>{let nodes:Option<Vec<_>>=value.items.0.iter().map(|hit|match hit{CodeSearchHit::Node{node}=>Some(node),_=>None}).collect();nodes.and_then(legacy_nodes).map(|nodes|GraphResult::Nodes{nodes})},
+            GraphResult::CodeGraph{value}=>legacy_nodes(&value.nodes.0).and_then(|nodes|{let edges:Option<Vec<_>>=value.edges.0.iter().map(|e|Some(EdgeView{edge_id:e.edge_id.clone(),source_id:e.source_id.clone(),target_id:e.target_id.clone(),kind:Id::new(e.edge_kind.0.clone()).ok()?,producing_unit:e.producing_unit.clone()?})).collect();edges.map(|edges|GraphResult::Graph{nodes,edges})}),
+            GraphResult::SourceText{value}=>Some(GraphResult::Source{citation:value.source.citation.clone(),text:value.text.0.clone()}),
+            GraphResult::SchemaDetails{value}=>value.artifact.clone().map(|schema|GraphResult::Schema{schema}),
+            GraphResult::ScopeDetails{value} if self.view.is_some()=>Some(GraphResult::ScopeStatus{coverage:value.coverage.clone()}),
+            _=>None
+        };
+        if let Some(projected)=projected{self.result=projected;}
+    }
+    fn check_revision(&self,revision:u32)->Result<(),String>{
+        let current=!matches!(self.result,GraphResult::Nodes{..}|GraphResult::Graph{..}|GraphResult::Source{..}|GraphResult::Schema{..}|GraphResult::ScopeStatus{..});
+        if revision<3&&current{return Err("graph result cannot be represented at the negotiated revision".into());}
+        if revision>=3&&!current{return Err("revision 3 requires the qualified graph result".into());}
+        Ok(())
+    }
+}
+
 /// Exactly one owner scope: a project, or (schema revision 3) the workspace spelled `true`.
 fn one_scope(project: &Option<ProjectId>, workspace: &Option<bool>) -> Result<(), &'static str> {
     match (project, workspace) {

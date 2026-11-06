@@ -21,7 +21,40 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
         _ => true,
     }
 }
+
+fn code_record(name:&str,v:&Value)->Result<(),String>{
+    let number=|key:&str|v[key].as_str().and_then(|n|n.parse::<u64>().ok());
+    if matches!(name,"CodeSearchSelection"|"CodeFileSelection") {
+        if name=="CodeSearchSelection" && v["mode"]!="Unified" { require(v["text"].as_str().is_some_and(|s|!s.trim().is_empty()),"node search requires a name pattern")?; }
+    }
+    if name=="CodeProperty" {
+        let (Some(offset),Some(total),Some(text))=(number("offset"),number("totalBytes"),v["jsonText"].as_str()) else{return Err("invalid property fragment".into())};
+        let end=offset.checked_add(text.len() as u64).ok_or("property offset overflow")?;
+        require(end<=total,"property fragment exceeds its value")?;
+        let next=v["nextOffset"].as_str().and_then(|n|n.parse::<u64>().ok());
+        require(if end<total{!text.is_empty()&&next==Some(end)}else{next.is_none()},"property continuation mismatch")?;
+        if offset==0 && end==total {serde_json::from_str::<Value>(text).map_err(|_|"invalid complete property JSON")?;}
+    }
+    if name=="CodeSourceText" {
+        let (Some(start),Some(end),Some(total),Some(text))=(number("startByte"),number("endByte"),number("totalBytes"),v["text"].as_str()) else{return Err("invalid source fragment".into())};
+        require(start<=end&&end<=total&&end-start==text.len() as u64,"source byte range mismatch")?;
+        require(number("firstLine").is_some_and(|n|n>0)&&ordered(v,"firstLine","lastLine"),"invalid source lines")?;
+        require(present(v,"nodeStartLine")==present(v,"nodeEndLine")&&ordered(v,"nodeStartLine","nodeEndLine"),"invalid highlighted node range")?;
+    }
+    if name=="CodeSourceLocation" {require(ordered(v,"startLine","endLine")&&present(v,"startByte")==present(v,"endByte")&&ordered(v,"startByte","endByte"),"invalid code location")?;}
+    if name=="CodeImpactSummary" {
+        let total=["criticalCount","highCount","mediumCount","lowCount"].iter().try_fold(0u64,|sum,key|number(key).and_then(|n|sum.checked_add(n)));
+        require(total==number("totalAffected"),"impact risk counts disagree")?;
+    }
+    if name=="CodeNode" {require(unique(v,"properties"),"duplicate property fragment")?;}
+    if matches!(name,"CodeSearchResult"|"CodeNodesResult") {
+        if let Some(total)=number("total") {let rows=if name=="CodeSearchResult"{"items"}else{"nodes"};require(v[rows].as_array().is_some_and(|a|a.len()as u64<=total),"graph page exceeds total")?;}
+    }
+    Ok(())
+}
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name.starts_with("Code") { code_record(name,v)?; }
+
     if name == "WorkRecord" {
         require(v["kind"] == "Feature" || !present(v, "budget"), "only features have spending limits")?;
     }
@@ -241,6 +274,8 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op=="repositories.nodes" {require(present(v,"views")!=present(v,"current")&&v.get("current").is_none_or(|v|v==true),"repository nodes requires explicit or current views")?;}
+
     if op == "router.price_override" {
         require(present(v, "price") != present(v, "change"), "override requires exactly one legacy price or explicit change")?;
     }
@@ -481,10 +516,20 @@ pub fn result(op: &str, v: &Value) -> Result<(), String> {
     if op.starts_with("code.") && op != "code.set_trust" || op == "repositories.nodes" {
         let kind = value["result"]["kind"].as_str().unwrap_or("");
         let allowed = match op {
-            "code.source" | "code.snippet" => kind == "Source",
-            "code.graph_schema" => kind == "Schema",
-            "code.graph_scope_status" => kind == "ScopeStatus",
-            _ => kind == "Nodes" || kind == "Graph",
+            "code.source"|"code.snippet"=>matches!(kind,"Source"|"SourceText"),
+            "code.graph_schema"=>matches!(kind,"Schema"|"SchemaDetails"),
+            "code.graph_scope_status"=>matches!(kind,"ScopeStatus"|"ScopeDetails"),
+            "code.search"=>matches!(kind,"Nodes"|"Graph"|"CodeSearch"),
+            "code.architecture"=>matches!(kind,"Nodes"|"Graph"|"Architecture"),
+            "code.overview"=>matches!(kind,"Nodes"|"Graph"|"RepositoryOverview"),
+            "code.nodes_by_file"|"repositories.nodes"=>matches!(kind,"Nodes"|"Graph"|"CodeNodes"),
+            "code.node_detail"=>matches!(kind,"Nodes"|"Graph"|"NodeDetail"),
+            "code.impact"|"code.file_impact"=>matches!(kind,"Nodes"|"Graph"|"Impact"),
+            "code.call_path"=>matches!(kind,"Nodes"|"Graph"|"CallTrace"),
+            "code.data_lineage"=>matches!(kind,"Nodes"|"Graph"|"Lineage"),
+            "code.consumers"|"code.publishers"=>matches!(kind,"Nodes"|"Graph"|"Related"),
+            "code.repository_dependencies"=>matches!(kind,"Nodes"|"Graph"|"Dependencies"),
+            _=>matches!(kind,"Nodes"|"Graph"|"CodeGraph"),
         };
         require(
             allowed,

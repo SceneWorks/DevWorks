@@ -41,12 +41,12 @@ SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest R
              'QueryId RequestKey CorrelationId'.split())
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
-           'ArtifactTags'.split())
+           'ArtifactTags Citation RepositorySnapshot ResolvedViewSet'.split())
 SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
               'DynamicJson SavedCommandInput DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
-GATED_SUPPORT = {'HistoryPage'}
+GATED_SUPPORT = {'HistoryPage', 'GraphPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
 
 SPECIALIZED = {
@@ -583,7 +583,7 @@ def gen_results(ops):
             '    fn check_revision(&self, revision: u32) -> Result<(), String> {',
             '        match self {',
             *[f'            Self::{pascal(n)} {{ .. }} if revision < {DOMAIN_OPS[n]["introducedRevision"]} => Err("operation result predates its introduction".into()),' for n, _ in results if DOMAIN_OPS.get(n, {}).get('introducedRevision', 1) > 1],
-            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned'],
+            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned' or t == 'GraphPage'],
             '            _ => Ok(()),', '        }', '    }', '}', '',
             '/// Generic recorded decision. Outcome variants cannot mint human authority or turn an external',
             '/// uncertainty into success.',

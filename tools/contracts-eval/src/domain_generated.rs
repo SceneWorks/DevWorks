@@ -1,8 +1,8 @@
 //! Generated architecture DTOs. Edit domain_spec.py and regenerate; no services.
 use super::domain_support::*;
 use crate::data_delivery::{
-    ArtifactTags, Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid, GraphPage,
-    RetrievalPage, ViewSelection,
+    ArtifactTags, Citation, Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid,
+    GraphPage, RepositorySnapshot, ResolvedViewSet, RetrievalPage, ViewSelection,
 };
 use crate::provider::{ArtifactRef, Digest, SchemaRef, TranscriptPage};
 use crate::{
@@ -12129,6 +12129,1158 @@ impl Check for UsageMeasuredQuantity {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSearchMode {
+    RankedNodes,
+    NodeList,
+    Unified,
+}
+impl Check for CodeSearchMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchSelection {
+    pub mode: CodeSearchMode,
+    pub text: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_kind: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_module: Option<Content>,
+}
+impl Check for CodeSearchSelection {
+    fn check(&self) -> Result<(), String> {
+        self.mode.check()?;
+        self.text.check()?;
+        self.repository_id.check()?;
+        self.node_kind.check()?;
+        self.internal_module.check()?;
+        super::domain_rules::record(
+            "CodeSearchSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeNodeSelection {
+    Node {
+        node_id: Id,
+    },
+    Name {
+        name: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository_id: Option<Id>,
+    },
+}
+impl Check for CodeNodeSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node_id } => {
+                node_id.check()?;
+            }
+            Self::Name {
+                name,
+                repository_id,
+            } => {
+                name.check()?;
+                repository_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeTraceDirection {
+    Inbound,
+    Outbound,
+    Both,
+}
+impl Check for CodeTraceDirection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCallSelection {
+    pub target: CodeNodeSelection,
+    pub direction: CodeTraceDirection,
+    pub depth: Depth,
+}
+impl Check for CodeCallSelection {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.direction.check()?;
+        self.depth.check()?;
+        super::domain_rules::record(
+            "CodeCallSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpactSelection {
+    pub target: CodeNodeSelection,
+    pub depth: Depth,
+}
+impl Check for CodeImpactSelection {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.depth.check()?;
+        super::domain_rules::record(
+            "CodeImpactSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeSourceMode {
+    NodeWindow,
+    WholeFile,
+}
+impl Check for CodeSourceMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeSourceSelection {
+    Node {
+        node_id: Id,
+        mode: CodeSourceMode,
+    },
+    File {
+        repository_id: Id,
+        path: RelativePath,
+        start_line: Counter,
+        end_line: Counter,
+    },
+}
+impl Check for CodeSourceSelection {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node_id, mode } => {
+                node_id.check()?;
+                mode.check()?;
+            }
+            Self::File {
+                repository_id,
+                path,
+                start_line,
+                end_line,
+            } => {
+                repository_id.check()?;
+                path.check()?;
+                start_line.check()?;
+                end_line.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeFileSelection {
+    pub repository_id: Id,
+    pub path: RelativePath,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<PositiveCounter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<Depth>,
+}
+impl Check for CodeFileSelection {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.path.check()?;
+        self.line.check()?;
+        self.depth.check()?;
+        super::domain_rules::record(
+            "CodeFileSelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRepositorySelection {
+    pub repository_id: Id,
+}
+impl Check for CodeRepositorySelection {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        super::domain_rules::record(
+            "CodeRepositorySelection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSourceLocation {
+    pub citation: Citation,
+    pub path: Content,
+    pub start_line: Counter,
+    pub end_line: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+}
+impl Check for CodeSourceLocation {
+    fn check(&self) -> Result<(), String> {
+        self.citation.check()?;
+        self.path.check()?;
+        self.start_line.check()?;
+        self.end_line.check()?;
+        self.start_byte.check()?;
+        self.end_byte.check()?;
+        self.language.check()?;
+        super::domain_rules::record(
+            "CodeSourceLocation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeProperty {
+    pub name: Content,
+    pub json_text: Content,
+    pub offset: Counter,
+    pub total_bytes: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<Counter>,
+}
+impl Check for CodeProperty {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.json_text.check()?;
+        self.offset.check()?;
+        self.total_bytes.check()?;
+        self.next_offset.check()?;
+        super::domain_rules::record(
+            "CodeProperty",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNode {
+    pub node_id: Id,
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub unit_key: Id,
+    pub node_kind: Label,
+    pub name: Content,
+    pub qualified_name: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_module: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CodeSourceLocation>,
+    pub properties: Rows<CodeProperty>,
+    pub properties_complete: bool,
+    pub do_not_trust: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_score: Option<Probability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_confidence: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_source: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<Content>,
+}
+impl Check for CodeNode {
+    fn check(&self) -> Result<(), String> {
+        self.node_id.check()?;
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.unit_key.check()?;
+        self.node_kind.check()?;
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.internal_module.check()?;
+        self.parent_id.check()?;
+        self.source.check()?;
+        self.properties.check()?;
+        self.properties_complete.check()?;
+        self.do_not_trust.check()?;
+        self.trust_score.check()?;
+        self.description.check()?;
+        self.analysis_confidence.check()?;
+        self.confidence.check()?;
+        self.extraction_source.check()?;
+        self.fallback_reason.check()?;
+        super::domain_rules::record(
+            "CodeNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeEdge {
+    pub edge_id: Id,
+    pub source_id: Id,
+    pub target_id: Id,
+    pub source_repository_id: Id,
+    pub target_repository_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producing_unit: Option<Id>,
+    pub edge_kind: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Probability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence_band: Option<Label>,
+    pub properties: Rows<CodeProperty>,
+    pub properties_complete: bool,
+    pub source_unit_key: Id,
+    pub target_unit_key: Id,
+}
+impl Check for CodeEdge {
+    fn check(&self) -> Result<(), String> {
+        self.edge_id.check()?;
+        self.source_id.check()?;
+        self.target_id.check()?;
+        self.source_repository_id.check()?;
+        self.target_repository_id.check()?;
+        self.producing_unit.check()?;
+        self.edge_kind.check()?;
+        self.resolution.check()?;
+        self.confidence.check()?;
+        self.confidence_band.check()?;
+        self.properties.check()?;
+        self.properties_complete.check()?;
+        self.source_unit_key.check()?;
+        self.target_unit_key.check()?;
+        super::domain_rules::record(
+            "CodeEdge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchRepository {
+    pub repository_id: Id,
+    pub name: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<Label>,
+    pub foundational: bool,
+}
+impl Check for CodeSearchRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.name.check()?;
+        self.description.check()?;
+        self.language.check()?;
+        self.framework.check()?;
+        self.foundational.check()?;
+        super::domain_rules::record(
+            "CodeSearchRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeSearchHit {
+    Node { node: CodeNode },
+    Repository { repository: CodeSearchRepository },
+}
+impl Check for CodeSearchHit {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Node { node } => {
+                node.check()?;
+            }
+            Self::Repository { repository } => {
+                repository.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSearchResult {
+    pub mode: CodeSearchMode,
+    pub items: Rows<CodeSearchHit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<Counter>,
+    pub low_confidence_count: Counter,
+}
+impl Check for CodeSearchResult {
+    fn check(&self) -> Result<(), String> {
+        self.mode.check()?;
+        self.items.check()?;
+        self.total.check()?;
+        self.low_confidence_count.check()?;
+        super::domain_rules::record(
+            "CodeSearchResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodesResult {
+    pub nodes: Rows<CodeNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<Counter>,
+    pub low_confidence_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_node_id: Option<Id>,
+}
+impl Check for CodeNodesResult {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.total.check()?;
+        self.low_confidence_count.check()?;
+        self.selected_node_id.check()?;
+        super::domain_rules::record(
+            "CodeNodesResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeGraphResult {
+    pub nodes: Rows<CodeNode>,
+    pub edges: Rows<CodeEdge>,
+    pub low_confidence_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeGraphResult {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.edges.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        super::domain_rules::record(
+            "CodeGraphResult",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeNodeDetail {
+    pub node: CodeNode,
+    pub neighbors: Rows<CodeNode>,
+    pub incoming: Rows<CodeEdge>,
+    pub outgoing: Rows<CodeEdge>,
+    pub cross_repository: Rows<CodeEdge>,
+    pub relationships_complete: bool,
+}
+impl Check for CodeNodeDetail {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.neighbors.check()?;
+        self.incoming.check()?;
+        self.outgoing.check()?;
+        self.cross_repository.check()?;
+        self.relationships_complete.check()?;
+        super::domain_rules::record(
+            "CodeNodeDetail",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSourceText {
+    pub source: CodeSourceLocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<Id>,
+    pub text: Content,
+    pub start_byte: Counter,
+    pub end_byte: Counter,
+    pub total_bytes: Counter,
+    pub first_line: Counter,
+    pub last_line: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_start_line: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_end_line: Option<Counter>,
+}
+impl Check for CodeSourceText {
+    fn check(&self) -> Result<(), String> {
+        self.source.check()?;
+        self.node_id.check()?;
+        self.text.check()?;
+        self.start_byte.check()?;
+        self.end_byte.check()?;
+        self.total_bytes.check()?;
+        self.first_line.check()?;
+        self.last_line.check()?;
+        self.node_start_line.check()?;
+        self.node_end_line.check()?;
+        super::domain_rules::record(
+            "CodeSourceText",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCount {
+    pub name: Content,
+    pub count: Counter,
+}
+impl Check for CodeCount {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.count.check()?;
+        super::domain_rules::record(
+            "CodeCount",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRepositoryLink {
+    pub source_repository_id: Id,
+    pub target_repository_id: Id,
+    pub edge_kind: Label,
+    pub count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence_band: Option<Label>,
+}
+impl Check for CodeRepositoryLink {
+    fn check(&self) -> Result<(), String> {
+        self.source_repository_id.check()?;
+        self.target_repository_id.check()?;
+        self.edge_kind.check()?;
+        self.count.check()?;
+        self.confidence_band.check()?;
+        super::domain_rules::record(
+            "CodeRepositoryLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverviewRepository {
+    pub repository_id: Id,
+    pub name: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_group: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<Label>,
+    pub foundational: bool,
+}
+impl Check for CodeOverviewRepository {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.name.check()?;
+        self.source_group.check()?;
+        self.language.check()?;
+        self.framework.check()?;
+        self.foundational.check()?;
+        super::domain_rules::record(
+            "CodeOverviewRepository",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeOverview {
+    pub repositories: Rows<CodeOverviewRepository>,
+    pub dependencies: Rows<CodeRepositoryLink>,
+}
+impl Check for CodeOverview {
+    fn check(&self) -> Result<(), String> {
+        self.repositories.check()?;
+        self.dependencies.check()?;
+        super::domain_rules::record(
+            "CodeOverview",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeHotspot {
+    pub name: Content,
+    pub qualified_name: Content,
+    pub fan_in: Counter,
+    pub reason: Content,
+}
+impl Check for CodeHotspot {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.fan_in.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "CodeHotspot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSupertype {
+    pub name: Content,
+    pub qualified_name: Content,
+    pub node_kind: Label,
+    pub subtype_count: Counter,
+    pub external: bool,
+}
+impl Check for CodeSupertype {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.qualified_name.check()?;
+        self.node_kind.check()?;
+        self.subtype_count.check()?;
+        self.external.check()?;
+        super::domain_rules::record(
+            "CodeSupertype",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodePackageDependency {
+    pub name: Content,
+    pub ecosystem: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<Content>,
+    pub dependent_count: Counter,
+}
+impl Check for CodePackageDependency {
+    fn check(&self) -> Result<(), String> {
+        self.name.check()?;
+        self.ecosystem.check()?;
+        self.version.check()?;
+        self.dependent_count.check()?;
+        super::domain_rules::record(
+            "CodePackageDependency",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeArchitecture {
+    pub repository_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Label>,
+    pub node_counts: Rows<CodeCount>,
+    pub hotspots: Rows<CodeHotspot>,
+    pub inbound: Rows<CodeRepositoryLink>,
+    pub outbound: Rows<CodeRepositoryLink>,
+    pub packages: Rows<CodePackageDependency>,
+    pub package_count: Counter,
+    pub package_counts_by_ecosystem: Rows<CodeCount>,
+    pub supertypes: Rows<CodeSupertype>,
+}
+impl Check for CodeArchitecture {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.node_counts.check()?;
+        self.hotspots.check()?;
+        self.inbound.check()?;
+        self.outbound.check()?;
+        self.packages.check()?;
+        self.package_count.check()?;
+        self.package_counts_by_ecosystem.check()?;
+        self.supertypes.check()?;
+        super::domain_rules::record(
+            "CodeArchitecture",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeRisk {
+    Critical,
+    High,
+    Medium,
+    Low,
+    None,
+}
+impl Check for CodeRisk {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeAffectedNode {
+    pub node: CodeNode,
+    pub depth: Counter,
+    pub edge_kind: Label,
+    pub risk: CodeRisk,
+    pub risk_factors: Rows<Content>,
+    pub low_confidence: bool,
+}
+impl Check for CodeAffectedNode {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.depth.check()?;
+        self.edge_kind.check()?;
+        self.risk.check()?;
+        self.risk_factors.check()?;
+        self.low_confidence.check()?;
+        super::domain_rules::record(
+            "CodeAffectedNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpactSummary {
+    pub total_affected: Counter,
+    pub cross_repository_count: Counter,
+    pub critical_count: Counter,
+    pub high_count: Counter,
+    pub medium_count: Counter,
+    pub low_count: Counter,
+    pub affected_repository_ids: Rows<Id>,
+    pub low_confidence_count: Counter,
+}
+impl Check for CodeImpactSummary {
+    fn check(&self) -> Result<(), String> {
+        self.total_affected.check()?;
+        self.cross_repository_count.check()?;
+        self.critical_count.check()?;
+        self.high_count.check()?;
+        self.medium_count.check()?;
+        self.low_count.check()?;
+        self.affected_repository_ids.check()?;
+        self.low_confidence_count.check()?;
+        super::domain_rules::record(
+            "CodeImpactSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeImpact {
+    pub found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_indexed: Option<bool>,
+    pub blast_radius: CodeRisk,
+    pub changed: Rows<CodeAffectedNode>,
+    pub affected: Rows<CodeAffectedNode>,
+    pub cross_repository: Rows<CodeRepositoryLink>,
+    pub summary: CodeImpactSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeImpact {
+    fn check(&self) -> Result<(), String> {
+        self.found.check()?;
+        self.path.check()?;
+        self.language.check()?;
+        self.language_indexed.check()?;
+        self.blast_radius.check()?;
+        self.changed.check()?;
+        self.affected.check()?;
+        self.cross_repository.check()?;
+        self.summary.check()?;
+        self.unmapped_inbound_edges.check()?;
+        super::domain_rules::record(
+            "CodeImpact",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeTraversalEntry {
+    pub node: CodeNode,
+    pub depth: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_kind: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_id: Option<Id>,
+}
+impl Check for CodeTraversalEntry {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.depth.check()?;
+        self.parent_id.check()?;
+        self.edge_kind.check()?;
+        self.edge_id.check()?;
+        super::domain_rules::record(
+            "CodeTraversalEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeCallTrace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<CodeNode>,
+    pub entries: Rows<CodeTraversalEntry>,
+    pub low_confidence_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeCallTrace {
+    fn check(&self) -> Result<(), String> {
+        self.start.check()?;
+        self.entries.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        super::domain_rules::record(
+            "CodeCallTrace",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeLineage {
+    pub model_name: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<CodeNode>,
+    pub producers: Rows<CodeTraversalEntry>,
+    pub consumers: Rows<CodeTraversalEntry>,
+    pub cross_repository: Rows<CodeEdge>,
+    pub related_nodes: Rows<CodeNode>,
+    pub low_confidence_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeLineage {
+    fn check(&self) -> Result<(), String> {
+        self.model_name.check()?;
+        self.model.check()?;
+        self.producers.check()?;
+        self.consumers.check()?;
+        self.cross_repository.check()?;
+        self.related_nodes.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        super::domain_rules::record(
+            "CodeLineage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRelatedNode {
+    pub node: CodeNode,
+    pub edge_kind: Label,
+    pub low_confidence: bool,
+}
+impl Check for CodeRelatedNode {
+    fn check(&self) -> Result<(), String> {
+        self.node.check()?;
+        self.edge_kind.check()?;
+        self.low_confidence.check()?;
+        super::domain_rules::record(
+            "CodeRelatedNode",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRelated {
+    pub nodes: Rows<CodeRelatedNode>,
+    pub low_confidence_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmapped_inbound_edges: Option<Counter>,
+}
+impl Check for CodeRelated {
+    fn check(&self) -> Result<(), String> {
+        self.nodes.check()?;
+        self.low_confidence_count.check()?;
+        self.unmapped_inbound_edges.check()?;
+        super::domain_rules::record(
+            "CodeRelated",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSemanticGroup {
+    pub index: Counter,
+    pub crates: Rows<Content>,
+    pub outcome: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<Label>,
+}
+impl Check for CodeSemanticGroup {
+    fn check(&self) -> Result<(), String> {
+        self.index.check()?;
+        self.crates.check()?;
+        self.outcome.check()?;
+        self.failure_code.check()?;
+        self.detail_code.check()?;
+        super::domain_rules::record(
+            "CodeSemanticGroup",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRustSemantic {
+    pub status: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<Content>,
+    pub group_count: Counter,
+    pub semantic_groups: Counter,
+    pub fallback_groups: Counter,
+    pub skipped_groups: Counter,
+    pub tree_sitter_groups: Rows<CodeSemanticGroup>,
+}
+impl Check for CodeRustSemantic {
+    fn check(&self) -> Result<(), String> {
+        self.status.check()?;
+        self.manifest.check()?;
+        self.group_count.check()?;
+        self.semantic_groups.check()?;
+        self.fallback_groups.check()?;
+        self.skipped_groups.check()?;
+        self.tree_sitter_groups.check()?;
+        super::domain_rules::record(
+            "CodeRustSemantic",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeDependencies {
+    pub repository_id: Id,
+    pub inbound: Rows<CodeRepositoryLink>,
+    pub outbound: Rows<CodeRepositoryLink>,
+    pub rust_semantic: CodeRustSemantic,
+}
+impl Check for CodeDependencies {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.inbound.check()?;
+        self.outbound.check()?;
+        self.rust_semantic.check()?;
+        super::domain_rules::record(
+            "CodeDependencies",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSchemaProperty {
+    pub owner_kind: Label,
+    pub name: Content,
+    pub description: Content,
+}
+impl Check for CodeSchemaProperty {
+    fn check(&self) -> Result<(), String> {
+        self.owner_kind.check()?;
+        self.name.check()?;
+        self.description.check()?;
+        super::domain_rules::record(
+            "CodeSchemaProperty",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeSchema {
+    pub node_kinds: Rows<Label>,
+    pub edge_kinds: Rows<Label>,
+    pub properties: Rows<CodeSchemaProperty>,
+    pub notes: Rows<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+}
+impl Check for CodeSchema {
+    fn check(&self) -> Result<(), String> {
+        self.node_kinds.check()?;
+        self.edge_kinds.check()?;
+        self.properties.check()?;
+        self.notes.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "CodeSchema",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeRepositoryStatus {
+    pub repository_id: Id,
+    pub freshness: IndexFreshness,
+    pub languages: Rows<LanguageCoverage>,
+    pub semantic_packs: Rows<SemanticPackStatus>,
+    pub overlays: Rows<OverlayStatus>,
+}
+impl Check for CodeRepositoryStatus {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.freshness.check()?;
+        self.languages.check()?;
+        self.semantic_packs.check()?;
+        self.overlays.check()?;
+        super::domain_rules::record(
+            "CodeRepositoryStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodeScopeStatus {
+    pub stamp: ReadStamp,
+    pub coverage: Coverage,
+    pub current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<Label>,
+    pub repositories: Rows<CodeRepositoryStatus>,
+}
+impl Check for CodeScopeStatus {
+    fn check(&self) -> Result<(), String> {
+        self.stamp.check()?;
+        self.coverage.check()?;
+        self.current.check()?;
+        self.unavailable_reason.check()?;
+        self.repositories.check()?;
+        super::domain_rules::record(
+            "CodeScopeStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -13170,10 +14322,34 @@ pub enum DomainQuery {
     #[serde(rename = "repositories.get")]
     RepositoriesGet { repository_id: Id },
     #[serde(rename = "repositories.nodes")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "views", "page"]}, {"required": ["kind", "repositoryId", "current", "page"], "x-since": 3}]))]
     RepositoriesNodes {
         repository_id: Id,
-        views: ViewSelection,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "ViewSelection")]
+        views: Option<ViewSelection>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        current: Option<bool>,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 3))]
+        node_kind: Option<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 3))]
+        internal_module: Option<Content>,
     },
     #[serde(rename = "repositories.readme")]
     RepositoriesReadme {
@@ -14390,11 +15566,17 @@ impl Check for DomainQuery {
             Self::RepositoriesNodes {
                 repository_id,
                 views,
+                current,
                 page,
+                node_kind,
+                internal_module,
             } => {
                 repository_id.check()?;
                 views.check()?;
+                current.check()?;
                 page.check()?;
+                node_kind.check()?;
+                internal_module.check()?;
             }
             Self::RepositoriesReadme {
                 repository_id,
@@ -14718,6 +15900,22 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *order = None;
+                }
+            }
+            Self::RepositoriesNodes {
+                current,
+                node_kind,
+                internal_module,
+                ..
+            } => {
+                if revision < 3 {
+                    *current = None;
+                }
+                if revision < 3 {
+                    *node_kind = None;
+                }
+                if revision < 3 {
+                    *internal_module = None;
                 }
             }
             _ => {}
@@ -20051,6 +21249,7 @@ impl Revisioned for OperationResult {
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
+            Self::RepositoriesNodes { value } => value.retain_revision(revision),
             Self::TasksSetFeature { value } => value.retain_revision(revision),
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
@@ -20065,6 +21264,24 @@ impl Revisioned for OperationResult {
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
+            Self::CodeSearch { value } => value.retain_revision(revision),
+            Self::CodeArchitecture { value } => value.retain_revision(revision),
+            Self::CodeDependency { value } => value.retain_revision(revision),
+            Self::CodeImpact { value } => value.retain_revision(revision),
+            Self::CodeSource { value } => value.retain_revision(revision),
+            Self::CodeTraverse { value } => value.retain_revision(revision),
+            Self::CodeGraphScopeStatus { value } => value.retain_revision(revision),
+            Self::CodeOverview { value } => value.retain_revision(revision),
+            Self::CodeNodesByFile { value } => value.retain_revision(revision),
+            Self::CodeNodeDetail { value } => value.retain_revision(revision),
+            Self::CodeFileImpact { value } => value.retain_revision(revision),
+            Self::CodeGraphSchema { value } => value.retain_revision(revision),
+            Self::CodeCallPath { value } => value.retain_revision(revision),
+            Self::CodeDataLineage { value } => value.retain_revision(revision),
+            Self::CodeConsumers { value } => value.retain_revision(revision),
+            Self::CodePublishers { value } => value.retain_revision(revision),
+            Self::CodeSnippet { value } => value.retain_revision(revision),
+            Self::CodeRepositoryDependencies { value } => value.retain_revision(revision),
             _ => {}
         }
     }
@@ -20084,6 +21301,25 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),
+            Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::CodeSearch { value } => value.check_revision(revision),
+            Self::CodeArchitecture { value } => value.check_revision(revision),
+            Self::CodeDependency { value } => value.check_revision(revision),
+            Self::CodeImpact { value } => value.check_revision(revision),
+            Self::CodeSource { value } => value.check_revision(revision),
+            Self::CodeTraverse { value } => value.check_revision(revision),
+            Self::CodeGraphScopeStatus { value } => value.check_revision(revision),
+            Self::CodeOverview { value } => value.check_revision(revision),
+            Self::CodeNodesByFile { value } => value.check_revision(revision),
+            Self::CodeNodeDetail { value } => value.check_revision(revision),
+            Self::CodeFileImpact { value } => value.check_revision(revision),
+            Self::CodeGraphSchema { value } => value.check_revision(revision),
+            Self::CodeCallPath { value } => value.check_revision(revision),
+            Self::CodeDataLineage { value } => value.check_revision(revision),
+            Self::CodeConsumers { value } => value.check_revision(revision),
+            Self::CodePublishers { value } => value.check_revision(revision),
+            Self::CodeSnippet { value } => value.check_revision(revision),
+            Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

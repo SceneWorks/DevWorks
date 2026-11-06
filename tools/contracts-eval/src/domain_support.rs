@@ -545,6 +545,9 @@ macro_rules! validated_leaf {($($t:ty),*)=>{$(impl Check for $t{fn check(&self)-
 validated_leaf!(
     crate::provider::ArtifactRef,
     crate::provider::TranscriptPage,
+    crate::data_delivery::Citation,
+    crate::data_delivery::RepositorySnapshot,
+    crate::data_delivery::ResolvedViewSet,
     crate::data_delivery::GitOid,
     crate::data_delivery::GraphPage,
     crate::data_delivery::RetrievalPage,
