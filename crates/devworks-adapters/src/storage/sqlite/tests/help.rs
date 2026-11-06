@@ -201,6 +201,12 @@ fn help_drafts_are_invisible_and_published_unicode_pages_filter_and_reopen() {
         assert!(tx.help().help_topic(&id("large-generation"),&id("a-guide"))?.is_none());assert!(tx.help().help_topics(&id("large-generation"),&HelpFilter::default(),None,500)?.is_empty());assert!(tx.help().help_passage(&id("large-generation"),&id("a-guide"),0,2)?.is_none());Ok(())
     }).unwrap();
     assert_eq!(read(&s, |r| r.help().help_head()).revision, 1);
+    assert_eq!(
+        read(&s, |r| r
+            .help()
+            .help_generation_operation(&id("large-generation"))),
+        None
+    );
     let new = publication("large-generation", &op, 2, 1, "large-source");
     let saved = new.clone();
     run_write(&s, WriteOptions::default(), move |tx| {
@@ -670,4 +676,107 @@ fn help_stage_requires_real_artifact_identity_and_immutable_document_bytes() {
             .help_topic(&id("identity-generation"), &id("guide")))
         .is_none()
     );
+}
+
+#[test]
+fn help_same_source_repairs_deleted_backing_instead_of_retaining_a_dead_reference() {
+    for deleted_artifact in [false, true] {
+        let h = Harness::new();
+        let s = h.store();
+        let initial = seed(&s);
+        let old = read(&s, |r| {
+            r.help().help_topic(&id("initial-generation"), &id("intro"))
+        })
+        .unwrap();
+        if deleted_artifact {
+            // Model lost artifact backing, independently of the normal public mutation guard.
+            h.raw().execute("UPDATE artifacts SET state='Deleted' WHERE id='artifact-initial-generation-intro'", []).unwrap();
+        } else {
+            run_write(&s, WriteOptions::default(), |tx| {
+                tx.artifacts()
+                    .tombstone_version(&id("version-initial-generation-intro"), T0 + 1)
+            })
+            .unwrap();
+        }
+        let op = claim(&s, "repair-op", 2, 1);
+        let mut replacement = publication("repair-generation", &op, 3, 1, "unused");
+        replacement.source_digest = initial.source_digest;
+        let repaired = run_write(&s, WriteOptions::default(), move |tx| {
+            let doc = document(tx, "repair-generation", "intro", "Original guide")?;
+            tx.help().stage_help_document(&doc)?;
+            tx.help()
+                .publish_help_generation(2, 1, Some(&op), &replacement, 1)
+        })
+        .unwrap();
+        assert_eq!(repaired.revision, 3);
+        assert_eq!(repaired.generation_id, Some(id("repair-generation")));
+        let fresh = read(&s, |r| {
+            r.help().help_topic(&id("repair-generation"), &id("intro"))
+        })
+        .unwrap();
+        assert_ne!(fresh.content_ref, old.content_ref);
+        assert_eq!(fresh.content_digest, old.content_digest);
+        assert_eq!(fresh.topic_revision, old.topic_revision);
+        assert_eq!(
+            read(&s, |r| r.help().help_passage(
+                &id("repair-generation"),
+                &id("intro"),
+                0,
+                100
+            ))
+            .as_deref(),
+            Some("Original guide")
+        );
+        drop(s);
+        let s = h.store();
+        assert_eq!(read(&s, |r| r.help().help_head()), repaired);
+        assert_eq!(
+            read(&s, |r| r
+                .help()
+                .help_generation_operation(&id("repair-generation"))),
+            Some(OperationId(id("repair-op")))
+        );
+    }
+}
+
+#[test]
+fn help_publication_rechecks_live_artifacts_and_present_blobs_after_staging() {
+    for missing_blob in [false, true] {
+        let h = Harness::new();
+        let s = h.store();
+        seed(&s);
+        let op = claim(&s, "backing-op", 2, 1);
+        let prior = read(&s, |r| r.help().help_head());
+        run_write(&s, WriteOptions::default(), move |tx| {
+            let doc = document(tx, "lost-backing-generation", "intro", "New guide")?;
+            tx.help().stage_help_document(&doc)?;
+            if missing_blob {
+                tx.artifacts().set_blob_state(
+                    &doc.topic.content_digest,
+                    BlobState::Present,
+                    BlobState::Unlinked,
+                    None,
+                )?;
+            } else {
+                tx.artifacts()
+                    .tombstone_version(&id("version-lost-backing-generation-intro"), T0 + 1)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let new = publication("lost-backing-generation", &op, 3, 1, "new-source");
+        assert!(matches!(
+            run_write(&s, WriteOptions::default(), move |tx| {
+                tx.help().publish_help_generation(2, 1, Some(&op), &new, 1)
+            }),
+            Err(StorageError::InvalidRecord(_))
+        ));
+        assert_eq!(read(&s, |r| r.help().help_head()), prior);
+        assert!(
+            read(&s, |r| r
+                .help()
+                .help_topic(&id("lost-backing-generation"), &id("intro")))
+            .is_none()
+        );
+    }
 }

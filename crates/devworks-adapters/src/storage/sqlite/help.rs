@@ -379,6 +379,14 @@ fn generation(conn: &Connection, id: &Id) -> Result<Option<(String, String)>, St
         )
         .optional())
 }
+// Verify backing at the head flip too: a staged artifact can have changed lifecycle since
+// its document was prepared. This reads indexed metadata, never guide bodies or files.
+fn references_live(conn: &Connection, generation: &Id) -> Result<bool, StorageError> {
+    db(conn.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM help_topics t WHERE t.generation_id=?1 AND t.availability='Available' AND NOT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=t.version_id AND v.artifact_id=t.artifact_id AND v.id=json_extract(t.content_ref_json,'$.versionId') AND a.id=json_extract(t.content_ref_json,'$.artifactId') AND v.blob_digest=t.content_digest AND v.blob_digest=json_extract(t.content_ref_json,'$.sha256') AND v.media_type=json_extract(t.content_ref_json,'$.mediaType') AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=CAST(json_extract(t.content_ref_json,'$.byteLength') AS INTEGER) AND b.state='Present'))",
+        [generation.as_str()], |r| r.get(0)
+    ))
+}
 // Staging handles and output revisions are not source identity. Each digest was checked
 // against actual guide bytes before staging; a no-op preserves the published references.
 fn equal_topics(conn: &Connection, a: &Id, b: &Id) -> Result<bool, StorageError> {
@@ -518,6 +526,9 @@ impl HelpRepository for Unit<'_> {
         if count != expected_topic_count {
             return Err(invalid("Help generation is incomplete"));
         }
+        if !references_live(self.conn, gen_id)? {
+            return Err(invalid("Help generation artifact backing is unavailable"));
+        }
         if let Some(published) = current.generation_id.as_ref()
             && current.app_version == new.app_version
             && current.registry_revision == new.registry_revision
@@ -528,7 +539,11 @@ impl HelpRepository for Unit<'_> {
                     "unchanged Help source identity has different content",
                 ));
             }
-            return Ok(current);
+            if references_live(self.conn, published)? {
+                return Ok(current);
+            }
+            // Identical semantic content may still require fresh backing. Keep the topic's
+            // semantic revision, but publish the newly verified generation and its real refs.
         }
         if expected_help_revision.checked_add(1) != Some(new.revision) {
             return Err(invalid("Help content revision must advance by one"));
