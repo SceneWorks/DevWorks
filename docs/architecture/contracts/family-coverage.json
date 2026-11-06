@@ -10515,7 +10515,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Revision 3 inspect returns exact typed reviewedSource for source-owned settings/feature plans, including legal content larger than the DynamicJson metadata limit. List rows omit reviewedSource. reviewedContent remains bounded metadata; never silently truncate or substitute a digest for human-readable reviewed source.",
           "familyRules": "Only authenticated host human interaction mints a human decision. Bind target/revision/content; approval does not clear pause.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

@@ -10651,6 +10651,13 @@ pub struct ApprovalViewRecord {
     )]
     #[schemars(with = "SavedOperationPreview", extend("x-since" = 3))]
     pub operation_preview: Option<SavedOperationPreview>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalReviewedContent", extend("x-since" = 3))]
+    pub reviewed_source: Option<ApprovalReviewedContent>,
 }
 impl Check for ApprovalViewRecord {
     fn check(&self) -> Result<(), String> {
@@ -10674,6 +10681,7 @@ impl Check for ApprovalViewRecord {
         self.resume_status.check()?;
         self.resumed_operation_id.check()?;
         self.operation_preview.check()?;
+        self.reviewed_source.check()?;
         crate::protocol::rules::record(
             "ApprovalViewRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -10716,6 +10724,9 @@ impl Revisioned for ApprovalViewRecord {
         }
         if revision < 3 {
             self.operation_preview = None;
+        }
+        if revision < 3 {
+            self.reviewed_source = None;
         }
     }
 }
@@ -10901,6 +10912,26 @@ impl Check for NotificationLink {
             "NotificationLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ApprovalReviewedContent {
+    Settings { entries: Items<SettingAssignment> },
+    FeaturePlan { plan: PlanDraft },
+}
+impl Check for ApprovalReviewedContent {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Settings { entries } => {
+                entries.check()?;
+            }
+            Self::FeaturePlan { plan } => {
+                plan.check()?;
+            }
+        }
         Ok(())
     }
 }
