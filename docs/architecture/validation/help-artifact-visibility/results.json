@@ -1,0 +1,90 @@
+{
+  "date": "2026-11-06",
+  "baseCommit": "91a07a34ab468e8e58806bf71c5d01d710f89a10",
+  "sourceCommit": "7fb7571ca67b710372ef49a2eb3a0f2af26eade5",
+  "confidence": "High for measured discovery regression and exercised authority/read/paging boundaries",
+  "productBoundary": "User/work artifacts are publicly discoverable; trusted host-managed Help backing bodies remain reachable by Help and exact authorized ArtifactRef, not ordinary discovery. Existing protected mutation behavior remains.",
+  "classification": {
+    "principalKind": "Host",
+    "producedBy": "actual StoreInfo.host_actor, supplied internally to the SQLite snapshot",
+    "derived.kind": "HelpTopic",
+    "authority": "Publication metadata is constructed by trusted writers; the public Save shape rejects caller provenance. Filename, tags and artifact bytes are not classification inputs."
+  },
+  "checks": [
+    {
+      "command": "cargo test --locked -p devworks-desktop --test history_and_attachments an_attachment_removed_while_it_is_being_stored_does_not_survive -- --nocapture",
+      "sourceCommit": "91a07a34ab468e8e58806bf71c5d01d710f89a10",
+      "result": "failed as expected",
+      "elapsedSeconds": 6.94,
+      "log": "/tmp/pr41-help-artifact-red.log",
+      "observation": "Expected only kept.txt, received kept.txt plus generated Help titles."
+    },
+    {
+      "command": "cargo test --locked -p devworks-desktop --test history_and_attachments -- --nocapture",
+      "result": "passed",
+      "passed": 5,
+      "failed": 0,
+      "elapsedSeconds": 8.36,
+      "log": "/tmp/pr41-help-history-native.log",
+      "note": "The original failing test file is byte-identical to the base, including its exact artifact-list assertions."
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test jobs help_artifacts_reject_public_mutation_while_ordinary_uploads_cannot_spoof_the_host_marker -- --nocapture",
+      "result": "passed",
+      "passed": 1,
+      "failed": 0,
+      "elapsedSeconds": 8.56,
+      "log": "/tmp/pr41-help-discovery-native.log",
+      "coverage": [
+        "Help bodies absent even at a one-row page bound, with no hidden trailing page.",
+        "Caller-authored provenance rejected as InvalidRequest. User Help-like filename/title/tags and marker-looking bytes remain discoverable.",
+        "Tagged and untagged one-row pages return every ordinary artifact exactly once.",
+        "An unrelated trusted host output with missing derived.kind remains visible (SQL NULL control).",
+        "Managed Help mutation refused; existing ArtifactRef remains readable."
+      ]
+    },
+    {
+      "command": "cargo test --locked -p devworks-engine --test jobs help_only_agent_reads_inline_and_allowed_legacy_audiences_can_read_the_real_artifact -- --nocapture",
+      "result": "passed",
+      "passed": 1,
+      "failed": 0,
+      "elapsedSeconds": 5.89,
+      "log": "/tmp/pr41-help-legacy-native.log"
+    },
+    {
+      "command": "cargo test --locked -p devworks-adapters --lib storage::sqlite::tests::artifacts::revision_three_saves_and_lists_workspace_artifacts_for_their_audience -- --nocapture",
+      "result": "passed",
+      "passed": 1,
+      "failed": 0,
+      "elapsedSeconds": 0.89,
+      "log": "/tmp/pr41-help-artifact-audiences.log"
+    },
+    {
+      "command": "cargo clippy --locked -p devworks-core -p devworks-adapters -p devworks-engine -p devworks-desktop --all-targets -- -D warnings",
+      "result": "passed",
+      "elapsedSeconds": 53.83,
+      "log": "/tmp/pr41-help-artifact-clippy.log"
+    },
+    {
+      "check": "Schema/migration bytes against 91a07a34",
+      "result": "passed",
+      "schemaFiles": 67,
+      "legacySchemas": 56,
+      "migrationFiles": 30
+    }
+  ],
+  "sourceSha256": {
+    "crates/devworks-adapters/src/storage/sqlite/artifacts.rs": "3949aec67c7211cbebbaecad4fd605e7359b5390dadc1f5694a7c96a92e6555c",
+    "crates/devworks-adapters/src/storage/sqlite/mod.rs": "63e9e1e62219e17f8711d7ed22318da91d88f18c24e0ba75896593d5d35ec16c",
+    "crates/devworks-adapters/src/storage/sqlite/repos.rs": "c0c41938c96b3c7a99b3d8085ab69e1c18ecfa74898dafa24c66f4688abec571",
+    "crates/devworks-core/src/ports/storage/artifacts.rs": "1afc49b5d03cca99413af2f2313baf0a32aba1b36657c85181296b8296bffb89",
+    "crates/devworks-engine/tests/jobs/help_service.rs": "ac56a2df0aab949f058ede77cd470086f65523d93b1fd7d7a58d3348230b2db6"
+  },
+  "unchangedOriginalTestSha256": "e74f4a53d35bd477ec17b4bc4f38ff7715ac6c0bb2ac660d97d55847b25cdbde",
+  "limits": [
+    "Native runtime evidence is Darwin arm64. Linux/macOS CI must confirm the integrated branch.",
+    "The existing Darwin linker __eh_frame/max16MB warning occurs in both the original RED and GREEN logs; no warning suppression was added. Strict source lint passes.",
+    "No network, model inference, Git effects, OAuth or OS secret-store access. Desktop common::config explicitly injects SessionSecrets and NoNetwork; the focused engine fixture composes neither connections nor native secrets.",
+    "Point-read visibility, reference retention, managed Help mutation guards, Help bytes, history, backup and GC/reader paths were not changed. Their existing native legacy/inline/guard cases pass; this task did not rerun a backup campaign."
+  ]
+}
