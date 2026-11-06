@@ -72,6 +72,8 @@ enum Action {
         expected: GitOid,
     },
     Push {
+        #[serde(default)]
+        transport_digest: Option<String>,
         remote: String,
         url: String,
         target: String,
@@ -1290,11 +1292,38 @@ impl GitService {
                 url,
                 target,
                 expected,
+                transport_digest,
                 ..
             } => {
+                let transport = match self.push_transport(
+                    &git,
+                    path,
+                    &expected.format,
+                    &job.tree.repository_id,
+                ) {
+                    Ok(transport) if transport_digest.as_ref() == Some(&transport.digest) => {
+                        transport
+                    }
+                    _ => {
+                        return EffectOutcome::Unknown(
+                            "trusted push transport cannot be established for recovery".into(),
+                        );
+                    }
+                };
+                let network = Git {
+                    runner: &transport,
+                    ctx: git.ctx,
+                    program: git.program,
+                    deadline: git.deadline,
+                    stop: git.stop,
+                };
                 observed.head == expected.hex
-                    && matches!(git.remote_symbolic_target(path, url, target), Ok(None))
-                    && git.remote_head(path, url, target).ok().flatten().as_deref()
+                    && matches!(network.remote_symbolic_target(path, url, target), Ok(None))
+                    && network
+                        .remote_head(path, url, target)
+                        .ok()
+                        .flatten()
+                        .as_deref()
                         == Some(&expected.hex)
             }
             Action::PullRequest { .. } => unreachable!("handled above"),
