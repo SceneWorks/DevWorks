@@ -1260,3 +1260,98 @@ fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
     );
     assert!(!h.state().usage.prices_loading);
 }
+
+#[test]
+fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom_tiers() {
+    use devworks_core::ports::{
+        storage::{ReadOptions, read_snapshot},
+        usage::{CostClassification, PriceQuery, PriceResolver},
+    };
+    use devworks_core::services::prices::CatalogPriceResolver;
+    let root = Root::new("usage-native-default-service-tier");
+    let mut config = config(&root.0);
+    config.connection_tick = None;
+    let engine = devworks_desktop::host::Engine::start(config).unwrap();
+    let b = engine.backend();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Default tier quote connection","profile":"CompatibleChat","endpoint":"http://127.0.0.1:9/v1"})))).unwrap();
+    let connections =
+        ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
+            .unwrap()
+            .0;
+    let connection = connections
+        .iter()
+        .find(|record| record.name.0 == "Default tier quote connection")
+        .unwrap();
+    let model = "native-default-service-tier";
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Default tier quote model","endpointProfile":"CompatibleChat","connectionId":connection.id,"upstreamModelId":"fixture/default-tier","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    assert!(matches!(
+        price_catalog(&*b, model).models.0[0].price_kind,
+        UsagePriceKind::Untracked
+    ));
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1400.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    press(&mut h, "Prices");
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    // Leave the new editor's service tier untouched, as a person pricing ordinary requests would.
+    replace(&mut h, "Amount USD per rate", "2.5");
+    press(&mut h, "Save tariff override");
+    let store = engine.host().runtime().store();
+    let mut query = PriceQuery {
+        catalog_model_id: devworks_core::protocol::Id::new(model).unwrap(),
+        provider_model_id: Some("fixture/default-tier".into()),
+        connection_id: connection.id.clone(),
+        endpoint_profile: "CompatibleChat".into(),
+        access_mode: "Api".into(),
+        service_tier: None,
+        input_tokens: Some(100),
+        cache_write_ttl_ms: None,
+        processing_region: None,
+        required_modalities: vec!["Text".into()],
+    };
+    let quote = read_snapshot(&**store, &ReadOptions::default(), |read| {
+        CatalogPriceResolver.quote(read, &query)
+    })
+    .unwrap();
+    assert_eq!(
+        quote.classification,
+        CostClassification::ConfiguredEstimate,
+        "an untouched blank tariff editor must price a request without an explicit service tier: {quote:?}"
+    );
+    assert_eq!(quote.untracked_reason, None);
+    assert_eq!(quote.tariffs[0].service_tier, "Standard");
+    assert_eq!(
+        quote
+            .rates
+            .as_ref()
+            .unwrap()
+            .input_usd_per_million
+            .as_deref(),
+        Some("2.5")
+    );
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    replace(&mut h, "Service tier", "CustomPriority");
+    press(&mut h, "Save tariff override");
+    let quote_for = |query: &PriceQuery| {
+        read_snapshot(&**store, &ReadOptions::default(), |read| {
+            CatalogPriceResolver.quote(read, query)
+        })
+        .unwrap()
+    };
+    let ordinary = quote_for(&query);
+    assert_eq!(
+        ordinary.untracked_reason.as_deref(),
+        Some("service_tier_unpriced")
+    );
+    query.service_tier = Some("CustomPriority".into());
+    let exact = quote_for(&query);
+    assert_eq!(exact.classification, CostClassification::ConfiguredEstimate);
+    assert_eq!(exact.tariffs[0].service_tier, "CustomPriority");
+    query.service_tier = Some("custompriority".into());
+    assert_eq!(
+        quote_for(&query).untracked_reason.as_deref(),
+        Some("service_tier_unpriced"),
+        "custom labels remain case-sensitive"
+    );
+}
