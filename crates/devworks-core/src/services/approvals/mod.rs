@@ -61,6 +61,7 @@ mod writes;
 pub use replay::{ApprovedCommand, ResumePreparation};
 pub use service::{ApprovalCatalog, ApprovalService, OPERATIONS};
 
+pub(crate) use writes::authority_binding;
 pub use writes::stage_saved;
 /// Canonical digest for a source-typed risk proposal; saved operations use requests::decode().fingerprint.
 pub fn content_digest(content: &crate::protocol::records::ApprovalContent) -> String {

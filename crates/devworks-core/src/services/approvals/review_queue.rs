@@ -16,38 +16,48 @@ pub(crate) fn query(
     if i.page.limit.get() > 50 {
         return Err(super::service::invalid("review_queue_limit"));
     }
-    let requested = i
+    let project_id = i
         .project_id
         .clone()
         .or_else(|| ctx.project_id().cloned())
-        .map_or(DataScope::Workspace, |project_id| DataScope::Project {
-            project_id,
-        });
+        .ok_or_else(|| super::service::invalid("project_required"))?;
+    let requested = DataScope::Project { project_id };
     let scoped = knowledge::resolve_scope(s.artifacts(), s.authority(), ctx, &requested, false)?;
     let scopes = vec![scoped.exact.clone()];
     let thresholds = knowledge::thresholds(s.configuration(), &scopes)?;
-    let q = ClaimQuery {
-        scopes: scopes.iter().map(KnowledgeScope::key).collect(),
-        lifecycles: vec!["Active".into()],
-        ..ClaimQuery::default()
-    };
+    let scope_keys = scopes.iter().map(KnowledgeScope::key).collect::<Vec<_>>();
+    let challenged = s.knowledge().knowledge_review_candidates(
+        &scope_keys,
+        KnowledgeReviewKind::Challenge,
+        500,
+    )?;
+    let proposed = s.knowledge().knowledge_review_candidates(
+        &scope_keys,
+        KnowledgeReviewKind::ProposedRule,
+        500,
+    )?;
+    let challenged_ids = challenged
+        .iter()
+        .map(|c| c.id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let proposed_ids = proposed
+        .iter()
+        .map(|c| c.id.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let relations = s
+        .knowledge()
+        .knowledge_review_contradictions(&scope_keys, 500)?;
     let mut claims = BTreeMap::new();
-    let mut after: Option<(i64, String)> = None;
-    loop {
-        let rows = s.knowledge().knowledge_claims(
-            &q,
-            after.as_ref().map(|(n, id)| (*n, id.as_str())),
-            500,
-        )?;
-        let more = rows.len() == 500;
-        if let Some(c) = rows.last() {
-            after = Some((c.updated_at_ms, c.id.as_str().to_owned()))
-        }
-        for c in rows {
-            claims.insert(c.id.as_str().to_owned(), c);
-        }
-        if !more {
-            break;
+    for c in challenged.into_iter().chain(proposed) {
+        claims.insert(c.id.as_str().to_owned(), c);
+    }
+    for r in &relations {
+        for id in [&r.subject_id, &r.object_id] {
+            if !claims.contains_key(id.as_str())
+                && let Some(c) = s.knowledge().knowledge_claim(id)?
+            {
+                claims.insert(c.id.as_str().to_owned(), c);
+            }
         }
     }
     let mut items: Vec<(u8, i64, i64, String, Value)> = Vec::new();
@@ -58,18 +68,18 @@ pub(crate) fn query(
         let (rank, priority) = priority(c);
         let wire = knowledge::claim_wire(s.knowledge(), c, &thresholds)?;
         let open = s.knowledge().knowledge_open_challenges(&c.id)?;
-        if open > 0 && nc < 500 {
-            let challenges = s
-                .knowledge()
-                .knowledge_challenges(&c.id, 500)?
-                .into_iter()
-                .filter(|ch| ch.state == "Open")
-                .collect::<Vec<_>>();
+        if open > 0 && challenged_ids.contains(c.id.as_str()) && nc < 500 {
+            let challenges = s.knowledge().knowledge_open_challenge_records(&c.id, 3)?;
             let since = challenges
                 .first()
                 .map_or(c.updated_at_ms, |ch| ch.opened_at_ms);
             let rows:Vec<Value>=challenges.iter().take(3).map(|ch|json!({"id":ch.id,"state":ch.state,"reason":ch.reason,"evidenceIds":ch.evidence_ids,"authorId":ch.author,"openedAtMs":ch.opened_at_ms.to_string(),"resolvedAtMs":ch.resolved_at_ms.map(|v|v.to_string()),"resolution":ch.resolution})).collect();
-            let v = json!({"kind":"Challenge","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":since.max(0).to_string(),"challenges":rows,"moreChallenges":(open-rows.len() as i64).max(0).to_string(),"author":c.author,"informational":true});
+            let mut v = json!({"kind":"Challenge","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":since.max(0).to_string(),"challenges":rows,"moreChallenges":(open-rows.len() as i64).max(0).to_string(),"author":c.author,"informational":true});
+            if open <= rows.len() as i64 {
+                v.as_object_mut()
+                    .expect("review item")
+                    .remove("moreChallenges");
+            }
             items.push((rank, -events, since, c.id.as_str().to_owned(), v));
             nc += 1;
         }
@@ -81,16 +91,15 @@ pub(crate) fn query(
                 events,
                 threshold,
             );
-            if state == "Proposed" && np < 500 {
+            if state == "Proposed" && proposed_ids.contains(c.id.as_str()) && np < 500 {
                 items.push((rank,-events,c.updated_at_ms,c.id.as_str().to_owned(),json!({"kind":"ProposedRule","entry":wire,"priority":priority,"recurrence":events.max(0).to_string(),"sinceMs":c.updated_at_ms.max(0).to_string(),"challenges":[],"author":c.author,"informational":true})));
                 np += 1;
             }
         }
     }
-    let ids = claims.values().map(|c| c.id.clone()).collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
     let mut nr = 0;
-    for r in s.knowledge().knowledge_relations_touching(&ids)? {
+    for r in relations {
         if r.predicate != "contradicts" || r.removed_at_ms.is_some() {
             continue;
         }
@@ -111,8 +120,8 @@ pub(crate) fn query(
         if !seen.insert(key) || nr >= 500 {
             continue;
         }
-        let a_count = s.knowledge().knowledge_lesson_event_count(&a.id)?;
-        let b_count = s.knowledge().knowledge_lesson_event_count(&b.id)?;
+        let a_count = s.knowledge().knowledge_lesson_event_count(&a.id)?.max(1);
+        let b_count = s.knowledge().knowledge_lesson_event_count(&b.id)?.max(1);
         let (a, b) = if priority(a).0 <= priority(b).0 {
             (a, b)
         } else {

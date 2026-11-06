@@ -363,12 +363,13 @@ pub fn stage_saved(
     {
         return Err(invalid("reviewed_binding"));
     }
-    let authority = authority_binding(tx, ctx)?;
+    let authority = super::authority_binding(tx, ctx)?;
     let mut input = i.clone();
     input.summary = crate::services::sessions::content(&preview.summary);
     input.artifact = preview
         .reviewed
         .get("artifact")
+        .filter(|v| !v.is_null())
         .map(|v| serde_json::from_value(v.clone()).map_err(|_| invalid("owner_artifact")))
         .transpose()?;
     if let Some(a) = &input.artifact {

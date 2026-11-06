@@ -5035,3 +5035,130 @@ fn review_candidates_are_id_bounded_before_ranking_and_reverse_conflicts_are_vis
         Ok(())
     });
 }
+
+#[test]
+fn approval_review_queue_is_informational_scoped_and_retains_bounded_open_challenges() {
+    struct Roles;
+    impl devworks_core::settings::service::PrincipalRoles for Roles {
+        fn role(&self, _: &InvocationContext) -> Option<AgentRole> {
+            None
+        }
+    }
+    let mut fx = Fx::new();
+    fx.cases = fx.cases.clone().with_approvals(Arc::new(
+        devworks_core::services::approvals::ApprovalService::new(
+            fx.h.ids.clone(),
+            fx.h.clock.clone(),
+            Arc::new(Roles),
+            Arc::new(devworks_core::services::runs::ControlService::new(
+                fx.h.ids.clone(),
+            )),
+        ),
+    ));
+    let user = fx.user();
+    let a = fx.agent("agent-a", Some("project-a"));
+    let challenged = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "challenged",
+        with(
+            draft("Lesson", "preserve scope"),
+            json!({"lesson":lesson_draft("Prompt",Some("qa"),Some("preserve scope"))}),
+        ),
+    );
+    let proposed = lesson_in_a(&fx, &a, "proposed", "Agent", "qb");
+    propose(&fx, &a, &proposed);
+    relate_in_a(&fx, &a, &challenged, "contradicts", &proposed);
+    let general = fx.claim_id(
+        &user,
+        ws(),
+        "General knowledge",
+        draft("Fact", "not inherited into project review"),
+    );
+    let target = challenged.clone();
+    fx.write(move |tx| {
+        for n in 0..505 {
+            let open = n >= 501;
+            tx.knowledge().put_knowledge_challenge(&StoredChallenge {
+                id: id(&format!("native-review-{n:04}")),
+                claim_id: target.clone(),
+                state: if open { "Open" } else { "Upheld" }.into(),
+                reason: "Review current evidence".into(),
+                evidence_ids: vec![],
+                author: actor("user-a"),
+                opened_at_ms: super::T0 + i64::from(n),
+                resolved_at_ms: (!open).then_some(super::T0 + i64::from(n) + 1),
+                resolved_by: (!open).then(|| actor("user-a")),
+                resolution: (!open).then(|| "Resolved".into()),
+            })?;
+        }
+        tx.knowledge().put_knowledge_challenge(&StoredChallenge {
+            id: id("general-open"),
+            claim_id: general,
+            state: "Open".into(),
+            reason: "Global challenge".into(),
+            evidence_ids: vec![],
+            author: actor("user-a"),
+            opened_at_ms: super::T0,
+            resolved_at_ms: None,
+            resolved_by: None,
+            resolution: None,
+        })?;
+        Ok(())
+    });
+    let OperationResult::ApprovalsReviewQueue { value } = result(fx.q(
+        &user,
+        "approvals.review_queue",
+        json!({"projectId":"project-a","page":{"limit":50}}),
+    )) else {
+        panic!("wrong queue")
+    };
+    assert_eq!(value.items.0.len(), 3);
+    assert_eq!(value.items.0[0].priority.0, "highest");
+    assert_eq!(value.items.0[1].priority.0, "highest");
+    assert_eq!(value.items.0[2].priority.0, "normal");
+
+    assert!(value.items.0.iter().all(|v| v.informational));
+    let challenge = value
+        .items
+        .0
+        .iter()
+        .find(|v| {
+            matches!(
+                v.kind,
+                devworks_core::protocol::records::KnowledgeReviewKind::Challenge
+            )
+        })
+        .unwrap();
+    assert_eq!(challenge.entry.id, challenged);
+    assert_eq!(challenge.challenges.0.len(), 3);
+    assert_eq!(challenge.more_challenges.as_ref().unwrap().as_str(), "1");
+    assert_eq!(challenge.since_ms.as_str(), (super::T0 + 501).to_string());
+    assert!(value.items.0.iter().any(|v| matches!(
+        v.kind,
+        devworks_core::protocol::records::KnowledgeReviewKind::ProposedRule
+    )));
+    assert!(value.items.0.iter().any(|v| matches!(
+        v.kind,
+        devworks_core::protocol::records::KnowledgeReviewKind::Contradiction
+    )));
+    assert!(
+        matches!(fx.q(&user,"approvals.review_queue",json!({"page":{"limit":50}})),DomainQueryReply::Rejected{fault,..} if fault.code==DomainErrorCode::InvalidArgument && fault.target_kind.as_ref().is_some_and(|v|v.0=="project_required"))
+    );
+    // A project-bound caller's omitted filter resolves its host lineage, while another project
+    // is denied before candidate selection or pagination.
+    let OperationResult::ApprovalsReviewQueue { value: inferred } =
+        result(fx.q(&a, "approvals.review_queue", json!({"page":{"limit":50}})))
+    else {
+        panic!("wrong queue")
+    };
+    assert_eq!(inferred.items.0.len(), 3);
+    assert!(matches!(
+        fx.q(
+            &a,
+            "approvals.review_queue",
+            json!({"projectId":"project-b","page":{"limit":50}})
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+}
