@@ -1,4 +1,6 @@
 //! Retained dependency impact. All identities and expansion remain inside one captured view set.
+//! Risk, dependency direction, structural-owner guards and crate-only summaries follow
+//! CodeGraph afe7356 ImpactAnalysisService; query limits add explicit partial coverage.
 use super::{
     dataset::{self, Key},
     model,
