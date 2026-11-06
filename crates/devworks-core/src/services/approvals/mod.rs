@@ -5,6 +5,7 @@ mod model;
 pub(crate) use model::scope_digest;
 pub mod owner_preview;
 pub mod requests;
+pub(crate) mod review_evidence;
 
 use crate::admission::DecodedRequest;
 use crate::context::InvocationContext;
