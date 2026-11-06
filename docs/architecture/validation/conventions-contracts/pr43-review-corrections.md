@@ -27,3 +27,17 @@ The import publication transaction records its exact typed result in the existin
 The desktop reader retains the cursor-free initial query intent separately from its canonical navigation target. Next/Previous reuse the original slug, hierarchy path, section and optional revision rather than changing the cursor binding to the returned ID. Native UI coverage exercises slug, exact path and refreshed-ID entry, exact Unicode/CRLF passage positions, forward/back navigation and absence of visible errors. All 17 Conventions desktop tests pass (45.38 s). The existing native macOS linker compact-unwind warning remains nonfatal. No timeout, scope check, cursor binding or assertion is weakened; no model inference executes.
 
 Confidence: high for these local native results. Final assembled strict checks and fresh published-head CI/review remain required before merge and acceptance.
+
+## Query-centered lexical excerpts
+
+Finding 4496607421 is repaired in the production SQLite ranked-chunk reader. It passes the
+actual weighted query terms to the existing Unicode-safe, whitespace-normalizing 360-character
+excerpt helper; empty/dense-only queries retain its prefix fallback. Immutable chunk text,
+ranking scores, scope and provenance do not change.
+
+The native regression reaches a real published chunk with a lexical match beyond character
+1,400. The old path returns only filler and fails; the corrected path includes the matching
+phrase, stays within 360 characters and preserves exact stored source. All 23 SQLite convention
+cases pass in 24.96 s; adapters all-target strict checks pass in 30.66 s. Earlier fixture setup
+errors (invalid term formatting, then mismatched token count) were corrected before the causal
+RED result. Existing query and test bounds remain unchanged; no inference compute runs.
