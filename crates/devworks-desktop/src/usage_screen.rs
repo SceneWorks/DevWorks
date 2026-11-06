@@ -653,8 +653,10 @@ impl UsageScreen {
         }
         if ui
             .add_enabled(
+                // The retained catalog is still usable while a background hint revalidates
+                // it. Disabling here can swallow a gesture aimed at the enabled prior frame;
+                // the command's expected catalog revision still guards admission.
                 !self.price_busy
-                    && !self.prices_loading
                     && self.refresh.is_none()
                     && !self.price_update_available
                     && (!self.price_providers.trim().is_empty() || !prices.providers.0.is_empty()),
