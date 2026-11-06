@@ -64,7 +64,7 @@ pub struct ConventionResourceQuery {
     pub lifecycles: Vec<String>,
 }
 
-pub trait ConventionRead {
+pub trait ConventionRead: ConventionIndexRead {
     /// The current head and the requested historical snapshot must both have an allowed scope.
     fn convention(
         &self,
@@ -97,7 +97,7 @@ pub trait ConventionRead {
     fn convention_scope_revision(&self, scope: &KnowledgeScope) -> Result<i64, StorageError>;
 }
 
-pub trait ConventionRepository: ConventionRead {
+pub trait ConventionRepository: ConventionRead + ConventionIndexRepository {
     fn create_convention(&mut self, row: &StoredConvention) -> Result<(), StorageError>;
     fn revise_convention(
         &mut self,
@@ -165,6 +165,8 @@ pub struct StoredConventionChunk {
     pub resource_revision: Option<i64>,
     pub index: i64,
     pub section_path: String,
+    /// Optional exact UTF-8 breadcrumb artifact when the public inline bound is insufficient.
+    pub section_path_ref: Option<Value>,
     pub text: String,
     pub embedding_text: String,
     /// Frozen ASCII token count of embedding_text, including its breadcrumb.
@@ -193,7 +195,25 @@ pub struct ConventionRankedChunk {
     pub score: f64,
 }
 
+/// Exact private embedding-input artifact identity, independent of mutable provider results.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredConventionEmbeddingInputs {
+    pub request_id: Id,
+    pub actor_id: ActorId,
+    pub project_id: Option<crate::protocol::ProjectId>,
+    pub context_digest: String,
+    pub embedding_space: String,
+    /// SHA256(JCS(ordered [{sha256,byteCount}])) from exact UTF-8 input bytes.
+    pub input_digest: String,
+    pub input_refs: Vec<Value>,
+    pub created_at_ms: i64,
+}
+
 pub trait ConventionIndexRead {
+    fn convention_embedding_inputs(
+        &self,
+        request: &Id,
+    ) -> Result<Option<StoredConventionEmbeddingInputs>, StorageError>;
     fn convention_embedding_space(
         &self,
         id: &str,
@@ -243,6 +263,13 @@ pub trait ConventionIndexRead {
 }
 
 pub trait ConventionIndexRepository: ConventionIndexRead {
+    /// Returns the winning immutable artifact refs for an exact request/context/space/batch.
+    /// Newly staged equivalent UUID refs do not replace a prior winner. Caller retires its
+    /// unused candidate refs atomically; this stores no provider outcome or dispatch state.
+    fn insert_convention_embedding_inputs(
+        &mut self,
+        inputs: &StoredConventionEmbeddingInputs,
+    ) -> Result<StoredConventionEmbeddingInputs, StorageError>;
     fn put_convention_embedding_space(
         &mut self,
         space: &StoredConventionEmbeddingSpace,
