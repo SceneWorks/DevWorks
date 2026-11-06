@@ -294,6 +294,8 @@ enum ReviewedCommitCase {
     UnexpectedTree,
     UnexpectedMessage,
     ChangedHookNames,
+    LateConfiguredHook,
+    UnavailablePolicy,
 }
 
 #[test]
@@ -316,6 +318,16 @@ fn reviewed_commit_does_not_accept_unexpected_committed_tree_or_message_on_recov
     ] {
         native_task_lifecycle(false, Some(case));
     }
+}
+
+#[test]
+fn reviewed_commit_blocks_new_hook_added_at_the_native_spawn_boundary() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateConfiguredHook));
+}
+
+#[test]
+fn reviewed_commit_policy_unavailable_refuses_before_proposal() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::UnavailablePolicy));
 }
 
 #[test]
@@ -408,7 +420,10 @@ fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase
     let filesystem = Arc::new(NativeFilesystem::new());
     let processes = Arc::new(ProcessSupervisor::new(
         store.clone(),
-        Arc::new(NativeProcessHost),
+        Arc::new(ReviewedProcessHost {
+            case: reviewed_case,
+            injected: std::sync::atomic::AtomicBool::new(false),
+        }),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
     ));
     let helpers = Arc::new(CommitReplyLost(
@@ -1160,6 +1175,97 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
             status: 200,
             body: serde_json::to_vec(&value).unwrap(),
         })
+    }
+}
+
+/// Intercept at the last actual native spawn boundary, after every Git configuration witness.
+/// The requested process policy still runs through the real native adapter and kernel.
+struct ReviewedProcessHost {
+    case: Option<ReviewedCommitCase>,
+    injected: std::sync::atomic::AtomicBool,
+}
+impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn probe(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.terminate(identity)
+    }
+    fn spawn(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        if matches!(self.case, Some(ReviewedCommitCase::UnavailablePolicy))
+            && spec.no_child_processes
+            && spec.args == ["--version"]
+        {
+            return Err(
+                devworks_core::ports::process::ProcessError::EnforcementUnavailable(
+                    "controlled unavailable platform".into(),
+                ),
+            );
+        }
+        if spec.no_child_processes
+            && matches!(
+                spec.args.first().map(String::as_str),
+                Some("add" | "commit")
+            )
+        {
+            for (key, expected) in [
+                ("index.threads", "1"),
+                ("pack.threads", "1"),
+                ("core.preloadIndex", "false"),
+                ("checkout.workers", "1"),
+                ("gc.auto", "0"),
+                ("maintenance.auto", "false"),
+                ("commit.gpgSign", "false"),
+            ] {
+                let suffix = spec
+                    .env
+                    .iter()
+                    .find_map(|(name, value)| {
+                        (name.starts_with("GIT_CONFIG_KEY_") && value == key)
+                            .then(|| name.trim_start_matches("GIT_CONFIG_KEY_"))
+                    })
+                    .expect("explicit helper-free option");
+                assert!(spec.env.iter().any(|(name, value)| name
+                    == &format!("GIT_CONFIG_VALUE_{suffix}")
+                    && value == expected));
+            }
+            if matches!(self.case, Some(ReviewedCommitCase::LateConfiguredHook))
+                && spec.args.first().is_some_and(|v| v == "commit")
+                && !self
+                    .injected
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let path = spec.cwd.as_deref().unwrap();
+                git(path, &["config", "hook.late.event", "pre-commit"]);
+                git(
+                    path,
+                    &[
+                        "config",
+                        "hook.late.command",
+                        "printf ran > review-hook-marker",
+                    ],
+                );
+            }
+        }
+        NativeProcessHost.spawn(spec)
     }
 }
 

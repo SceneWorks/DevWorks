@@ -257,7 +257,51 @@ fn windows_reviewed_program(exec_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod process_argument_tests {
-    use super::windows_path_argument;
+    use super::{supported_reviewed_version, windows_path_argument, windows_reviewed_program};
+
+    #[test]
+    fn reviewed_git_keeps_the_supported_floor_and_resolves_only_its_distribution() {
+        for version in [
+            "git version 2.31.0",
+            "git version 2.54.0.windows.1",
+            "git version 2.54.0 (Apple Git-157)",
+        ] {
+            assert!(supported_reviewed_version(version));
+        }
+        for version in [
+            "git version 2.30.9",
+            "git version unknown",
+            "version 2.54.0",
+            "git version 2.54.0\nextra",
+        ] {
+            assert!(!supported_reviewed_version(version));
+        }
+        for (path, expected) in [
+            (
+                r"C:\Program Files\Git\mingw64\libexec\git-core",
+                "C:/Program Files/Git/mingw64/bin/git.exe",
+            ),
+            (
+                r"\\?\C:\PortableGit\mingw32\libexec\git-core",
+                "C:/PortableGit/mingw32/bin/git.exe",
+            ),
+            (
+                "//host/share/Git/clangarm64/libexec/git-core",
+                "//host/share/Git/clangarm64/bin/git.exe",
+            ),
+        ] {
+            assert_eq!(windows_reviewed_program(path).as_deref(), Some(expected));
+        }
+        for path in [
+            "relative/mingw64/libexec/git-core",
+            "C:/Git/cmd/git.exe",
+            "C:/other/libexec/git-core",
+            "C:/Git/../mingw64/libexec/git-core",
+            "C:/Git/mingw64/libexec/git-core/extra",
+        ] {
+            assert!(windows_reviewed_program(path).is_none(), "{path}");
+        }
+    }
 
     #[test]
     fn canonical_windows_paths_keep_their_target_in_git_arguments() {

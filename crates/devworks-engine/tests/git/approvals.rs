@@ -120,7 +120,20 @@ pub(super) fn assert_reviewed_commit(
         .0;
     let frame = serde_json::json!({"protocol":"1.0-draft.1","requestKey":"reviewed-commit",
         "command":{"kind":"Commit","worktreeId":tree.id,"expectedHead":tree.head,"message":reference}});
-    let operation = approve_owned_force(h, store.clone(), service.clone(), gateway, &agent, &frame);
+    let operation = approve_owned_force_result(
+        h,
+        store.clone(),
+        service.clone(),
+        gateway,
+        &agent,
+        &frame,
+        matches!(case, ReviewedCommitCase::UnavailablePolicy),
+    );
+    let Some(operation) = operation else {
+        assert!(!marker.exists());
+        assert_eq!(git(path, &["rev-parse", "HEAD"]), tree.head.hex);
+        return;
+    };
     assert!(!marker.exists(), "preparation executed a helper: {case:?}");
     if matches!(case, ReviewedCommitCase::ChangedHookNames) {
         git(path, &["config", "hook.late.event", "pre-commit"]);
@@ -141,7 +154,9 @@ pub(super) fn assert_reviewed_commit(
     );
     if matches!(
         case,
-        ReviewedCommitCase::UnexpectedTree | ReviewedCommitCase::UnexpectedMessage
+        ReviewedCommitCase::UnexpectedTree
+            | ReviewedCommitCase::UnexpectedMessage
+            | ReviewedCommitCase::LateConfiguredHook
     ) {
         assert!(
             matches!(
@@ -166,6 +181,30 @@ pub(super) fn assert_reviewed_commit(
                 .pending_operation_id,
             Some(operation)
         );
+        if matches!(case, ReviewedCommitCase::LateConfiguredHook) {
+            // Positive control on the same real Git after all unknown/recovery assertions.
+            // Older supported Git may lack configured hooks entirely; report that separately.
+            git(
+                path,
+                &[
+                    "commit",
+                    "--allow-empty",
+                    "--no-gpg-sign",
+                    "-m",
+                    "unconfined hook control",
+                ],
+            );
+            let version = git(path, &["--version"]);
+            let advertised = git(path, &["help", "--config"]);
+            assert!(
+                !advertised.contains("hook.<friendly-name>.event") || marker.exists(),
+                "real configured-hook control did not execute: {version}"
+            );
+            eprintln!(
+                "{version}: unconfined configured hook executed={}",
+                marker.exists()
+            );
+        }
     } else if matches!(case, ReviewedCommitCase::ChangedHookNames) {
         assert!(
             matches!(
@@ -396,6 +435,19 @@ pub(super) fn approve_owned_force(
     agent: &devworks_core::context::InvocationContext,
     force: &serde_json::Value,
 ) -> devworks_core::protocol::OperationId {
+    approve_owned_force_result(h, store, service, gateway, agent, force, false)
+        .expect("accepted reviewed operation")
+}
+
+fn approve_owned_force_result(
+    h: &Harness,
+    store: Arc<dyn ApplicationStore>,
+    service: Arc<GitService>,
+    gateway: &Gateway<'_>,
+    agent: &devworks_core::context::InvocationContext,
+    force: &serde_json::Value,
+    expect_unavailable: bool,
+) -> Option<devworks_core::protocol::OperationId> {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{ActorId, CommandReply};
     use devworks_core::services::{
@@ -485,6 +537,29 @@ pub(super) fn approve_owned_force(
     let reply = cases
         .command(gateway, agent, "approvals.propose", &propose)
         .unwrap();
+    if expect_unavailable {
+        let wire = serde_json::to_value(&reply).unwrap();
+        assert_eq!(wire["receipt"]["decision"]["kind"], "Refused");
+        assert_eq!(
+            wire["receipt"]["decision"]["fault"]["code"],
+            "UnsupportedCapability"
+        );
+        assert_eq!(
+            wire["receipt"]["decision"]["fault"]["targetKind"],
+            "git_reviewed_process_policy"
+        );
+        let query = serde_json::to_vec(&serde_json::json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"no-false-proposal","body":{"kind":"approvals.list","scope":{"kind":"Project","projectId":"project"},"page":{"limit":20}}})).unwrap();
+        let visible = cases
+            .query(gateway, agent, "approvals.list", &query)
+            .unwrap();
+        assert!(
+            serde_json::to_value(visible).unwrap()["result"]["value"]["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        return None;
+    }
     let p = match reply {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
             DomainDecision::Applied { result } | DomainDecision::NoChange { result } => {
@@ -568,7 +643,7 @@ pub(super) fn approve_owned_force(
         grant
     );
     assert_eq!(&row.principal, agent.principal());
-    operation
+    Some(operation)
 }
 
 fn assert_filtered_untracked_manifest_is_nonexecuting(driver: &str, file: &std::ffi::OsStr) {
