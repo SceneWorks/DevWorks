@@ -13151,7 +13151,13 @@ pub struct CodeOverviewRepository {
     )]
     #[schemars(with = "Label", extend("x-since" = 3))]
     pub framework: Option<Label>,
-    pub foundational: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub foundational: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -13187,6 +13193,9 @@ impl Revisioned for CodeOverviewRepository {
         }
         if revision < 3 {
             self.framework = None;
+        }
+        if revision < 3 {
+            self.foundational = None;
         }
         if revision < 3 {
             self.readme_source = None;
