@@ -124,9 +124,12 @@ impl Shell {
         );
     }
     /// Keep a user's loaded page set intact when a background refresh publishes a new catalog.
-    /// A small revision probe offers an explicit reload instead of silently replacing those rows.
+    /// A partial first page already owns a cursor: probing also preserves a More gesture
+    /// before its append reply arrives. Completed single pages can be reloaded normally.
     pub(super) fn refresh_visible_prices(&mut self) {
-        if self.usage.price_pages <= 1 {
+        if self.usage.price_pages <= 1
+            && self.usage.prices.as_ref().is_none_or(|page| !page.has_more)
+        {
             self.reload_applied_prices();
         } else if !self.pending(&Slot::PriceProbe(self.usage.price_generation)) {
             let generation = self.usage.price_generation;
