@@ -11,9 +11,9 @@ use devworks_core::services::{
         accounting::{AttemptSelection, ReportCategory},
     },
     usage::{
-        accounting::{AttemptRequest, DispatchIdentity},
+        accounting::{AttemptRequest, DispatchIdentity, Observation},
         host::{DriveOutcome, InferenceFrame, OwnedInferenceSource},
-        meter::InputSemantics,
+        meter::{InputSemantics, ObservationSemantics, Quantities},
         pricing::PricingContext,
     },
 };
@@ -232,21 +232,75 @@ impl OwnedInferenceSource for PanickingSource {
     }
 }
 
+/// A manual Human chat has monetary attribution but no managed-execution custody.
+struct ManualChatSource {
+    first: bool,
+    observed: Option<tokio::sync::oneshot::Sender<()>>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+    fail_close: bool,
+}
+impl OwnedInferenceSource for ManualChatSource {
+    fn start(&mut self, _: &StoredInferenceAttempt) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn next(&mut self, cancel: &Cancellation) -> Result<Option<InferenceFrame>, StorageError> {
+        if self.first {
+            self.first = false;
+            return Ok(Some(InferenceFrame::Usage(Observation {
+                key: "manual-usage".into(),
+                sequence: 1,
+                semantics: ObservationSemantics::Cumulative,
+                quantities: Quantities {
+                    input_tokens: Some(10),
+                    output_tokens: Some(0),
+                    ..Default::default()
+                },
+                reported_cost: None,
+                provider_model_id: None,
+            })));
+        }
+        if let Some(observed) = self.observed.take() {
+            let _ = observed.send(());
+        }
+        if self.fail_close {
+            return Ok(None);
+        }
+        let (lock, changed) = &*self.release;
+        let mut released = lock.lock().unwrap();
+        while !*released && !cancel.is_cancelled() {
+            released = changed
+                .wait_timeout(released, Duration::from_millis(5))
+                .unwrap()
+                .0;
+        }
+        Ok(None)
+    }
+    fn close(&mut self) -> Result<(), StorageError> {
+        if self.fail_close {
+            Err(StorageError::Busy)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[test]
 fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() {
     runtime().block_on(async {
         within("managed inference closure", async {
-            for (worker, bounded_shutdown, membership, panic_source) in [
-                (false, false, false, false),
-                (true, false, false, false),
-                (false, true, false, false),
-                (false, false, true, false),
-                (false, false, false, true),
+            for (worker, bounded_shutdown, membership, panic_source, manual_failed_close) in [
+                (false, false, false, false, None),
+                (true, false, false, false, None),
+                (false, true, false, false, None),
+                (false, false, true, false, None),
+                (false, false, false, true, None),
+                (false, false, false, false, Some(false)),
+                (false, false, false, false, Some(true)),
             ] {
                 let f = Fx::new();
                 let selected_router = router(&f);
                 let physical_child = std::env::var_os("DW21_CAPTURE_OWNER").is_some();
-                if physical_child {
+                if physical_child || manual_failed_close.is_some() {
                     f.tx(|_, tx| {
                         let mut connection =
                             tx.router().connection(&id("usage-connection"))?.unwrap();
@@ -410,7 +464,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     }),
                     cache_diagnostics: vec![],
                 };
-                if physical_child {
+                if physical_child || manual_failed_close.is_some() {
                     use devworks_core::ports::usage::PriceResolver;
                     request.quote = read(&*f.store, |s| {
                         devworks_core::services::prices::CatalogPriceResolver
@@ -444,6 +498,26 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     },
                     |app| app.accounting().clone(),
                 );
+                let mut manual_task = None;
+                let mut manual_before = None;
+                let manual_release=Arc::new((Mutex::new(false),Condvar::new()));
+                let _manual_cleanup=manual_failed_close.map(|_|Cleanup{runtime:runtime.clone(),gate:manual_release.clone()});
+                if let Some(fail_close)=manual_failed_close {
+                    let agent=f.store.info().host_actor;
+                    f.tx(move|_,tx|tx.sessions().insert_session(&StoredSession{id:id("manual-feature-chat"),conversation_id:id("manual-feature-conversation"),agent_id:agent,project_id:Some(ProjectId(id("project-a"))),root_id:Some(RootId(id("root-f"))),title:"Human feature chat".into(),context_epoch:0,revision:1,created_by:ActorId(id("user-a")),created_at_ms:T0,closed_at_ms:None,closed_by:None,next_sequence:1,checkpoint_sequence:0}));
+                    let manual_context=f.user.clone().with_lineage(Some(ProjectId(id("project-a"))),Some(RootId(id("root-f"))),None).with_session(id("manual-feature-chat"));
+                    let mut manual_request=request.clone();manual_request.actor_id=manual_context.principal().clone();manual_request.role="Human".into();manual_request.request_id=id("manual-request");manual_request.admission_key=id("manual-admission");manual_request.dispatch=None;
+                    let mut manual_logical=logical.clone();manual_logical.request_id=manual_request.request_id.clone();manual_logical.session_id=Some(id("manual-feature-chat"));
+                    let (observed,ready)=tokio::sync::oneshot::channel();
+                    let source=Box::new(ManualChatSource{first:true,observed:Some(observed),release:manual_release.clone(),fail_close});let host=runtime.clone();
+                    let mut task=tokio::spawn(async move{host.produce(manual_context,manual_logical,ReportCategory::Assistant,manual_request,source).await});
+                    ready.await.unwrap();
+                    if fail_close{assert!(matches!((&mut task).await.unwrap(),Err(StorageError::Busy)));}else{manual_task=Some(task);}
+                    let rows=read(&*f.store,|s|s.usage().inference_attempts(&UsageAttemptFilter{session_id:Some(id("manual-feature-chat")),..Default::default()},None,64));assert_eq!(rows.len(),1);let attempt=&rows[0];assert_eq!(attempt.feature_id,Some(id("root-f")));assert!(attempt.execution_root_id.is_none()&&attempt.execution_id.is_none());
+                    let balance=read(&*f.store,|s|s.usage().attempt_balance(&attempt.attempt_id)).unwrap();assert_eq!(balance.priced_micro_usd,Some(10));assert_eq!(balance.reserved_micro_usd,Some(20));assert!(!balance.local_quiescent);
+                    assert!(read(&*f.store,|s|s.runs().inference_quiescent(&RootId(id("root-f")))));
+                    manual_before=Some(balance);
+                }
                 if panic_source {
                     assert!(
                         runtime
@@ -544,7 +618,8 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     host.produce(context, logical, ReportCategory::Assistant, request, source)
                         .await
                 });
-                start.await.unwrap();
+                if start.await.is_err(){panic!("valid independent coordinator was not admitted: {:?}",produce.await.unwrap());}
+                if let Some(before)=&manual_before{assert_eq!(read(&*f.store,|s|s.usage().attempt_balance(&before.attempt_id)).as_ref(),Some(before),"managed admission must not retire or reprice manual custody");}
                 if let Some(signal) = std::env::var_os("DW21_CAPTURE_OWNER") {
                     let attempts = read(&*f.store, |s| {
                         s.usage()
@@ -699,7 +774,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                 let totals = read(&*f.store, |s| {
                     s.usage().feature_usage_totals(&id(execution_root))
                 });
-                assert_eq!(totals.attempts, if membership { 0 } else { 1 });
+                assert_eq!(totals.attempts, if membership { 0 } else { 1 } + i64::from(manual_failed_close.is_some()));
                 if let Some(destination) = destination {
                     f.tx(|service, tx| {
                         devworks_core::services::work::membership::reconcile_project(
@@ -715,6 +790,8 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     assert!(moved.generation > assignment.generation);
                 }
                 runtime.drain().await;
+                if let Some(task)=manual_task{assert!(matches!(task.await.unwrap().unwrap(),DriveOutcome::Settled(_)));}
+                if manual_failed_close==Some(true){let before=manual_before.unwrap();assert_eq!(read(&*f.store,|s|s.usage().attempt_balance(&before.attempt_id)),Some(before),"failed manual close retains its own expense/reservation without claiming execution custody");}
             }
         })
         .await;

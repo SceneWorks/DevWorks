@@ -225,17 +225,30 @@ fn prior_work_owner_unclosed(
             MAX_PAGE,
         )?;
         for attempt in &rows {
+            // Monetary attribution alone (for example a manual Human feature chat) does
+            // not establish managed-execution custody. Never infer it from work membership.
+            let (Some(root), Some(execution)) = (&attempt.execution_root_id, &attempt.execution_id)
+            else {
+                continue;
+            };
             let balance = tx.usage().attempt_balance(&attempt.attempt_id)?;
             if balance.as_ref().is_some_and(|b| b.local_quiescent) {
                 continue;
             }
             let bound = snapshot(attempt)?;
+            // Inconsistent positive custody remains fenced; it is not a manual conversation.
+            let Some(prior_owner) = bound.dispatch.as_ref() else {
+                return Ok(true);
+            };
+            if prior_owner.root_id != *root || prior_owner.execution_id != *execution {
+                return Ok(true);
+            }
             let uncertain = balance
                 .as_ref()
                 .map(summary)
                 .transpose()?
                 .is_some_and(|s| s.custody_recovery_reason.is_some());
-            if bound.dispatch.as_ref() != Some(owner) || uncertain {
+            if prior_owner != owner || uncertain {
                 return Ok(true);
             }
         }
