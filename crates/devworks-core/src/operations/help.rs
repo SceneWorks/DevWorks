@@ -41,34 +41,83 @@ impl Revisioned for SearchInput {
 pub struct ReadInput {
     pub topic_id: Id,
     pub version: Label,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Cursor", extend("x-since" = 3))]
+    pub cursor: Option<Cursor>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 3))]
+    pub max_chars: Option<PositiveCounter>,
 }
 impl Check for ReadInput {
     fn check(&self) -> Result<(), String> {
         self.topic_id.check()?;
         self.version.check()?;
+        self.cursor.check()?;
+        self.max_chars.check()?;
         Ok(())
     }
 }
 impl Revisioned for ReadInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.cursor = None;
+        }
+        if revision < 3 {
+            self.max_chars = None;
+        }
+    }
 }
 
 /// `help.topic_for_screen` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["screenId", "capabilityRevision"]}, {"required": ["screenId", "current"], "x-since": 3}]))]
 pub struct TopicForScreenInput {
     pub screen_id: Id,
-    pub capability_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Revision")]
+    pub capability_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+    pub current: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PageRequest", extend("x-since" = 3))]
+    pub page: Option<PageRequest>,
 }
 impl Check for TopicForScreenInput {
     fn check(&self) -> Result<(), String> {
         self.screen_id.check()?;
         self.capability_revision.check()?;
+        self.current.check()?;
+        self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for TopicForScreenInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.current = None;
+        }
+        if revision < 3 {
+            self.page = None;
+        }
+    }
 }
 
 /// `help.package_guides` Query input.

@@ -213,6 +213,40 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             "saved operation input is the closed argument object without operation kind",
         )?;
     }
+    if name == "HelpSnapshot" {
+        require(
+            v["canGenerate"] == !present(v, "cannotGenerateReason"),
+            "Help generation permission needs an exact refusal reason",
+        )?;
+    }
+    if name == "HelpCapabilityMetadata" {
+        require(
+            v["available"] == !present(v, "unavailableReason"),
+            "Help capability availability needs an exact reason",
+        )?;
+    }
+    if matches!(name, "HelpPassage" | "HelpTopicPage") {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "Help continuation mismatch",
+        )?;
+    }
+    if matches!(name, "HelpTopicSummary" | "HelpTopicPage") && v["availability"] != "Available" {
+        require(present(v, "reason"), "unavailable Help needs a reason")?;
+    }
+    if name == "HelpReadView" {
+        match v["kind"].as_str() {
+            Some("Available") => require(
+                v["topic"]["availability"] == "Available",
+                "available Help read needs an available topic",
+            )?,
+            Some("Unavailable") => require(
+                v["availability"] != "Available",
+                "unavailable Help cannot claim availability",
+            )?,
+            _ => {}
+        }
+    }
     eval_record(name, v)?;
     match name {
         "ClaimDraft" => require(
@@ -399,6 +433,19 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "help.read" && present(v, "maxChars") {
+        require(
+            v["maxChars"]
+                .as_str()
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some_and(|n| (1..=65536).contains(&n)),
+            "Help passage limit is 1..65536 characters",
+        )?;
+    }
+    if op == "help.topic_for_screen" && present(v, "current") {
+        require(v["current"] == true, "Help current selector must be true")?;
+    }
+
     if op == "router.price_override" {
         require(
             present(v, "price") != present(v, "change"),

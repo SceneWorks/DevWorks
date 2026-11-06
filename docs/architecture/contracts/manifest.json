@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-05",
+  "date": "2026-11-06",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -86,11 +86,11 @@
     },
     {
       "file": "domain-command-reply.r3.schema.json",
-      "sha256": "90728b988fe9f6caab45cfe17a5e052376e49c6e40f578ee51e766b28874cdec"
+      "sha256": "5c0238932dfc4e7bb5b4cea191f738684f9ebbfe46ea59fd8bde184fc591482c"
     },
     {
       "file": "domain-command-reply.r4.schema.json",
-      "sha256": "fecd19e2e5c6ffe832d9423d5e9307e8021c60a8031835501a224a5ab805e867"
+      "sha256": "f117be5dac3813719248bf9240cd058033c1c87c6161d735f04ea5ba4cb4bcee"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -102,11 +102,11 @@
     },
     {
       "file": "domain-query-reply.r3.schema.json",
-      "sha256": "d9a51d4d0eb0f456fe078fc0425d4d221502eaa9fd076bc06bb9a720e6f7e834"
+      "sha256": "40552e7bb44e234bc95c2757f01262fc4ac86aa44c4de35bde9d89f93636ec8e"
     },
     {
       "file": "domain-query-reply.r4.schema.json",
-      "sha256": "6748de8e8734197aee658dddcc9a58de8f299e1d8255598bb52befb75d6245dd"
+      "sha256": "409a0d190891e42ee7d67aa6deee5e4b343ac3c76dcef463a244d83933567f55"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -118,7 +118,7 @@
     },
     {
       "file": "domain-request.r3.schema.json",
-      "sha256": "7c50c8d43604a0406707df1c2fca4a5fda43bd11cc8d1b27a2b5edfd8642af06"
+      "sha256": "20aed48653a1f442fa0224294cf85947f4f9b8842d369fe3ebaa416f6f5da84e"
     },
     {
       "file": "domain-request.schema.json",
@@ -170,11 +170,11 @@
     },
     {
       "file": "operation-completion.r3.schema.json",
-      "sha256": "734ff5409220b1ed3d92e57038e324e7ca66d27b83448f9bd238f90ed6b15c4e"
+      "sha256": "6cf20d9b72f4b0a4bddc3c3d0ae89c267e97c9122355cc2984d57e1d28b1f9fc"
     },
     {
       "file": "operation-completion.r4.schema.json",
-      "sha256": "ec5beab6babfa7d1189c6f375c988f81c2a0a6aecf52d6158f5a8252b9a55b96"
+      "sha256": "a432755d1b01b93ce2a3073cf706dd14675047b9653003cf86fcc26626d2f38f"
     },
     {
       "file": "operation-completion.schema.json",
@@ -186,11 +186,11 @@
     },
     {
       "file": "operation-result.r3.schema.json",
-      "sha256": "bd5404a30f5a0949bb681e54ef19ae56cdcb6fef040dd427f7d956d4c2571107"
+      "sha256": "d5949a01143cd56e6e304797cb81106c5e505eb67afe1d4678496b773a28d330"
     },
     {
       "file": "operation-result.r4.schema.json",
-      "sha256": "456edb2bba9f03854e37bd04f9ccca9778236236a70b5a1f3a4d536255a3f013"
+      "sha256": "2bd7674a5066cb8b199c1fac200cd457dff32fee079371aac5d77865ef58b871"
     },
     {
       "file": "operation-result.schema.json",

@@ -9717,9 +9717,17 @@
         {
           "additionalProperties": false,
           "properties": {
+            "cursor": {
+              "$ref": "#/$defs/Text1To4096",
+              "x-since": 3
+            },
             "kind": {
               "const": "help.read",
               "type": "string"
+            },
+            "maxChars": {
+              "$ref": "#/$defs/PositiveCounter",
+              "x-since": 3
             },
             "topicId": {
               "$ref": "#/$defs/Id"
@@ -9737,13 +9745,39 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "screenId",
+                "capabilityRevision"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "screenId",
+                "current"
+              ],
+              "x-since": 3
+            }
+          ],
           "properties": {
             "capabilityRevision": {
               "$ref": "#/$defs/Revision"
             },
+            "current": {
+              "const": true,
+              "type": "boolean",
+              "x-since": 3
+            },
             "kind": {
               "const": "help.topic_for_screen",
               "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 3
             },
             "screenId": {
               "$ref": "#/$defs/Id"
@@ -9751,8 +9785,7 @@
           },
           "required": [
             "kind",
-            "screenId",
-            "capabilityRevision"
+            "screenId"
           ],
           "type": "object"
         },

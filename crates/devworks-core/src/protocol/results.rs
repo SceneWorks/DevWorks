@@ -661,13 +661,13 @@ pub enum OperationResult {
     #[serde(rename = "addons.uninstall")]
     AddonsUninstall { value: PackageRecord },
     #[serde(rename = "help.search")]
-    HelpSearch { value: Page<HelpTopic> },
+    HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
-    HelpRead { value: HelpTopic },
+    HelpRead { value: HelpReadResult },
     #[serde(rename = "help.topic_for_screen")]
-    HelpTopicForScreen { value: Page<HelpTopic> },
+    HelpTopicForScreen { value: HelpTopicPageResult },
     #[serde(rename = "help.package_guides")]
-    HelpPackageGuides { value: Page<HelpTopic> },
+    HelpPackageGuides { value: HelpTopicPageResult },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs { value: OperationRef },
     #[serde(rename = "workspace.diagnostics")]
@@ -1595,6 +1595,10 @@ impl Revisioned for OperationResult {
             Self::AddonsUpdate { value } => value.retain_revision(revision),
             Self::AddonsRollback { value } => value.retain_revision(revision),
             Self::AddonsUninstall { value } => value.retain_revision(revision),
+            Self::HelpSearch { value } => value.retain_revision(revision),
+            Self::HelpRead { value } => value.retain_revision(revision),
+            Self::HelpTopicForScreen { value } => value.retain_revision(revision),
+            Self::HelpPackageGuides { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
@@ -1617,6 +1621,10 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),
+            Self::HelpSearch { value } => value.check_revision(revision),
+            Self::HelpRead { value } => value.check_revision(revision),
+            Self::HelpTopicForScreen { value } => value.check_revision(revision),
+            Self::HelpPackageGuides { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

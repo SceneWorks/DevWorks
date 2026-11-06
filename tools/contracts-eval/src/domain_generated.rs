@@ -12129,6 +12129,398 @@ impl Check for UsageMeasuredQuantity {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HelpAvailability {
+    Available,
+    Missing,
+    Stale,
+    Unavailable,
+}
+impl Check for HelpAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpSnapshot {
+    pub app_version: Label,
+    pub help_revision: Revision,
+    pub registry_revision: Revision,
+    pub can_generate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cannot_generate_reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_operation: Option<OperationRef>,
+}
+impl Check for HelpSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.app_version.check()?;
+        self.help_revision.check()?;
+        self.registry_revision.check()?;
+        self.can_generate.check()?;
+        self.cannot_generate_reason.check()?;
+        self.generation_operation.check()?;
+        super::domain_rules::record(
+            "HelpSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpProvenance {
+    Bundled {
+        app_version: Label,
+        content_digest: Digest,
+    },
+    Package {
+        package_id: Id,
+        package_version: Label,
+        manifest_digest: Digest,
+        content_digest: Digest,
+    },
+    Generated {
+        app_version: Label,
+        registry_revision: Revision,
+        content_digest: Digest,
+    },
+}
+impl Check for HelpProvenance {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Bundled {
+                app_version,
+                content_digest,
+            } => {
+                app_version.check()?;
+                content_digest.check()?;
+            }
+            Self::Package {
+                package_id,
+                package_version,
+                manifest_digest,
+                content_digest,
+            } => {
+                package_id.check()?;
+                package_version.check()?;
+                manifest_digest.check()?;
+                content_digest.check()?;
+            }
+            Self::Generated {
+                app_version,
+                registry_revision,
+                content_digest,
+            } => {
+                app_version.check()?;
+                registry_revision.check()?;
+                content_digest.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpCapabilityMetadata {
+    pub operation: Label,
+    pub mode: Label,
+    pub owner: Label,
+    pub authority: Label,
+    pub effect: Label,
+    pub schema_revision: Revision,
+    pub input_type: Label,
+    pub result_type: Label,
+    pub input_schema_digest: Digest,
+    pub result_schema_digest: Digest,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<Content>,
+}
+impl Check for HelpCapabilityMetadata {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.mode.check()?;
+        self.owner.check()?;
+        self.authority.check()?;
+        self.effect.check()?;
+        self.schema_revision.check()?;
+        self.input_type.check()?;
+        self.result_type.check()?;
+        self.input_schema_digest.check()?;
+        self.result_schema_digest.check()?;
+        self.available.check()?;
+        self.unavailable_reason.check()?;
+        super::domain_rules::record(
+            "HelpCapabilityMetadata",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicSummary {
+    pub id: Id,
+    pub version: Label,
+    pub title: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ArtifactRef>,
+    pub related_capability_ids: Items<Id>,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<HelpProvenance>,
+    pub capabilities: Rows<HelpCapabilityMetadata>,
+    pub related_capabilities: Rows<Label>,
+}
+impl Check for HelpTopicSummary {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.version.check()?;
+        self.title.check()?;
+        self.content.check()?;
+        self.related_capability_ids.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.provenance.check()?;
+        self.capabilities.check()?;
+        self.related_capabilities.check()?;
+        super::domain_rules::record(
+            "HelpTopicSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpPassage {
+    pub text: Content,
+    pub offset: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for HelpPassage {
+    fn check(&self) -> Result<(), String> {
+        self.text.check()?;
+        self.offset.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "HelpPassage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpReadView {
+    Available {
+        topic: HelpTopicSummary,
+        passage: HelpPassage,
+        snapshot: HelpSnapshot,
+    },
+    Unavailable {
+        topic_id: Id,
+        requested_version: Label,
+        availability: HelpAvailability,
+        reason: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_version: Option<Label>,
+        snapshot: HelpSnapshot,
+    },
+}
+impl Check for HelpReadView {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Available {
+                topic,
+                passage,
+                snapshot,
+            } => {
+                topic.check()?;
+                passage.check()?;
+                snapshot.check()?;
+            }
+            Self::Unavailable {
+                topic_id,
+                requested_version,
+                availability,
+                reason,
+                current_version,
+                snapshot,
+            } => {
+                topic_id.check()?;
+                requested_version.check()?;
+                availability.check()?;
+                reason.check()?;
+                current_version.check()?;
+                snapshot.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicPage {
+    pub items: Rows<HelpTopicSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub snapshot: HelpSnapshot,
+}
+impl Check for HelpTopicPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.snapshot.check()?;
+        super::domain_rules::record(
+            "HelpTopicPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "HelpTopic", "before": 3}))]
+pub enum HelpReadResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(HelpTopic),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpReadView),
+}
+impl Check for HelpReadResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<HelpTopic> = match self {
+                Self::Current(HelpReadView::Available { topic, .. }) => {
+                    topic.content.clone().map(|content| HelpTopic {
+                        id: topic.id.clone(),
+                        version: topic.version.clone(),
+                        title: topic.title.clone(),
+                        related_capability_ids: topic.related_capability_ids.clone(),
+                        content,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum HelpTopicPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<HelpTopic>),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpTopicPage),
+}
+impl Check for HelpTopicPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpTopicPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<HelpTopic>> = match self {
+                Self::Current(value)
+                    if matches!(value.availability, HelpAvailability::Available)
+                        && value.items.0.iter().all(|topic| {
+                            matches!(topic.availability, HelpAvailability::Available)
+                                && topic.content.is_some()
+                        }) =>
+                {
+                    Some(Page {
+                        items: BoundedList(
+                            value
+                                .items
+                                .0
+                                .iter()
+                                .map(|topic| HelpTopic {
+                                    id: topic.id.clone(),
+                                    version: topic.version.clone(),
+                                    title: topic.title.clone(),
+                                    related_capability_ids: topic.related_capability_ids.clone(),
+                                    content: topic
+                                        .content
+                                        .clone()
+                                        .expect("checked published artifact"),
+                                })
+                                .collect(),
+                        ),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -13049,11 +13441,45 @@ pub enum DomainQuery {
     #[serde(rename = "help.search")]
     HelpSearch { query: Text, page: PageRequest },
     #[serde(rename = "help.read")]
-    HelpRead { topic_id: Id, version: Label },
+    HelpRead {
+        topic_id: Id,
+        version: Label,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Cursor", extend("x-since" = 3))]
+        cursor: Option<Cursor>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PositiveCounter", extend("x-since" = 3))]
+        max_chars: Option<PositiveCounter>,
+    },
     #[serde(rename = "help.topic_for_screen")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "screenId", "capabilityRevision"]}, {"required": ["kind", "screenId", "current"], "x-since": 3}]))]
     HelpTopicForScreen {
         screen_id: Id,
-        capability_revision: Revision,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Revision")]
+        capability_revision: Option<Revision>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        current: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 3))]
+        page: Option<PageRequest>,
     },
     #[serde(rename = "help.package_guides")]
     HelpPackageGuides {
@@ -14321,16 +14747,27 @@ impl Check for DomainQuery {
                 query.check()?;
                 page.check()?;
             }
-            Self::HelpRead { topic_id, version } => {
+            Self::HelpRead {
+                topic_id,
+                version,
+                cursor,
+                max_chars,
+            } => {
                 topic_id.check()?;
                 version.check()?;
+                cursor.check()?;
+                max_chars.check()?;
             }
             Self::HelpTopicForScreen {
                 screen_id,
                 capability_revision,
+                current,
+                page,
             } => {
                 screen_id.check()?;
                 capability_revision.check()?;
+                current.check()?;
+                page.check()?;
             }
             Self::HelpPackageGuides {
                 package_id,
@@ -14666,6 +15103,24 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *snapshot_ids = None;
+                }
+            }
+            Self::HelpRead {
+                cursor, max_chars, ..
+            } => {
+                if revision < 3 {
+                    *cursor = None;
+                }
+                if revision < 3 {
+                    *max_chars = None;
+                }
+            }
+            Self::HelpTopicForScreen { current, page, .. } => {
+                if revision < 3 {
+                    *current = None;
+                }
+                if revision < 3 {
+                    *page = None;
                 }
             }
             Self::WorkspaceLogs {
@@ -18997,13 +19452,13 @@ pub enum OperationResult {
     #[serde(rename = "addons.logs")]
     AddonsLogs { value: Page<Diagnostic> },
     #[serde(rename = "help.search")]
-    HelpSearch { value: Page<HelpTopic> },
+    HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
-    HelpRead { value: HelpTopic },
+    HelpRead { value: HelpReadResult },
     #[serde(rename = "help.topic_for_screen")]
-    HelpTopicForScreen { value: Page<HelpTopic> },
+    HelpTopicForScreen { value: HelpTopicPageResult },
     #[serde(rename = "help.package_guides")]
-    HelpPackageGuides { value: Page<HelpTopic> },
+    HelpPackageGuides { value: HelpTopicPageResult },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs { value: OperationRef },
     #[serde(rename = "workspace.diagnostics")]
@@ -20048,6 +20503,10 @@ impl Revisioned for OperationResult {
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),
+            Self::HelpSearch { value } => value.retain_revision(revision),
+            Self::HelpRead { value } => value.retain_revision(revision),
+            Self::HelpTopicForScreen { value } => value.retain_revision(revision),
+            Self::HelpPackageGuides { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
@@ -20084,6 +20543,10 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),
+            Self::HelpSearch { value } => value.check_revision(revision),
+            Self::HelpRead { value } => value.check_revision(revision),
+            Self::HelpTopicForScreen { value } => value.check_revision(revision),
+            Self::HelpPackageGuides { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

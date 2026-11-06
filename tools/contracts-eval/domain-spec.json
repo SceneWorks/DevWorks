@@ -4558,6 +4558,131 @@
         "cache_write_ttl_ms": "?Counter",
         "quantity": "Counter"
       }
+    },
+    "HelpAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "Missing",
+        "Stale",
+        "Unavailable"
+      ]
+    },
+    "HelpSnapshot": {
+      "kind": "record",
+      "fields": {
+        "app_version": "Label",
+        "help_revision": "Revision",
+        "registry_revision": "Revision",
+        "can_generate": "bool",
+        "cannot_generate_reason": "?Content",
+        "generation_operation": "?OperationRef"
+      }
+    },
+    "HelpProvenance": {
+      "kind": "union",
+      "variants": {
+        "Bundled": {
+          "app_version": "Label",
+          "content_digest": "Digest"
+        },
+        "Package": {
+          "package_id": "Id",
+          "package_version": "Label",
+          "manifest_digest": "Digest",
+          "content_digest": "Digest"
+        },
+        "Generated": {
+          "app_version": "Label",
+          "registry_revision": "Revision",
+          "content_digest": "Digest"
+        }
+      }
+    },
+    "HelpCapabilityMetadata": {
+      "kind": "record",
+      "fields": {
+        "operation": "Label",
+        "mode": "Label",
+        "owner": "Label",
+        "authority": "Label",
+        "effect": "Label",
+        "schema_revision": "Revision",
+        "input_type": "Label",
+        "result_type": "Label",
+        "input_schema_digest": "Digest",
+        "result_schema_digest": "Digest",
+        "available": "bool",
+        "unavailable_reason": "?Content"
+      }
+    },
+    "HelpTopicSummary": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "version": "Label",
+        "title": "Label",
+        "content": "?ArtifactRef",
+        "related_capability_ids": "Items<Id>",
+        "availability": "HelpAvailability",
+        "reason": "?Content",
+        "provenance": "?HelpProvenance",
+        "capabilities": "Rows<HelpCapabilityMetadata>",
+        "related_capabilities": "Rows<Label>"
+      }
+    },
+    "HelpPassage": {
+      "kind": "record",
+      "fields": {
+        "text": "Content",
+        "offset": "Counter",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "HelpReadView": {
+      "kind": "union",
+      "variants": {
+        "Available": {
+          "topic": "HelpTopicSummary",
+          "passage": "HelpPassage",
+          "snapshot": "HelpSnapshot"
+        },
+        "Unavailable": {
+          "topic_id": "Id",
+          "requested_version": "Label",
+          "availability": "HelpAvailability",
+          "reason": "Content",
+          "current_version": "?Label",
+          "snapshot": "HelpSnapshot"
+        }
+      }
+    },
+    "HelpTopicPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<HelpTopicSummary>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "availability": "HelpAvailability",
+        "reason": "?Content",
+        "snapshot": "HelpSnapshot"
+      }
+    },
+    "HelpReadResult": {
+      "kind": "versioned",
+      "legacy": "HelpTopic",
+      "current": "HelpReadView",
+      "revision": 3,
+      "projection": "help_read"
+    },
+    "HelpTopicPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<HelpTopic>",
+      "current": "HelpTopicPage",
+      "revision": 3,
+      "projection": "help_page",
+      "earlierName": "Page"
     }
   },
   "operations": {
@@ -8160,34 +8285,55 @@
         "query": "Text",
         "page": "PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Entirely offline local search of version-matched authorized documentation; * browses visible topics. Cursor is bound to query, Help/registry/source revisions and visibility. Compact summaries do not read remote embeddings or mutate state."
     },
     "help.read": {
       "operation": "help.read",
       "mode": "Query",
       "fields": {
         "topic_id": "Id",
-        "version": "Label"
+        "version": "Label",
+        "cursor": "?Cursor",
+        "max_chars": "?PositiveCounter"
       },
-      "result": "HelpTopic",
+      "result": "HelpReadResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read a version-matched bounded Unicode-scalar passage (default 16384, maximum 65536 characters) under Help permission alone; no artifact-tool permission is required. Cursor binds topic/version/source digest and current visibility. Missing, stale or unavailable source is explicit. Legacy reads use actual published artifact references.",
+      "since": {
+        "cursor": 3,
+        "max_chars": 3
+      }
     },
     "help.topic_for_screen": {
       "operation": "help.topic_for_screen",
       "mode": "Query",
       "fields": {
         "screen_id": "Id",
-        "capability_revision": "Revision"
+        "capability_revision": "?Revision",
+        "current": "?bool",
+        "page": "?PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one explicit capability revision or current:true; resolve current metadata in the same authorized snapshot, without requiring add-on tools. A stale explicit revision is visible, not silently replaced. Screen mappings are server-owned and paged.",
+      "since": {
+        "current": 3,
+        "page": 3
+      },
+      "exactlyOne": [
+        "capability_revision",
+        "current"
+      ],
+      "fieldSchema": {
+        "current": {
+          "const": true
+        }
+      }
     },
     "help.package_guides": {
       "operation": "help.package_guides",
@@ -8197,10 +8343,10 @@
         "version": "Label",
         "page": "PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read verified local Help for the exact installed package version and manifest. Expose package/version/manifest provenance and explicit missing/stale/unavailable outcomes. No add-on or artifact-tool permission is required for authorized Help retrieval."
     },
     "help.generate_capability_docs": {
       "operation": "help.generate_capability_docs",
@@ -9445,6 +9591,22 @@
       3
     ],
     "router.price_override": [
+      1,
+      3
+    ],
+    "help.search": [
+      1,
+      3
+    ],
+    "help.read": [
+      1,
+      3
+    ],
+    "help.topic_for_screen": [
+      1,
+      3
+    ],
+    "help.package_guides": [
       1,
       3
     ]

@@ -4516,14 +4516,398 @@
       ],
       "type": "string"
     },
-    "HelpTopic": {
+    "HelpAvailability": {
+      "enum": [
+        "Available",
+        "Missing",
+        "Stale",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "HelpCapabilityMetadata": {
       "additionalProperties": false,
       "properties": {
+        "authority": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "effect": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "inputSchemaDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "inputType": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "mode": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "operation": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "owner": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "resultSchemaDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "resultType": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "schemaRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "unavailableReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "mode",
+        "owner",
+        "authority",
+        "effect",
+        "schemaRevision",
+        "inputType",
+        "resultType",
+        "inputSchemaDigest",
+        "resultSchemaDigest",
+        "available"
+      ],
+      "type": "object"
+    },
+    "HelpPassage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset": {
+          "$ref": "#/$defs/Counter"
+        },
+        "text": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "text",
+        "offset",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "HelpProvenance": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appVersion": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "contentDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "Bundled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "appVersion",
+            "contentDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contentDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "Package",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "packageVersion": {
+              "$ref": "#/$defs/Text1To256"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "packageVersion",
+            "manifestDigest",
+            "contentDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "appVersion": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "contentDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "kind": {
+              "const": "Generated",
+              "type": "string"
+            },
+            "registryRevision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "appVersion",
+            "registryRevision",
+            "contentDigest"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HelpReadResult": {
+      "$ref": "#/$defs/HelpReadView",
+      "x-since": 3
+    },
+    "HelpReadView": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Available",
+              "type": "string"
+            },
+            "passage": {
+              "$ref": "#/$defs/HelpPassage"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/HelpSnapshot"
+            },
+            "topic": {
+              "$ref": "#/$defs/HelpTopicSummary"
+            }
+          },
+          "required": [
+            "kind",
+            "topic",
+            "passage",
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "availability": {
+              "$ref": "#/$defs/HelpAvailability"
+            },
+            "currentVersion": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Text1To256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "Unavailable",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            "requestedVersion": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/HelpSnapshot"
+            },
+            "topicId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "topicId",
+            "requestedVersion",
+            "availability",
+            "reason",
+            "snapshot"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HelpSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "appVersion": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "canGenerate": {
+          "type": "boolean"
+        },
+        "cannotGenerateReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generationOperation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "helpRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "registryRevision": {
+          "$ref": "#/$defs/Revision"
+        }
+      },
+      "required": [
+        "appVersion",
+        "helpRevision",
+        "registryRevision",
+        "canGenerate"
+      ],
+      "type": "object"
+    },
+    "HelpTopicPage": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/HelpAvailability"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_HelpTopicSummary_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot": {
+          "$ref": "#/$defs/HelpSnapshot"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "availability",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "HelpTopicPageResult": {
+      "$ref": "#/$defs/HelpTopicPage",
+      "x-since": 3
+    },
+    "HelpTopicSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/HelpAvailability"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/List_HelpCapabilityMetadata_0_500"
+        },
         "content": {
-          "$ref": "#/$defs/ArtifactRef"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "$ref": "#/$defs/Id"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HelpProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relatedCapabilities": {
+          "$ref": "#/$defs/List_Text1To256_0_500"
         },
         "relatedCapabilityIds": {
           "$ref": "#/$defs/List_Id_0_128"
@@ -4539,8 +4923,10 @@
         "id",
         "version",
         "title",
-        "content",
-        "relatedCapabilityIds"
+        "relatedCapabilityIds",
+        "availability",
+        "capabilities",
+        "relatedCapabilities"
       ],
       "type": "object"
     },
@@ -6466,9 +6852,17 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_HelpTopic_0_500": {
+    "List_HelpCapabilityMetadata_0_500": {
       "items": {
-        "$ref": "#/$defs/HelpTopic"
+        "$ref": "#/$defs/HelpCapabilityMetadata"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_HelpTopicSummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/HelpTopicSummary"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -9722,32 +10116,6 @@
         },
         "items": {
           "$ref": "#/$defs/List_PackageRecord_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page46": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_HelpTopic_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19871,7 +20239,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page46"
+          "$ref": "#/$defs/HelpTopicPageResult"
         }
       },
       "required": [
@@ -19888,7 +20256,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/HelpTopic"
+          "$ref": "#/$defs/HelpReadResult"
         }
       },
       "required": [
@@ -19905,7 +20273,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page46"
+          "$ref": "#/$defs/HelpTopicPageResult"
         }
       },
       "required": [
@@ -19922,7 +20290,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page46"
+          "$ref": "#/$defs/HelpTopicPageResult"
         }
       },
       "required": [
