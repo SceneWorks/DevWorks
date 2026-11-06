@@ -980,14 +980,23 @@ impl PackageService {
                     .len()
                     >= 32 * 1024
                 {
-                    let reference = self
-                        .publish_review_facts(
-                            &context,
-                            &request,
-                            &Preparation::new(&*self.store, None, None),
-                            &facts,
-                        )
-                        .map_err(review_failure)?;
+                    let reference = match self.publish_review_facts(
+                        &context,
+                        &request,
+                        &Preparation::new(&*self.store, None, None),
+                        &facts,
+                    ) {
+                        Ok(reference) => reference,
+                        // A source can lose authority after the read-side check. It remains
+                        // pending; one revoked source must not abort application bootstrap.
+                        Err(Failure::Storage(StorageError::ScopeDenied)) => continue,
+                        Err(Failure::Refused(refusal))
+                            if refusal.code == DomainErrorCode::PermissionDenied =>
+                        {
+                            continue;
+                        }
+                        Err(failure) => return Err(review_failure(failure)),
+                    };
                     Some((reference, facts))
                 } else {
                     None
