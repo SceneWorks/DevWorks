@@ -900,3 +900,38 @@ fn chat_nested_raw_evidence_follows_escaped_and_duplicate_structural_keys() {
         }
     }
 }
+
+#[test]
+fn malformed_messages_blocks_never_panic_on_later_deltas() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        for block in [json!(null), json!("bad"), json!(42), json!([]), json!(true)] {
+            for delta in [
+                json!({"type":"text_delta","text":"later"}),
+                json!({"type":"thinking_delta","thinking":"later"}),
+                json!({"type":"signature_delta","signature":"later"}),
+                json!({"type":"citations_delta","citation":{"text":"later"}}),
+            ] {
+                let mut decoder = Decoder::new(profile.clone());
+                let mut frames = event(
+                    &mut decoder,
+                    json!({"type":"content_block_start","index":0,"content_block":block}),
+                );
+                frames.extend(event(
+                    &mut decoder,
+                    json!({"type":"content_block_delta","index":0,"delta":delta}),
+                ));
+                frames.extend(decoder.finish());
+                assert!(
+                    frames
+                        .iter()
+                        .any(|f| matches!(f, DecodedFrame::Error { .. }))
+                );
+                assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
+                assert!(calls(&frames).is_empty());
+            }
+        }
+    }
+}
