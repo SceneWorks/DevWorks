@@ -124,6 +124,7 @@ fn indexed_architecture_overview_and_dependencies_preserve_exact_facts_and_unkno
         counts.edges.to_string()
     );
     let row = &result["value"]["result"]["value"]["repositories"][0];
+    assert!(row.get("foundational").is_none());
     assert_eq!(row["readmeSource"]["path"], "README.md");
     assert_eq!(row["readmeSource"]["snapshot"]["repositoryId"], json!(rid));
     assert!(
@@ -195,7 +196,8 @@ fn captured_modules(store: &Arc<dyn ApplicationStore>) {
         for i in 0..601{nodes.push(StoredNode{unit_key:key.into(),node_id:format!("route-{i}"),kind:"Route".into(),name:format!("route-{i}"),payload:json!({"properties":{"dotnet_project":"Recorded"}})});}
         tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:key.into(),content_digest:"opaque-recorded-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&nodes,&[])?;
         tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"Other.csproj".into(),content_digest:"opaque-other-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[StoredNode{unit_key:"Other.csproj".into(),node_id:"module-other".into(),kind:"DotnetProject".into(),name:"Other".into(),payload:json!({"properties":{"dotnet_project":"Other"}})}],&[])?;
-        tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:2,manifest:json!({})})?;
+        tx.indexing().put_unit(&StoredUnit{generation_id:generation.clone(),unit_key:"/".into(),content_digest:"opaque-root-content".into(),action:UNIT_REPLACE.into(),payload:json!({})},&[StoredNode{unit_key:"/".into(),node_id:"root-recorded".into(),kind:"Repository".into(),name:"Recorded".into(),payload:json!({"properties":{"foundational":true,"sourceGroup":"captured-source-group","framework":"captured-framework"}})}],&[])?;
+        tx.indexing().update_generation(&StoredGeneration{id:generation.clone(),repository_id:repository.clone(),layer:LAYER_BASELINE.into(),state:GEN_SEALED.into(),source_digest:"a".repeat(40),watermark:3,manifest:json!({})})?;
         tx.indexing().insert_view(&StoredView{view_id:view.clone(),repository_id:repository.clone(),view_digest:devworks_core::fingerprint::sha256_hex(b"recorded-view"),baseline_id:generation,branch_id:None,worktree_id:None,coverage:json!({"state":"Complete","commit":"a".repeat(40),"sourceRevision":1})})?;
         tx.indexing().publish(&repository,&view,0)?;
         tx.projects().publish_index_view(&StoredIndexView{view_id:view,repository_id:repository,source_revision:"a".repeat(40),coverage:"Complete".into(),published_at_ms:1})?;
@@ -222,6 +224,18 @@ fn recorded_modules_page_full_semantic_arrays_and_indexed_drilldowns_without_fab
         DomainQueryReply::Result { result, .. } => serde_json::to_value(result).unwrap(),
         DomainQueryReply::Rejected { fault, .. } => panic!("{fault:?}"),
     };
+    let overview = match app
+        .query(&ctx, "code.overview", base.to_string().as_bytes())
+        .unwrap()
+    {
+        DomainQueryReply::Result { result, .. } => serde_json::to_value(result).unwrap(),
+        DomainQueryReply::Rejected { fault, .. } => panic!("{fault:?}"),
+    };
+    let repository = &overview["value"]["result"]["value"]["repositories"][0];
+    assert_eq!(repository["foundational"], true);
+    assert_eq!(repository["sourceGroup"], "captured-source-group");
+    assert_eq!(repository["framework"], "captured-framework");
+    assert!(repository.get("readmeSource").is_none());
     let mut limited = base.clone();
     limited["limits"]["maxVisited"] = json!(1);
     let limited_result = invoke(&limited);

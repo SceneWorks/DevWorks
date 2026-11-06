@@ -244,7 +244,7 @@ pub(super) fn kind_counts(
     });
     Ok(rows)
 }
-fn repository_properties(
+pub(super) fn repository_properties(
     reader: &mut Reader<'_>,
     scope: &GraphScope,
 ) -> Result<Option<Value>, Failure> {

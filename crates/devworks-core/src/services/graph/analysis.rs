@@ -87,7 +87,7 @@ pub(super) fn overview(
         if repository.is_some_and(|id| id != &row.id) {
             return Ok(true);
         }
-        let mut value = json!({"repositoryId":row.id,"name":row.name,"foundational":false});
+        let mut value = json!({"repositoryId":row.id,"name":row.name});
         if row.languages.len() == 1 {
             value["language"] = json!(row.languages[0]);
         }
@@ -108,9 +108,27 @@ pub(super) fn overview(
                 .views
                 .iter()
                 .any(|binding| binding.repository_id == id)
-                && let Some(source) = reader.readme_source(&id)?
             {
-                row["readmeSource"] = serde_json::to_value(source).expect("typed source");
+                let scope = reader.scoped_repository(&id)?;
+                if let Some(recorded) = aggregate::repository_properties(reader, &scope)? {
+                    if let Some(flag) = recorded
+                        .get("foundational")
+                        .or_else(|| recorded.get("isFoundational"))
+                        .and_then(Value::as_bool)
+                    {
+                        row["foundational"] = json!(flag);
+                    }
+                    for (input, output) in
+                        [("sourceGroup", "sourceGroup"), ("framework", "framework")]
+                    {
+                        if let Some(text) = recorded.get(input).and_then(Value::as_str) {
+                            row[output] = json!(text);
+                        }
+                    }
+                }
+                if let Some(source) = reader.readme_source(&id)? {
+                    row["readmeSource"] = serde_json::to_value(source).expect("typed source");
+                }
             }
         }
         let scope = match repository {
