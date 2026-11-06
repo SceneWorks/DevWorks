@@ -52,6 +52,14 @@ impl Materials for Material {
         }
         Ok(b.clone())
     }
+    fn native(
+        &self,
+        reference: &ArtifactRef,
+        _binding: &NativeBinding,
+        max: u64,
+    ) -> Result<Vec<u8>, ProviderError> {
+        self.artifact(reference, max)
+    }
     fn schema(&self, _: &SchemaRef) -> Result<Value, ProviderError> {
         Ok(self.schema.clone())
     }
@@ -917,4 +925,247 @@ fn converted_message_and_tool_text_keep_frozen_newlines_without_changing_instruc
             assert_eq!(result["output"], "First result\nSecond result");
         }
     }
+}
+
+#[test]
+fn thinking_effort_thresholds_share_exact_wire_and_admission_normalization() {
+    use effort::{NativeEffort, normalize_effort, requested_effort};
+    let levels = [
+        (0, "low"),
+        (4095, "low"),
+        (4096, "medium"),
+        (16383, "medium"),
+        (16384, "high"),
+        (32767, "high"),
+        (32768, "xhigh"),
+        (65535, "xhigh"),
+        (65536, "max"),
+        (u32::MAX, "max"),
+    ];
+    for profile in [
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for (budget, level) in levels {
+            let mut c = context();
+            c.parameters.thinking = Some(Thinking::Enabled {
+                budget_tokens: budget,
+            });
+            let mut m = Material::new();
+            let r = request(&mut m, &c);
+            let b = binding(profile.clone());
+            let mut cap = caps(b.clone());
+            cap.efforts = vec![level.into()];
+            let encoding = match profile {
+                EndpointProfile::OpenAiResponses | EndpointProfile::CodexSubscriptionResponses => {
+                    EffortEncoding::ResponsesReasoning {
+                        value: level.into(),
+                    }
+                }
+                _ => EffortEncoding::ReasoningEffort {
+                    value: level.into(),
+                },
+            };
+            cap.effort_encodings.insert(level.into(), encoding);
+            let normalized = normalize_effort(&c.parameters, &r.options, &cap).unwrap();
+            assert_eq!(normalized.requested.unwrap().as_str(), level);
+            assert_eq!(normalized.requested, normalized.effective);
+            let prepared = prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap();
+            let pointer = if profile == EndpointProfile::CompatibleChat {
+                "/reasoning_effort"
+            } else {
+                "/reasoning/effort"
+            };
+            assert_eq!(body(&prepared).pointer(pointer), Some(&json!(level)));
+            assert!(body(&prepared).get("thinking").is_none());
+        }
+    }
+    let mut c = context();
+    let mut m = Material::new();
+    let r = request(&mut m, &c);
+    c.parameters.thinking = Some(Thinking::Disabled);
+    assert_eq!(
+        requested_effort(&c.parameters, &r.options).unwrap(),
+        Some(NativeEffort::None)
+    );
+    c.parameters.thinking = Some(Thinking::Adaptive);
+    assert_eq!(requested_effort(&c.parameters, &r.options).unwrap(), None);
+    c.parameters.thinking = None;
+    assert_eq!(requested_effort(&c.parameters, &r.options).unwrap(), None);
+}
+
+#[test]
+fn thinking_disabled_override_unknown_and_wrong_encoding_never_downgrade() {
+    for profile in [
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut c = context();
+        c.parameters.thinking = Some(Thinking::Disabled);
+        let mut m = Material::new();
+        let mut r = request(&mut m, &c);
+        let b = binding(profile.clone());
+        let mut cap = caps(b.clone());
+        let encoding = |value: &str| match profile {
+            EndpointProfile::OpenAiResponses | EndpointProfile::CodexSubscriptionResponses => {
+                EffortEncoding::ResponsesReasoning {
+                    value: value.into(),
+                }
+            }
+            _ => EffortEncoding::ReasoningEffort {
+                value: value.into(),
+            },
+        };
+        cap.efforts = vec!["none".into(), "high".into()];
+        cap.effort_encodings.insert("none".into(), encoding("none"));
+        cap.effort_encodings.insert("high".into(), encoding("high"));
+        let pointer = if profile == EndpointProfile::CompatibleChat {
+            "/reasoning_effort"
+        } else {
+            "/reasoning/effort"
+        };
+        assert_eq!(
+            body(&prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap())
+                .pointer(pointer),
+            Some(&json!("none"))
+        );
+        r.options.effort = Some(EffortOption {
+            value: id("High"),
+            required: true,
+        });
+        let normalized = effort::normalize_effort(&c.parameters, &r.options, &cap).unwrap();
+        assert_eq!(normalized.effective, Some(effort::NativeEffort::High));
+        assert_eq!(
+            body(&prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap())
+                .pointer(pointer),
+            Some(&json!("high"))
+        );
+        r.options.effort = Some(EffortOption {
+            value: id("Minimal"),
+            required: false,
+        });
+        assert_eq!(
+            prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap_err(),
+            ProviderError::Unsupported("effort")
+        );
+        r.options.effort = Some(EffortOption {
+            value: id("mystery"),
+            required: true,
+        });
+        assert_eq!(
+            effort::requested_effort(&c.parameters, &r.options),
+            Err(ProviderError::Unsupported("effort"))
+        );
+        r.options.effort = None;
+        cap.thinking = Support::Unknown;
+        assert_eq!(
+            prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap_err(),
+            ProviderError::Unsupported("thinking")
+        );
+        cap.thinking = Support::Supported;
+        cap.effort_encodings.insert(
+            "none".into(),
+            EffortEncoding::MessagesOutputConfig {
+                value: "none".into(),
+            },
+        );
+        assert_eq!(
+            prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap_err(),
+            ProviderError::Unsupported("effort_encoding")
+        );
+    }
+}
+
+#[test]
+fn messages_thinking_keeps_exact_native_budget_adaptive_and_disabled() {
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        for (thinking, expected) in [
+            (Thinking::Disabled, json!({"type":"disabled"})),
+            (
+                Thinking::Enabled {
+                    budget_tokens: 16384,
+                },
+                json!({"type":"enabled","budget_tokens":16384}),
+            ),
+            (Thinking::Adaptive, json!({"type":"adaptive"})),
+        ] {
+            let mut c = context();
+            c.parameters.thinking = Some(thinking);
+            let mut m = Material::new();
+            let mut r = request(&mut m, &c);
+            let b = binding(profile.clone());
+            let mut cap = caps(b.clone());
+            let prepared = prepare(identity(b.clone()), &r, &cap, &m, None, &limits()).unwrap();
+            assert_eq!(body(&prepared)["thinking"], expected);
+            assert!(body(&prepared).get("output_config").is_none());
+            cap.efforts = vec!["minimal".into()];
+            cap.effort_encodings.insert(
+                "minimal".into(),
+                EffortEncoding::MessagesOutputConfig {
+                    value: "minimal".into(),
+                },
+            );
+            r.options.effort = Some(EffortOption {
+                value: id("Minimal"),
+                required: true,
+            });
+            let prepared = prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap();
+            assert_eq!(body(&prepared)["thinking"], expected);
+            assert_eq!(body(&prepared)["output_config"]["effort"], json!("minimal"));
+        }
+    }
+}
+
+#[test]
+fn adaptive_and_unspecified_effort_keep_target_defaults_and_disabled_local_kwargs_are_exact() {
+    for profile in [
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        let mut c = context();
+        c.parameters.thinking = Some(Thinking::Adaptive);
+        let mut m = Material::new();
+        let r = request(&mut m, &c);
+        let b = binding(profile.clone());
+        let cap = caps(b.clone());
+        let normalized = effort::normalize_effort(&c.parameters, &r.options, &cap).unwrap();
+        assert_eq!(normalized.effective, None);
+        assert!(normalized.encoding.is_none());
+        let prepared = prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap();
+        let body = body(&prepared);
+        assert!(body.pointer("/reasoning/effort").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking").is_none());
+        if profile == EndpointProfile::OpenRouterChat {
+            assert_eq!(body["reasoning"], json!({"enabled":true,"exclude":false}));
+        }
+    }
+    let mut c = context();
+    c.parameters.thinking = Some(Thinking::Disabled);
+    let mut m = Material::new();
+    let r = request(&mut m, &c);
+    let b = binding(EndpointProfile::CompatibleChat);
+    let mut cap = caps(b.clone());
+    cap.efforts = vec!["none".into()];
+    cap.effort_encodings.insert(
+        "none".into(),
+        EffortEncoding::ChatTemplateKwargs {
+            value: json!({"enable_thinking":false}),
+        },
+    );
+    assert_eq!(
+        body(&prepare(identity(b), &r, &cap, &m, None, &limits()).unwrap())["chat_template_kwargs"],
+        json!({"enable_thinking":false})
+    );
+    let embedding = caps(binding(EndpointProfile::Embedding));
+    assert!(effort::normalize_effort(&c.parameters, &r.options, &embedding).is_err());
 }

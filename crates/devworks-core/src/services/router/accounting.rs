@@ -34,6 +34,12 @@ pub struct PinFence {
 }
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub enum AttemptSelection {
+    /// Trusted native normalization retained alongside the existing exact route eligibility.
+    NativeGeneration {
+        route: Box<AttemptSelection>,
+        requested_effort: Option<String>,
+        effective_effort: Option<String>,
+    },
     Conversation {
         intent: RouteIntent,
         effort: EffortName,
@@ -55,6 +61,14 @@ pub enum AttemptSelection {
     },
 }
 
+impl AttemptSelection {
+    fn route(&self) -> &Self {
+        match self {
+            Self::NativeGeneration { route, .. } => route,
+            _ => self,
+        }
+    }
+}
 impl InferenceRouter {
     pub(crate) fn attempt_route_current(
         &self,
@@ -64,7 +78,32 @@ impl InferenceRouter {
         query: &crate::ports::usage::PriceQuery,
     ) -> Result<Option<String>, StorageError> {
         let connections = self.connections.connections(tx.router())?;
+        if let AttemptSelection::NativeGeneration {
+            route,
+            effective_effort,
+            ..
+        } = selection
+        {
+            let mut selected = route.as_ref().clone();
+            let AttemptSelection::Conversation { effort, .. } = &mut selected else {
+                return Err(StorageError::ScopeDenied);
+            };
+            if let Some(level) = effective_effort.as_deref() {
+                *effort = match level {
+                    "none" => EffortName::Default,
+                    "minimal" => EffortName::Minimal,
+                    "low" => EffortName::Low,
+                    "medium" => EffortName::Medium,
+                    "high" => EffortName::High,
+                    "xhigh" => EffortName::XHigh,
+                    "max" => EffortName::Max,
+                    _ => return Err(StorageError::ScopeDenied),
+                };
+            }
+            return self.attempt_route_current(tx, session, &selected, query);
+        }
         match selection {
+            AttemptSelection::NativeGeneration { .. } => unreachable!("handled above"),
             AttemptSelection::Conversation {
                 intent,
                 effort,
@@ -178,7 +217,13 @@ impl InferenceRouter {
                     && query.provider_model_id.as_ref() == Some(upstream_model_id)
                     && registration_digest.len() == 64
                     && registration_digest.bytes().all(|b| b.is_ascii_hexdigit());
-                if !eligible {
+                if !eligible
+                    || tx
+                        .router()
+                        .cooldowns()?
+                        .iter()
+                        .any(|c| c.model_id == query.catalog_model_id && c.until_ms > tx.now_ms())
+                {
                     return Ok(Some(
                         "embedding model, connection or qualified native space changed".into(),
                     ));
@@ -251,14 +296,17 @@ impl InferenceRouter {
                 StorageError::InvalidRecord("missing logical inference request".into())
             })?;
         if (route.purpose == "Embedding")
-            != matches!(request.selection, AttemptSelection::Embedding { .. })
+            != matches!(
+                request.selection.route(),
+                AttemptSelection::Embedding { .. }
+            )
         {
             return Ok(Admission::SourceChanged(
                 "embedding requires its qualified native route".into(),
             ));
         }
         if route.purpose == "TierClassification"
-            && matches!(&request.selection,AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
+            && matches!(request.selection.route(),AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
         {
             return Ok(Admission::SourceChanged(
                 "the conversational classifier must target Low directly".into(),

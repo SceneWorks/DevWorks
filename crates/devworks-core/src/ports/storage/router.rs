@@ -184,6 +184,8 @@ pub struct StoredConnection {
     /// Positive native account identity generation, independent of credential refreshes.
     /// The owning service preserves it or advances it by one with the connection CAS.
     pub account_revision: i64,
+    /// Exact durable OAuth refresh operation, retained after its outcome.
+    pub refresh_operation_id: Option<OperationId>,
     /// Digest of the provider account the credential acts for.
     pub account_digest: Option<String>,
     pub access_expires_at_ms: Option<i64>,

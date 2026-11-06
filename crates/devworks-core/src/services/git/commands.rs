@@ -82,6 +82,29 @@ enum Action {
 }
 struct StagedMessage(Result<String, DomainErrorCode>, Option<Value>);
 
+fn reviewed_commit_matches(git: &Git<'_>, path: &Path, job: &Job, head: &str) -> bool {
+    let (Action::Commit { message, expected }, Some(binding)) =
+        (&job.action, &job.reviewed_binding)
+    else {
+        return false;
+    };
+    let message = if message.ends_with('\n') {
+        message.clone()
+    } else {
+        format!("{message}\n")
+    };
+    git.commit_message(path, head)
+        .is_ok_and(|actual| actual == message)
+        && git
+            .committed_commit_manifest(path, &expected.hex, head)
+            .is_ok_and(|manifest| {
+                super::approval::compact_commit_manifest(&manifest)
+                    .ok()
+                    .as_ref()
+                    == Some(&binding["commitManifest"])
+            })
+}
+
 impl Job {
     fn context(&self, service: &GitService, operation: &OperationId) -> InvocationContext {
         let kind = match self.kind.as_str() {
@@ -1042,7 +1065,20 @@ impl GitService {
                     }
                     _ => return changed("worktree head or branch changed"),
                 }
-                match git.mutation(path, &["add", "--all", "--"], None, &operation.id, false) {
+                let mutate = |args: &[&str], stdin| {
+                    if let Some(binding) = &job.reviewed_binding {
+                        git.reviewed_mutation(
+                            path,
+                            args,
+                            stdin,
+                            &operation.id,
+                            &binding["commitManifest"]["executionPolicy"],
+                        )
+                    } else {
+                        git.mutation(path, args, stdin, &operation.id, false)
+                    }
+                };
+                match mutate(&["add", "--all", "--"], None) {
                     Ok(_) => {
                         if let Some(binding) = &job.reviewed_binding {
                             match git.staged_commit_manifest(path, &expected.hex) {
@@ -1058,13 +1094,11 @@ impl GitService {
                                 }
                             }
                         }
-                        git.mutation(
-                            path,
-                            &["commit", "--cleanup=verbatim", "--file=-"],
-                            Some(message.as_bytes().to_vec()),
-                            &operation.id,
-                            false,
-                        )
+                        let mut args = vec!["commit", "--cleanup=verbatim", "--file=-"];
+                        if job.reviewed_binding.is_some() {
+                            args.push("--no-gpg-sign");
+                        }
+                        mutate(&args, Some(message.as_bytes().to_vec()))
                     }
                     Err(e) => Err(e),
                 }
@@ -1083,6 +1117,14 @@ impl GitService {
                             != Some(std::slice::from_ref(&expected.hex)))
                 {
                     return EffectOutcome::Unknown("commit parent could not be verified".into());
+                }
+                if matches!(job.action, Action::Commit { .. })
+                    && job.reviewed_binding.is_some()
+                    && !reviewed_commit_matches(&git, path, &job, &observation.head)
+                {
+                    return EffectOutcome::Unknown(
+                        "committed tree or message differs from the reviewed contents".into(),
+                    );
                 }
                 self.finish_git(&job, &operation.id, observation)
             }
@@ -1145,13 +1187,16 @@ impl GitService {
             Action::Inspect => true,
             Action::Commit { message, expected } => {
                 if observed.head == expected.hex {
-                    !observed.dirty
+                    !observed.dirty && job.reviewed_binding.is_none()
                 } else {
                     git.commit_parents(path, &observed.head).ok().as_deref()
                         == Some(std::slice::from_ref(&expected.hex))
-                        && git
-                            .commit_message(path, &observed.head)
-                            .is_ok_and(|body| body.trim_end() == message.trim_end())
+                        && if job.reviewed_binding.is_some() {
+                            reviewed_commit_matches(&git, path, job, &observed.head)
+                        } else {
+                            git.commit_message(path, &observed.head)
+                                .is_ok_and(|body| body.trim_end() == message.trim_end())
+                        }
                 }
             }
             Action::Push {

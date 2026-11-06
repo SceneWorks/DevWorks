@@ -8,3 +8,6 @@ CREATE TABLE provider_connection_identities (
 ) STRICT;
 INSERT INTO provider_connection_identities(id,account_revision)
     SELECT id,account_revision FROM router_connections;
+
+-- Exact OAuth refresh ownership survives app closure and never replays a possibly spent token.
+ALTER TABLE router_connections ADD COLUMN refresh_operation_id TEXT REFERENCES operations(id) DEFAULT NULL;

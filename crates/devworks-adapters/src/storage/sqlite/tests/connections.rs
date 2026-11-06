@@ -3499,3 +3499,88 @@ fn account_identity_removed_generation_is_retained_and_recreation_cannot_revive_
         Some(i64::MAX)
     );
 }
+
+#[test]
+fn native_account_identity_service_changes_do_not_alias_rotation_or_removed_connections() {
+    use devworks_core::protocol::provider::{EndpointProfile, NativeBinding};
+    let cx = Cx::new();
+    cx.add(
+        "native-identity",
+        "CompatibleChat",
+        "http://localhost:11434/v1",
+        None,
+    );
+    let before = cx.row("native-identity");
+    let old_binding = NativeBinding {
+        connection_id: before.id.clone(),
+        account_revision: Revision::new(before.account_revision).unwrap(),
+        endpoint_profile: EndpointProfile::CompatibleChat,
+        model_id: id("native-model"),
+        context_epoch: Counter::new(0).unwrap(),
+    };
+    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":before.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1"})));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        before.account_revision
+    );
+    for endpoint in ["http://localhost:11434/v2", "http://localhost:11434/v1"] {
+        let current = cx.row("native-identity");
+        summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":endpoint})));
+        assert_eq!(
+            cx.row("native-identity").account_revision,
+            current.account_revision + 1
+        );
+    }
+    let current = cx.row("native-identity");
+    let key = cx.stage("native-new-key");
+    summary(cx.configure(json!({"kind":"Connection","connectionId":"native-identity","expectedRevision":current.revision.to_string(),"name":"Renamed","profile":"CompatibleChat","endpoint":"http://localhost:11434/v1","credentialRef":key.as_str()})));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision + 1
+    );
+    let current = cx.row("native-identity");
+    summary(cx.configure(
+        json!({"kind":"SignIn","connectionId":"native-identity","action":"Disconnect"}),
+    ));
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision + 1
+    );
+    let removed = cx.row("native-identity");
+    summary(cx.configure(json!({"kind":"RemoveConnection","connectionId":"native-identity","expectedRevision":removed.revision.to_string()})));
+    cx.add(
+        "native-identity",
+        "CompatibleChat",
+        "http://localhost:11434/v1",
+        None,
+    );
+    let current = cx.row("native-identity");
+    assert_eq!(current.account_revision, removed.account_revision + 1);
+    assert_ne!(current.account_revision, old_binding.account_revision.get());
+    let cx = cx.restart();
+    assert_eq!(
+        cx.row("native-identity").account_revision,
+        current.account_revision
+    );
+}
+
+#[test]
+fn native_same_account_oauth_refresh_preserves_continuation_but_new_account_fences_it() {
+    let cx = Cx::new();
+    let before = claude_due_for_refresh(&cx);
+    cx.svc.access(&id("claude"), None).unwrap();
+    let rotated = cx.row("claude");
+    assert_eq!(rotated.credential_revision, before.credential_revision + 1);
+    assert_eq!(
+        rotated.account_revision, before.account_revision,
+        "ordinary refresh must preserve native replay identity"
+    );
+    cx.http.reset(Method::Post,CLAUDE_TOKEN,200,json!({"access_token":"new-account-access","refresh_token":"new-account-refresh","expires_in":3600,"account":{"uuid":"different-account"}}));
+    assert!(matches!(
+        cx.svc.refresh(&id("claude")),
+        Err(AccessError::Disabled)
+    ));
+    let changed = cx.row("claude");
+    assert_eq!(changed.account_revision, rotated.account_revision + 1);
+    assert!(changed.risk.is_none());
+}

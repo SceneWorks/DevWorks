@@ -42,6 +42,8 @@ pub struct Quantities {
     pub cache_write_tokens: Option<i64>,
     /// Reasoning is an output subset; it is observable but never added to output again.
     pub reasoning_tokens: Option<i64>,
+    /// Token Input/Output modality counters are subsets of the corresponding aggregate.
+    /// Non-token units are independent billing dimensions.
     pub additional: Vec<MeasuredQuantity>,
 }
 

@@ -63,6 +63,7 @@ pub enum DecodeErrorKind {
     InvalidToolCall,
     InvalidEmbedding,
     UnsupportedReplay,
+    Unreachable,
     Authentication,
     Permission,
     ModelUnavailable,
@@ -590,6 +591,13 @@ impl Decoder {
             DecodeErrorKind::Authentication
         } else if facts.contains("permission") || code.as_deref() == Some("403") {
             DecodeErrorKind::Permission
+        } else if facts.contains("usage_not_included")
+            || facts.contains("unsupported_model")
+            || facts.contains("model_not_found")
+            || facts.contains("model_not_available")
+            || facts.contains("invalid model")
+        {
+            DecodeErrorKind::ModelUnavailable
         } else if facts.contains("context_length")
             || facts.contains("context window")
             || facts.contains("context_window")
@@ -610,13 +618,6 @@ impl Decoder {
             || code.as_deref() == Some("503")
         {
             DecodeErrorKind::Overloaded
-        } else if facts.contains("usage_not_included")
-            || facts.contains("unsupported_model")
-            || facts.contains("model_not_found")
-            || facts.contains("model_not_available")
-            || facts.contains("invalid model")
-        {
-            DecodeErrorKind::ModelUnavailable
         } else {
             DecodeErrorKind::Provider
         };

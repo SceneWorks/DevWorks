@@ -2,7 +2,7 @@
 use devworks_core::{
     ports::{
         http::HttpRequest,
-        provider_http::{HttpStream, SendPhase, StreamLimits, StreamingHttp},
+        provider_http::{HttpStream, SendPhase, StreamLimits, StreamingHttp, TransportFailure},
         secrets::Secret,
         storage::*,
     },
@@ -35,6 +35,8 @@ pub struct NativeProviderSource {
     aggregate: Vec<u8>,
     pending: VecDeque<InferenceFrame>,
     ended: bool,
+    terminal: Option<AttemptEnd>,
+    completed_items: Vec<DecodedFrame>,
     usage_sequence: i64,
     provider_model: Option<String>,
     status: u16,
@@ -65,6 +67,8 @@ impl NativeProviderSource {
             aggregate: Vec::new(),
             pending: VecDeque::new(),
             ended: false,
+            terminal: None,
+            completed_items: Vec::new(),
             usage_sequence: 0,
             provider_model: None,
             status: 0,
@@ -81,9 +85,14 @@ impl NativeProviderSource {
         self
     }
     fn frames(&mut self, frames: Vec<DecodedFrame>) -> Result<(), StorageError> {
-        for frame in frames {
-            if self.status >= 300 && matches!(frame, DecodedFrame::ToolCallComplete { .. }) {
-                continue;
+        for mut frame in frames {
+            if self.status >= 300 {
+                if matches!(frame, DecodedFrame::ToolCallComplete { .. }) {
+                    continue;
+                }
+                if let DecodedFrame::Native { observation } = &mut frame {
+                    observation.continuation = None;
+                }
             }
             match &frame {
                 DecodedFrame::Identity { model, .. } => {
@@ -92,6 +101,12 @@ impl NativeProviderSource {
                     }
                 }
                 DecodedFrame::Usage { observation } => {
+                    self.pending.push_back(InferenceFrame::UsageDimensions(
+                        devworks_core::services::usage::dimensions::ObservedDimensions {
+                            service_tier: observation.service_tier.clone(),
+                            processing_region: observation.processing_region.clone(),
+                        },
+                    ));
                     self.usage_sequence += 1;
                     let n = |v: Option<u64>| {
                         v.map(i64::try_from)
@@ -104,10 +119,9 @@ impl NativeProviderSource {
                             modality: "Text".into(),
                             charge_kind: "CacheWrite".into(),
                             unit: "Token".into(),
-                            cache_write_ttl_ms: write
-                                .ttl_seconds
-                                .map(|n| i64::try_from(n).ok().and_then(|n| n.checked_mul(1000)))
-                                .flatten(),
+                            cache_write_ttl_ms: write.ttl_seconds.and_then(|n| {
+                                i64::try_from(n).ok().and_then(|n| n.checked_mul(1000))
+                            }),
                             quantity: n(Some(write.tokens))?.expect("provided"),
                         });
                     }
@@ -153,13 +167,20 @@ impl NativeProviderSource {
                         .push_back(InferenceFrame::Output(frame.clone()));
                     continue;
                 }
+                DecodedFrame::ToolCallComplete { .. } => {
+                    self.completed_items.push(frame.clone());
+                    continue;
+                }
+                DecodedFrame::Native { observation } if observation.continuation.is_some() => {
+                    self.completed_items.push(frame.clone());
+                    continue;
+                }
                 DecodedFrame::Terminal { outcome, .. } => {
-                    self.pending
-                        .push_back(InferenceFrame::Terminal(if self.status >= 300 {
-                            AttemptEnd::Failed
-                        } else {
-                            outcome_kind(outcome)
-                        }));
+                    self.terminal = Some(if self.status >= 300 {
+                        AttemptEnd::Failed
+                    } else {
+                        outcome_kind(outcome)
+                    });
                     continue;
                 }
                 _ => {}
@@ -300,8 +321,8 @@ impl OwnedInferenceSource for NativeProviderSource {
                     AttemptEnd::UnknownTail
                 };
                 return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "provider transport did not open",
+                    Unavailable::Io,
+                    format!("provider transport {:?}: {:?}", error.phase, error.kind),
                 ));
             }
         };
@@ -322,20 +343,29 @@ impl OwnedInferenceSource for NativeProviderSource {
                 matches!(
                     name.to_ascii_lowercase().as_str(),
                     "retry-after" | "x-ratelimit-reset-requests" | "x-ratelimit-reset-tokens"
-                )
+                ) || name.to_ascii_lowercase().starts_with("x-codex-")
+                    || name
+                        .to_ascii_lowercase()
+                        .starts_with("anthropic-ratelimit-unified-")
             })
             .map(|(n, v)| (n.clone(), v.chars().take(512).collect::<String>()))
             .collect::<Vec<_>>();
-        self.frames(vec![DecodedFrame::Native {
-            observation: devworks_core::providers::decode::NativeObservation {
-                ordinal: None,
-                kind: "http_response".into(),
-                value: serde_json::json!({"status":self.status,"headers":headers}),
-                raw_json: serde_json::json!({"status":self.status,"headers":headers}).to_string(),
-                replay: devworks_core::providers::decode::NativeReplay::Unsupported,
-                continuation: None,
+        self.pending.push_back(InferenceFrame::ResponseHead(
+            devworks_core::providers::ProviderResponseHead {
+                status: self.status,
+                headers,
+                access: devworks_core::providers::ProviderAccessBasis {
+                    connection_id: access.connection_id.clone(),
+                    profile: self.prepared.profile.clone(),
+                    endpoint_digest: devworks_core::fingerprint::sha256_hex(
+                        access.endpoint.as_bytes(),
+                    ),
+                    credential_revision: access.credential_revision,
+                    account_revision: self.prepared.identity.binding.account_revision.get(),
+                    oauth: matches!(access.credential, AccessCredential::Bearer { .. }),
+                },
             },
-        }])?;
+        ));
         let streaming = matches!(
             self.prepared.profile,
             EndpointProfile::CodexSubscriptionResponses
@@ -368,6 +398,13 @@ impl OwnedInferenceSource for NativeProviderSource {
             if let Some(frame) = self.pending.pop_front() {
                 return Ok(Some(frame));
             }
+            if let Some(terminal) = self.terminal.take() {
+                self.close()?;
+                self.pending
+                    .extend(self.completed_items.drain(..).map(InferenceFrame::Output));
+                self.pending.push_back(InferenceFrame::Terminal(terminal));
+                continue;
+            }
             if self.ended {
                 return Ok(None);
             }
@@ -378,13 +415,32 @@ impl OwnedInferenceSource for NativeProviderSource {
                 .ok_or_else(|| invalid("provider source not started"))?
                 .read(&mut bytes, cancellation);
             match result {
-                Err(_) => {
-                    self.interrupted(
-                        if cancellation.is_cancelled() {
-                            DecodedOutcome::Cancelled
-                        } else {
-                            DecodedOutcome::OutcomeUnknown
+                Err(error) => {
+                    let kind = match error.kind {
+                        TransportFailure::Unreachable
+                        | TransportFailure::Deadline
+                        | TransportFailure::IdleTimeout => {
+                            devworks_core::providers::decode::DecodeErrorKind::Unreachable
+                        }
+                        TransportFailure::Protocol | TransportFailure::InvalidRequest => {
+                            devworks_core::providers::decode::DecodeErrorKind::Protocol
+                        }
+                        TransportFailure::TooLarge => {
+                            devworks_core::providers::decode::DecodeErrorKind::LimitExceeded
+                        }
+                        TransportFailure::Cancelled => {
+                            devworks_core::providers::decode::DecodeErrorKind::Provider
+                        }
+                    };
+                    self.frames(vec![DecodedFrame::Error {
+                        error: devworks_core::providers::decode::DecodeError {
+                            kind,
+                            code: Some(format!("transport_{:?}", error.kind)),
+                            message: "provider transport interrupted".into(),
                         },
+                    }])?;
+                    self.interrupted(
+                        DecodedOutcome::OutcomeUnknown,
                         "provider transport interrupted",
                     )?;
                 }
@@ -405,13 +461,17 @@ impl OwnedInferenceSource for NativeProviderSource {
                     self.frames(frames)?;
                     if self.status >= 300 {
                         let kind = match self.status {
-                            401 | 402 | 403 => {
+                            401..=403 => {
                                 devworks_core::providers::decode::DecodeErrorKind::Authentication
                             }
                             404 => {
                                 devworks_core::providers::decode::DecodeErrorKind::ModelUnavailable
                             }
+                            408 => devworks_core::providers::decode::DecodeErrorKind::Unreachable,
                             429 => devworks_core::providers::decode::DecodeErrorKind::Cooldown,
+                            500 | 502 | 503 | 504 | 529 => {
+                                devworks_core::providers::decode::DecodeErrorKind::Overloaded
+                            }
                             _ => devworks_core::providers::decode::DecodeErrorKind::Provider,
                         };
                         // Keep the actual HTTP classification even if a proxy supplied a syntactically

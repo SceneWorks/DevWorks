@@ -355,7 +355,7 @@ fn errors_remain_typed_and_partial_native_facts_survive() {
         ("context_length_exceeded", DecodeErrorKind::ContextLimit),
         ("rate_limit_error", DecodeErrorKind::Cooldown),
         ("usage_limit_reached", DecodeErrorKind::Cooldown),
-        ("usage_not_included", DecodeErrorKind::Cooldown),
+        ("usage_not_included", DecodeErrorKind::ModelUnavailable),
         ("insufficient_quota", DecodeErrorKind::Cooldown),
         ("context_window_exceeded", DecodeErrorKind::ContextLimit),
         ("overloaded_error", DecodeErrorKind::Overloaded),

@@ -87,6 +87,182 @@ pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
     pub result: ProviderResult,
 }
+pub(crate) struct NativeProduction {
+    pub context: InvocationContext,
+    pub logical: RequestAdmission,
+    pub category: ReportCategory,
+    pub request: AttemptRequest,
+    pub source: Box<dyn OwnedInferenceSource>,
+    pub sink: Box<dyn OwnedInferenceSink>,
+    pub preparation: NativePreparation,
+}
+pub(crate) struct NativePreparation {
+    owner: Arc<NativeProviders>,
+    request: InferenceRequest,
+}
+pub(crate) struct QuoteRefresh {
+    pub quote: devworks_core::ports::usage::PriceQuote,
+    pub price_generation: i64,
+    pub override_revision: i64,
+    pub connection_revision: i64,
+    pub native_effort: Option<devworks_core::providers::effort::NormalizedEffort>,
+    pub recorded_selection: Option<devworks_core::services::router::accounting::AttemptSelection>,
+}
+impl NativePreparation {
+    pub(crate) fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        logical: &RequestAdmission,
+        request: &AttemptRequest,
+    ) -> Result<Option<QuoteRefresh>, StorageError> {
+        if ctx.principal() != &request.actor_id
+            || logical.request_id != request.request_id
+            || logical.connection_id != request.query.connection_id
+            || logical.model_id != request.query.catalog_model_id
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let store = self.owner.store.as_ref();
+        let (replay, before) = read_snapshot(store, &ReadOptions::default(), |s| {
+            let mut replay = None;
+            if let Some(route) = s.router().route_request(&request.request_id)? {
+                let op = s
+                    .operations()
+                    .operation(&route.operation_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if op.args_digest != logical.args_digest {
+                    return Err(StorageError::ScopeDenied);
+                }
+                for journal in &op.attempts {
+                    if let Some(row) = s.usage().inference_attempt(&journal.id.0)?
+                        && devworks_core::services::usage::accounting::snapshot(&row)?.admission_key
+                            == request.admission_key
+                    {
+                        let captured = devworks_core::services::usage::accounting::snapshot(&row)?;
+                        let expected=match &captured.selection {devworks_core::services::router::accounting::AttemptSelection::NativeGeneration{route,..}=>route.as_ref(),selection=>selection};
+                        if serde_json::to_value(expected).ok()
+                            != serde_json::to_value(&request.selection).ok()
+                        {
+                            return Err(StorageError::ScopeDenied);
+                        }
+                        replay = Some(captured);
+                        break;
+                    }
+                }
+            }
+            Ok((
+                replay,
+                s.router()
+                    .connection(&request.query.connection_id)?
+                    .ok_or(StorageError::ScopeDenied)?,
+            ))
+        })?;
+        if let Some(captured) = replay {
+            return Ok(Some(QuoteRefresh {
+                connection_revision: captured
+                    .quote
+                    .connection_revision
+                    .ok_or(StorageError::ScopeDenied)?,
+                quote: captured.quote,
+                price_generation: captured.price_generation,
+                override_revision: captured.override_revision,
+                native_effort: None,
+                recorded_selection: Some(captured.selection),
+            }));
+        }
+        let parameters = match &self.request.input {
+            InferenceInput::Generation { context, .. } => {
+                let (bytes, _) = self
+                    .owner
+                    .artifacts
+                    .read_exact(store, ctx, context, 8 * 1024 * 1024)
+                    .map_err(|_| StorageError::ScopeDenied)?;
+                let material = serde_json::from_slice::<
+                    devworks_core::providers::context::ProviderContext,
+                >(&bytes)
+                .map_err(|_| invalid("provider context"))?;
+                material
+                    .validate()
+                    .map_err(|_| invalid("provider context"))?;
+                Some(material.parameters)
+            }
+            _ => None,
+        };
+        self.owner
+            .connections
+            .access(&before.id, None)
+            .map_err(|_| {
+                StorageError::unavailable(
+                    Unavailable::UnsupportedRuntime,
+                    "current provider access unavailable",
+                )
+            })?;
+        use devworks_core::ports::usage::PriceResolver;
+        read_snapshot(store, &ReadOptions::default(), |s| {
+            let current = s
+                .router()
+                .connection(&before.id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if current.account_revision != before.account_revision
+                || current.endpoint != before.endpoint
+                || current.profile != before.profile
+                || current.profile != request.query.endpoint_profile
+                || !current.enabled
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            let native_effort = if let Some(parameters) = &parameters {
+                let context_epoch = match &self.request.input {
+                    InferenceInput::Generation { context_epoch, .. } => context_epoch.clone(),
+                    _ => Counter::new(0).expect("zero"),
+                };
+                let binding = NativeBinding {
+                    connection_id: current.id.clone(),
+                    account_revision: Revision::new(current.account_revision).map_err(invalid)?,
+                    endpoint_profile: serde_json::from_value(serde_json::Value::String(
+                        current.profile.clone(),
+                    ))
+                    .map_err(|_| invalid("endpoint profile"))?,
+                    model_id: request.query.catalog_model_id.clone(),
+                    context_epoch,
+                };
+                let caps = self.owner.capabilities(
+                    &self.request,
+                    &binding,
+                    &current,
+                    s.router().route_model(&request.query.catalog_model_id)?,
+                    request
+                        .query
+                        .provider_model_id
+                        .as_deref()
+                        .ok_or(StorageError::ScopeDenied)?,
+                    &request.selection,
+                )?;
+                Some(
+                    devworks_core::providers::effort::normalize_effort(
+                        parameters,
+                        &self.request.options,
+                        &caps,
+                    )
+                    .map_err(|_| invalid("native effort is not qualified"))?,
+                )
+            } else {
+                None
+            };
+            Ok(Some(QuoteRefresh {
+                quote: devworks_core::services::prices::CatalogPriceResolver
+                    .quote(s, &request.query)?,
+                price_generation: s.usage().price_revision()?,
+                override_revision: s
+                    .usage()
+                    .price_override_revision(&request.query.catalog_model_id)?,
+                connection_revision: current.revision,
+                native_effort,
+                recorded_selection: None,
+            }))
+        })
+    }
+}
 impl NativeProviders {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
@@ -105,6 +281,14 @@ impl NativeProviders {
             composition,
         })
     }
+    /// Explicit host-qualified declarations, including Unknown support. Every request still
+    /// intersects these with the CURRENT registered model/profile/account and current policy.
+    pub fn capability_registrations(&self) -> &[Capabilities] {
+        &self.composition.capabilities
+    }
+    pub fn embedding_registrations(&self) -> &[EmbeddingRegistration] {
+        &self.composition.embedding_spaces
+    }
     pub fn schemas(&self) -> &Arc<RegisteredSchemas> {
         &self.schemas
     }
@@ -117,6 +301,12 @@ impl NativeProviders {
         request: InferenceRequest,
     ) -> Result<ProviderInvocation, StorageError> {
         request.validate().map_err(invalid)?;
+        if let ModelSelection::Model { model_id } = &request.options.selection
+            && model_id != &attempt.query.catalog_model_id
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+
         let canonical = devworks_core::jcs::canonicalize(
             &serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?,
         )
@@ -150,24 +340,91 @@ impl NativeProviders {
         let sink = LazySink {
             owner: self.clone(),
             context: context.clone(),
-            request,
+            request: request.clone(),
             shared,
             result: result.clone(),
             inner: None,
         };
+        let request_id = logical.request_id.clone();
+        let admission_key = attempt.admission_key.clone();
         let accounting = self
             .usage
-            .produce_with_sink(
+            .produce_native(NativeProduction {
                 context,
                 logical,
                 category,
-                attempt,
-                Box::new(source),
-                Some(Box::new(sink)),
-            )
+                request: attempt,
+                source: Box::new(source),
+                sink: Box::new(sink),
+                preparation: NativePreparation {
+                    owner: self.clone(),
+                    request,
+                },
+            })
             .await?;
-        let result = result.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let result = if matches!(accounting, DriveOutcome::AlreadyDispatched) {
+            self.recorded_result(&request_id, &admission_key)?
+        } else {
+            result.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        };
         Ok(ProviderInvocation { accounting, result })
+    }
+    fn recorded_result(
+        &self,
+        request_id: &Id,
+        admission_key: &Id,
+    ) -> Result<ProviderResult, StorageError> {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
+            let route = s
+                .router()
+                .route_request(request_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let operation = s
+                .operations()
+                .operation(&route.operation_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            for journal in &operation.attempts {
+                let Some(attempt) = s.usage().inference_attempt(&journal.id.0)? else {
+                    continue;
+                };
+                if devworks_core::services::usage::accounting::snapshot(&attempt)?.admission_key
+                    != *admission_key
+                {
+                    continue;
+                }
+                let page = s.history().page(
+                    &EventFilter::Aggregate {
+                        kind: "provider_result".into(),
+                        id: attempt.attempt_id.as_str().into(),
+                    },
+                    0,
+                    1,
+                )?;
+                if let Some(event) = page.events.first() {
+                    let body = &event.payload;
+                    let outcome = match body["outcome"].as_str() {
+                        Some("Completed") => Some(AttemptEnd::Completed),
+                        Some("ToolCallsReady") => Some(AttemptEnd::ToolCallsReady),
+                        Some("Incomplete") => Some(AttemptEnd::Incomplete),
+                        Some("Failed") => Some(AttemptEnd::Failed),
+                        Some("Cancelled") => Some(AttemptEnd::Cancelled),
+                        Some("UnknownTail") => Some(AttemptEnd::UnknownTail),
+                        _ => None,
+                    };
+                    return Ok(ProviderResult {
+                        vector_artifacts: serde_json::from_value(body["vectorArtifacts"].clone())
+                            .map_err(|_| invalid("stored provider vectors"))?,
+                        result_artifact: serde_json::from_value(body["resultArtifact"].clone())
+                            .map_err(|_| invalid("stored provider result"))?,
+                        outcome,
+                        faults: serde_json::from_value(body["faults"].clone())
+                            .map_err(|_| invalid("stored provider fault"))?,
+                        retry_at_ms: body["retryAtMs"].as_i64(),
+                    });
+                }
+            }
+            Ok(ProviderResult::default())
+        })
     }
     /// Builds the internal admission selection from CURRENT discovery plus this host's explicit
     /// space registration. It cannot create a conversational model or mutate a session pin.
@@ -191,6 +448,15 @@ impl NativeProviders {
             s.router().connection(&registration.connection_id)
         })?
         .ok_or(StorageError::ScopeDenied)?;
+        if connection.lifecycle != "Connected"
+            || registration.capabilities.binding.account_revision.get()
+                != connection.account_revision
+            || registration.capabilities.binding.connection_id != connection.id
+            || registration.capabilities.binding.endpoint_profile != EndpointProfile::Embedding
+            || !registration.capabilities.embeddings.supported()
+        {
+            return Err(StorageError::ScopeDenied);
+        }
         if connection.profile != "Embedding"
             || !connection.enabled
             || !connection
@@ -205,6 +471,9 @@ impl NativeProviders {
             &connection.id,
             &registration.upstream_model_id,
         );
+        if registration.capabilities.binding.model_id != model {
+            return Err(StorageError::ScopeDenied);
+        }
         Ok((
             devworks_core::services::router::accounting::AttemptSelection::Embedding {
                 embedding_space_id: space.clone(),
@@ -227,63 +496,22 @@ impl NativeProviders {
             },
         ))
     }
-    fn prepare(
+    fn capabilities(
         &self,
-        context: &InvocationContext,
         request: &InferenceRequest,
-        attempt: &StoredInferenceAttempt,
-    ) -> Result<(PreparedRequest, StoredConnection), StorageError> {
-        let bound = devworks_core::services::usage::accounting::snapshot(attempt)?;
-        let (connection, model) =
-            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
-                Ok((
-                    s.router()
-                        .connection(&attempt.connection_id)?
-                        .ok_or(StorageError::ScopeDenied)?,
-                    s.router().route_model(&attempt.catalog_model_id)?,
-                ))
-            })?;
-        if bound.quote.connection_revision != Some(connection.revision)
-            || connection.profile != attempt.endpoint_profile
-        {
-            return Err(StorageError::ScopeDenied);
-        }
-        let profile: EndpointProfile =
-            serde_json::from_value(serde_json::Value::String(connection.profile.clone()))
-                .map_err(|_| invalid("unqualified provider profile"))?;
-        let context_epoch = match &request.input {
-            InferenceInput::Generation {
-                session_id,
-                context_epoch,
-                ..
-            } => {
-                if attempt.session_id.as_ref() != Some(session_id)
-                    || bound.context_epoch != Some(context_epoch.get())
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-                context_epoch.clone()
-            }
-            InferenceInput::Embedding { .. } => Counter::new(0).expect("zero"),
-        };
-        let binding = NativeBinding {
-            connection_id: connection.id.clone(),
-            account_revision: Revision::new(connection.account_revision).map_err(invalid)?,
-            endpoint_profile: profile,
-            model_id: attempt.catalog_model_id.clone(),
-            context_epoch,
-        };
-        let upstream = bound
-            .query
-            .provider_model_id
-            .clone()
-            .ok_or(StorageError::ScopeDenied)?;
+        binding: &NativeBinding,
+        connection: &StoredConnection,
+        model: Option<StoredRouteModel>,
+        upstream: &str,
+        selection: &devworks_core::services::router::accounting::AttemptSelection,
+    ) -> Result<Capabilities, StorageError> {
         let mut capabilities = self
             .composition
             .capabilities
             .iter()
             .find(|c| {
                 c.binding.connection_id == binding.connection_id
+                    && c.binding.account_revision == binding.account_revision
                     && c.binding.model_id == binding.model_id
                     && c.binding.endpoint_profile == binding.endpoint_profile
             })
@@ -302,6 +530,7 @@ impl NativeProviders {
                     .find(|r| {
                         r.space.space_id == *embedding_space_id
                             && r.space.dimensions == *dimensions
+                            && r.capabilities.binding.account_revision == binding.account_revision
                             && r.connection_id == binding.connection_id
                             && r.upstream_model_id == upstream
                     })
@@ -309,7 +538,7 @@ impl NativeProviders {
                 let devworks_core::services::router::accounting::AttemptSelection::Embedding {
                     registration_digest,
                     ..
-                } = &bound.selection
+                } = selection
                 else {
                     return Err(StorageError::ScopeDenied);
                 };
@@ -378,6 +607,69 @@ impl NativeProviders {
             }
         }
         capabilities.binding = binding.clone();
+        Ok(capabilities)
+    }
+    fn prepare(
+        &self,
+        context: &InvocationContext,
+        request: &InferenceRequest,
+        attempt: &StoredInferenceAttempt,
+    ) -> Result<(PreparedRequest, StoredConnection), StorageError> {
+        let bound = devworks_core::services::usage::accounting::snapshot(attempt)?;
+        let (connection, model) =
+            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
+                Ok((
+                    s.router()
+                        .connection(&attempt.connection_id)?
+                        .ok_or(StorageError::ScopeDenied)?,
+                    s.router().route_model(&attempt.catalog_model_id)?,
+                ))
+            })?;
+        if bound.quote.connection_revision != Some(connection.revision)
+            || connection.profile != attempt.endpoint_profile
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let profile: EndpointProfile =
+            serde_json::from_value(serde_json::Value::String(connection.profile.clone()))
+                .map_err(|_| invalid("unqualified provider profile"))?;
+        let context_epoch = match &request.input {
+            InferenceInput::Generation {
+                session_id,
+                context_epoch,
+                ..
+            } => {
+                if attempt.session_id.as_ref() != Some(session_id)
+                    || bound.context_epoch != Some(context_epoch.get())
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                context_epoch.clone()
+            }
+            InferenceInput::Embedding { .. } => {
+                Counter::new(bound.context_epoch.unwrap_or(0)).map_err(invalid)?
+            }
+        };
+        let binding = NativeBinding {
+            connection_id: connection.id.clone(),
+            account_revision: Revision::new(connection.account_revision).map_err(invalid)?,
+            endpoint_profile: profile,
+            model_id: attempt.catalog_model_id.clone(),
+            context_epoch,
+        };
+        let upstream = bound
+            .query
+            .provider_model_id
+            .clone()
+            .ok_or(StorageError::ScopeDenied)?;
+        let capabilities = self.capabilities(
+            request,
+            &binding,
+            &connection,
+            model,
+            &upstream,
+            &bound.selection,
+        )?;
         let identity = RequestIdentity {
             request_id: attempt.request_id.clone(),
             attempt_id: AttemptId(attempt.attempt_id.clone()),
@@ -536,44 +828,54 @@ struct LazySink {
 }
 impl LazySink {
     fn get(&mut self) -> Result<Option<&mut ProviderSink>, StorageError> {
-        if self.inner.is_none() {
-            if let Some(prepared) = self
+        if self.inner.is_none()
+            && let Some(prepared) = self
                 .shared
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone()
-            {
-                let embedding = match &self.request.input {
-                    InferenceInput::Embedding {
-                        embedding_space_id,
-                        inputs,
-                        ..
-                    } => {
-                        let registration = self
-                            .owner
-                            .composition
-                            .embedding_spaces
-                            .iter()
-                            .find(|r| r.space.space_id == *embedding_space_id)
-                            .ok_or(StorageError::ScopeDenied)?;
-                        Some((registration.space.clone(), inputs.clone()))
-                    }
-                    _ => None,
-                };
-                self.inner = Some(ProviderSink::new(
-                    self.owner.store.clone(),
-                    self.owner.artifacts.clone(),
-                    self.context.clone(),
-                    prepared,
-                    embedding,
-                    self.result.clone(),
-                ));
-            }
+        {
+            let embedding = match &self.request.input {
+                InferenceInput::Embedding {
+                    embedding_space_id,
+                    inputs,
+                    ..
+                } => {
+                    let registration = self
+                        .owner
+                        .composition
+                        .embedding_spaces
+                        .iter()
+                        .find(|r| r.space.space_id == *embedding_space_id)
+                        .ok_or(StorageError::ScopeDenied)?;
+                    Some((registration.space.clone(), inputs.clone()))
+                }
+                _ => None,
+            };
+            self.inner = Some(ProviderSink::new(
+                self.owner.store.clone(),
+                self.owner.artifacts.clone(),
+                self.context.clone(),
+                prepared,
+                embedding,
+                self.result.clone(),
+            ));
         }
         Ok(self.inner.as_mut())
     }
 }
 impl OwnedInferenceSink for LazySink {
+    fn response_head(
+        &mut self,
+        a: &StoredInferenceAttempt,
+        h: devworks_core::providers::ProviderResponseHead,
+        w: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        self.get()?
+            .ok_or(StorageError::ScopeDenied)?
+            .response_head(a, h, w)
+    }
+
     fn accept(
         &mut self,
         a: &StoredInferenceAttempt,

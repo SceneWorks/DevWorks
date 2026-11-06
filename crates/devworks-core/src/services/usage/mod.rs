@@ -141,3 +141,5 @@ impl QueryHandler for UsageService {
         })
     }
 }
+
+pub mod dimensions;

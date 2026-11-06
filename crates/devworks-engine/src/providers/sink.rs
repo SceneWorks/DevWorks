@@ -19,7 +19,7 @@ use devworks_core::{
         },
     },
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -32,9 +32,15 @@ pub struct ProviderResult {
     pub vector_artifacts: Vec<ArtifactRef>,
     pub result_artifact: Option<ArtifactRef>,
     pub outcome: Option<AttemptEnd>,
+    pub faults: Vec<String>,
+    pub retry_at_ms: Option<i64>,
 }
 pub type ResultChannel = Arc<Mutex<ProviderResult>>;
 
+enum ArtifactKind {
+    Evidence,
+    NativeContinuation,
+}
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
@@ -48,6 +54,14 @@ pub struct ProviderSink {
     )>,
     vectors: BTreeMap<u64, Vec<f32>>,
     result: ResultChannel,
+    limit: devworks_core::providers::limits::LimitReading,
+    retry_at: Option<i64>,
+    http_status: u16,
+    entitlement_refused: bool,
+    limited: bool,
+    access: Option<devworks_core::providers::ProviderAccessBasis>,
+    evidence: Vec<Value>,
+    evidence_bytes: usize,
 }
 impl ProviderSink {
     pub fn new(
@@ -71,7 +85,49 @@ impl ProviderSink {
             embedding,
             vectors: BTreeMap::new(),
             result,
+            limit: Default::default(),
+            retry_at: None,
+            http_status: 0,
+            entitlement_refused: false,
+            limited: false,
+            access: None,
+            evidence: Vec::new(),
+            evidence_bytes: 0,
         }
+    }
+    fn evidence(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        value: Value,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        self.evidence_bytes = self.evidence_bytes.saturating_add(value.to_string().len());
+        self.evidence.push(value);
+        if self.evidence_bytes >= 1024 * 1024 {
+            self.flush_evidence(attempt, fence)?;
+        }
+        Ok(())
+    }
+    fn flush_evidence(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        if self.evidence.is_empty() {
+            return Ok(());
+        }
+        let bytes=serde_json::to_vec(&json!({"version":1,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"binding":self.prepared.identity.binding,"observations":self.evidence})).map_err(|_|invalid("provider evidence JSON"))?;
+        self.artifact(
+            attempt,
+            &bytes,
+            "Provider evidence batch",
+            "application/vnd.devworks.provider-evidence+json",
+            ArtifactKind::Evidence,
+            fence,
+        )?;
+        self.evidence.clear();
+        self.evidence_bytes = 0;
+        Ok(())
     }
     fn event(
         &mut self,
@@ -146,6 +202,7 @@ impl ProviderSink {
         bytes: &[u8],
         title: &str,
         media_type: &str,
+        kind: ArtifactKind,
         fence: &AccountingWriteFence,
     ) -> Result<ArtifactRef, StorageError> {
         let service = self.artifacts.clone();
@@ -155,6 +212,10 @@ impl ProviderSink {
         let title = title.to_owned();
         let media_type = media_type.to_owned();
         let binding = self.prepared.identity.binding.clone();
+        let artifact_kind = match kind {
+            ArtifactKind::Evidence => "ProviderEvidence",
+            ArtifactKind::NativeContinuation => "ProviderNativeContinuation",
+        };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
             let staged=service.stage_host_bytes(store.as_ref(),bytes,json!({"kind":"ProviderOutput","requestId":attempt.request_id,"attemptId":attempt.attempt_id}))?
@@ -164,7 +225,7 @@ impl ProviderSink {
                 validate(tx,&context,&attempt)?;
                 validate_binding(tx,&binding)?;
                 let scope=attempt.project_id.clone().map_or(ArtifactScope::Workspace,ArtifactScope::Project);
-                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
+                let version=service_in.commit_host_bytes_in_scope(tx,&pending, devworks_core::services::artifacts::host::HostArtifactPublication {title:&title,media_type:&media_type,provenance:json!({"kind":artifact_kind,"nativeBinding":binding,"requestId":attempt.request_id,"attemptId":attempt.attempt_id,"actorId":attempt.actor_id,"sessionId":attempt.session_id,"workId":attempt.work_id,"dispatch":accounting::snapshot(&attempt)?.dispatch}),
                     scope,owner:attempt.actor_id.clone()})?;
                 let reference=version_ref(&version);
                 let event=EventId(tx.new_id(IdKind::Event));
@@ -194,6 +255,7 @@ impl ProviderSink {
             call.arguments_raw.as_bytes(),
             "Provider tool arguments",
             "application/json",
+            ArtifactKind::Evidence,
             fence,
         )?;
         let bytes =
@@ -203,6 +265,7 @@ impl ProviderSink {
             &bytes,
             "Provider tool item",
             "application/json",
+            ArtifactKind::Evidence,
             fence,
         )?;
         self.event(
@@ -343,6 +406,36 @@ pub(crate) fn validate(
     Ok(())
 }
 impl OwnedInferenceSink for ProviderSink {
+    fn response_head(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        head: devworks_core::providers::ProviderResponseHead,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        let store = self.store.clone();
+        let current = attempt.clone();
+        let context = self.context.clone();
+        let now = fence.write(store.as_ref(), move |tx| {
+            validate(tx, &context, &current)?;
+            Ok(tx.now_ms())
+        })?;
+        self.http_status = head.status;
+        self.limit =
+            devworks_core::providers::limits::headers(&self.prepared.profile, &head.headers, now);
+        self.retry_at = head
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("retry-after"))
+            .and_then(|(_, v)| devworks_core::providers::limits::retry_after(now, v));
+        self.evidence(
+            attempt,
+            json!({"kind":"host_http_response","status":head.status,"headers":head.headers}),
+            fence,
+        )?;
+        self.access = Some(head.access);
+        Ok(())
+    }
+
     fn accept(
         &mut self,
         attempt: &StoredInferenceAttempt,
@@ -370,13 +463,21 @@ impl OwnedInferenceSink for ProviderSink {
             }
             DecodedFrame::ToolCallComplete { call } => self.call(attempt, call, fence)?,
             DecodedFrame::Native { observation } => {
-                self.artifact(
-                    attempt,
-                    observation.raw_json.as_bytes(),
-                    "Provider native observation",
-                    "application/json",
-                    fence,
-                )?;
+                if observation.value.get("error").is_some()
+                    || observation.value.get("detail").is_some()
+                {
+                    let store = self.store.clone();
+                    let current = attempt.clone();
+                    let context = self.context.clone();
+                    let now = fence.write(store.as_ref(), move |tx| {
+                        validate(tx, &context, &current)?;
+                        Ok(tx.now_ms())
+                    })?;
+                    self.retry_at =
+                        devworks_core::providers::limits::body_reset(&observation.value, now)
+                            .or(self.retry_at);
+                }
+                self.evidence(attempt,json!({"kind":observation.kind,"ordinal":observation.ordinal,"rawJson":observation.raw_json,"replay":format!("{:?}",observation.replay)}),fence)?;
                 if let Some(value) = observation.continuation {
                     let bytes = serde_json::to_vec(&value)
                         .map_err(|_| invalid("native continuation JSON"))?;
@@ -385,6 +486,7 @@ impl OwnedInferenceSink for ProviderSink {
                         &bytes,
                         "Provider native continuation",
                         "application/json",
+                        ArtifactKind::NativeContinuation,
                         fence,
                     )?;
                     self.event(
@@ -398,13 +500,7 @@ impl OwnedInferenceSink for ProviderSink {
                 }
             }
             DecodedFrame::Usage { observation } => {
-                self.artifact(
-                    attempt,
-                    observation.raw_json.as_bytes(),
-                    "Provider usage observation",
-                    "application/json",
-                    fence,
-                )?;
+                self.evidence(attempt,json!({"kind":"usage","rawJson":observation.raw_json,"inputSemantics":format!("{:?}",observation.input_semantics),"validationErrors":observation.validation_errors}),fence)?;
             }
             DecodedFrame::Embedding { index, vector } => {
                 let Some((space, inputs)) = &self.embedding else {
@@ -425,23 +521,30 @@ impl OwnedInferenceSink for ProviderSink {
                 let bytes =
                     serde_json::to_vec(&json!({"model":model,"generationId":generation_id}))
                         .map_err(|_| invalid("identity JSON"))?;
-                self.artifact(
-                    attempt,
-                    &bytes,
-                    "Provider reported identity",
-                    "application/json",
-                    fence,
-                )?;
+                self.evidence(attempt,json!({"kind":"reported_identity","rawJson":String::from_utf8(bytes).map_err(|_|invalid("identity UTF8"))?}),fence)?;
             }
             DecodedFrame::Error { error } => {
+                self.entitlement_refused |= matches!(
+                    error.kind,
+                    devworks_core::providers::decode::DecodeErrorKind::ModelUnavailable
+                );
+                self.limited |= matches!(
+                    error.kind,
+                    devworks_core::providers::decode::DecodeErrorKind::Cooldown
+                        | devworks_core::providers::decode::DecodeErrorKind::Overloaded
+                );
+                self.result
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .faults
+                    .push(format!(
+                        "{:?}:{}",
+                        error.kind,
+                        error.code.as_deref().unwrap_or("provider_error")
+                    ));
+
                 let bytes=serde_json::to_vec(&json!({"kind":format!("{:?}",error.kind),"code":error.code,"message":error.message})).map_err(|_|invalid("error JSON"))?;
-                self.artifact(
-                    attempt,
-                    &bytes,
-                    "Provider error observation",
-                    "application/json",
-                    fence,
-                )?;
+                self.evidence(attempt,json!({"kind":"error","rawJson":String::from_utf8(bytes).map_err(|_|invalid("error UTF8"))?}),fence)?;
             }
             DecodedFrame::Heartbeat => {}
             DecodedFrame::Terminal { .. } => {
@@ -456,6 +559,76 @@ impl OwnedInferenceSink for ProviderSink {
         outcome: AttemptEnd,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
+        self.finish_output(attempt, outcome, fence)?;
+        let result = self
+            .result
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let context = self.context.clone();
+        let current = attempt.clone();
+        let store = self.store.clone();
+        fence.write(store.as_ref(),move|tx| {
+            validate(tx,&context,&current)?;
+            let event=EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {id:event,actor:current.actor_id,project_id:current.project_id,root_id:current.execution_root_id,operation_id:Some(current.operation_id),aggregate_kind:"provider_result".into(),aggregate_id:current.attempt_id.as_str().into(),aggregate_revision:1,kind:"ProviderResultRecorded".into(),
+                payload:json!({"outcome":result.outcome.map(|o|o.label()),"vectorArtifacts":result.vector_artifacts,"resultArtifact":result.result_artifact,"faults":result.faults,"retryAtMs":result.retry_at_ms})})?;
+            Ok(())
+        })
+    }
+}
+
+impl ProviderSink {
+    fn finish_output(
+        &mut self,
+        attempt: &StoredInferenceAttempt,
+        outcome: AttemptEnd,
+        fence: &AccountingWriteFence,
+    ) -> Result<(), StorageError> {
+        if let Some(access) = self.access.as_ref().filter(|a| {
+            matches!(self.http_status, 401..=403) && !(self.http_status == 401 && a.oauth)
+        }) {
+            let store = self.store.clone();
+            let current = attempt.clone();
+            let context = self.context.clone();
+            let access = access.clone();
+            let status = self.http_status;
+            fence.write(store.as_ref(), move |tx| {
+                validate(tx, &context, &current)?;
+                devworks_core::services::router::connections::record_inference_rejection(
+                    tx, &access, status,
+                )
+                .map(|_| ())
+            })?;
+        }
+        self.flush_evidence(attempt, fence)?;
+        if !self.entitlement_refused
+            && (self.limit.exhausted || self.limited || self.http_status == 429)
+        {
+            let reset = self.limit.reset_at_ms.or(self.retry_at);
+            if let Some(until_ms) = reset {
+                let store = self.store.clone();
+                let current = attempt.clone();
+                let context = self.context.clone();
+                fence.write(store.as_ref(), move |tx| {
+                    validate(tx, &context, &current)?;
+                    if until_ms > tx.now_ms() {
+                        let now = tx.now_ms();
+                        tx.router().record_cooldown(&StoredCooldown {
+                            model_id: current.catalog_model_id,
+                            until_ms,
+                            reason: "RateLimited".into(),
+                            observed_at_ms: now,
+                        })?;
+                    }
+                    Ok(())
+                })?;
+                self.result
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .retry_at_ms = Some(until_ms);
+            }
+        }
         if let Some((space, inputs)) = &self.embedding {
             let dimensions = space.dimensions;
             if outcome == AttemptEnd::Completed {

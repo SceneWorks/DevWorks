@@ -1309,6 +1309,11 @@ impl Runtime {
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
+        let refresh_shutdown = self
+            .use_cases
+            .connection_service()
+            .map(|connections| connections.close())
+            .transpose();
         self.usage.stop();
         self.evals.stop();
         self.resumes.stop();
@@ -1423,6 +1428,22 @@ impl Runtime {
             .housekeeper
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
+        match refresh_shutdown {
+            Err(error) if stopped.reconciliation.is_ok() => stopped.reconciliation = Err(error),
+            Ok(Some(report)) if !report.unknown_operations.is_empty() => {
+                stopped.reconciliation = Err(
+                    devworks_core::ports::storage::StorageError::unavailable(
+                        devworks_core::ports::storage::Unavailable::UnsupportedRuntime,
+                        format!(
+                            "{} token refreshes have unknown outcomes; {} external secret handles remain unpublished",
+                            report.unknown_operations.len(),
+                            report.unpublished_handles.len()
+                        ),
+                    ),
+                );
+            }
+            _ => {}
+        }
         match inference_shutdown {
             Ok(drain) => {
                 stopped.unclosed_inference_attempts = drain.unclosed;
@@ -1457,6 +1478,9 @@ impl Runtime {
     fn stop(&self) {
         if let Some(help) = &self.help {
             help.stop();
+        }
+        if let Some(connections) = self.use_cases.connection_service() {
+            let _ = connections.close();
         }
         self.usage.stop();
         if let Some(worker) = &self.prices {

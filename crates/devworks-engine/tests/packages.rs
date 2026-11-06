@@ -4474,3 +4474,5 @@ mod approvals;
 
 #[path = "packages/help_guides.rs"]
 mod help_guides;
+#[path = "providers/packages.rs"]
+mod provider_schema;

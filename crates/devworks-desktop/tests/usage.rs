@@ -195,6 +195,131 @@ fn pending_plan_cap_reopens_and_is_approved_from_the_captured_backend_token() {
     assert!(applied.attempts.0.is_empty());
 }
 #[test]
+fn withdrawing_a_reopened_pending_cap_preserves_active_budget_and_off_remains_explicit() {
+    let root = Root::new("usage-native-withdraw-cap");
+    let engine = start(&root);
+    let b = engine.backend();
+    let p = project(&*b, "Withdraw cap project");
+    let mut h = open_features(&engine, &root, &p);
+    press(&mut h, "New feature");
+    replace(&mut h, "Title", "Withdraw captured cap");
+    click(&mut h, Role::CheckBox, "Limit feature spending");
+    replace(&mut h, "Feature spending limit USD", "5");
+    press(&mut h, "Create");
+    let f = features(&*b, &p).remove(0);
+    let active_budget = f.budget.as_ref().unwrap().clone();
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    replace(&mut h, "Plan text", "The exact retained plan scope.");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    replace(&mut h, "Feature spending limit USD", "12.50");
+    press(&mut h, "Save plan draft");
+    let saved = feature(&*b, f.id.as_str());
+    let pending = saved.pending_plan.as_ref().unwrap();
+    let old_digest = pending.plan_digest.clone();
+    assert!(
+        matches!(&pending.budget, Some(FeatureBudgetInput::Limit { micro_usd }) if micro_usd.as_str() == "12500000")
+    );
+    // An old client omitting both fields retains the already saved proposal.
+    let legacy = wops::work_changed(b.command(
+        "features.edit_plan",
+        &wops::work_command(
+            &*b,
+            "features.edit_plan",
+            json!({
+                "featureId":f.id,"expectedRevision":saved.revision,"plan":pending.draft
+            }),
+        ),
+    ))
+    .unwrap();
+    assert_eq!(
+        legacy.pending_plan.as_ref().unwrap().plan_digest,
+        old_digest
+    );
+    assert!(legacy.pending_plan.as_ref().unwrap().budget.is_some());
+    // Reopen a new native editor from durable backend state before unchecking.
+    drop(h);
+    let mut h = open_features(&engine, &root, &p);
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    assert!(h.state().work.plan.as_ref().unwrap().budget.is_some());
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    press(&mut h, "Save plan draft");
+    let withdrawn = feature(&*b, f.id.as_str());
+    let pending = withdrawn.pending_plan.as_ref().unwrap();
+    assert!(pending.budget.is_none());
+    assert_ne!(pending.plan_digest, old_digest);
+    assert_eq!(
+        serde_json::to_value(&withdrawn.budget).unwrap(),
+        serde_json::to_value(Some(&active_budget)).unwrap()
+    );
+    approve_pending_cap(&mut h, &*b, f.id.as_str());
+    let approved = feature(&*b, f.id.as_str());
+    assert!(approved.pending_plan.is_none());
+    assert_eq!(
+        serde_json::to_value(&approved.budget).unwrap(),
+        serde_json::to_value(Some(&active_budget)).unwrap()
+    );
+    // A new explicit Off proposal has different meaning and changes the active policy only
+    // after approval of that exact pending plan.
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    select_feature(&mut h, "Withdraw captured cap  ·");
+    press(&mut h, "Edit plan");
+    click(
+        &mut h,
+        Role::CheckBox,
+        "Propose a spending cap change with this plan",
+    );
+    click(&mut h, Role::CheckBox, "Limit feature spending");
+    press(&mut h, "Save plan draft");
+    let off = feature(&*b, f.id.as_str());
+    assert!(matches!(
+        off.pending_plan.as_ref().unwrap().budget,
+        Some(FeatureBudgetInput::Off {})
+    ));
+    assert_eq!(
+        off.budget
+            .as_ref()
+            .unwrap()
+            .limit_micro_usd
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "5000000"
+    );
+    approve_pending_cap(&mut h, &*b, f.id.as_str());
+    assert!(
+        feature(&*b, f.id.as_str())
+            .budget
+            .unwrap()
+            .limit_micro_usd
+            .is_none()
+    );
+}
+fn approve_pending_cap(h: &mut Ui, b: &dyn Backend, id: &str) {
+    press(h, "Request approval");
+    let pending = feature(b, id).pending_plan.unwrap();
+    let proposal = pending.approval.unwrap().proposal_id;
+    h.state_mut().navigate(Route::Approvals);
+    settle(h);
+    press(h, &format!("Inspect proposal {}", proposal.as_str()));
+    replace(
+        h,
+        "Decision rationale",
+        "Approve this exact saved plan and budget intent.",
+    );
+    press(h, "Approve exact proposal");
+}
+#[test]
 fn local_free_connection_policy_is_explicit_and_unrelated_edits_preserve_it() {
     let root = Root::new("usage-native-local-policy");
     let mut config = config(&root.0);
@@ -447,10 +572,24 @@ impl devworks_core::ports::http::HttpTransport for PublicPriceHttp {
     }
 }
 fn start_native_price_refresh(h: &mut Ui) {
+    // A provider publication precedes the operation's terminal journal write. A quiet GUI
+    // can still display that legitimate earlier status, so confirm it before a new gesture.
+    h.state_mut().usage.last_refresh = None;
+    step_until(
+        h,
+        "previous price refresh reaches its recorded terminal state",
+        |shell| shell.usage.refresh.is_none(),
+    );
     settle(h);
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .scroll_to_me();
     settle(h);
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Refresh official price sources")
+            .accesskit_node()
+            .is_disabled(),
+        "the refresh control is enabled before the single user gesture"
+    );
     h.get_by_role_and_label(Role::Button, "Refresh official price sources")
         .click();
     // A live operation deliberately schedules periodic repaints. Step the command receipt,
@@ -459,6 +598,12 @@ fn start_native_price_refresh(h: &mut Ui) {
         h.step();
         assert!(h.state().wait_idle());
     }
+    h.step();
+    assert!(
+        h.state().usage.refresh.is_some(),
+        "the single gesture has an accepted durable receipt: {:?}",
+        h.state().usage.price_error
+    );
 }
 fn wait_for_price_publication(b: &dyn Backend, snapshots: usize) -> PriceCatalogView {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
@@ -545,6 +690,7 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
         .operation_id
         .clone();
     assert_ne!(first, second);
+    let delayed_second_status = h.state().usage.refresh.clone().unwrap();
     assert!(
         h.state()
             .usage
@@ -595,8 +741,26 @@ fn native_manual_public_price_refresh_is_async_and_keeps_verified_history_withou
             .as_str(),
         snapshot.as_str()
     );
+    // Reapply the real pre-publication GUI observation to deterministically exercise a
+    // delayed status reply: publication is committed before the operation journal settles.
+    // The next user action must wait for the actual recorded terminal state, not click a
+    // control that remains disabled because this earlier observation is still displayed.
+    h.state_mut().usage.refresh = Some(delayed_second_status);
+    h.state_mut().usage.last_refresh = Some(std::time::Instant::now());
     http.next();
     start_native_price_refresh(&mut h);
+    let third = h
+        .state()
+        .usage
+        .refresh
+        .as_ref()
+        .unwrap()
+        .operation_id
+        .clone();
+    assert_ne!(
+        second, third,
+        "the third user action admitted a fresh durable refresh"
+    );
     http.release();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
     loop {
@@ -1259,4 +1423,99 @@ fn settling_applies_requests_started_in_the_last_successful_repaint_frame() {
         "a successful repaint left a real backend reply pending"
     );
     assert!(!h.state().usage.prices_loading);
+}
+
+#[test]
+fn native_blank_tariff_editor_prices_default_requests_and_preserves_exact_custom_tiers() {
+    use devworks_core::ports::{
+        storage::{ReadOptions, read_snapshot},
+        usage::{CostClassification, PriceQuery, PriceResolver},
+    };
+    use devworks_core::services::prices::CatalogPriceResolver;
+    let root = Root::new("usage-native-default-service-tier");
+    let mut config = config(&root.0);
+    config.connection_tick = None;
+    let engine = devworks_desktop::host::Engine::start(config).unwrap();
+    let b = engine.backend();
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Connection","name":"Default tier quote connection","profile":"CompatibleChat","endpoint":"http://127.0.0.1:9/v1"})))).unwrap();
+    let connections =
+        ops::connection_records(b.query("router.connections", &ops::router_connections(&*b, None)))
+            .unwrap()
+            .0;
+    let connection = connections
+        .iter()
+        .find(|record| record.name.0 == "Default tier quote connection")
+        .unwrap();
+    let model = "native-default-service-tier";
+    ops::configured(b.command("router.configure", &ops::router_configure(&*b,json!({"kind":"Model","model":{"id":model,"displayName":"Default tier quote model","endpointProfile":"CompatibleChat","connectionId":connection.id,"upstreamModelId":"fixture/default-tier","enabled":true,"tierMemberships":[],"efforts":[],"imageInput":false,"tools":false,"revision":"1"}})))).unwrap();
+    assert!(matches!(
+        price_catalog(&*b, model).models.0[0].price_kind,
+        UsagePriceKind::Untracked
+    ));
+    let mut h = harness(shell(&engine, &root, Script::default()), 1800.0, 1400.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Usage);
+    settle(&mut h);
+    press(&mut h, "Prices");
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    // Leave the new editor's service tier untouched, as a person pricing ordinary requests would.
+    replace(&mut h, "Amount USD per rate", "2.5");
+    press(&mut h, "Save tariff override");
+    let store = engine.host().runtime().store();
+    let mut query = PriceQuery {
+        catalog_model_id: devworks_core::protocol::Id::new(model).unwrap(),
+        provider_model_id: Some("fixture/default-tier".into()),
+        connection_id: connection.id.clone(),
+        endpoint_profile: "CompatibleChat".into(),
+        access_mode: "Api".into(),
+        service_tier: None,
+        input_tokens: Some(100),
+        cache_write_ttl_ms: None,
+        processing_region: None,
+        required_modalities: vec!["Text".into()],
+    };
+    let quote = read_snapshot(&**store, &ReadOptions::default(), |read| {
+        CatalogPriceResolver.quote(read, &query)
+    })
+    .unwrap();
+    assert_eq!(
+        quote.classification,
+        CostClassification::ConfiguredEstimate,
+        "an untouched blank tariff editor must price a request without an explicit service tier: {quote:?}"
+    );
+    assert_eq!(quote.untracked_reason, None);
+    assert_eq!(quote.tariffs[0].service_tier, "Standard");
+    assert_eq!(
+        quote
+            .rates
+            .as_ref()
+            .unwrap()
+            .input_usd_per_million
+            .as_deref(),
+        Some("2.5")
+    );
+    press(&mut h, &format!("Edit tariff override for {model}"));
+    replace(&mut h, "Service tier", "CustomPriority");
+    press(&mut h, "Save tariff override");
+    let quote_for = |query: &PriceQuery| {
+        read_snapshot(&**store, &ReadOptions::default(), |read| {
+            CatalogPriceResolver.quote(read, query)
+        })
+        .unwrap()
+    };
+    let ordinary = quote_for(&query);
+    assert_eq!(
+        ordinary.untracked_reason.as_deref(),
+        Some("service_tier_unpriced")
+    );
+    query.service_tier = Some("CustomPriority".into());
+    let exact = quote_for(&query);
+    assert_eq!(exact.classification, CostClassification::ConfiguredEstimate);
+    assert_eq!(exact.tariffs[0].service_tier, "CustomPriority");
+    query.service_tier = Some("custompriority".into());
+    assert_eq!(
+        quote_for(&query).untracked_reason.as_deref(),
+        Some("service_tier_unpriced"),
+        "custom labels remain case-sensitive"
+    );
 }

@@ -1406,3 +1406,279 @@ fn different_birth(birth: &str) -> String {
     changed.push(if last == '0' { '1' } else { '0' });
     changed
 }
+
+fn privileged_policy_test_context() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: read-only credential queries.
+        unsafe { libc::getuid() == 0 || libc::geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn policy_result(
+    spec: &ProcessSpec,
+) -> Result<(TreeStatus, String), devworks_core::ports::process::ProcessError> {
+    let mut child = NativeProcessHost.spawn(spec)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        let status = child.poll()?;
+        if status.empty {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native policy child did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut error = String::new();
+    if let Some((mut stdout, mut stderr)) = child.take_output() {
+        let mut output = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut output).unwrap();
+        std::io::Read::read_to_string(&mut stderr, &mut error).unwrap();
+    }
+    Ok((status, error))
+}
+
+#[test]
+fn required_no_child_processes_blocks_helpers_before_their_marker_and_keeps_the_parent_usable() {
+    let _serial = serial();
+    let scratch = Scratch::new("child-policy");
+    let root = scratch.path("root-marker");
+    let marker = scratch.path("child-marker");
+    let executable = std::env::current_exe().unwrap();
+    let mut spec = if cfg!(windows) {
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+        // Command arguments use Win32 quoting, whereas an embedded /C program uses cmd's
+        // different quote rules. A batch file keeps its quoted executable out of argv.
+        std::fs::write(
+            scratch.0.join("policy-root.cmd"),
+            format!(
+                "@echo off\r\necho root>root-marker\r\n\"{}\" --exact no_child_policy_marker_fixture --nocapture\r\necho finished\r\n",
+                executable.display()
+            ),
+        )
+        .unwrap();
+        let mut native = ProcessSpec::new(&[
+            cmd.to_string_lossy().into_owned(),
+            "/D".into(),
+            "/C".into(),
+            "policy-root.cmd".into(),
+        ])
+        .unwrap();
+        native.cwd = Some(scratch.0.clone());
+        native
+    } else {
+        shell(&format!(
+            "printf root > '{root}'; '{}' --exact no_child_policy_marker_fixture --nocapture; printf finished",
+            executable.display()
+        ))
+    };
+    spec.env
+        .push(("DEVWORKS_NO_CHILD_POLICY_MARKER".into(), marker.clone()));
+    assert!(!spec.no_child_processes);
+    spec.no_child_processes = true;
+    spec.capture_output = true;
+    let (status, error) = match policy_result(&spec) {
+        Ok(result) => result,
+        Err(devworks_core::ports::process::ProcessError::EnforcementUnavailable(_))
+            if privileged_policy_test_context() =>
+        {
+            assert!(!std::path::Path::new(&root).exists());
+            assert!(!std::path::Path::new(&marker).exists());
+            return;
+        }
+        Err(error) => panic!("native no-child policy unavailable: {error}"),
+    };
+    assert!(
+        std::path::Path::new(&root).exists(),
+        "the constrained root ran: {status:?} {error}"
+    );
+    assert!(
+        !std::path::Path::new(&marker).exists(),
+        "an unreviewed child ran: {status:?} {error}"
+    );
+    spec.no_child_processes = false;
+    let (control, error) = policy_result(&spec).unwrap();
+    assert_eq!(control.exit_code, Some(0), "{error}");
+    assert!(
+        std::path::Path::new(&marker).exists(),
+        "the unrestricted positive-control helper must actually run"
+    );
+}
+
+#[test]
+fn no_child_processes_keeps_native_git_add_commit_working_and_blocks_a_new_hook_alias() {
+    let _serial = serial();
+    let scratch = Scratch::new("child-policy");
+    let repo = scratch.0.join("repo");
+    let hooks = scratch.0.join("empty-hooks");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&hooks).unwrap();
+    let executable = if cfg!(windows) {
+        let output = std::process::Command::new("git")
+            .arg("--exec-path")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let exec = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        exec.join("../../bin/git.exe")
+            .canonicalize()
+            .expect("the real Git for Windows executable, not its cmd shim")
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|base| base.join("git"))
+            .find(|path| path.is_file())
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+    };
+    let git = |args: &[&str], limited| {
+        let mut argv = vec![executable.to_string_lossy().into_owned()];
+        for (key, value) in [
+            ("core.hooksPath", hooks.to_str().unwrap()),
+            ("core.fsmonitor", ""),
+            ("index.threads", "1"),
+            ("pack.threads", "1"),
+            ("checkout.workers", "1"),
+            ("gc.auto", "0"),
+            ("maintenance.auto", "false"),
+            ("commit.gpgsign", "false"),
+            ("tag.gpgsign", "false"),
+        ] {
+            argv.extend(["-c".into(), format!("{key}={value}")]);
+        }
+        argv.extend(args.iter().map(|v| v.to_string()));
+        let mut spec = ProcessSpec::new(&argv).unwrap();
+        spec.cwd = Some(repo.clone());
+        spec.capture_output = true;
+        spec.no_child_processes = limited;
+        spec.clear_env = true;
+        spec.env = std::env::vars()
+            .filter(|(key, _)| !key.to_ascii_uppercase().starts_with("GIT_"))
+            .collect();
+        spec.env.extend(vec![
+            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ("GIT_CONFIG_GLOBAL".into(), scratch.path("no-global")),
+            ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ]);
+        policy_result(&spec)
+    };
+    assert_eq!(git(&["init", "-q"], false).unwrap().0.exit_code, Some(0));
+    for args in [
+        ["config", "user.name", "Native policy"],
+        ["config", "user.email", "native@example.test"],
+    ] {
+        assert_eq!(git(&args, false).unwrap().0.exit_code, Some(0));
+    }
+    std::fs::write(repo.join("reviewed"), "first\n").unwrap();
+    let staged = match git(&["add", "--", "reviewed"], true) {
+        Ok(result) => result,
+        Err(devworks_core::ports::process::ProcessError::EnforcementUnavailable(_))
+            if privileged_policy_test_context() =>
+        {
+            return;
+        }
+        Err(error) => panic!("required native Git policy unavailable: {error}"),
+    };
+    assert_eq!(staged.0.exit_code, Some(0), "{}", staged.1);
+    let committed = git(&["commit", "-m", "reviewed base"], true).unwrap();
+    assert_eq!(committed.0.exit_code, Some(0), "{}", committed.1);
+    // The capability-specific race supplements the unconditional native child-denial proof.
+    // Older supported Git has no friendly hook aliases and keeps its existing version floor.
+    let advertised = std::process::Command::new(&executable)
+        .args(["help", "--config"])
+        .output()
+        .unwrap();
+    if !String::from_utf8_lossy(&advertised.stdout).contains("hook.<friendly-name>.event") {
+        return;
+    }
+    let marker = scratch.path("late-hook-marker");
+    let command = format!(
+        "printf unexpected > '{}'",
+        marker.replace('\\', "/").replace('\'', "'\\''")
+    );
+    assert_ne!(
+        git(
+            &[
+                "config",
+                "--get-regexp",
+                r"^hook\..*\.(event|command|enabled)$"
+            ],
+            false
+        )
+        .unwrap()
+        .0
+        .exit_code,
+        Some(0)
+    );
+    assert_eq!(
+        git(
+            &["config", "hook.after-enumeration.event", "pre-commit"],
+            false
+        )
+        .unwrap()
+        .0
+        .exit_code,
+        Some(0)
+    );
+    assert_eq!(
+        git(
+            &["config", "hook.after-enumeration.command", &command],
+            false
+        )
+        .unwrap()
+        .0
+        .exit_code,
+        Some(0)
+    );
+    std::fs::write(repo.join("reviewed"), "second\n").unwrap();
+    assert_eq!(
+        git(&["add", "--", "reviewed"], true).unwrap().0.exit_code,
+        Some(0)
+    );
+    let denied = git(&["commit", "-m", "late helper must not execute"], true).unwrap();
+    assert_ne!(denied.0.exit_code, Some(0), "{}", denied.1);
+    assert!(
+        !std::path::Path::new(&marker).exists(),
+        "new hook escaped process policy"
+    );
+    let control = git(&["commit", "-m", "positive helper control"], false).unwrap();
+    assert_eq!(control.0.exit_code, Some(0), "{}", control.1);
+    assert!(std::path::Path::new(&marker).exists());
+}
+
+#[test]
+fn no_child_policy_marker_fixture() {
+    if let Some(marker) = std::env::var_os("DEVWORKS_NO_CHILD_POLICY_MARKER") {
+        std::fs::write(marker, "the external child actually executed").unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn required_child_policy_refuses_a_set_id_program_before_any_target_effect() {
+    use std::os::unix::fs::PermissionsExt;
+    let _serial = serial();
+    let scratch = Scratch::new("child-policy-setid");
+    let target = scratch.0.join("set-id-shell");
+    std::fs::copy("/bin/sh", &target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o4755)).unwrap();
+    let marker = scratch.path("must-not-run");
+    let mut spec = ProcessSpec::new(&[
+        target.to_string_lossy().into_owned(),
+        "-c".into(),
+        format!("printf forbidden > '{marker}'"),
+    ])
+    .unwrap();
+    spec.no_child_processes = true;
+    assert!(matches!(
+        NativeProcessHost.spawn(&spec),
+        Err(devworks_core::ports::process::ProcessError::EnforcementUnavailable(_))
+    ));
+    assert!(!std::path::Path::new(&marker).exists());
+}

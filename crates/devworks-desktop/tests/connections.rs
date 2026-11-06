@@ -113,13 +113,22 @@ fn settings_adds_tests_and_routes_an_api_key_connection_without_exposing_the_key
     click(&mut h, Role::Button, "Test connection");
     assert!(has_text(&h, "Test passed"), "{:?}", labels(&h, Role::Label));
     assert!(has_text(&h, "4 models discovered"));
-    assert!(
-        http.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|r| r.url.ends_with("/models"))
-    );
+    // Official price maintenance shares this scripted port with connection discovery.
+    // Public pricing probes stay credential-free and never qualify provider inference.
+    assert!(http.seen.lock().unwrap().iter().all(|r| {
+        r.url.ends_with("/models")
+            || [
+                devworks_core::ports::usage::OfficialPriceProvider::OpenAi,
+                devworks_core::ports::usage::OfficialPriceProvider::Anthropic,
+            ]
+            .into_iter()
+            .any(|provider| {
+                r.url == format!("{}.md", provider.source_url())
+                    && r.method == devworks_core::ports::http::Method::Get
+                    && r.header_value("authorization").is_none()
+                    && r.header_value("x-api-key").is_none()
+            })
+    }));
 
     // The router routes Open Router Auto through it now.
     let a = ops::availability(backend.query(

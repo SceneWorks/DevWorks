@@ -559,7 +559,21 @@ fn attempt(read: &dyn ReadSnapshot, a: StoredInferenceAttempt, gaps: &mut Gaps) 
         status: read
             .operations()
             .operation(&a.operation_id)?
-            .map(|op| operation_status(op.state))
+            .map(|op| {
+                // Source cancellation settles the generic journal as Failed. Use the exact
+                // confirmed last source outcome without masking a newer retry's journal state.
+                if op.state == crate::protocol::OperationState::Failed
+                    && op
+                        .latest_attempt()
+                        .is_some_and(|last| last.id.0 == a.attempt_id)
+                    && b.is_some_and(|balance| balance.local_quiescent)
+                    && summary.outcome.as_deref() == Some("Cancelled")
+                {
+                    "cancelled".into()
+                } else {
+                    operation_status(op.state)
+                }
+            })
             .or(summary.outcome)
             .or(Some(a.state)),
         duration: None,

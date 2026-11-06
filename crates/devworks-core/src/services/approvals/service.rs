@@ -364,6 +364,11 @@ impl QueryHandler for ApprovalService {
 pub(crate) struct PreparedOwner {
     pub preview: OwnerPreview,
 }
+/// A business owner can refuse preparation without publishing a false reviewable proposal.
+/// Preserve its typed reason through the command decision instead of erasing it as metadata.
+#[derive(Clone)]
+struct PreparedOwnerRefusal(Refusal);
+
 impl CommandHandler for ApprovalService {
     fn prepare(
         &self,
@@ -451,7 +456,9 @@ impl CommandHandler for ApprovalService {
         match prepared {
             Ok(preview) => Ok(Some(Prepared::new(PreparedOwner { preview }))),
             Err(Failure::Storage(e)) => Err(e),
-            Err(Failure::Refused(_)) => Ok(None),
+            Err(Failure::Refused(refusal)) => {
+                Ok(Some(Prepared::new(PreparedOwnerRefusal(refusal))))
+            }
         }
     }
     fn decide(
@@ -460,6 +467,9 @@ impl CommandHandler for ApprovalService {
         c: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
+        if let Some(refusal) = c.prepared::<PreparedOwnerRefusal>() {
+            return crate::services::sessions::decided(tx, Err(refusal.0.clone().into()));
+        }
         let out = match c.input() {
             OperationInput::Approvals(ops::Input::Propose(i)) => self.propose(tx, ctx, c, i),
             OperationInput::Approvals(ops::Input::RecordHumanDecision(i)) => {

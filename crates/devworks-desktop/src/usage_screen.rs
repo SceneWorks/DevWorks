@@ -91,7 +91,7 @@ impl Default for TariffForm {
     fn default() -> Self {
         Self {
             upstream: String::new(),
-            service: "standard".into(),
+            service: "Standard".into(),
             lower: String::new(),
             upper: String::new(),
             modality: "Text".into(),
@@ -1173,7 +1173,7 @@ fn tariff_form(ui: &mut Ui, t: &mut TariffForm) {
         ui,
         "Service tier",
         &mut t.service,
-        "standard, batch, priority…",
+        "Standard or an exact custom tier",
     );
     ui.horizontal_wrapped(|ui| {
         field(

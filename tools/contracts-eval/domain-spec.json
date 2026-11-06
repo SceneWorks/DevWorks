@@ -5022,14 +5022,21 @@
         "feature_id": "RootId",
         "expected_revision": "Revision",
         "plan": "PlanDraft",
-        "budget": "?FeatureBudgetInput"
+        "budget": "?FeatureBudgetInput",
+        "clear_budget_proposal": "?bool"
       },
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Save or edit the feature-owned pending plan only. Preserve the active plan, its approval and currently effective scope/acceptance while the revision awaits approval or is rejected. Editing a pending proposal invalidates only that proposal approval. No active plan exists before initial approval. Approval through authenticated human decision atomically promotes the exact reviewed pending plan and updates effective fields, history and wakeups; never start/resume from edit alone. Plan revision/digest fields are internal conflict and approval-binding tokens, not user-facing plan versions. Missing active requirements in the replacement require explicit Dropped decisions; do not rewrite current task acceptance during drafting. Schema3 optional budget is a proposed feature cap change beside the pending PlanDraft, not effective configuration. Omission preserves the effective cap. Bind it in the exact pending digest/approval, expose it on PendingFeaturePlan for reopened editors, and adopt only on actual human approval. Direct effective cap lifts/removal remain human-only. Editing alone never clears budget/other holds.",
+      "rules": "Save or edit the feature-owned pending plan only. Preserve the active plan, its approval and currently effective scope/acceptance while the revision awaits approval or is rejected. Editing a pending proposal invalidates only that proposal approval. No active plan exists before initial approval. Approval through authenticated human decision atomically promotes the exact reviewed pending plan and updates effective fields, history and wakeups; never start/resume from edit alone. Plan revision/digest fields are internal conflict and approval-binding tokens, not user-facing plan versions. Missing active requirements in the replacement require explicit Dropped decisions; do not rewrite current task acceptance during drafting. Schema3 optional budget is a proposed feature cap change beside the pending PlanDraft, not effective configuration. Omission preserves the effective cap. Bind it in the exact pending digest/approval, expose it on PendingFeaturePlan for reopened editors, and adopt only on actual human approval. Direct effective cap lifts/removal remain human-only. Editing alone never clears budget/other holds. Omission preserves an existing pending budget proposal for legacy clients. Schema3 clearBudgetProposal:true explicitly withdraws only the pending cap proposal, never the effective budget; it is exclusive with budget (including explicit Off). Null or false clearBudgetProposal is invalid.",
       "since": {
-        "budget": 3
+        "budget": 3,
+        "clear_budget_proposal": 3
+      },
+      "fieldSchema": {
+        "clear_budget_proposal": {
+          "const": true
+        }
       }
     },
     "features.dependencies": {

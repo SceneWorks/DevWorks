@@ -128,7 +128,7 @@ pub struct PlanForm {
     pub drops: BTreeMap<String, DropDraft>,
     #[serde(default)]
     pub statuses: BTreeMap<String, RequirementStatus>,
-    /// None preserves the effective policy; Some is an exact pending cap proposal.
+    /// None withdraws a proposal present in the starting snapshot; Some proposes an exact cap.
     #[serde(default)]
     pub budget: Option<crate::usage_screen::BudgetDraft>,
 }
@@ -1294,6 +1294,12 @@ impl Shell {
                     return;
                 }
             }
+        } else if w
+            .pending_plan
+            .as_ref()
+            .is_some_and(|pending| pending.budget.is_some())
+        {
+            body["clearBudgetProposal"] = json!(true);
         }
         self.command(
             Slot::WorkPlan(w.id.as_str().to_owned()),
