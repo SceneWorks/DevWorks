@@ -609,15 +609,15 @@ pub enum OperationResult {
     #[serde(rename = "router.availability")]
     RouterAvailability { value: RouteAvailability },
     #[serde(rename = "router.usage")]
-    RouterUsage { value: UsageReport },
+    RouterUsage { value: RouterUsageResult },
     #[serde(rename = "router.request_status")]
     RouterRequestStatus { value: OperationRef },
     #[serde(rename = "router.price_status")]
-    RouterPriceStatus { value: Page<ModelPriceStatus> },
+    RouterPriceStatus { value: PriceCatalogResult },
     #[serde(rename = "router.price_refresh")]
     RouterPriceRefresh { value: OperationRef },
     #[serde(rename = "router.price_override")]
-    RouterPriceOverride { value: PriceRecord },
+    RouterPriceOverride { value: PriceOverrideResult },
     #[serde(rename = "router.configure")]
     RouterConfigure { value: MutationSummary },
     #[serde(rename = "router.decision_models")]
@@ -1584,6 +1584,9 @@ impl Revisioned for OperationResult {
             Self::RouterRoute { value } => value.retain_revision(revision),
             Self::RouterPin { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
+            Self::RouterUsage { value } => value.retain_revision(revision),
+            Self::RouterPriceStatus { value } => value.retain_revision(revision),
+            Self::RouterPriceOverride { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),
@@ -1611,6 +1614,9 @@ impl Revisioned for OperationResult {
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            Self::RouterUsage { value } => value.check_revision(revision),
+            Self::RouterPriceStatus { value } => value.check_revision(revision),
+            Self::RouterPriceOverride { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

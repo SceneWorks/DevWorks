@@ -40,7 +40,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
-            'router.route', 'router.pin',
+            'router.route', 'router.pin', 'router.usage', 'router.price_status', 'router.price_override',
             'projects.create', 'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
             'next_work.claim_project_queue', 'next_work.claim_feature_task',
             'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',
@@ -117,6 +117,17 @@ class SchemaRevisionRules(unittest.TestCase):
             self.assertEqual([r['revision'] for r in byname[name]['schemaRevisions']], [3])
         self.assertEqual(byname['approvals.review_queue']['resultValueType'], 'KnowledgeReviewPage')
         self.assertEqual([r['revision'] for r in byname['notifications.settings']['schemaRevisions']], [1])
+
+    def test_nonprojectable_usage_results_refuse_legacy_instead_of_faking_values(self):
+        usage = generate.gen_versioned('RouterUsageResult', generate.TYPES['RouterUsageResult'], generate.TYPES)
+        self.assertIn('Current(UsageQueryResult)', usage)
+        self.assertIn('current result cannot be represented at this revision', usage)
+        self.assertNotIn('*self = Self::Legacy', usage)
+        catalog = generate.TYPES['PriceCatalogResult']
+        self.assertEqual(catalog['legacy'], 'Page<ModelPriceStatus>')
+        self.assertEqual(catalog['earlierName'], 'Page')
+        self.assertNotIn('budget', generate.TYPES['TaskPatch']['fields'])
+        self.assertNotIn('budget', generate.TYPES['IssuePatch']['fields'])
 
     def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
         operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')

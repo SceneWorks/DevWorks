@@ -474,7 +474,8 @@
         "pending_readiness": "?ReadinessAssessment",
         "task_type": "?WorkItemType",
         "labels": "?Items<Label>",
-        "previous_inheritance": "?WorkInheritanceOrigin"
+        "previous_inheritance": "?WorkInheritanceOrigin",
+        "budget": "?FeatureBudgetView"
       },
       "since": {
         "readiness": 2,
@@ -484,7 +485,8 @@
         "pending_readiness": 2,
         "task_type": 3,
         "labels": 3,
-        "previous_inheritance": 3
+        "previous_inheritance": 3,
+        "budget": 3
       }
     },
     "PlanDraft": {
@@ -2647,10 +2649,12 @@
         "repository_ids": "Items<Id>",
         "plan": "PlanDraft",
         "tasks": "PlanItems<TaskPlanEntry>",
-        "labels": "?Items<Label>"
+        "labels": "?Items<Label>",
+        "budget": "?FeatureBudgetInput"
       },
       "since": {
-        "labels": 3
+        "labels": 3,
+        "budget": 3
       }
     },
     "AtomicWorkPlan": {
@@ -2671,7 +2675,8 @@
           "status_id": "Id",
           "priority": "i32",
           "plan": "?PlanDraft",
-          "labels": "?Items<Label>"
+          "labels": "?Items<Label>",
+          "budget": "?FeatureBudgetInput"
         },
         "AtomicPlan": {
           "plan": "AtomicWorkPlan"
@@ -2682,7 +2687,8 @@
       },
       "variantSince": {
         "Single": {
-          "labels": 3
+          "labels": 3,
+          "budget": 3
         }
       }
     },
@@ -2837,12 +2843,14 @@
         "add_comment": "?WorkComment",
         "readiness": "?ReadinessChange",
         "acceptance_evidence": "?NonEmpty<AcceptanceCriterion>",
-        "labels": "?Items<Label>"
+        "labels": "?Items<Label>",
+        "budget": "?FeatureBudgetInput"
       },
       "since": {
         "readiness": 2,
         "acceptance_evidence": 2,
-        "labels": 3
+        "labels": 3,
+        "budget": 3
       }
     },
     "IssuePatch": {
@@ -4111,9 +4119,372 @@
           "entries": "Items<SettingAssignment>"
         },
         "FeaturePlan": {
-          "plan": "PlanDraft"
+          "plan": "PlanDraft",
+          "budget": "?FeatureBudgetInput"
         }
       }
+    },
+    "PriceTariff": {
+      "kind": "record",
+      "fields": {
+        "upstream_model_id": "Text",
+        "service_tier": "Label",
+        "context_lower_exclusive": "?Counter",
+        "context_upper_inclusive": "?Counter",
+        "modality": "PriceModality",
+        "charge_kind": "PriceChargeKind",
+        "cache_ttl_seconds": "?PositiveCounter",
+        "unit": "PriceUnit",
+        "units": "PositiveCounter",
+        "amount_usd": "Money",
+        "region": "?Label",
+        "endpoint_profile": "?Label"
+      }
+    },
+    "PriceSourceSnapshot": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "provider_id": "Id",
+        "revision": "Revision",
+        "source_url": "Url",
+        "source_digest": "Digest",
+        "parser_version": "Label",
+        "fetched_at_ms": "Counter",
+        "verified_at_ms": "Counter",
+        "effective_date": "?Label"
+      }
+    },
+    "ProviderPriceStatus": {
+      "kind": "record",
+      "fields": {
+        "provider_id": "Id",
+        "revision": "Revision",
+        "snapshot_id": "?Id",
+        "stale": "bool",
+        "last_checked_at_ms": "?Counter",
+        "next_check_at_ms": "?Counter",
+        "refresh_operation_id": "?OperationId",
+        "error": "?Text"
+      }
+    },
+    "PriceCatalogEntry": {
+      "kind": "record",
+      "fields": {
+        "provider_id": "Id",
+        "model_id": "?Id",
+        "upstream_model_id": "Text",
+        "origin": "PriceOrigin",
+        "snapshot_id": "?Id",
+        "override_revision": "?Revision",
+        "tariff": "PriceTariff"
+      }
+    },
+    "PriceCatalogView": {
+      "kind": "record",
+      "fields": {
+        "catalog_revision": "Revision",
+        "items": "Rows<PriceCatalogEntry>",
+        "snapshots": "Rows<PriceSourceSnapshot>",
+        "providers": "Rows<ProviderPriceStatus>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "coverage": "Coverage"
+      }
+    },
+    "PriceCatalogResult": {
+      "kind": "versioned",
+      "legacy": "Page<ModelPriceStatus>",
+      "current": "PriceCatalogView",
+      "revision": 3,
+      "projection": "none",
+      "earlierName": "Page"
+    },
+    "PriceOverrideChange": {
+      "kind": "union",
+      "variants": {
+        "Set": {
+          "tariffs": "NonEmpty<PriceTariff>"
+        },
+        "Clear": {}
+      }
+    },
+    "PriceOverrideOutcome": {
+      "kind": "union",
+      "variants": {
+        "Set": {
+          "model_id": "Id",
+          "revision": "Revision",
+          "tariffs": "NonEmpty<PriceTariff>"
+        },
+        "Cleared": {
+          "model_id": "Id",
+          "revision": "Revision"
+        }
+      }
+    },
+    "PriceOverrideResult": {
+      "kind": "versioned",
+      "legacy": "PriceRecord",
+      "current": "PriceOverrideOutcome",
+      "revision": 3,
+      "projection": "none"
+    },
+    "UsageReportKind": {
+      "kind": "enum",
+      "values": [
+        "Attempts",
+        "AssistantUsage",
+        "AssistantActivity",
+        "McpUsage",
+        "CodeReviewUsage",
+        "RepositoryAnalysisUsage",
+        "Filters"
+      ]
+    },
+    "UsageReportRange": {
+      "kind": "record",
+      "fields": {
+        "start_ms": "Counter",
+        "end_ms": "Counter"
+      }
+    },
+    "UsageAppliedFilters": {
+      "kind": "record",
+      "fields": {
+        "scope": "?DataScope",
+        "project_id": "?ProjectId",
+        "root_id": "?RootId",
+        "session_id": "?Id",
+        "job_run_id": "?Id",
+        "user": "?Text",
+        "provider": "?Text",
+        "model": "?Text",
+        "tool": "?Text",
+        "purpose": "?Label"
+      }
+    },
+    "UsageQueryContext": {
+      "kind": "record",
+      "fields": {
+        "report_kind": "UsageReportKind",
+        "range": "UsageReportRange",
+        "interval": "Label",
+        "applied_filters": "UsageAppliedFilters",
+        "read_revision": "Revision"
+      }
+    },
+    "UsageCacheDiagnostic": {
+      "kind": "record",
+      "fields": {
+        "kind": "Label",
+        "inferred": "bool",
+        "detail": "?Text",
+        "source_revision": "?Revision"
+      }
+    },
+    "UsageCostSnapshot": {
+      "kind": "record",
+      "fields": {
+        "price_kind": "UsagePriceKind",
+        "price_origin": "PriceOrigin",
+        "amount_micro_usd": "?Counter",
+        "currency": "?Label",
+        "original_amount": "?Money",
+        "classification": "?Label",
+        "price_snapshot_id": "?Id",
+        "price_revision": "?Revision",
+        "override_revision": "?Revision",
+        "subscription_equivalent": "bool",
+        "incomplete": "bool",
+        "untracked_reason": "?Text",
+        "tariffs": "Rows<PriceTariff>"
+      }
+    },
+    "UsageAttemptRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "request_id": "Id",
+        "attempt_id": "?Id",
+        "attempt_number": "?Revision",
+        "source_kind": "Label",
+        "source_id": "Id",
+        "actor_id": "?ActorId",
+        "project_id": "?ProjectId",
+        "feature_id": "?RootId",
+        "work_id": "?Id",
+        "assignment_id": "?AssignmentId",
+        "session_id": "?Id",
+        "job_run_id": "?Id",
+        "operation_id": "?OperationId",
+        "purpose": "Label",
+        "role": "?Label",
+        "provider_id": "?Id",
+        "connection_id": "?Id",
+        "model_id": "?Id",
+        "resolved_model_id": "?Text",
+        "started_at_ms": "?Counter",
+        "finished_at_ms": "?Counter",
+        "state": "Label",
+        "input_tokens": "?Counter",
+        "uncached_input_tokens": "?Counter",
+        "output_tokens": "?Counter",
+        "cache_read_tokens": "?Counter",
+        "cache_write_tokens": "?Counter",
+        "cache_read_micro_usd": "?Counter",
+        "cache_write_micro_usd": "?Counter",
+        "input_semantics": "?Label",
+        "cost": "UsageCostSnapshot",
+        "cache_diagnostics": "Rows<UsageCacheDiagnostic>"
+      }
+    },
+    "UsageTotals": {
+      "kind": "record",
+      "fields": {
+        "attempts": "Counter",
+        "tracked_micro_usd": "Counter",
+        "reported_micro_usd": "Counter",
+        "estimated_micro_usd": "Counter",
+        "reserved_micro_usd": "Counter",
+        "local_free_attempts": "Counter",
+        "untracked_attempts": "Counter",
+        "unknown_tail_attempts": "Counter",
+        "incomplete_attempts": "Counter"
+      }
+    },
+    "UsageAttemptPage": {
+      "kind": "record",
+      "fields": {
+        "context": "UsageQueryContext",
+        "items": "Rows<UsageAttemptRecord>",
+        "totals": "UsageTotals",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "coverage": "Coverage"
+      }
+    },
+    "UsageReportRow": {
+      "kind": "union",
+      "variants": {
+        "Total": {
+          "key": "Label",
+          "label": "Label",
+          "value": "Counter"
+        },
+        "SeriesPoint": {
+          "key": "Label",
+          "label": "Label",
+          "bucket_start_ms": "Counter",
+          "value": "Counter"
+        },
+        "Breakdown": {
+          "dimension": "Label",
+          "key": "Text",
+          "label": "Text",
+          "value": "Counter"
+        }
+      }
+    },
+    "UsageAggregatePage": {
+      "kind": "record",
+      "fields": {
+        "context": "UsageQueryContext",
+        "items": "Rows<UsageReportRow>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "coverage": "Coverage"
+      }
+    },
+    "UsageFilterOption": {
+      "kind": "record",
+      "fields": {
+        "dimension": "Label",
+        "value": "Text"
+      }
+    },
+    "UsageFilterOptions": {
+      "kind": "record",
+      "fields": {
+        "context": "UsageQueryContext",
+        "items": "Rows<UsageFilterOption>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "coverage": "Coverage"
+      }
+    },
+    "UsageQueryResult": {
+      "kind": "union",
+      "variants": {
+        "Attempts": {
+          "page": "UsageAttemptPage"
+        },
+        "Report": {
+          "report": "UsageAggregatePage"
+        },
+        "Filters": {
+          "filters": "UsageFilterOptions"
+        }
+      }
+    },
+    "RouterUsageResult": {
+      "kind": "versioned",
+      "legacy": "UsageReport",
+      "current": "UsageQueryResult",
+      "revision": 3,
+      "projection": "none"
+    },
+    "FeatureBudgetInput": {
+      "kind": "union",
+      "variants": {
+        "Off": {},
+        "Limit": {
+          "micro_usd": "Counter"
+        }
+      }
+    },
+    "FeatureBudgetView": {
+      "kind": "record",
+      "fields": {
+        "revision": "Revision",
+        "limit_micro_usd": "?Counter",
+        "spent_micro_usd": "Counter",
+        "reserved_micro_usd": "Counter",
+        "warning": "bool",
+        "continue_required": "bool",
+        "untracked_attempts": "Counter",
+        "unknown_tail_attempts": "Counter"
+      }
+    },
+    "PriceChargeKind": {
+      "kind": "enum",
+      "values": [
+        "Input",
+        "Output",
+        "CacheRead",
+        "CacheWrite",
+        "Request",
+        "Runtime"
+      ]
+    },
+    "PriceUnit": {
+      "kind": "enum",
+      "values": [
+        "Token",
+        "Second",
+        "Image",
+        "Request"
+      ]
+    },
+    "PriceModality": {
+      "kind": "enum",
+      "values": [
+        "Text",
+        "Image",
+        "Audio",
+        "Video",
+        "Any"
+      ]
     }
   },
   "operations": {
@@ -4153,7 +4524,7 @@
       "result": "ProjectRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": " Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap."
     },
     "projects.edit": {
       "operation": "projects.edit",
@@ -4259,7 +4630,7 @@
       "result": "Page<WorkRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
+      "rules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap."
     },
     "features.edit": {
       "operation": "features.edit",
@@ -4272,7 +4643,7 @@
       "result": "WorkRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
+      "rules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap."
     },
     "issues.list": {
       "operation": "issues.list",
@@ -4582,7 +4953,7 @@
       "result": "Page<WorkRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically."
+      "rules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap."
     },
     "workflows.list": {
       "operation": "workflows.list",
@@ -7412,12 +7783,36 @@
         "root_id": "?RootId",
         "session_id": "?Id",
         "job_run_id": "?Id",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "report_kind": "?UsageReportKind",
+        "scope": "?DataScope",
+        "project_id": "?ProjectId",
+        "start_ms": "?Counter",
+        "end_ms": "?Counter",
+        "interval": "?Content",
+        "user": "?Content",
+        "provider": "?Content",
+        "model": "?Content",
+        "tool": "?Content",
+        "purpose": "?Label"
       },
-      "result": "UsageReport",
+      "result": "RouterUsageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Schema 3 selects complete paged attempts, retained usage/activity/report groups or filter options. Normalize UTC [start,end), default trailing30days; interval auto/day/week/month (case-insensitive, trimmed), auto day<=45days/week<=180days/month, Monday weeks. User/provider/model/tool filters preserve source-specific applicability; filter options ignore categorical selections but obey authorized scope/time. Freeze query+read revision in cursor. Nullable metrics and immutable source/attempt provenance never become zero/current-owner guesses. Canonical attempts suppress session/job mirrors; per-scope totals cover the whole selection rather than the current page. Old schema1 cannot represent unavailable metrics and must return a truthful fault rather than fabricated counters.",
+      "since": {
+        "report_kind": 3,
+        "scope": 3,
+        "project_id": 3,
+        "start_ms": 3,
+        "end_ms": 3,
+        "interval": 3,
+        "user": 3,
+        "provider": 3,
+        "model": 3,
+        "tool": 3,
+        "purpose": 3
+      }
     },
     "router.request_status": {
       "operation": "router.request_status",
@@ -7435,12 +7830,20 @@
       "mode": "Query",
       "fields": {
         "model_ids": "Items<Id>",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "provider_ids": "?Items<Id>",
+        "include_history": "?bool",
+        "snapshot_ids": "?Items<Id>"
       },
-      "result": "Page<ModelPriceStatus>",
+      "result": "PriceCatalogResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Revision 3 exposes immutable catalog source snapshots, provider freshness/errors, exact normalized tariff rows and override precedence/history. Missing/ambiguous model/context/service/endpoint/modality/TTL/region mapping is untracked, never an arbitrary flat rate. Historical estimates retain admitted snapshot and rates.",
+      "since": {
+        "provider_ids": 3,
+        "include_history": 3,
+        "snapshot_ids": 3
+      }
     },
     "router.price_refresh": {
       "operation": "router.price_refresh",
@@ -7460,12 +7863,20 @@
       "fields": {
         "model_id": "Id",
         "expected_revision": "Revision",
-        "price": "PriceInput"
+        "price": "?PriceInput",
+        "change": "?PriceOverrideChange"
       },
-      "result": "PriceRecord",
+      "result": "PriceOverrideResult",
       "effect": "Local",
       "authority": "Configuration",
-      "rules": "Host sets UserConfigured origin/revision; user cannot forge provider-reported/official provenance. Custom unpriced remains allowed and visibly untracked."
+      "rules": "Host sets UserConfigured origin/revision; user cannot forge provider-reported/official provenance. Custom unpriced remains allowed and visibly untracked. Schema3 supports exact normalized tariff Set or explicit Clear; exactly one legacy price or change. Refresh does not overwrite overrides. Clear is not a zero-price override. New estimates bind publication/override revisions atomically; old attempts never consult today's catalog.",
+      "since": {
+        "change": 3
+      },
+      "exactlyOne": [
+        "price",
+        "change"
+      ]
     },
     "router.configure": {
       "operation": "router.configure",
@@ -8944,6 +9355,18 @@
       3
     ],
     "notifications.mark_read": [
+      3
+    ],
+    "router.usage": [
+      1,
+      3
+    ],
+    "router.price_status": [
+      1,
+      3
+    ],
+    "router.price_override": [
+      1,
       3
     ]
   },

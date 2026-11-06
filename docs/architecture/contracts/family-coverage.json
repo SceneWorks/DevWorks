@@ -151,7 +151,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": " Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap.",
           "familyRules": "Project boundaries and repository membership are revisioned. Archive fences work; delete only app records and requires concrete confirmation where destructive.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -574,7 +574,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
+          "semanticRules": "Host fixes kind=Feature. A feature has no task parent; project tasks may have an optional feature relationship. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -860,7 +860,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
+          "semanticRules": "Metadata edits do not replace the effective approved plan. Changes to structured implementation scope, repositories/goals or acceptance of an approved feature must use the pending-plan flow; refuse bypass through generic edits. Current title/description prose does not grant new implementation authority. Schema revision 2: readiness records an assessment of the current active or pending plan (bound to its revision and digest; findings are validated against its requirements and the feature's work, a new blocking finding at an unchanged plan needs new evidence, settled findings are not reopened without it) or closes one finding with its closure note and evidence. Readiness is derived, never caller-asserted; plan approval never closes findings. Schema revision 2: acceptanceEvidence records the state and evidence of the active plan's acceptance criteria and acceptance tests (by ID, at their approved text; evidence IDs are recorded history links of the project). A feature in a Done status is Verified only when every such criterion is met with evidence, otherwise Manual; only Verified completion satisfies its dependents. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap.",
           "familyRules": "Features own their plan. One active approved plan plus at most one pending revision; no independent plan work item or user-facing version management. Draft edits/approval requests/rejection preserve the active plan and eligible execution. Exact human approval atomically replaces it; current authority/controls and affected task checks still apply.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1880,7 +1880,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically.",
+          "semanticRules": "Atomic upsert by client key with explicit desired task relationships; reject conflicting edits and cycles, preserve evidence. Missing tasks are not silently deleted. Optional atomic project plan preserves caller refs, feature requirements and task inheritance; validate all feature/task revisions and all references/cycles before any write. Missing active requirements need explicit drop decisions; absent tasks are never silently deleted. Larger source plans use an authorized immutable artifact validated against the fixed AtomicWorkPlan schema, retaining atomicity beyond the wire-frame limit; inline/staged project plan are mutually exclusive. Routine decomposition within the active approved plan remains allowed. A pending plan does not authorize changing live task scope or acceptance beyond that plan; proposed dependent work waits for plan approval. Atomic project-plan entry points must preserve the same active/pending distinction and cannot invalidate the active approval merely by saving a draft. Optional task priorities preserve existing values when omitted; new tasks use the documented default. Routine priority/dependency coordination uses the same shared validation and does not invalidate the active plan approval. Project-wide cycle validation includes links to tasks outside the feature. Schema revision 3: optional labels replace the exact bounded set (empty clears; omitted preserves updates). Task/issue patches and task plan entries accept taskType or clearTaskType:true, never both. Features carry labels but no card type. Invalid duplicate/whitespace-only labels and conflicting clear/set are refused atomically. Feature budget authoring (schema3) is feature-only: omitted existing/imported values preserve configuration, new feature defaultsOff. Only actual human authority may raise/remove an existing cap. Draft/import cap changes apply only with exact human approval; staging is not adoption. Raising/Off never clears a budget Continue latch or other holds. Issues/tasks/jobs have no independent cap.",
           "familyRules": "ProjectTask belongs to one project and has an optional feature relationship. Standalone tasks are shown as issues and share the same stable work identity across task/issue entry points. Task/Issue wire tags cannot establish feature membership or execution authority. Feature-linked work stays in feature allocation; standalone work uses issue allocation/execution/usage/delivery. Assignment parentage is separate; no manual child-assignment Pause/Continue. Humans and agents share task priority and project-wide blocking-link operations. Cross-feature links do not change membership. Eligibility precedes descending priority and ascending queue rank; graph-cycle and current controls apply on every claim/dispatch.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -14987,7 +14987,7 @@
             "pointer": "/kind",
             "equals": "router.usage"
           },
-          "resultValueType": "UsageReport",
+          "resultValueType": "RouterUsageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -14999,11 +14999,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Schema 3 selects complete paged attempts, retained usage/activity/report groups or filter options. Normalize UTC [start,end), default trailing30days; interval auto/day/week/month (case-insensitive, trimmed), auto day<=45days/week<=180days/month, Monday weeks. User/provider/model/tool filters preserve source-specific applicability; filter options ignore categorical selections but obey authorized scope/time. Freeze query+read revision in cursor. Nullable metrics and immutable source/attempt provenance never become zero/current-owner guesses. Canonical attempts suppress session/job mirrors; per-scope totals cover the whole selection rather than the current page. Old schema1 cannot represent unavailable metrics and must return a truthful fault rather than fabricated counters.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -15079,7 +15087,7 @@
             "pointer": "/kind",
             "equals": "router.price_status"
           },
-          "resultValueType": "Page<ModelPriceStatus>",
+          "resultValueType": "PriceCatalogResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -15091,11 +15099,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Revision 3 exposes immutable catalog source snapshots, provider freshness/errors, exact normalized tariff rows and override precedence/history. Missing/ambiguous model/context/service/endpoint/modality/TTL/region mapping is untracked, never an arbitrary flat rate. Historical estimates retain admitted snapshot and rates.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -15171,7 +15187,7 @@
             "pointer": "/kind",
             "equals": "router.price_override"
           },
-          "resultValueType": "PriceRecord",
+          "resultValueType": "PriceOverrideResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -15183,11 +15199,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Configuration",
           "effect": "Local",
-          "semanticRules": "Host sets UserConfigured origin/revision; user cannot forge provider-reported/official provenance. Custom unpriced remains allowed and visibly untracked.",
+          "semanticRules": "Host sets UserConfigured origin/revision; user cannot forge provider-reported/official provenance. Custom unpriced remains allowed and visibly untracked. Schema3 supports exact normalized tariff Set or explicit Clear; exactly one legacy price or change. Refresh does not overwrite overrides. Clear is not a zero-price override. New estimates bind publication/override revisions atomically; old attempts never consult today's catalog.",
           "familyRules": "Direct tiers/named/Auto and separate effort; durable pins, trusted capabilities, host attribution/price provenance and explicit unknown tails.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
