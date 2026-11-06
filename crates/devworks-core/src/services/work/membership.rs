@@ -485,7 +485,11 @@ fn clear_handoff_hold(
     };
     for hold in active_blockers(tx.runs(), &BlockerFilter::RootLevel(work.clone()))?
         .into_iter()
-        .filter(|hold| hold.cause == HoldCause::Policy && hold.origin_id == assignment.0.as_str())
+        .filter(|hold| {
+            hold.cause == HoldCause::Policy
+                && hold.origin_id == assignment.0.as_str()
+                && hold.clearance.get(MARKER) == Some(&Value::Bool(true))
+        })
     {
         clear_blocker(
             tx,

@@ -376,6 +376,27 @@ fn returning_to_the_original_feature_fences_delayed_results_without_preempting_s
 #[test]
 fn a_closed_session_retires_its_pending_handoff_and_allows_a_fresh_destination_worker() {
     let m = MovedWorker::new();
+    let origin = m.worker.id.0.as_str().to_owned();
+    write(&*m.f.store, move |tx| {
+        let created_at_ms = tx.now_ms();
+        tx.runs().insert_blocker(&StoredBlocker {
+            id: id("independent-policy"),
+            root_id: Some(RootId(id("moving"))),
+            assignment_id: None,
+            operation_id: None,
+            cause: HoldCause::Policy,
+            origin_id: origin,
+            origin_revision: 999,
+            state: BlockerState::Active,
+            revision: 1,
+            reason: "independent policy with the same origin identity".into(),
+            clearance: json!({"manualPolicy":true}),
+            created_at_ms,
+            cleared_at_ms: None,
+            cleared_by: None,
+        })
+    })
+    .unwrap();
     m.change(Some("feature-b"));
     let session = read(&*m.f.store, |s| s.sessions().session(&m.session)).unwrap();
     applied(m.f.command(
@@ -416,6 +437,12 @@ fn a_closed_session_retires_its_pending_handoff_and_allows_a_fresh_destination_w
     .unwrap()
     .unwrap();
     assert_ne!(new_worker.id, retired.id);
+    assert_eq!(
+        read(&*m.f.store, |s| s.runs().blocker(&id("independent-policy")))
+            .unwrap()
+            .state,
+        BlockerState::Active
+    );
     assert!(
         read(&*m.f.store, |s| s.sessions().session(&m.session))
             .unwrap()
