@@ -56,7 +56,10 @@ impl Completions {
     }
     /// Replace only after the complete server feed has loaded. Order is server newest-first;
     /// failed/unknown acknowledgments remain visible. No client timer dismisses a card.
-    pub fn reconcile(&mut self, cards: Vec<CompletionCard>) {
+    pub fn reconcile(&mut self, mut cards: Vec<CompletionCard>) {
+        let mut identities = BTreeSet::new();
+        cards.retain(|card| identities.insert(card.id.clone()));
+        self.status.retain(|id, _| identities.contains(id));
         for card in cards.iter().rev() {
             if self.seen.insert(card.id.clone()) {
                 self.announce = Some(format!("{}: {}", card.kind, card.title));
@@ -210,8 +213,12 @@ mod tests {
             "dismissal waits for durable acknowledgment"
         );
         assert_eq!(c.take_dismissed(), ["b"]);
-        c.reconcile(vec![card("a")]);
-        assert_eq!(c.cards().len(), 1);
+        c.reconcile(vec![card("a"), card("a")]);
+        assert_eq!(
+            c.cards().len(),
+            1,
+            "feed reconciliation also deduplicates identities"
+        );
         assert!(
             !c.push(card("b")),
             "a dismissed card does not come back from a replayed event"

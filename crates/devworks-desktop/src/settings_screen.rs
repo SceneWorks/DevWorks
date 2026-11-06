@@ -246,7 +246,6 @@ impl SettingsScreen {
                     if widgets::secondary_button(ui, "Scheduled jobs").clicked() {
                         st.1.push(SettingsAction::OpenJobs);
                     }
-                    if widgets::secondary_button(ui, "Notification preferences").clicked() { st.1.push(SettingsAction::OpenNotifications); }
                 },
                 |ui, st, _| st.0.body(ui, online, st.1, general),
             );
@@ -392,6 +391,10 @@ impl SettingsScreen {
             if matches!(self.category, None | Some(Category::General))
                 && self.query.trim().is_empty()
             {
+                ui.heading("Notifications");
+                if widgets::secondary_button(ui, "Notification preferences").clicked() {
+                    actions.push(SettingsAction::OpenNotifications);
+                }
                 general(ui);
             }
             if self.category == Some(Category::Tools) {

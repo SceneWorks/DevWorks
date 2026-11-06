@@ -34,6 +34,7 @@ pub struct DecisionsUi {
     pub unacknowledged_only: bool,
     pub category: String,
     pub notification: Option<NotificationRecord>,
+    reading_notification: Option<String>,
     /// Complete authoritative unacknowledged verified-completion feed, independent of filters.
     pub completions: Vec<NotificationRecord>,
     completion_gathering: Vec<NotificationRecord>,
@@ -69,6 +70,7 @@ enum Action {
     NextText,
     PreviousText,
     OpenWork(String),
+    ReloadConfig,
 }
 
 impl Shell {
@@ -333,7 +335,10 @@ impl Shell {
                     self.decisions.decision_error = None;
                     self.load_approval_text();
                 }
-                Err(e) => self.decisions.decision_error = Some(e.describe()),
+                Err(e) => {
+                    self.decisions.inspecting = None;
+                    self.decisions.decision_error = Some(e.describe());
+                }
             },
             (Slot::ApprovalContent(id), Reply::Query(q)) => {
                 if self
@@ -430,6 +435,8 @@ impl Shell {
                     self.decisions.notification_error = Some(e.describe());
                 }
             },
+            (Slot::NotificationRead(id), Reply::Query(_))
+                if self.decisions.reading_notification.as_deref() != Some(id.as_str()) => {}
             (Slot::NotificationRead(_), Reply::Query(q)) => match dops::notification(q) {
                 Ok(n) => self.decisions.notification = Some(n),
                 Err(e) => self.decisions.notification_error = Some(e.describe()),
@@ -504,6 +511,7 @@ impl Shell {
                     self.load_notification_history();
                 }
                 Action::Read(id) => {
+                    self.decisions.reading_notification = Some(id.clone());
                     let key = id.clone();
                     self.query(
                         Slot::NotificationRead(key),
@@ -543,6 +551,11 @@ impl Shell {
                         c.request_notification_permission();
                     }
                 }
+                Action::ReloadConfig => {
+                    self.decisions.config = None;
+                    self.decisions.config_draft = None;
+                    self.load_notification_history();
+                }
                 Action::SaveConfig => {
                     if let (Some((_, revision)), Some(config)) =
                         (&self.decisions.config, &self.decisions.config_draft)
@@ -561,15 +574,12 @@ impl Shell {
         }
     }
     fn open_notification_link(&mut self, ctx: &egui::Context, link: NotificationLink) {
-        if let Some(url) = link.url {
-            ctx.open_url(egui::OpenUrl::new_tab(url.0));
-        }
         if let Some(artifact) = &link.artifact {
             self.routes.entry(Route::Artifacts).or_default().selection =
                 Some(artifact.artifact_id.as_str().to_owned());
         }
         if let Some(id) = link.target_id {
-            match link.kind.0.as_str() {
+            match link.kind.0.to_ascii_lowercase().as_str() {
                 "approval" | "decision" => {
                     self.navigate(Route::Approvals);
                     self.inspect_approval(id.as_str().into());
@@ -581,10 +591,29 @@ impl Shell {
                 "artifact" => {
                     self.navigate(Route::Artifacts);
                 }
-                _ => self.open_work(id.as_str()),
+                "feature" | "issue" | "task" | "work" | "root" => self.open_work(id.as_str()),
+                "session" | "chat" => {
+                    let id = id.as_str().to_owned();
+                    self.chat.selected = Some(id.clone());
+                    self.load_transcript(&id);
+                    self.navigate(Route::Chat);
+                }
+                "project" => {
+                    self.select_project(Some(id.as_str().into()));
+                    self.navigate(Route::Overview);
+                }
+                _ => {
+                    self.status = Some(format!(
+                        "No native view is registered for {} target {}.",
+                        link.kind.0,
+                        id.as_str()
+                    ))
+                }
             }
         } else if link.artifact.is_some() {
             self.navigate(Route::Artifacts);
+        } else if let Some(url) = link.url {
+            ctx.open_url(egui::OpenUrl::new_tab(url.0));
         }
     }
     pub(super) fn completion_action(&mut self, ctx: &egui::Context, action: CardAction) {
@@ -607,10 +636,13 @@ impl Shell {
                 self.change_notification(n, None);
             }
             CardAction::Open(_) => {
-                if let Some(link) = n.links.as_ref().and_then(|x| x.0.first()).cloned() {
-                    self.open_notification_link(ctx, link);
-                } else if let Some(root) = n.root_id {
+                if let Some(root) = n.root_id {
                     self.open_work(root.0.as_str());
+                } else if let Some(link) = n.links.as_ref().and_then(|x| x.0.first()).cloned() {
+                    self.open_notification_link(ctx, link);
+                } else {
+                    self.notifications_open = true;
+                    self.decision_actions(ctx, vec![Action::Read(n.id.as_str().into())]);
                 }
             }
         }
@@ -775,6 +807,9 @@ impl Shell {
             self.decisions.permission = Some(b.os_notification_permission());
         }
         let requesting_permission = self.pending(&Slot::OsNotificationPermission);
+        let preferences_busy = self.pending(&Slot::NotificationSettingsSave)
+            || self.unresolved(&Slot::NotificationSettingsSave)
+            || self.online().is_err();
         let projects: Vec<_> = self
             .projects
             .list
@@ -806,7 +841,9 @@ impl Shell {
                 if d.notifications_loaded&&d.notifications.is_empty(){ui.label("No notifications in this view.");}
                 for n in &d.notifications {
                     ui.push_id(n.id.as_str(),|ui|{ui.group(|ui|{
-                        ui.label(RichText::new(&n.title.0).strong());ui.label(format!("{} · {} · {}",n.category.as_ref().map_or("Notification",|c|c.0.as_str()),if n.read==Some(true){"Read"}else{"Unread"},if n.acknowledged{"Acknowledged"}else{"Unacknowledged"}));
+                        ui.label(RichText::new(&n.title.0).strong());
+                    if n.requires_input==Some(true){ui.label("Input required");}
+                    ui.label(format!("{} · {} · {}",n.category.as_ref().map_or("Notification",|c|c.0.as_str()),if n.read==Some(true){"Read"}else{"Unread"},if n.acknowledged{"Acknowledged"}else{"Unacknowledged"}));
                         if ui.button(format!("Read {}",n.title.0)).clicked(){actions.push(Action::Read(n.id.as_str().into()));}
                         ui.add_enabled_ui(!busy.contains(n.id.as_str()),|ui|{
                             if ui.button(if n.read==Some(true){"Mark unread"}else{"Mark read"}).clicked(){actions.push(Action::MarkRead(n.clone(),n.read!=Some(true)));}
@@ -829,7 +866,9 @@ impl Shell {
                     let mut kinds=config.kinds.0.iter().map(|k|k.0.clone()).collect::<Vec<_>>().join(", ");
                     ui.label("Notification kinds (comma separated)");
                     if ui.text_edit_singleline(&mut kinds).changed(){config.kinds.0=kinds.split(',').map(str::trim).filter(|x|!x.is_empty()).map(|x|devworks_core::protocol::support::BoundedText(x.into())).collect();}
-                    if ui.button("Save notification preferences").clicked(){actions.push(Action::SaveConfig);}
+                    if ui.add_enabled(!preferences_busy,egui::Button::new("Save notification preferences")).clicked(){actions.push(Action::SaveConfig);}
+                    if ui.button("Discard preference draft and reload").clicked(){actions.push(Action::ReloadConfig);}
+                    if let Some((_,revision))=&d.config {ui.label(format!("Preferences revision {revision}"));}
                 }
             });
         });
@@ -871,6 +910,9 @@ fn json_view(ui: &mut Ui, label: &str, value: &impl serde::Serialize) {
     });
 }
 fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, enabled: bool) {
+    if let Some(e) = &d.decision_error {
+        ui.colored_label(theme::RED, e);
+    }
     let Some(p) = &d.selected else {
         ui.label("Inspect a proposal to review its exact content and binding.");
         return;
@@ -1054,9 +1096,6 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
     if let Some(id) = &p.resumed_operation_id {
         ui.label(format!("Operation {}", id.0.as_str()));
     }
-    if let Some(e) = &d.decision_error {
-        ui.colored_label(theme::RED, e);
-    }
     if ui.button("Refresh inspected proposal").clicked() {
         actions.push(Action::Inspect(p.id.as_str().into()));
     }
@@ -1101,7 +1140,7 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
         actions.push(Action::Decide(false));
     }
     if !enabled {
-        ui.label("A decision is pending or its outcome needs confirmation.");
+        ui.label("Decisions require an online host and confirmation of any earlier outcome.");
     }
 }
 
