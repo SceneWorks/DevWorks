@@ -48,6 +48,10 @@ pub trait Dialogs {
     fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
         None
     }
+    /// One portable convention manifest selected by a human.
+    fn pick_convention(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
     /// A package bundle to install (the first picked file by default).
     fn pick_package(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -68,6 +72,12 @@ impl Dialogs for NativeDialogs {
             .set_title("Attach images or files")
             .pick_files()
             .unwrap_or_default()
+    }
+    fn pick_convention(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import a convention manifest")
+            .add_filter("Convention manifest", &["json"])
+            .pick_file()
     }
     fn pick_package(&mut self) -> Option<PathBuf> {
         rfd::FileDialog::new()
@@ -516,7 +526,13 @@ impl Shell {
                 if !self.projects.list.loaded && !self.pending(&Slot::ProjectsList) {
                     self.load_projects();
                 }
-                if !self.knowledge.loaded && self.knowledge.listing.is_none() {
+                if self
+                    .routes
+                    .get(&Route::Knowledge)
+                    .is_none_or(|r| r.tab != 2)
+                    && !self.knowledge.loaded
+                    && self.knowledge.listing.is_none()
+                {
                     self.load_knowledge();
                 }
             }
@@ -2842,7 +2858,11 @@ impl Shell {
             // Only an unpaged listing is re-read in place: a re-read of a list the user paged
             // through would drop the pages they loaded.
             Route::Knowledge
-                if self.knowledge.loaded
+                if self
+                    .routes
+                    .get(&Route::Knowledge)
+                    .is_none_or(|r| r.tab != 2)
+                    && self.knowledge.loaded
                     && self.knowledge.listing.is_none()
                     && self.knowledge.items.len() <= knowledge_screen::PAGE as usize =>
             {
@@ -3187,6 +3207,7 @@ impl Shell {
     /// Begins the close lifecycle (the window's close button lands here).
     pub fn request_close(&mut self) {
         if self.lifecycle == Lifecycle::Open {
+            self.cancel_convention_queries();
             if let Some(c) = &mut self.client {
                 c.close();
             }
@@ -3254,6 +3275,7 @@ impl Shell {
     /// Called when the window is gone without the lifecycle (process exit paths): saves view
     /// state; the engine's own drop still performs its bounded shutdown.
     pub fn on_exit(&mut self) {
+        self.cancel_convention_queries();
         self.persist(true);
         if let Some(c) = &mut self.client {
             c.close();
@@ -3696,8 +3718,11 @@ impl Shell {
         if !dropped.is_empty() {
             if conversation_visible {
                 self.attach(dropped);
+            } else if self.route == Route::Knowledge && self.route_memory(Route::Knowledge).tab == 2
+            {
+                self.import_dropped_convention(dropped);
             } else if self.route == Route::Knowledge {
-                // A file dropped on the Knowledge screen is imported (previewed first).
+                // A file dropped on an entry view is previewed before import.
                 self.knowledge_actions(vec![KnowledgeAction::ImportFiles(dropped)]);
             } else {
                 self.announce("Open the workspace coordinator to attach dropped files.");

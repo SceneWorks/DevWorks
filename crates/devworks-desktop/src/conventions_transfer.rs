@@ -96,10 +96,15 @@ fn prepare_edit_inner(
     if !d.body_complete || d.loading {
         return Err("The full opening source must finish loading before saving.".into());
     }
-    let order = d
-        .order
-        .parse::<i32>()
-        .map_err(|_| "Order must be a signed 32-bit integer.")?;
+    let order = if d.order.is_empty() && d.target().is_none() {
+        None
+    } else {
+        Some(
+            d.order
+                .parse::<i32>()
+                .map_err(|_| "Order must be a signed 32-bit integer.")?,
+        )
+    };
     let mut files = Vec::new();
     if let Some(record) = d.target() {
         let original = d
@@ -110,7 +115,7 @@ fn prepare_edit_inner(
             .content
             .as_ref()
             .ok_or("The opening Markdown artifact is unavailable.")?;
-        let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug,"sortOrder":order.to_string(),"parent":d.parent.as_ref().map_or_else(||json!({"kind":"Root"}),|id|json!({"kind":"Child","parentId":id}))});
+        let mut body = json!({"scope":scope.wire(),"conventionId":record.id,"expectedRevision":record.revision,"content":content,"title":d.title,"slug":d.slug,"sortOrder":order.ok_or("An existing convention needs its captured order.")?.to_string(),"parent":d.parent.as_ref().map_or_else(||json!({"kind":"Root"}),|id|json!({"kind":"Child","parentId":id}))});
         if d.markdown_changed {
             files.push(stage_text(
                 b,

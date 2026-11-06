@@ -22,6 +22,13 @@ impl Shell {
             if state.listing || (append && state.next.is_none()) {
                 return;
             }
+            if search && state.search_recovery.is_some() {
+                state.notice = Some((
+                    Tone::Attention,
+                    "Confirm the previous search outcome before starting a new search.".into(),
+                ));
+                return;
+            }
             state.list_generation = state.list_generation.wrapping_add(1);
             state.listing = true;
             let lifecycle = match state.lifecycle {
@@ -59,16 +66,26 @@ impl Shell {
                 "conventions.list"
             };
             if !append {
-                state.query_snapshot = Some(body.clone());
+                state.pending_listing = Some((state.list_generation, body.clone()));
             }
             (state.list_generation, body, operation)
         };
-        if !self.query(
-            Slot::ConventionsList(key, generation, append, search),
-            "Reading conventions",
-            operation,
-            move |b| cop::query(b, operation, body),
-        ) {
+        let submitted = if search {
+            if let Some(b) = self.backend() {
+                let frame = cop::query(&*b, operation, body);
+                self.dispatch_convention_search(scope.clone(), generation, append, frame)
+            } else {
+                false
+            }
+        } else {
+            self.query(
+                Slot::ConventionsList(key, generation, append, false),
+                "Reading conventions",
+                operation,
+                move |b| cop::query(b, operation, body),
+            )
+        };
+        if !submitted {
             let state = self.conventions.states.get_mut(&scope).expect("scope");
             state.listing = false;
             state.list_error = Some(
@@ -182,6 +199,9 @@ impl Shell {
             {
                 return;
             }
+            if !append {
+                s.resource_next = None;
+            }
             if !append && s.resource_mode == 2 {
                 s.resource_document_cursors = vec![None];
                 s.resource_document = None;
@@ -266,14 +286,12 @@ impl Shell {
         );
     }
     pub(super) fn apply_conventions(&mut self, slot: Slot, reply: Reply) -> Option<(Slot, Reply)> {
+        let mut refresh_index_metadata = false;
         match (slot, reply) {
             (Slot::ConventionsList(key, generation, append, search), Reply::Query(outcome)) => {
                 let scope = self.convention_scope(&key)?;
                 let s = self.conventions.states.get_mut(&scope).expect("scope");
-                if s.list_generation != generation {
-                    return None;
-                }
-                s.listing = false;
+                let uncertain = search && cop::search_uncertain(&outcome);
                 let result = if search {
                     cop::search(outcome).map(|p| {
                         (
@@ -295,11 +313,68 @@ impl Shell {
                         )
                     })
                 };
+                if search {
+                    if s.active_search
+                        .as_ref()
+                        .is_some_and(|(g, _)| *g == generation)
+                    {
+                        s.active_search = None;
+                    }
+                    if s.search_recovery
+                        .as_ref()
+                        .is_some_and(|r| r.generation == generation)
+                    {
+                        let custody = result
+                            .as_ref()
+                            .ok()
+                            .and_then(|(_, _, _, _, retrieval)| retrieval.as_ref())
+                            .and_then(|r| {
+                                r.embedding_request_id
+                                    .as_ref()
+                                    .zip(r.embedding_operation.as_ref())
+                            })
+                            .map(|(id, op)| (id.as_str().to_owned(), op.clone()));
+                        let prior_unsettled = s
+                            .search_preparation
+                            .as_ref()
+                            .is_some_and(|(_, op)| cop::preparation_unsettled(op));
+                        let matching = s
+                            .search_preparation
+                            .as_ref()
+                            .zip(custody.as_ref())
+                            .is_some_and(|((_, old), (_, new))| {
+                                old.operation_id == new.operation_id
+                            });
+                        if (!prior_unsettled || matching) && result.is_ok() {
+                            s.search_preparation = custody;
+                        }
+                        let unsettled = s
+                            .search_preparation
+                            .as_ref()
+                            .is_some_and(|(_, op)| cop::preparation_unsettled(op));
+                        if result.is_ok() {
+                            s.last_search = s.search_recovery.clone();
+                        }
+                        if !uncertain && !unsettled {
+                            s.search_recovery = None;
+                        }
+                    }
+                }
+                if s.list_generation != generation {
+                    return None;
+                }
+                s.listing = false;
                 match result {
                     Ok((revision, next, hits, items, retrieval)) => {
                         if append && s.scope_revision.is_some_and(|old| old != revision) {
                             s.list_error=Some("The convention listing changed while paging. Refresh for a current listing; drafts are kept.".into());
                             return None;
+                        }
+                        if s.pending_listing
+                            .as_ref()
+                            .is_some_and(|(g, _)| *g == generation)
+                        {
+                            s.query_snapshot = s.pending_listing.take().map(|(_, body)| body);
                         }
                         if !append {
                             s.items.clear();
@@ -316,11 +391,34 @@ impl Shell {
                         s.list_error = None;
                     }
                     Err(error) => {
+                        if s.pending_listing
+                            .as_ref()
+                            .is_some_and(|(g, _)| *g == generation)
+                        {
+                            s.pending_listing = None;
+                        }
                         s.list_error = Some(error.describe());
                         if matches!(error, Failure::NoUseCase(_)) {
                             s.available = false;
                         }
                     }
+                }
+            }
+            (Slot::ConventionsList(key, generation, _, true), Reply::Task(Err(error))) => {
+                let scope = self.convention_scope(&key)?;
+                let state = self.conventions.states.get_mut(&scope).expect("scope");
+                if state
+                    .active_search
+                    .as_ref()
+                    .is_some_and(|(g, _)| *g == generation)
+                {
+                    state.active_search = None;
+                }
+                if state.list_generation == generation {
+                    state.listing = false;
+                    state.list_error = Some(format!(
+                        "The search result is not confirmed: {error}. Confirm the original search before retrying."
+                    ));
                 }
             }
             (Slot::ConventionRead(key, generation), Reply::Query(outcome)) => {
@@ -528,6 +626,25 @@ impl Shell {
                                 },
                             );
                         }
+                        if matches!(status.kind, ConventionOperationKind::Index)
+                            && matches!(
+                                status.phase,
+                                ConventionOperationPhase::Completed
+                                    | ConventionOperationPhase::Failed
+                                    | ConventionOperationPhase::Cancelled
+                            )
+                            && self.conventions.scope == scope
+                            && s.reader.target.as_ref().is_some_and(|target| {
+                                target.revision.is_some()
+                                    && status
+                                        .convention_id
+                                        .as_ref()
+                                        .is_none_or(|id| target.id == id.as_str())
+                            })
+                            && !s.reader.loading
+                        {
+                            refresh_index_metadata = true;
+                        }
                         s.operation_statuses.insert(id, status);
                     }
                     Ok(_) => {
@@ -615,6 +732,9 @@ impl Shell {
                 self.finish_convention_change(&key, &token, outcome)
             }
             (slot, reply) => return Some((slot, reply)),
+        }
+        if refresh_index_metadata {
+            self.load_convention_passage();
         }
         None
     }
@@ -1028,6 +1148,39 @@ impl Shell {
                 self.load_conventions(*append, search);
             }
             cv::Action::Search => self.load_conventions(false, true),
+            cv::Action::ConfirmSearch => self.confirm_convention_search(),
+            cv::Action::NewSearch => {
+                self.archive_convention_search();
+                self.load_conventions(false, true);
+            }
+            cv::Action::ConfirmEarlierSearch(index) => {
+                if self
+                    .conventions
+                    .state()
+                    .is_none_or(|s| s.active_search.is_some())
+                {
+                    return true;
+                }
+                let state = self.conventions.state_mut();
+                if *index >= state.previous_searches.len() {
+                    return true;
+                }
+                let context = state.previous_searches.remove(*index);
+                self.archive_convention_search();
+                let state = self.conventions.state_mut();
+                state.search_recovery = Some(context.request);
+                state.search_preparation = context.preparation;
+                self.confirm_convention_search();
+            }
+            cv::Action::CancelSearch => {
+                if let Some((_, token)) = self
+                    .conventions
+                    .state()
+                    .and_then(|s| s.active_search.as_ref())
+                {
+                    token.cancel();
+                }
+            }
             cv::Action::Read(target) => self.read_convention(target.clone(), true),
             cv::Action::OpenSlug => {
                 if let Some(slug) = self.conventions.state().map(|s| s.slug_input.clone()) {
@@ -1329,21 +1482,43 @@ impl Shell {
             d.error = Some(error);
         }
     }
-    fn convention_artifact_action(&mut self, action: cv::Action) {
+    pub(super) fn import_dropped_convention(&mut self, paths: Vec<std::path::PathBuf>) {
+        if paths.len() != 1 {
+            self.conventions.state_mut().notice = Some((
+                Tone::Attention,
+                "Drop one portable convention manifest at a time.".into(),
+            ));
+            return;
+        }
+        self.import_convention_path(paths.into_iter().next().expect("one manifest"));
+    }
+    fn import_convention_path(&mut self, path: std::path::PathBuf) {
         use crate::conventions_transfer::{Pipeline, StagedFile};
+        if self.conventions.state().is_some_and(|s| s.busy) {
+            self.conventions.state_mut().notice = Some((Tone::Attention,
+                "The current convention change must be confirmed before importing another manifest.".into()));
+            return;
+        }
+        let scope = self.conventions.scope.clone();
+        let Some(b) = self.backend() else {
+            return;
+        };
+        let token = b.token("convention-import");
+        let submission = self.convention_submission("conventions.import", None, None);
+        self.begin_convention_pipeline(token, Pipeline {
+            scope: scope.clone(), operation: "conventions.import".into(),
+            body: serde_json::json!({"scope":scope.wire(),"schema":devworks_core::services::conventions::model::manifest_schema()}),
+            files: vec![StagedFile { path, name:"Convention portable manifest".into(), media_type:"application/json".into(), pointer:"/source".into(), owned:false }],
+            at: 0, submission,
+        });
+    }
+    fn convention_artifact_action(&mut self, action: cv::Action) {
         match action {
             cv::Action::Save => self.prepare_convention_save(),
             cv::Action::Import => {
-                let Some(path) = self.dialogs.pick_files().into_iter().next() else {
-                    return;
-                };
-                let scope = self.conventions.scope.clone();
-                let Some(b) = self.backend() else {
-                    return;
-                };
-                let token = b.token("convention-import");
-                let submission = self.convention_submission("conventions.import", None, None);
-                self.begin_convention_pipeline(token,Pipeline{scope:scope.clone(),operation:"conventions.import".into(),body:serde_json::json!({"scope":scope.wire(),"schema":devworks_core::services::conventions::model::manifest_schema()}),files:vec![StagedFile{path,name:"Convention portable manifest".into(),media_type:"application/json".into(),pointer:"/source".into(),owned:false}],at:0,submission});
+                if let Some(path) = self.dialogs.pick_convention() {
+                    self.import_convention_path(path);
+                }
             }
             cv::Action::Export(format) => {
                 let Some(record) = self.conventions.state().and_then(|s| s.record()).cloned()
@@ -1626,6 +1801,9 @@ impl Shell {
         }) {
             ui.ctx().request_repaint_after(Duration::from_secs(2));
         }
+        self.conventions.supports_search_cancel = self
+            .backend()
+            .is_some_and(|b| b.supports_query_cancellation());
         let mut actions = Vec::new();
         self.conventions.ui(ui, self.online().is_ok(), &mut actions);
         for action in actions {
@@ -1645,13 +1823,15 @@ impl Shell {
             .filter(|(_, s)| !s.operation_ids.is_empty())
             .map(|(scope, s)| serde_json::json!({"scope":scope,"ids":s.operation_ids}))
             .collect();
+        let searches:Vec<_>=self.conventions.states.iter().filter(|(_,s)|s.search_recovery.is_some()||s.last_search.is_some()).map(|(scope,s)|serde_json::json!({"scope":scope,"recovery":s.search_recovery,"last":s.last_search,"preparation":s.search_preparation,"earlier":s.previous_searches})).collect();
         if self.conventions.pipelines.is_empty()
             && self.conventions.submissions.is_empty()
             && operations.is_empty()
+            && searches.is_empty()
         {
             return serde_json::Value::Null;
         }
-        serde_json::json!({"pipelines":self.conventions.pipelines,"submissions":self.conventions.submissions,"operations":operations,"scope":self.conventions.scope})
+        serde_json::json!({"pipelines":self.conventions.pipelines,"submissions":self.conventions.submissions,"operations":operations,"searches":searches,"scope":self.conventions.scope})
     }
     pub(super) fn restore_conventions_pending(&mut self, value: &serde_json::Value) {
         if let Ok(scope) = serde_json::from_value(value["scope"].clone()) {
@@ -1672,6 +1852,21 @@ impl Shell {
             p.resource = None;
             self.conventions.states.entry(p.scope.clone()).or_default();
         }
+        if let Some(searches) = value["searches"].as_array() {
+            for search in searches {
+                if let Ok(scope) = serde_json::from_value::<Scope>(search["scope"].clone()) {
+                    let state = self.conventions.states.entry(scope).or_default();
+                    state.search_recovery =
+                        serde_json::from_value(search["recovery"].clone()).unwrap_or_default();
+                    state.last_search =
+                        serde_json::from_value(search["last"].clone()).unwrap_or_default();
+                    state.search_preparation =
+                        serde_json::from_value(search["preparation"].clone()).unwrap_or_default();
+                    state.previous_searches =
+                        serde_json::from_value(search["earlier"].clone()).unwrap_or_default();
+                }
+            }
+        }
         if let Some(operations) = value["operations"].as_array() {
             for operation in operations {
                 if let (Ok(scope), Ok(ids)) = (
@@ -1685,6 +1880,131 @@ impl Shell {
                         .operation_ids = ids;
                 }
             }
+        }
+    }
+}
+
+impl Shell {
+    fn dispatch_convention_search(
+        &mut self,
+        scope: Scope,
+        generation: u64,
+        append: bool,
+        frame: Vec<u8>,
+    ) -> bool {
+        if self.online().is_err() {
+            return false;
+        }
+        let Some(backend) = self.backend() else {
+            return false;
+        };
+        let token = devworks_core::ports::storage::Cancellation::new();
+        let state = self.conventions.states.entry(scope.clone()).or_default();
+        state.search_recovery = Some(cop::SearchRecovery {
+            frame: frame.clone(),
+            append,
+            generation,
+        });
+        state.active_search = Some((generation, token.clone()));
+        let slot = Slot::ConventionsList(scope.key(), generation, append, true);
+        let submitted = self.client.as_mut().is_some_and(|c| {
+            if backend.supports_query_cancellation() {
+                c.query_cancellable(
+                    slot,
+                    "Searching active conventions",
+                    "conventions.search",
+                    frame,
+                    devworks_core::ports::storage::ReadOptions {
+                        cancellation: Some(token),
+                        ..Default::default()
+                    },
+                )
+            } else {
+                c.query(
+                    slot,
+                    "Searching active conventions",
+                    "conventions.search",
+                    frame,
+                )
+            }
+        });
+        if !submitted {
+            let s = self.conventions.states.get_mut(&scope).expect("scope");
+            s.search_recovery = None;
+            s.active_search = None;
+        }
+        submitted
+    }
+    fn confirm_convention_search(&mut self) {
+        let scope = self.conventions.scope.clone();
+        let state = self.conventions.states.entry(scope.clone()).or_default();
+        if state.active_search.is_some() {
+            return;
+        }
+        let Some(recovery) = state
+            .search_recovery
+            .as_ref()
+            .or(state.last_search.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&recovery.frame) else {
+            state.list_error =
+                Some("The saved search frame is unreadable; no new search was sent.".into());
+            return;
+        };
+        let mut body = value["body"].clone();
+        let Some(object) = body.as_object_mut() else {
+            return;
+        };
+        object.remove("kind");
+        let mut old = state.query_snapshot.clone().unwrap_or_default();
+        if let Some(page) = old
+            .get_mut("page")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            page.remove("cursor");
+        }
+        let mut filter = body.clone();
+        if let Some(page) = filter
+            .get_mut("page")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            page.remove("cursor");
+        }
+        let append = recovery.append && state.searched && old == filter;
+        state.list_generation = state.list_generation.wrapping_add(1);
+        let generation = state.list_generation;
+        state.pending_listing = Some((generation, body));
+        state.listing = true;
+        state.list_error = None;
+        if !self.dispatch_convention_search(scope.clone(), generation, append, recovery.frame) {
+            let s = self.conventions.states.get_mut(&scope).expect("scope");
+            s.listing = false;
+            s.list_error =
+                Some("The original search cannot be confirmed while offline or closing.".into());
+        }
+    }
+    pub(super) fn cancel_convention_queries(&self) {
+        for state in self.conventions.states.values() {
+            if let Some((_, token)) = &state.active_search {
+                token.cancel();
+            }
+        }
+    }
+}
+
+impl Shell {
+    fn archive_convention_search(&mut self) {
+        let state = self.conventions.state_mut();
+        if let Some(request) = state.search_recovery.take() {
+            state.previous_searches.push(cop::SearchContext {
+                request,
+                preparation: state.search_preparation.take(),
+            });
+        } else {
+            state.search_preparation = None;
         }
     }
 }

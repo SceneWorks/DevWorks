@@ -248,3 +248,42 @@ pub struct Submission {
     #[serde(default)]
     pub resource: Option<(bool, String, u64)>,
 }
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchRecovery {
+    pub frame: Vec<u8>,
+    pub append: bool,
+    pub generation: u64,
+}
+/// Admission failures never started preparation. An ambiguous preparation/read failure keeps
+/// its original query identity; a new invocation may confirm it without creating another.
+pub fn search_uncertain(outcome: &QueryOutcome) -> bool {
+    use devworks_core::{
+        gateway::GatewayFailure,
+        protocol::{DomainErrorCode, results::DomainQueryReply},
+    };
+    match outcome {
+        Ok(DomainQueryReply::Rejected { fault, .. }) => matches!(
+            fault.code,
+            DomainErrorCode::OutcomeUnknown
+                | DomainErrorCode::StorageUnavailable
+                | DomainErrorCode::Cancelled
+        ),
+        Err(GatewayFailure::HandlerContract(_)) => true,
+        _ => false,
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchContext {
+    pub request: SearchRecovery,
+    pub preparation: Option<(String, OperationRef)>,
+}
+pub fn preparation_unsettled(operation: &OperationRef) -> bool {
+    !matches!(
+        operation.state,
+        devworks_core::protocol::OperationState::ObservedComplete
+            | devworks_core::protocol::OperationState::Failed
+            | devworks_core::protocol::OperationState::CancelledBeforeDispatch
+    )
+}

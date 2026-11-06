@@ -94,7 +94,7 @@ impl Default for Draft {
             slug: String::new(),
             parent: None,
             parent_path: vec![],
-            order: "0".into(),
+            order: String::new(),
             applicability: vec![],
             retired: false,
             markdown: Arc::new(String::new()),
@@ -205,6 +205,12 @@ pub struct ScopeState {
     pub scope_revision: Option<i64>,
     pub list_generation: u64,
     pub query_snapshot: Option<serde_json::Value>,
+    pub pending_listing: Option<(u64, serde_json::Value)>,
+    pub search_recovery: Option<crate::conventions_ops::SearchRecovery>,
+    pub last_search: Option<crate::conventions_ops::SearchRecovery>,
+    pub search_preparation: Option<(String, OperationRef)>,
+    pub previous_searches: Vec<crate::conventions_ops::SearchContext>,
+    pub active_search: Option<(u64, devworks_core::ports::storage::Cancellation)>,
     pub text: String,
     pub slug_input: String,
     pub applicability: Vec<String>,
@@ -292,6 +298,7 @@ pub struct ConventionsScreen {
     pub submissions: BTreeMap<String, crate::conventions_ops::Submission>,
     pub pipelines: BTreeMap<String, crate::conventions_transfer::Pipeline>,
     pub last_operation_poll: Option<std::time::Instant>,
+    pub supports_search_cancel: bool,
 }
 pub enum Action {
     Knowledge(usize),
@@ -300,6 +307,10 @@ pub enum Action {
     ResumeTransfer(String),
     List(bool),
     Search,
+    ConfirmSearch,
+    NewSearch,
+    ConfirmEarlierSearch(usize),
+    CancelSearch,
     Read(Target),
     OpenSlug,
     Page(bool),
@@ -413,6 +424,7 @@ impl ConventionsScreen {
     }
     pub fn ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<Action>) {
         let projects = self.projects.clone();
+        let supports_cancel = self.supports_search_cancel;
         let mut scope = self.scope.clone();
         let resumable: Vec<_> = self
             .pipelines
@@ -523,7 +535,7 @@ impl ConventionsScreen {
                         widgets::secondary_pane(ui, "Find conventions", |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("convention-list")
-                                .show(ui, |ui| browse(ui, s, online, a))
+                                .show(ui, |ui| browse(ui, s, online, supports_cancel, a))
                         });
                     },
                 );
@@ -531,7 +543,13 @@ impl ConventionsScreen {
         );
     }
 }
-fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
+fn browse(
+    ui: &mut Ui,
+    s: &mut ScopeState,
+    online: bool,
+    supports_cancel: bool,
+    a: &mut Vec<Action>,
+) {
     field(ui, "Find convention", &mut s.text);
     egui::CollapsingHeader::new("Open a convention by slug").show(ui, |ui| {
         field(ui, "Convention slug lookup", &mut s.slug_input);
@@ -546,7 +564,7 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
     ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
-                online && !s.listing,
+                online && !s.listing && s.search_recovery.is_none(),
                 egui::Button::new("Search conventions"),
             )
             .clicked()
@@ -563,6 +581,69 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
             a.push(Action::List(false));
         }
     });
+    if let Some((request, operation)) = &s.search_preparation {
+        widgets::caption(
+            ui,
+            format!(
+                "Query preparation · request {request} · last reported {:?}",
+                operation.state
+            ),
+        );
+    }
+    if s.search_recovery.is_some() {
+        ui.label(if s.active_search.is_some() {
+            "The submitted search is running."
+        } else {
+            "The previous search result is not confirmed. Confirming reuses that exact request."
+        });
+        if ui
+            .add_enabled(
+                online && s.active_search.is_none(),
+                egui::Button::new("Confirm search outcome"),
+            )
+            .clicked()
+        {
+            a.push(Action::ConfirmSearch);
+        }
+        if supports_cancel
+            && let Some((_, token)) = &s.active_search
+            && ui
+                .add_enabled(
+                    !token.is_cancelled(),
+                    egui::Button::new("Cancel search request"),
+                )
+                .clicked()
+        {
+            a.push(Action::CancelSearch);
+        }
+    }
+    if s.search_recovery.is_none()
+        && s.last_search.is_some()
+        && ui
+            .add_enabled(
+                online && s.active_search.is_none(),
+                egui::Button::new("Repeat previous search request"),
+            )
+            .clicked()
+    {
+        a.push(Action::ConfirmSearch);
+    }
+    if s.search_recovery.is_some()
+        && ui
+            .add_enabled(
+                online && s.active_search.is_none() && !s.listing,
+                egui::Button::new("Start a new search"),
+            )
+            .clicked()
+    {
+        a.push(Action::NewSearch);
+    }
+    if !s.previous_searches.is_empty() {
+        egui::CollapsingHeader::new("Earlier unconfirmed searches").show(ui,|ui|{for (index,context) in s.previous_searches.iter().enumerate(){ui.push_id(index,|ui|{
+        if let Some((request,operation))=&context.preparation{widgets::caption(ui,format!("Request {request} · last reported {:?}",operation.state));}else{ui.label("An earlier result was not confirmed; no preparation metadata was observed.");}
+        if ui.add_enabled(online&&s.active_search.is_none(),egui::Button::new("Confirm this earlier search")).clicked(){a.push(Action::ConfirmEarlierSearch(index));}
+    });}});
+    }
     egui::CollapsingHeader::new("Convention filters").show(ui, |ui| {
         egui::ComboBox::from_label("Browsing lifecycle")
             .selected_text(["Active", "Retired", "Active and retired", "Deleted"][s.lifecycle])
@@ -606,6 +687,14 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
         }
     }
     if s.searched {
+        if let Some(query) = s
+            .query_snapshot
+            .as_ref()
+            .and_then(|v| v.get("text"))
+            .and_then(serde_json::Value::as_str)
+        {
+            widgets::caption(ui, format!("Results for: {query}"));
+        }
         for (index, hit) in s.hits.iter().enumerate() {
             ui.push_id(("hit", index), |ui| {
                 if ui.button(&hit.convention.title.0).clicked() {
@@ -1037,6 +1126,10 @@ fn editor(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
     if draft.base.is_none() {
         changed |= labels(ui, &mut draft.parent_path, "Parent path component");
         changed |= field(ui, "Initial sort order", &mut draft.order);
+        widgets::caption(
+            ui,
+            "Leave the initial order blank to use the default sibling order.",
+        );
     }
     changed |= labels(ui, &mut draft.applicability, "Applicability label");
     changed |= ui
