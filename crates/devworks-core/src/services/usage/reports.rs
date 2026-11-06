@@ -137,18 +137,29 @@ impl Query {
             return Err(StorageError::ScopeDenied.into());
         }
         let kind = i.report_kind.clone().unwrap_or(UsageReportKind::Attempts);
+        let parse_time = |v: &crate::protocol::support::SignedCounter| {
+            v.0.parse::<i64>().map_err(|_| invalid("usage_range"))
+        };
         let end = i
             .end_ms
             .as_ref()
-            .map_or_else(|| resolved.map_or(now, |r| r.1), Counter::get);
-        if end < 0 {
-            return Err(invalid("usage_range"));
-        }
+            .map(parse_time)
+            .transpose()?
+            .or(resolved.map(|r| r.1))
+            .unwrap_or(now);
+        calendar::valid_source_date(end)?;
+        let default_start = end
+            .checked_sub(30 * DAY)
+            .ok_or_else(|| invalid("usage_range"))?;
         let start = i
             .start_ms
             .as_ref()
-            .map_or_else(|| resolved.map_or(end - 30 * DAY, |r| r.0), Counter::get);
-        if start >= end || end < 0 || end.checked_sub(start).is_none() {
+            .map(parse_time)
+            .transpose()?
+            .or(resolved.map(|r| r.0))
+            .unwrap_or(default_start);
+        calendar::valid_source_date(start)?;
+        if start >= end || end.checked_sub(start).is_none() {
             return Err(invalid("usage_range"));
         }
         let interval = Interval::parse(i.interval.as_ref().map(|s| s.0.as_str()), start, end)?;
@@ -219,7 +230,7 @@ impl Query {
             report_kind: kind.clone(),
             range: UsageReportRange {
                 start_ms: crate::protocol::support::SignedCounter(start.to_string()),
-                end_ms: count(end)?,
+                end_ms: crate::protocol::support::SignedCounter(end.to_string()),
             },
             interval: BoundedText(interval.name().into()),
             read_revision: Revision::new(read.stamp().committed_sequence.max(1))
@@ -292,6 +303,70 @@ impl Query {
         ]
         .into_iter()
         .all(|(asked, actual)| asked.is_none_or(|s| actual == Some(s)))
+    }
+    fn relevant(&self, f: &Fact) -> bool {
+        match self.kind {
+            UsageReportKind::Attempts | UsageReportKind::Filters => true,
+            UsageReportKind::AssistantUsage | UsageReportKind::AssistantActivity => {
+                matches!(f.path, Path::Assistant | Path::Unknown)
+            }
+            UsageReportKind::CodeReviewUsage => matches!(f.path, Path::Review | Path::Unknown),
+            UsageReportKind::RepositoryAnalysisUsage => {
+                matches!(f.path, Path::Analysis | Path::Unknown)
+            }
+            UsageReportKind::McpUsage => f.mcp,
+        }
+    }
+    /// Missing immutable identity cannot prove that a filtered population is empty. Known
+    /// contradictory dimensions still exclude the fact; this never guesses a matching owner.
+    fn uncertain_filter(&self, f: &Fact) -> bool {
+        if !self.relevant(f) {
+            return false;
+        }
+        let a = &self.context.applied_filters;
+        let model_unknown = f
+            .record
+            .as_ref()
+            .is_some_and(|r| r.resolved_model_id.is_none())
+            || f.activity && f.record.is_none();
+        let mut unknown = false;
+        for (asked, actual, uncertain) in [
+            (
+                a.user.as_ref().map(|s| s.0.as_str()),
+                f.user.as_deref(),
+                false,
+            ),
+            (
+                a.provider.as_ref().map(|s| s.0.as_str()),
+                f.provider.as_deref(),
+                false,
+            ),
+            (
+                a.model.as_ref().map(|s| s.0.as_str()),
+                f.model.as_deref(),
+                model_unknown,
+            ),
+            (
+                a.tool.as_ref().map(|s| s.0.as_str()),
+                f.tool.as_deref(),
+                false,
+            ),
+            (
+                a.purpose.as_ref().map(|s| s.0.as_str()),
+                f.purpose.as_deref(),
+                false,
+            ),
+        ] {
+            if let Some(asked) = asked {
+                match actual {
+                    Some(actual) if !uncertain && actual != asked => return false,
+                    None => unknown = true,
+                    _ if uncertain => unknown = true,
+                    _ => {}
+                }
+            }
+        }
+        unknown
     }
     fn ownership(
         &self,
@@ -594,7 +669,7 @@ fn origin(read: &dyn ReadSnapshot, o: StoredUsageOrigin, gaps: &mut Gaps) -> SRe
 }
 fn collect(read: &dyn ReadSnapshot, q: &Query, gaps: &mut Gaps) -> SResult<Vec<Fact>> {
     let mut facts = Vec::new();
-    if q.end == 0 {
+    if q.end <= 0 {
         return Ok(facts);
     }
     let mut after = None;
@@ -867,6 +942,12 @@ pub fn query(
             })
     }) {
         gaps.add("cache-profile-observation-conflict");
+    }
+    if facts.iter().any(|f| {
+        (q.in_range(f.time) || f.activity_time.is_some_and(|t| q.in_range(t)))
+            && q.uncertain_filter(f)
+    }) {
+        gaps.add("filter-identity-unrecorded");
     }
     let selected = facts
         .iter()

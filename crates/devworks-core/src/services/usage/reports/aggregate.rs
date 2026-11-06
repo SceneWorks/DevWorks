@@ -319,7 +319,9 @@ pub(super) fn report(q: &Query, facts: &[&Fact], gaps: &mut Gaps) -> SResult<Vec
     };
     // Unknown categorization cannot establish that a source population is empty.
     if rows.is_empty()
-        && ((!mcp && unknown_path) || (mcp && gaps.0.contains("tool-transport-unrecorded")))
+        && (gaps.0.contains("filter-identity-unrecorded")
+            || (!mcp && unknown_path)
+            || (mcp && gaps.0.contains("tool-transport-unrecorded")))
     {
         return Ok(Vec::new());
     }

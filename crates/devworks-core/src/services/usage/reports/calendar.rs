@@ -83,3 +83,16 @@ impl Interval {
             .map_err(|_| invalid("usage_range"))
     }
 }
+
+/// Frozen DateTime accepts years 1..=9999. Signed epoch milliseconds preserve its real legal
+/// pre-1970 dates, while rejecting dates that the retained controller could never bind.
+pub(super) fn valid_source_date(ms: i64) -> SResult<()> {
+    let year = Timestamp::from_millisecond(ms)
+        .map_err(|_| invalid("usage_range"))?
+        .to_zoned(TimeZone::UTC)
+        .year();
+    if !(1..=9999).contains(&year) {
+        return Err(invalid("usage_range"));
+    }
+    Ok(())
+}
