@@ -35,7 +35,7 @@ def choice(fs,one,since,kind):
 def record_attrs(d):
  out=[]
  if d.get('schemaName'):out.append(f'#[schemars(rename = "{d["schemaName"]}")]')
- if d.get('earlierName'):out.append(f'#[schemars(extend("x-earlier" = {literal({"name":d["earlierName"],"before":min(d["since"].values())})}))]')
+ if d.get('earlierName'):out.append(f'#[schemars(extend("x-earlier" = {literal({"name":d["earlierName"],"before":d.get("earlierBefore",min(d["since"].values()))})}))]')
  return ''.join(a+'\n' for a in out)
 def tokens(t):return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*',t))
 # Members introduced in a later operation schema revision ("since") and the types that carry one.

@@ -2445,3 +2445,19 @@ fn an_archival_stops_runs_by_their_own_target_not_their_jobs_current_one() {
         json!([rid])
     );
 }
+
+#[test]
+fn scheduled_inference_persists_a_stable_latest_alias_without_requiring_a_concrete_catalog_row() {
+    let fx = Fx::new();
+    let mut definition = seed_prompt(&fx, None);
+    definition["route"] = json!({"kind":"Model", "modelId":"astra-latest"});
+    let job = fx.job(
+        &fx.user(),
+        body("Latest family job", every(3600), definition, true),
+    );
+    assert_eq!(job["definition"]["route"]["modelId"], "astra-latest");
+    assert!(
+        fx.read(|r| r.router().route_model(&id("astra-latest")))
+            .is_none()
+    );
+}

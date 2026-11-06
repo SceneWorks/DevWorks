@@ -214,24 +214,71 @@ fn capability_blocks(model: &StoredRouteModel, need: &Need) -> Vec<Block> {
     blocks
 }
 
-/// Whether a discovered model list serves `upstream` (the reference's `ModelDiscovery.Lists`):
-/// OpenRouter exactly (its automatic route is always served); every other profile ignoring case,
-/// listed as-is or with only a snapshot date between the two in either direction
-/// (`claude-sonnet-4-5` and `claude-sonnet-4-5-20250929`).
+/// Whether inventory lists this exact concrete upstream identity. A dated snapshot and an
+/// undated provider alias are distinct identities; neither can keep the other's pin alive.
 pub fn lists(profile: &str, discovered: &BTreeSet<String>, upstream: &str) -> bool {
     if profile == OPEN_ROUTER_PROFILE {
         return upstream == OPEN_ROUTER_AUTO_UPSTREAM || discovered.contains(upstream);
     }
-    fn snapshot_of(dated: &str, alias: &str) -> bool {
-        dated.len() == alias.len() + 9
-            && dated.is_char_boundary(alias.len())
-            && dated[..alias.len()].eq_ignore_ascii_case(alias)
-            && dated.as_bytes()[alias.len()] == b'-'
-            && dated[alias.len() + 1..].bytes().all(|b| b.is_ascii_digit())
+    discovered
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(upstream))
+}
+
+/// Exact provider inventory availability, independent of enablement, credentials, cooldowns
+/// and request requirements. Unknown remains unknown until every applicable permitted scope
+/// has a complete inventory, unless one already proves the identity is listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inventory {
+    pub available: Option<bool>,
+    pub reason: Option<&'static str>,
+}
+
+pub fn inventory(model: &StoredRouteModel, connections: &[ConnectionStatus]) -> Inventory {
+    let serving: Vec<_> = connections
+        .iter()
+        .filter(|c| c.profile == model.endpoint_profile)
+        .filter(|c| model.connection_id.as_ref().is_none_or(|id| id == &c.id))
+        .collect();
+    if serving.is_empty() {
+        return Inventory {
+            available: None,
+            reason: Some("NoInventory"),
+        };
     }
-    discovered.iter().any(|id| {
-        id.eq_ignore_ascii_case(upstream) || snapshot_of(id, upstream) || snapshot_of(upstream, id)
-    })
+    let permitted: Vec<_> = serving
+        .into_iter()
+        .filter(|c| c.permits(&model.upstream_model_id))
+        .collect();
+    if permitted.is_empty() {
+        return Inventory {
+            available: Some(false),
+            reason: Some("Excluded"),
+        };
+    }
+    if model.endpoint_profile == OPEN_ROUTER_PROFILE
+        && model.upstream_model_id == OPEN_ROUTER_AUTO_UPSTREAM
+        || permitted.iter().any(|c| {
+            c.discovered
+                .as_ref()
+                .is_some_and(|d| lists(&model.endpoint_profile, d, &model.upstream_model_id))
+        })
+    {
+        Inventory {
+            available: Some(true),
+            reason: None,
+        }
+    } else if permitted.iter().any(|c| c.discovered.is_none()) {
+        Inventory {
+            available: None,
+            reason: Some("NoInventory"),
+        }
+    } else {
+        Inventory {
+            available: Some(false),
+            reason: Some("NotDiscovered"),
+        }
+    }
 }
 
 /// The usable connection of `model` (preferring `preferred`), or why there is none.

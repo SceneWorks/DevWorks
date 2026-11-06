@@ -152,7 +152,7 @@ def record_attrs(d):
     if d.get('schemaName'):
         out += f'#[schemars(rename = "{d["schemaName"]}")]\n'
     if d.get('earlierName'):
-        earlier = {'name': d['earlierName'], 'before': min(d['since'].values())}
+        earlier = {'name': d['earlierName'], 'before': d.get('earlierBefore', min(d['since'].values()))}
         out += f'#[schemars(extend("x-earlier" = {json.dumps(earlier)}))]\n'
     return out
 

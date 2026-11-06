@@ -590,7 +590,7 @@ pub enum OperationResult {
     #[serde(rename = "settings.explain_source")]
     SettingsExplainSource { value: Page<SettingEntry> },
     #[serde(rename = "router.catalog")]
-    RouterCatalog { value: Page<RouteModel> },
+    RouterCatalog { value: Page<RouteCatalogModel> },
     #[serde(rename = "router.connections")]
     RouterConnections { value: Page<ConnectionRecord> },
     #[serde(rename = "router.route")]
@@ -1549,6 +1549,8 @@ impl Revisioned for OperationResult {
             Self::JobsDisable { value } => value.retain_revision(revision),
             Self::RouterCatalog { value } => value.retain_revision(revision),
             Self::RouterConnections { value } => value.retain_revision(revision),
+            Self::RouterRoute { value } => value.retain_revision(revision),
+            Self::RouterPin { value } => value.retain_revision(revision),
             Self::RouterAvailability { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),

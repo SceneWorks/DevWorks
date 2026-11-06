@@ -4,7 +4,7 @@
   "project": "DW",
   "existing_feature": "DW-F1",
   "existing_feature_role": "Retain as architecture/planning baseline and publication home; native implementation moves to the related delivery features.",
-  "scope": "Preserve all 63 native item IDs and 250 dependency edges. The current approved source requirement set contains 374 individually structured requirements. UI acceptance is amended explicitly; native progress and completion require live CodeGraph evidence.",
+  "scope": "Preserve all 63 native item IDs and 250 dependency edges. The current approved source requirement set contains 377 individually structured requirements. UI acceptance is amended explicitly; native progress and completion require live CodeGraph evidence. Latest-model amendment adds three confirmed requirements and DW-108; all earlier identities and obligations remain.",
   "apply_strategy": [
     "Create related features under DW with requirements/goals/acceptance.",
     "Move existing items with version-checked update_work, updating inherited requirement references without recreating items or changing dependencies.",
@@ -1083,7 +1083,8 @@
       "title": "Models, routing and usage",
       "goals": [
         "Use the agreed model/providers, routing, context, tools, decisions and cost controls through one native execution path.",
-        "Assign DevWorks Auto once per new session using a pooled SystemOne decision or bounded Low-tier fallback, then preserve its tier and eligible generation model affinity."
+        "Assign DevWorks Auto once per new session using a pooled SystemOne decision or bounded Low-tier fallback, then preserve its tier and eligible generation model affinity.",
+        "Keep model-family latest choices and availability current without reconfiguring tiers or moving eligible concrete chat pins."
       ],
       "requirements": [
         {
@@ -1355,13 +1356,32 @@
           "source_id": "ROUTE-24",
           "source_status": "Confirmed",
           "text": "ROUTE-24 [Confirmed]: Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment."
+        },
+        {
+          "id": "E46",
+          "source_id": "ROUTE-25",
+          "source_status": "Confirmed",
+          "text": "ROUTE-25 [Confirmed]: Provide stable -latest aliases for OpenAI Astra (Max), Sol (High), Terra (Mid), Luna (Low), and Anthropic Fable (Max), Opus (High), Sonnet (Mid), Haiku (Low). Refresh complete provider model lists hourly while the app is open, recheck overdue lists on reopening, and retain manual refresh. Resolve each family alias to the highest available numeric version in its configured provider/connection scope, promoting newly listed higher versions automatically. If the highest version disappears, use the highest version still listed; if none remains, the alias is unavailable. Compare parsed version components, not lexical order, response order or discovery time. Preserve connection/billing boundaries and configured allow/exclude constraints."
+        },
+        {
+          "id": "E47",
+          "source_id": "ROUTE-26",
+          "source_status": "Confirmed",
+          "text": "ROUTE-26 [Confirmed]: For all providers and models, including custom and SystemOne decision models, reconcile availability from successful complete model-list refreshes. Keep missing model records, user enablement/configuration and historical references; mark them unavailable for new selection and routing, and restore availability when they return without re-enabling user-disabled models. Failed, malformed or partial refreshes must not become authoritative shorter catalogs. Availability is scoped to the serving connection and remains distinct from user enablement, authentication, cooldowns and request-specific capability eligibility."
+        },
+        {
+          "id": "E48",
+          "source_id": "ROUTE-27",
+          "source_status": "Confirmed",
+          "text": "ROUTE-27 [Confirmed]: Every model-selection input, particularly Workspace/Home chat and its shared sidebar, offers the eight family -latest aliases alongside available explicit versions. New/replacement tier assignments round-robin across the configured latest aliases for those eight families, retaining configured custom tier members outside them. Preserve editable tier membership, independent effort and direct named-version/upstream-auto choices. Allocate once per chat and persist its resolved concrete version pin across turns, tool continuations, compaction and restart; an alias promotion alone neither invalidates an eligible pin nor reclassifies its Auto tier. Unavailable pins use normal eligible same-tier replacement. Alias intent, concrete catalog identity and provider-resolved identity remain distinguishable, and known request replay does not re-resolve an alias or consume another round-robin turn."
         }
       ],
       "acceptance_tests": [
         "All mapped source requirements and existing item acceptance are fulfilled with native evidence; source statuses remain explicit.",
         "Reuse item evidence for integrated behavior, including shared authority, recovery and UI/tool consistency; design fixtures do not constitute native completion.",
         "Across native UI and scripted host/agent/job entry points, prove each new Auto session gets one durable tier assignment, independent workers classify separately, direct/upstream-auto choices bypass it, and ordinary continuations/restart/compaction do not trigger tier selection.",
-        "Reuse item evidence for multi-model decision round robin, nonrecursive Low fallback, strict outputs, bounded per-model failures, same-tier generation failover, budgets and diagnostics. Provider cache-hit or universal model-judgment quality claims require separate runtime evidence and are not inferred from planning fixtures."
+        "Reuse item evidence for multi-model decision round robin, nonrecursive Low fallback, strict outputs, bounded per-model failures, same-tier generation failover, budgets and diagnostics. Provider cache-hit or universal model-judgment quality claims require separate runtime evidence and are not inferred from planning fixtures.",
+        "Prove latest numeric promotion/fallback, hourly reversible availability for all providers including SystemOne, explicit/latest pickers, latest/custom tier and Low-classifier rotation, independent cursors, and preservation of concrete pins/known replay across refresh and restart. Reuse deterministic native evidence from the latest-model story, DW-22 and DW-107; no additional inference or benchmark campaign."
       ],
       "items": [
         {
@@ -1437,10 +1457,10 @@
           "type": "story",
           "acceptance_criteria_unchanged": false,
           "blocked_by": [
+            "DW-5",
             "DW-17",
             "DW-18",
-            "DW-21",
-            "DW-5"
+            "DW-21"
           ],
           "acceptance_criteria": [
             {
@@ -1455,8 +1475,8 @@
             },
             {
               "id": "A3",
-              "state": "unmet",
-              "text": "Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported."
+              "text": "Two or more eligible SystemOne models alternate across new logical decision requests without session pins; capability/input-limit/disabled/cooling/auth/billing exclusions are respected. Concurrent calls and restart preserve durable cursor fairness, known receipt replay does not consume another turn, and per-model bounded failures do not loop. Explicit-ID invocation stays exact and all retained choice/noul/score/box/media/usage behavior remains supported. Successful complete refreshes exclude disappeared SystemOne models from available selection, explicit invocation and pool allocation without deleting their configuration; returning enabled models rejoin. Failed/partial refreshes do not falsely remove them, and unavailable candidates/known replay do not consume another decision turn.",
+              "state": "unmet"
             }
           ]
         },
@@ -1469,24 +1489,55 @@
           "acceptance_criteria": [
             {
               "id": "A1",
-              "state": "unmet",
-              "text": "New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated."
+              "text": "New sessions selecting DevWorks Auto, including independently delegated worker sessions, classify from the initial prompt plus role/task context with an inspectable versioned rubric and accept only Low/Mid/High/Max. Native Home/sidebar and other route selectors, agent/host invocation and job route inputs use the same typed behavior. Explicit tier/named selections and upstream OpenRouter Auto/Auto Beta bypass classification, preserve independent effort/capabilities and keep provider-resolved identity distinct. Existing defaults and saved selections are not silently migrated. Latest aliases and available explicit versions use the same catalog across composers, host/agent and job inputs.",
+              "state": "unmet"
             },
             {
               "id": "A2",
-              "state": "unmet",
-              "text": "The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing."
+              "text": "The initial tier and classifier/policy/input provenance survive concurrent first requests, availability waits and restart. Allocate/pin a generation member only within the chosen eligible tier. Later messages, tool turns, compaction, policy edits and complexity changes perform no further classification or tier switching; same-tier availability failover persists an explained replacement. Explicit manual overrides remain possible, established automatic assignment restoration does not reclassify, and a manually started session without an automatic assignment requires a new session for initial Auto routing. New/replacement generation allocations rotate latest-family/custom members; refreshing to a newer alias target leaves an eligible concrete version pin and its Auto tier unchanged, including across restart and first-request races.",
+              "state": "unmet"
             },
             {
               "id": "A3",
-              "state": "unmet",
-              "text": "SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance."
+              "text": "SystemOne absence, unusable capabilities, malformed choices and bounded model failures lead to a directly admitted pinless Low classifier without recursive routing or conversation repinning. Low-model failures are bounded per model, and an exhausted/unsupported chosen generation tier waits or refuses rather than silently downgrading/upgrading. Classifier and generation usage/budget/authority are independently admitted and attributed. Deterministic native integration proves these paths and replay/cancellation behavior without inference in normal CI; reuse that evidence for final acceptance. The direct-Low fallback rotates latest Haiku/Luna plus configured custom Low members with its own purpose-scoped cursor and no conversation pin; missing models are excluded, returning models regain eligibility, and known replay neither retargets a decided alias nor advances a cursor.",
+              "state": "unmet"
             }
           ],
           "blocked_by": [
             "DW-16",
             "DW-20",
-            "DW-22"
+            "DW-22",
+            "DW-108"
+          ],
+          "acceptance_criteria_unchanged": false
+        },
+        {
+          "local_id": "DW-108",
+          "key": "DW-108",
+          "ref": "model-latest",
+          "title": "Keep latest model aliases and catalog availability current",
+          "type": "story",
+          "acceptance_criteria_unchanged": false,
+          "acceptance_criteria": [
+            {
+              "id": "AC1",
+              "text": "Hourly/manual/overdue-on-reopen refreshes apply complete successful provider inventories per connection. Missing models remain stored with user settings/history intact and become unavailable; returning models regain availability without re-enabling user-disabled models. Failed, malformed or partial refreshes preserve the last successful inventory. Shared facts cover conversational/custom and SystemOne inventories; decision invocation/pool integration is owned by amended DW-22.",
+              "state": "unmet"
+            },
+            {
+              "id": "AC2",
+              "text": "All eight aliases resolve to the highest available parsed numeric family version within configured connection/policy scope, promote newly listed higher versions and fall back when a version disappears. New/replacement tier allocations round-robin latest-family targets and configured custom members. Eligible concrete pins survive promotion, turns and restart; explicit-version selection stays exact, known replay stays on its recorded resolution, and refresh/alias retargeting consumes no allocation turn.",
+              "state": "unmet"
+            },
+            {
+              "id": "AC3",
+              "text": "Every existing model-selection input, including Workspace/Home/sidebar and scheduled-job route inputs, offers latest aliases alongside available explicit versions. Unavailable records/configuration remain inspectable in Settings, selection/availability updates follow completed background/manual refreshes, and native UI and router/tool contracts share alias intent, resolved concrete identity and truthful unavailable states without bypassing effort, capabilities or provider constraints.",
+              "state": "unmet"
+            }
+          ],
+          "blocked_by": [
+            "DW-17",
+            "DW-18"
           ]
         }
       ],
@@ -3223,7 +3274,7 @@
           "ref": "slice-acceptance",
           "title": "Reconcile full retained behavior and release readiness",
           "type": "task",
-          "acceptance_criteria_unchanged": true,
+          "acceptance_criteria_unchanged": false,
           "blocked_by": [
             "DW-1",
             "DW-2",
@@ -3286,7 +3337,27 @@
             "DW-59",
             "DW-60",
             "DW-62",
-            "DW-63"
+            "DW-63",
+            "DW-104",
+            "DW-107",
+            "DW-108"
+          ],
+          "acceptance_criteria": [
+            {
+              "id": "A1",
+              "text": "Run every AT requirement and all 33 CAP groups through actual services, reconcile frozen-source drift and verify each retained operation plus import quirks. Separately dispatch authorized live inference E2E later; schema/probe counts cannot satisfy product acceptance.",
+              "state": "unmet"
+            },
+            {
+              "id": "A2",
+              "text": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests. Satisfy every primary and supporting source requirement listed on this item, preserving its Confirmed/Proposed status.",
+              "state": "unmet"
+            },
+            {
+              "id": "A3",
+              "text": "Integrated Auto/latest acceptance reuses the latest-model story, DW-22 and DW-107 evidence: all eight aliases and explicit/custom choices work across native/host/job entry points; hourly complete inventories promote/fall back and remove/restore availability across providers including SystemOne without deleting configuration or reacting to failed/partial lists. New/replacement tier and pinless Low-classifier allocations use latest/custom pools with independent durable cursors; eligible concrete pins, the chosen Auto tier and known receipt resolutions survive alias promotion and restart. No extra inference/benchmark campaign is implied, and normal CI executes no inference.",
+              "state": "unmet"
+            }
           ]
         }
       ],
@@ -3328,5 +3399,23 @@
     "expandedItem": "DW-22",
     "finalAcceptance": "DW-61",
     "note": "Existing unrelated items and dependencies retained; Auto native acceptance pending."
+  },
+  "latestModelAmendment": {
+    "date": "2026-11-05",
+    "feature": "DW-F6",
+    "newItem": "DW-108",
+    "expandedItems": [
+      "DW-22",
+      "DW-107"
+    ],
+    "finalAcceptance": "DW-61",
+    "requirements": [
+      "ROUTE-25",
+      "ROUTE-26",
+      "ROUTE-27"
+    ],
+    "nativeAcceptance": "pending",
+    "newItemStatus": "ready",
+    "addedDependencyEdges": 4
   }
 }

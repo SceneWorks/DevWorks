@@ -2,8 +2,9 @@
 //! coordinator sidebar because both render the same conversation key.
 //!
 //! The route selector offers Tier Max, High, Mid and Low first, then the named-model group from
-//! `router.catalog` in catalog order (Open Router Auto and every enabled model, custom ones
-//! included). Effort is a separate selector: Provider default, plus the explicit efforts the
+//! `router.catalog`: the eight stable latest-family choices, Open Router Auto, and available
+//! concrete versions (custom models included). Unavailable records remain in Settings. Effort
+//! is a separate selector: Provider default, plus the explicit efforts the
 //! selected route declares (a tier offers what its members declare; picking one makes the tier's
 //! other members ineligible rather than silently dropping it). Labels never encode effort.
 //!
@@ -14,7 +15,7 @@
 //! the pinned model or the truthful availability of the selection: its blockers, and the
 //! earliest cooldown expiry when that is all it waits for (rechecked then, never earlier).
 use devworks_core::protocol::records::{
-    EffortName, RouteAvailability, RouteChoice, RouteIntent, RouteModel, TierName,
+    EffortName, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, TierName,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -51,8 +52,8 @@ pub struct Status {
 
 #[derive(Default)]
 pub struct Routing {
-    /// The conversational catalog in selector order (enabled models).
-    pub catalog: Vec<RouteModel>,
+    /// The complete query catalog; selection options filter unavailable concrete models.
+    pub catalog: Vec<RouteCatalogModel>,
     pub catalog_loaded: bool,
     pub catalog_error: Option<String>,
     /// Selections by conversation key (a session ID, or the new-chat draft key).
@@ -84,7 +85,7 @@ pub struct Routing {
 #[derive(Clone, Debug, Default)]
 pub struct CatalogLoad {
     pub generation: u64,
-    pub items: Vec<RouteModel>,
+    pub items: Vec<RouteCatalogModel>,
 }
 
 /// What a catalog page did to the load it belongs to.
@@ -118,7 +119,7 @@ impl Routing {
     pub fn catalog_page(
         &mut self,
         generation: u64,
-        items: Vec<RouteModel>,
+        items: Vec<RouteCatalogModel>,
         next: Option<String>,
     ) -> CatalogPage {
         let Some(load) = self
@@ -185,6 +186,26 @@ pub const TIERS: [(TierName, &str); 4] = [
     (TierName::Mid, "Tier Mid"),
     (TierName::Low, "Tier Low"),
 ];
+/// Stable logical routes are always offered, including before discovery completes.
+pub const LATEST_FAMILIES: [(&str, &str); 8] = [
+    ("astra-latest", "Astra Latest"),
+    ("sol-latest", "Sol Latest"),
+    ("terra-latest", "Terra Latest"),
+    ("luna-latest", "Luna Latest"),
+    ("fable-latest", "Fable Latest"),
+    ("opus-latest", "Opus Latest"),
+    ("sonnet-latest", "Sonnet Latest"),
+    ("haiku-latest", "Haiku Latest"),
+];
+
+pub fn is_latest(m: &RouteCatalogModel) -> bool {
+    devworks_core::services::router::latest::alias_family(m.id.as_str()).is_some()
+}
+
+pub fn selectable(m: &RouteCatalogModel) -> bool {
+    is_latest(m) || (m.enabled && (is_open_router_auto(m) || m.available != Some(false)))
+}
+
 const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
 
 fn wire<T: Serialize>(v: &T) -> String {
@@ -195,14 +216,14 @@ fn wire<T: Serialize>(v: &T) -> String {
 }
 
 /// Whether a catalog model is OpenRouter's own automatic route.
-pub fn is_open_router_auto(m: &RouteModel) -> bool {
+pub fn is_open_router_auto(m: &RouteCatalogModel) -> bool {
     wire(&m.endpoint_profile) == "OpenRouterChat"
         && m.upstream_model_id.0 == OPEN_ROUTER_AUTO_UPSTREAM
 }
 
 /// The intent a catalog entry selects: Open Router Auto is its own intent, every other model is
 /// named directly (never translated to a tier).
-pub fn intent_of(m: &RouteModel) -> RouteIntent {
+pub fn intent_of(m: &RouteCatalogModel) -> RouteIntent {
     if is_open_router_auto(m) {
         RouteIntent::OpenRouterAuto {}
     } else {
@@ -212,17 +233,36 @@ pub fn intent_of(m: &RouteModel) -> RouteIntent {
     }
 }
 
-/// The route options in selector order: the four tiers, then the named-model group.
-pub fn options(catalog: &[RouteModel]) -> Vec<(String, RouteIntent)> {
+/// The four tiers, eight stable family choices, then offered concrete versions and upstream auto.
+pub fn options(catalog: &[RouteCatalogModel]) -> Vec<(String, RouteIntent)> {
     let mut out: Vec<(String, RouteIntent)> = TIERS
         .iter()
         .map(|(t, l)| ((*l).to_owned(), RouteIntent::Tier { tier: t.clone() }))
         .collect();
+    out.extend(LATEST_FAMILIES.iter().map(|(id, label)| {
+        (
+            catalog
+                .iter()
+                .find(|m| m.id.as_str() == *id)
+                .map(|m| m.display_name.0.clone())
+                .unwrap_or_else(|| (*label).into()),
+            RouteIntent::Model {
+                model_id: devworks_core::protocol::Id::new(*id).expect("stable alias"),
+            },
+        )
+    }));
     out.extend(
         catalog
             .iter()
-            .filter(|m| m.enabled)
-            .map(|m| (m.display_name.0.clone(), intent_of(m))),
+            .filter(|m| !is_latest(m) && selectable(m))
+            .map(|m| {
+                let label = if m.available.is_none() && !is_open_router_auto(m) {
+                    format!("{} (availability unknown)", m.display_name.0)
+                } else {
+                    m.display_name.0.clone()
+                };
+                (label, intent_of(m))
+            }),
     );
     out
 }
@@ -232,27 +272,52 @@ pub fn same_intent(a: &RouteIntent, b: &RouteIntent) -> bool {
 }
 
 /// The label of an intent.
-pub fn intent_label(catalog: &[RouteModel], intent: &RouteIntent) -> String {
+pub fn intent_label(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> String {
+    if let RouteIntent::Model { model_id } = intent
+        && let Some(model) = catalog.iter().find(|m| &m.id == model_id)
+    {
+        return model.display_name.0.clone();
+    }
     options(catalog)
         .into_iter()
         .find(|(_, i)| same_intent(i, intent))
         .map(|(l, _)| l)
         .unwrap_or_else(|| match intent {
-            RouteIntent::Model { model_id } => model_id.as_str().to_owned(),
+            RouteIntent::Model { model_id } => catalog
+                .iter()
+                .find(|m| &m.id == model_id)
+                .map(|m| m.display_name.0.clone())
+                .unwrap_or_else(|| model_id.as_str().to_owned()),
             RouteIntent::OpenRouterAuto {} => "Open Router Auto".into(),
             RouteIntent::Tier { tier } => format!("Tier {}", wire(tier)),
         })
 }
 
-fn models_of<'c>(catalog: &'c [RouteModel], intent: &RouteIntent) -> Vec<&'c RouteModel> {
+fn models_of<'c>(
+    catalog: &'c [RouteCatalogModel],
+    intent: &RouteIntent,
+) -> Vec<&'c RouteCatalogModel> {
     catalog
         .iter()
-        .filter(|m| m.enabled)
+        .filter(|m| m.enabled && m.available != Some(false))
         .filter(|m| match intent {
             RouteIntent::Tier { tier } => {
                 m.tier_memberships.0.iter().any(|t| wire(t) == wire(tier))
             }
-            RouteIntent::Model { model_id } => &m.id == model_id,
+            RouteIntent::Model { model_id } => {
+                if devworks_core::services::router::latest::alias_family(model_id.as_str())
+                    .is_some()
+                {
+                    catalog
+                        .iter()
+                        .find(|a| &a.id == model_id)
+                        .filter(|a| a.available == Some(true))
+                        .and_then(|a| a.resolves_to_model_ids.as_ref())
+                        .is_some_and(|ids| ids.0.contains(&m.id))
+                } else {
+                    &m.id == model_id
+                }
+            }
             RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
         })
         .collect()
@@ -260,7 +325,7 @@ fn models_of<'c>(catalog: &'c [RouteModel], intent: &RouteIntent) -> Vec<&'c Rou
 
 /// The efforts offered for `intent`: Provider default, then every explicit effort a pooled
 /// model declares (lowest first).
-pub fn efforts(catalog: &[RouteModel], intent: &RouteIntent) -> Vec<EffortName> {
+pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<EffortName> {
     const ORDER: [EffortName; 6] = [
         EffortName::Minimal,
         EffortName::Low,
@@ -271,7 +336,28 @@ pub fn efforts(catalog: &[RouteModel], intent: &RouteIntent) -> Vec<EffortName> 
     ];
     let declared: Vec<String> = models_of(catalog, intent)
         .iter()
-        .flat_map(|m| m.efforts.0.iter().map(wire))
+        .flat_map(|m| {
+            if is_latest(m) {
+                m.resolves_to_model_ids
+                    .as_ref()
+                    .map(|ids| {
+                        ids.0
+                            .iter()
+                            .filter_map(|id| {
+                                catalog.iter().find(|target| {
+                                    &target.id == id
+                                        && target.enabled
+                                        && target.available != Some(false)
+                                })
+                            })
+                            .flat_map(|target| target.efforts.0.iter().map(wire))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                m.efforts.0.iter().map(wire).collect()
+            }
+        })
         .collect();
     let mut out = vec![EffortName::Default];
     out.extend(
@@ -308,6 +394,7 @@ pub fn reason(code: &str) -> &'static str {
         "ContextUnknown" => "context window not declared",
         "ContextTooSmall" => "context window too small",
         "EmptyPool" => "no members are configured",
+        "NoInventory" => "waiting for complete provider inventory",
         _ => "unavailable",
     }
 }
@@ -325,7 +412,7 @@ pub fn local_time(ms: i64) -> String {
 
 /// The status line of a selection: the pinned route, or the selection's truthful availability.
 pub fn status_line(
-    catalog: &[RouteModel],
+    catalog: &[RouteCatalogModel],
     selection: &Selection,
     status: Option<&Status>,
 ) -> String {
@@ -341,12 +428,12 @@ pub fn status_line(
         return format!("{route} · {effort} · checking availability…");
     };
     if let (Some(pin), Some(true)) = (&a.pin, a.pin_eligible) {
-        return format!("Pinned: {} · {effort}", model_label(catalog, pin));
+        return format!("{route} · Pinned: {} · {effort}", model_label(pin));
     }
     let pinned = a
         .pin
         .as_ref()
-        .map(|p| format!("Pinned: {} (not eligible now) · ", model_label(catalog, p)))
+        .map(|p| format!("Pinned: {} (not eligible now) · ", model_label(p)))
         .unwrap_or_default();
     if a.available {
         let names: Vec<String> = a
@@ -382,18 +469,24 @@ pub fn status_line(
     )
 }
 
-fn model_label(catalog: &[RouteModel], pin: &RouteChoice) -> String {
-    catalog.iter().find(|m| m.id == pin.model_id).map_or_else(
-        || pin.model_id.as_str().to_owned(),
-        |m| m.display_name.0.clone(),
-    )
+fn model_label(pin: &RouteChoice) -> String {
+    match &pin.resolved_upstream_model_id {
+        Some(upstream) => {
+            let provenance = match pin.resolved_identity_origin.as_ref().map(|s| s.0.as_str()) {
+                Some("Migration25CurrentCatalog") => " (version captured during upgrade)",
+                _ => "",
+            };
+            format!("{}{provenance}", upstream.0)
+        }
+        None => format!("{} (version unknown)", pin.model_id.as_str()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn model(id: &str) -> RouteModel {
+    fn model(id: &str) -> RouteCatalogModel {
         serde_json::from_value(serde_json::json!({
             "id": id, "displayName": id, "endpointProfile": "CompatibleChat",
             "upstreamModelId": id, "enabled": true, "tierMemberships": [], "efforts": [],
@@ -403,6 +496,93 @@ mod tests {
     }
     fn ids(r: &Routing) -> Vec<String> {
         r.catalog.iter().map(|m| m.id.as_str().to_owned()).collect()
+    }
+
+    #[test]
+    fn logical_options_are_stable_and_unavailable_concrete_rows_remain_inspectable() {
+        let mut available = model("available-version");
+        available.available = Some(true);
+        let mut gone = model("retired-version");
+        gone.available = Some(false);
+        let unknown = model("manual-version");
+        let catalog = vec![available, gone, unknown];
+        let choices = options(&catalog);
+        for (id, label) in LATEST_FAMILIES {
+            assert!(choices.iter().any(|(l, i)| l == label
+                && matches!(i, RouteIntent::Model { model_id } if model_id.as_str() == id)));
+        }
+        assert!(choices.iter().any(|(l, _)| l == "available-version"));
+        assert!(!choices.iter().any(|(l, _)| l == "retired-version"));
+        assert!(
+            choices
+                .iter()
+                .any(|(l, _)| l == "manual-version (availability unknown)")
+        );
+        let retired = RouteIntent::Model {
+            model_id: catalog[1].id.clone(),
+        };
+        assert_eq!(intent_label(&catalog, &retired), "retired-version");
+        assert_eq!(
+            catalog.len(),
+            3,
+            "query records remain available to Settings"
+        );
+    }
+
+    #[test]
+    fn latest_effort_comes_only_from_its_current_targets_and_pin_keeps_both_names() {
+        let mut concrete = model("astra-v2");
+        concrete.available = Some(true);
+        concrete.efforts.0 = vec![EffortName::High];
+        let mut alias = model("astra-latest");
+        alias.display_name = serde_json::from_value(serde_json::json!("Astra Latest")).unwrap();
+        alias.available = Some(true);
+        alias.resolves_to_model_ids =
+            Some(serde_json::from_value(serde_json::json!([concrete.id])).unwrap());
+        let selection = Selection {
+            intent: intent_of(&alias),
+            effort: EffortName::High,
+        };
+        let mut catalog = vec![alias, concrete];
+        assert_eq!(efforts(&catalog, &selection.intent).len(), 2);
+        catalog[0].available = Some(false);
+        assert_eq!(efforts(&catalog, &selection.intent).len(), 1);
+        assert_eq!(
+            effort_label(&selection.effort),
+            "High",
+            "constraints are retained"
+        );
+        let availability: RouteAvailability = serde_json::from_value(serde_json::json!({
+            "intent": {"kind":"Model", "modelId":"astra-latest"},
+            "available":true, "eligibleModelIds":["astra-v1"], "blockedReasonCodes":[],
+            "pinEligible":true,
+            "pin":{"intent":{"kind":"Model","modelId":"astra-latest"},"modelId":"astra-v1",
+                "connectionId":"codex", "requestedEffort":"High", "effectiveEffort":"High",
+                "pinId":"pin-1", "pinRevision":"1", "resolvedUpstreamModelId":"astra-v1",
+                "resolvedEndpointProfile":"CodexSubscriptionResponses", "resolvedIdentityOrigin":"AtResolution"}
+        }))
+        .unwrap();
+        let mut legacy_pin = availability.pin.clone().unwrap();
+        legacy_pin.resolved_identity_origin =
+            Some(serde_json::from_value(serde_json::json!("Migration25CurrentCatalog")).unwrap());
+        assert_eq!(
+            model_label(&legacy_pin),
+            "astra-v1 (version captured during upgrade)"
+        );
+        legacy_pin.resolved_upstream_model_id = None;
+        assert_eq!(model_label(&legacy_pin), "astra-v1 (version unknown)");
+        let text = status_line(
+            &catalog,
+            &selection,
+            Some(&Status {
+                availability: Some(availability),
+                error: None,
+            }),
+        );
+        assert!(
+            text.contains("Astra Latest") && text.contains("Pinned: astra-v1"),
+            "{text}"
+        );
     }
 
     #[test]

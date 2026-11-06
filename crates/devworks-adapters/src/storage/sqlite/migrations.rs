@@ -340,6 +340,15 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0024_eval_runs.sql"),
         rebuilds_tables: false,
     },
+    // Additive concrete pin snapshots. Old writers would silently follow catalog identity
+    // changes without replacing the pin, so only writers that preserve snapshots may write.
+    Migration {
+        version: 25,
+        minimum_reader: 8,
+        minimum_writer: 25,
+        sql: include_str!("migrations/0025_router_pin_identity.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -645,3 +654,7 @@ pub const MIGRATION_0023_SHA256: &str =
 /// Recorded checksum of migration 24.
 pub const MIGRATION_0024_SHA256: &str =
     "7a648e33e052c1f0e8d2cd5d795f4a68a05f97a97399040b4be4631b7750f44b";
+
+/// Recorded checksum of migration 25.
+pub const MIGRATION_0025_SHA256: &str =
+    "36b3e80b714419a911ac7e7dd74108b6bb17e4e5efedc3c24b8faf76b349d28f";

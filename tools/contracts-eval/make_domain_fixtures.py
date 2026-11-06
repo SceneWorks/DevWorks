@@ -536,6 +536,20 @@ case('r2-result-router.availability','operation-result.r2',{'kind':'router.avail
 case('r2-result-router.availability-no-pin','operation-result.r2',{'kind':'router.availability','value':sample('RouteAvailability')})
 case('reject-r1-result-availability-pin','operation-result',{'kind':'router.availability','value':availability_r2},False,False)
 case('reject-r2-result-availability-pin-effort','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':{**pin_choice,'effectiveEffort':'Low'}}},False,True)
+# Revision 3 retains concrete pin identity; migration observations never claim historical origin.
+resolved_pin={**pin_choice,'resolvedUpstreamModelId':'provider/astra-6.1','resolvedEndpointProfile':sample('EndpointKind'),'resolvedIdentityOrigin':'Resolved'}
+for name in ['router.route','router.pin']:
+ case('r3-input-'+name,'domain-request.r3',command_at(name,3))
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':resolved_pin})
+case('r3-input-router.availability','domain-request.r3',domain('router.availability',3,sessionId='session-a'))
+case('r3-result-router.availability','operation-result.r3',{'kind':'router.availability','value':{**availability_r2,'pin':resolved_pin}})
+case('r3-result-pin-migration-observation','operation-result.r3',{'kind':'router.pin','value':{**resolved_pin,'resolvedIdentityOrigin':'Migration25CurrentCatalog'}})
+case('r3-result-pin-unknown-identity','operation-result.r3',{'kind':'router.pin','value':{**pin_choice,'resolvedIdentityOrigin':'Unknown'}})
+case('r3-result-pin-no-new-history-fields','operation-result.r3',{'kind':'router.pin','value':pin_choice})
+case('reject-r1-result-pin-snapshot','operation-result',{'kind':'router.pin','value':resolved_pin},False,False)
+case('reject-r2-result-availability-snapshot','operation-result.r2',{'kind':'router.availability','value':{**availability_r2,'pin':resolved_pin}},False,False)
+case('reject-r3-result-null-pin-snapshot','operation-result.r3',{'kind':'router.route','value':{**resolved_pin,'resolvedUpstreamModelId':None}},False,False)
+
 # Schema revision 2 (indexing status): freshness, per-language coverage, semantic pack state and
 # every overlay with its lifecycle state and snapshot provenance.
 oid='0123456789abcdef0123456789abcdef01234567'
@@ -669,6 +683,18 @@ case('r2-input-router.configure-plain','domain-request.r2',command_at('router.co
 case('reject-r1-configure-model-context','domain-request',command_at('router.configure',None,action={'kind':'Model','model':model_r2}),False,False)
 case('r2-input-router.connections','domain-request.r2',domain('router.connections'))
 case('r2-input-router.catalog','domain-request.r2',domain('router.catalog'))
+# Revision 3 (DW-108) is query-only: immutable configured Model inputs stay unchanged.
+latest_alias={**model_r2,'id':'astra-latest','displayName':'Astra latest','upstreamModelId':'astra-latest','latestFamily':'astra','resolvesToModelIds':['astra-6-1-a','astra-6-1-b'],'available':True,'availabilityReason':'Listed'}
+case('r3-input-router.catalog','domain-request.r3',domain('router.catalog',3))
+case('r3-result-router.catalog','operation-result.r3',{'kind':'router.catalog','value':{'items':[latest_alias],'hasMore':False}})
+case('r3-result-catalog-unavailable','operation-result.r3',{'kind':'router.catalog','value':{'items':[{**latest_alias,'resolvesToModelIds':[],'available':False,'availabilityReason':'MissingFromInventory'}],'hasMore':False}})
+unknown_alias={k:v for k,v in latest_alias.items() if k!='available'};unknown_alias.update(resolvesToModelIds=[],availabilityReason='InventoryUnknown')
+case('r3-result-catalog-unknown','operation-result.r3',{'kind':'router.catalog','value':{'items':[unknown_alias],'hasMore':False}})
+case('reject-r2-result-catalog-latest','operation-result.r2',{'kind':'router.catalog','value':{'items':[latest_alias],'hasMore':False}},False,False)
+case('reject-r1-result-catalog-latest','operation-result',{'kind':'router.catalog','value':{'items':[latest_alias],'hasMore':False}},False,False)
+case('reject-r3-result-catalog-null-availability','operation-result.r3',{'kind':'router.catalog','value':{'items':[{**latest_alias,'available':None}],'hasMore':False}},False,False)
+case('reject-configure-catalog-facts','domain-request.r2',command_at('router.configure',action={'kind':'Model','model':latest_alias}),False,False)
+
 case('r2-result-router.configure','operation-result.r2',{'kind':'router.configure','value':sample('MutationSummary')})
 # Revision 2 (DW-18): connection enable/disable and OpenRouter constraints.
 or_constraints={'allowedModels':['anthropic/*'],'excludedModels':['openai/gpt-4o'],'costTier':'low','provider':{'order':['anthropic'],'allowFallbacks':False,'requireParameters':True,'dataCollection':'deny','zdr':True,'enforceDistillableText':True,'only':['anthropic'],'ignore':['deepinfra'],'quantizations':['fp8','bf16'],'sort':{'by':'price','partition':'none'},'preferredMinThroughput':{'p50':50.0},'preferredMaxLatency':{'p90':2.5},'maxPrice':{'prompt':'3','completion':'15','request':'0.01','image':'0.002'}}}

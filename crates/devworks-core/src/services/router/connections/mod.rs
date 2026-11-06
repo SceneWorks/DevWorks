@@ -106,7 +106,7 @@ pub const STAGED_TTL_MS: i64 = 30 * 60 * 1000;
 const CREDENTIAL_READ_ATTEMPTS: usize = 3;
 /// Connected connections rediscover their models this often (reference
 /// `ModelListRefreshInterval`).
-pub const DISCOVERY_INTERVAL_MS: i64 = 6 * 60 * 60 * 1000;
+pub const DISCOVERY_INTERVAL_MS: i64 = 60 * 60 * 1000;
 /// An unavailable connection is tested again this often.
 pub const UNAVAILABLE_RECHECK_MS: i64 = 60 * 1000;
 /// How often the host reconciles orphaned secret handles.
@@ -446,6 +446,7 @@ enum Exchange {
 /// one read its request was built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CheckBasis {
+    connection_revision: i64,
     credential_revision: i64,
     profile: String,
     endpoint: String,
@@ -453,20 +454,23 @@ struct CheckBasis {
 impl CheckBasis {
     fn of(c: &StoredConnection) -> Self {
         Self {
+            connection_revision: c.revision,
             credential_revision: c.credential_revision,
             profile: c.profile.clone(),
             endpoint: c.endpoint.clone(),
         }
     }
-    fn from_access(a: &Access) -> Self {
+    fn from_access(a: &Access, connection_revision: i64) -> Self {
         Self {
+            connection_revision,
             credential_revision: a.credential_revision,
             profile: a.profile.clone(),
             endpoint: a.endpoint.clone(),
         }
     }
     fn matches(&self, c: &StoredConnection) -> bool {
-        self.credential_revision == c.credential_revision
+        self.connection_revision == c.revision
+            && self.credential_revision == c.credential_revision
             && self.profile == c.profile
             && self.endpoint == c.endpoint
     }
@@ -1045,7 +1049,7 @@ impl ConnectionService {
                 .map_err(|e| AccessError::Unavailable(format!("{e:?}")))?
                 .ok_or(AccessError::NotFound)?;
             self.usable(&now, testing)?;
-            if CheckBasis::from_access(&a).matches(&now) {
+            if CheckBasis::from_access(&a, now.revision).matches(&now) {
                 return Ok(a);
             }
         }
@@ -1476,6 +1480,21 @@ impl ConnectionService {
             }
         };
         let run = |a: &Access| {
+            // Refresh may have rotated the credential. Read its current connection revision
+            // after access; a newer check or any configuration change invalidates this result.
+            let current = self
+                .read(|s| s.router().connection(&a.connection_id))
+                .ok()
+                .flatten();
+            let basis = CheckBasis::from_access(a, current.as_ref().map_or(-1, |c| c.revision));
+            if current.as_ref().is_none_or(|c| !basis.matches(c)) {
+                return Checked {
+                    basis,
+                    outcome: Err(ListFailure::Unreachable(
+                        "the connection changed before discovery".into(),
+                    )),
+                };
+            }
             let auth = match (&a.credential, a.profile.as_str()) {
                 (AccessCredential::None, _) => discovery::Auth::None,
                 (AccessCredential::ApiKey(k), "AnthropicMessages") => {
@@ -1490,7 +1509,7 @@ impl ConnectionService {
                 }
             };
             Checked {
-                basis: CheckBasis::from_access(a),
+                basis,
                 outcome: discovery::list(
                     &*self.http,
                     &self.endpoints,
@@ -2904,6 +2923,16 @@ fn apply_check(
     Ok(true)
 }
 
+/// Canonical discovery ID for one exact upstream model served by one connection. Snapshot
+/// suffixes are identity, never stripped. The digest input avoids delimiter collisions.
+/// Discovery uses a stable free suffix if user configuration has repurposed this ID.
+pub fn discovered_model_id(profile: &str, connection: &Id, upstream: &str) -> Id {
+    let identity =
+        serde_json::to_vec(&(profile, connection.as_str(), upstream)).expect("strings serialize");
+    let digest = crate::fingerprint::sha256_hex(&identity);
+    Id::new(format!("drmodel_{}", &digest[..40])).expect("bounded digest identifier")
+}
+
 /// Applies provider-reported facts to the catalog models a connection serves: an unknown
 /// context window from the model list; for OpenRouter, the reported tools and image support
 /// and, when none is declared, the supported efforts (reference `UpdateOpenRouterModelsAsync`).
@@ -2913,7 +2942,72 @@ fn apply_discovery(
     d: &Discovery,
 ) -> Result<(), StorageError> {
     let listed: BTreeSet<String> = d.models.iter().map(|m| m.id.clone()).collect();
-    let models = all_models(tx.router())?;
+    let mut models = all_models(tx.router())?;
+    // Discovery adds exact models to the same catalog. A configured global or bound row,
+    // including a user-disabled row, already owns that identity and must never be bypassed.
+    if !matches!(c.profile.as_str(), "SystemOne" | "Embedding") {
+        let mut position = models.iter().map(|m| m.position).max().unwrap_or(0);
+        let permitted = status_filter(c);
+        for found in d.models.iter().filter(|m| {
+            permitted.permits(&m.id)
+                && (matches!(
+                    c.profile.as_str(),
+                    "CodexSubscriptionResponses"
+                        | "ClaudeSubscriptionMessages"
+                        | "AnthropicMessages"
+                ) || crate::services::router::latest::parse(&m.id).is_some()
+                    || d.conversational.contains(&m.id))
+        }) {
+            if found.id == select::OPEN_ROUTER_AUTO_UPSTREAM
+                || models.iter().any(|m| {
+                    m.endpoint_profile == c.profile
+                        && m.upstream_model_id == found.id
+                        && m.connection_id.as_ref().is_none_or(|id| id == &c.id)
+                })
+            {
+                continue;
+            }
+            // A discovery row remains editable. Its original generated ID may now belong to
+            // another upstream or connection; retain it and reserve the next free stable ID.
+            // A disabled edited row keeps the replacement disabled, never bypassing that choice.
+            let canonical_id = discovered_model_id(&c.profile, &c.id, &found.id);
+            let mut id = canonical_id.clone();
+            let mut enabled = true;
+            let mut suffix = 0_u64;
+            loop {
+                if let Some(occupied) = models.iter().find(|m| m.id == id) {
+                    enabled &= occupied.enabled;
+                } else if tx.router().decision_model(&id)?.is_none() {
+                    break;
+                }
+                suffix += 1;
+                id = Id::new(format!("{}_{}", canonical_id.as_str(), suffix))
+                    .expect("bounded digest and numeric suffix");
+            }
+            let reported = d
+                .reported
+                .iter()
+                .find(|(id, _)| id == &found.id)
+                .map(|(_, r)| r);
+            position = position.saturating_add(1);
+            let model = StoredRouteModel {
+                id,
+                display_name: label(&found.id, "model").0,
+                endpoint_profile: c.profile.clone(),
+                upstream_model_id: found.id.clone(),
+                enabled,
+                efforts: reported.map(|r| r.efforts.clone()).unwrap_or_default(),
+                image_input: reported.and_then(|r| r.vision).unwrap_or(false),
+                tools: reported.and_then(|r| r.tools).unwrap_or(false),
+                context_tokens: found.context_tokens,
+                connection_id: Some(c.id.clone()),
+                position,
+                revision: 1,
+                updated_at_ms: tx.now_ms(),
+            };
+            models.push(tx.router().put_route_model(&model, None)?);
+        }
+    }
     for m in models.iter().filter(|m| {
         m.endpoint_profile == c.profile && m.connection_id.as_ref().is_none_or(|b| b == &c.id)
     }) {
@@ -2922,13 +3016,7 @@ fn apply_discovery(
         {
             continue;
         }
-        let found = d.models.iter().find(|x| {
-            select::lists(
-                &c.profile,
-                &BTreeSet::from([x.id.clone()]),
-                &m.upstream_model_id,
-            )
-        });
+        let found = d.models.iter().find(|x| x.id == m.upstream_model_id);
         let mut next = m.clone();
         if next.context_tokens.is_none() {
             next.context_tokens = found.and_then(|x| x.context_tokens);
@@ -2959,6 +3047,9 @@ fn configure_model(
     model: &RouteModel,
     expected: Option<i64>,
 ) -> Result<DomainDecision, Failure> {
+    if super::latest::alias_family(model.id.as_str()).is_some() {
+        return Err(invalid("reserved_latest_alias"));
+    }
     let profile_name = wire(&model.endpoint_profile);
     if profile_name == "SystemOne" {
         return Err(invalid("endpoint_profile"));
@@ -3006,7 +3097,29 @@ fn configure_model(
     asked.sort_by_key(|t| TIERS.iter().position(|(n, _)| n == t));
     asked.dedup();
     if asked != current_tiers {
-        return Err(invalid("tier_memberships"));
+        // Catalog annotations are projections: revision 3 shows virtual family slots, while
+        // older clients see current concrete targets. Accept their current read-only echo,
+        // never a membership change (only the Tier action writes the routing setting).
+        let models = all_models(tx.router())?
+            .into_iter()
+            .map(|m| (m.id.as_str().to_owned(), m))
+            .collect();
+        let connections: Vec<_> = all_connections(tx.router())?
+            .iter()
+            .map(status_filter)
+            .collect();
+        let projected = [1, 3].into_iter().any(|revision| {
+            let members = super::catalog_tier_members(&members, &models, &connections, revision);
+            let tiers: Vec<String> = TIERS
+                .iter()
+                .filter(|(tier, _)| members.get(tier).is_some_and(|ids| ids.contains(&model.id)))
+                .map(|(tier, _)| (*tier).to_owned())
+                .collect();
+            asked == tiers
+        });
+        if !projected {
+            return Err(invalid("tier_memberships"));
+        }
     }
     let current = tx.router().route_model(&model.id)?;
     let now = tx.now_ms();
@@ -3114,7 +3227,9 @@ fn configure_tier(
         if !seen.insert(id.as_str()) {
             return Err(invalid("member_ids"));
         }
-        if tx.router().route_model(id)?.is_none() {
+        if super::latest::alias_family(id.as_str()).is_none()
+            && tx.router().route_model(id)?.is_none()
+        {
             // Decision models are never tier members; unknown models cannot be pooled.
             return Err(refuse(DomainErrorCode::NotFound, MODEL_AGGREGATE, Some(id)));
         }

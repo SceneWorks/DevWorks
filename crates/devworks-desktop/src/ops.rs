@@ -7,7 +7,7 @@ use devworks_core::protocol::provider::{ArtifactRef, TranscriptPage};
 use devworks_core::protocol::records::{
     AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, DiagnosticEntry, EffortName,
     JobInspection, JobRecord, JobRun, MutationSummary, ProjectRecord, RepositoryRecord,
-    RepositoryText, ResourceRecord, RouteAvailability, RouteChoice, RouteIntent, RouteModel,
+    RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent,
     SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::results::{DomainDecision, DomainQueryReply, OperationResult};
@@ -439,8 +439,8 @@ pub fn resources(outcome: QueryOutcome) -> Result<(Vec<ResourceRecord>, bool), F
 // ---------------------------------------------------------------------------------------------
 // Router (UI-10, ROUTE-19, ROUTE-20)
 
-/// `router.availability` reports a session's pin from schema revision 2.
-pub const ROUTER_AVAILABILITY_REVISION: u64 = 2;
+/// Revision 3 includes the retained concrete identity of a session pin.
+pub const ROUTER_AVAILABILITY_REVISION: u64 = 3;
 
 /// One page of the catalog, after `cursor` (the first page without one).
 pub fn router_catalog(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
@@ -448,14 +448,19 @@ pub fn router_catalog(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     if let Some(c) = cursor {
         page["cursor"] = json!(c);
     }
-    query_frame(
-        backend,
-        "router.catalog",
-        json!({"page": page, "includeDisabled": false}),
+    at_revision(
+        query_frame(
+            backend,
+            "router.catalog",
+            json!({"page": page, "includeDisabled": true}),
+        ),
+        3,
     )
 }
 /// A catalog page and the cursor of the next one (`None` on the last page).
-pub fn route_models(outcome: QueryOutcome) -> Result<(Vec<RouteModel>, Option<String>), Failure> {
+pub fn route_models(
+    outcome: QueryOutcome,
+) -> Result<(Vec<RouteCatalogModel>, Option<String>), Failure> {
     match query_result(outcome)? {
         (OperationResult::RouterCatalog { value }, _) => {
             let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
@@ -509,11 +514,14 @@ pub fn router_pin(
     intent: &RouteIntent,
     effort: &EffortName,
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        "router.pin",
-        json!({"sessionId": session, "expectedPinRevision": expected_pin_revision.to_string(),
+    at_revision(
+        command_frame(
+            backend,
+            "router.pin",
+            json!({"sessionId": session, "expectedPinRevision": expected_pin_revision.to_string(),
             "intent": intent, "effort": effort}),
+        ),
+        3,
     )
 }
 pub fn router_route(
@@ -523,11 +531,14 @@ pub fn router_route(
     intent: &RouteIntent,
     effort: &EffortName,
 ) -> Vec<u8> {
-    command_frame(
-        backend,
-        "router.route",
-        json!({"sessionId": session, "expectedContextEpoch": context_epoch.to_string(),
+    at_revision(
+        command_frame(
+            backend,
+            "router.route",
+            json!({"sessionId": session, "expectedContextEpoch": context_epoch.to_string(),
             "intent": intent, "effort": effort, "requiredCapabilities": []}),
+        ),
+        3,
     )
 }
 pub fn routed(outcome: CommandOutcome) -> Result<RouteChoice, Failure> {
@@ -1131,7 +1142,7 @@ pub fn connection_records(
         (other, _) => Err(unexpected("router.connections", &other)),
     }
 }
-/// The whole catalog, disabled models included, at revision 2 (context windows, bindings).
+/// The whole query catalog, including availability and logical family targets (revision 3).
 pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     let mut page = json!({"limit": PAGE_LIMIT});
     if let Some(c) = cursor {
@@ -1143,7 +1154,7 @@ pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8
             "router.catalog",
             json!({"page": page, "includeDisabled": true}),
         ),
-        ROUTER_CONNECTIONS_REVISION,
+        3,
     )
 }
 pub fn router_configure(backend: &dyn Backend, action: Value) -> Vec<u8> {

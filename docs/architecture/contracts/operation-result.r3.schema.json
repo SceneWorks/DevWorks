@@ -5972,9 +5972,9 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_RouteModel_0_500": {
+    "List_RouteCatalogModel_0_500": {
       "items": {
-        "$ref": "#/$defs/RouteModel"
+        "$ref": "#/$defs/RouteCatalogModel"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -8429,7 +8429,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_RouteModel_0_500"
+          "$ref": "#/$defs/List_RouteCatalogModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -10770,6 +10770,78 @@
       ],
       "type": "object"
     },
+    "RouteCatalogModel": {
+      "additionalProperties": false,
+      "properties": {
+        "availabilityReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "available": {
+          "type": "boolean",
+          "x-since": 3
+        },
+        "connectionId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
+        "contextTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 2
+        },
+        "displayName": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "efforts": {
+          "$ref": "#/$defs/List_EffortName_0_128"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpointProfile": {
+          "$ref": "#/$defs/EndpointKind"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "imageInput": {
+          "type": "boolean"
+        },
+        "latestFamily": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "resolvesToModelIds": {
+          "$ref": "#/$defs/List_Id_0_128",
+          "x-since": 3
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "tierMemberships": {
+          "$ref": "#/$defs/List_TierName_0_128"
+        },
+        "tools": {
+          "type": "boolean"
+        },
+        "upstreamModelId": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "id",
+        "displayName",
+        "endpointProfile",
+        "upstreamModelId",
+        "enabled",
+        "tierMemberships",
+        "efforts",
+        "imageInput",
+        "tools",
+        "revision"
+      ],
+      "type": "object"
+    },
     "RouteChoice": {
       "additionalProperties": false,
       "properties": {
@@ -10803,6 +10875,18 @@
         },
         "requestedEffort": {
           "$ref": "#/$defs/EffortName"
+        },
+        "resolvedEndpointProfile": {
+          "$ref": "#/$defs/EndpointKind",
+          "x-since": 3
+        },
+        "resolvedIdentityOrigin": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "resolvedUpstreamModelId": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 3
         }
       },
       "required": [
@@ -10866,62 +10950,6 @@
           "type": "object"
         }
       ]
-    },
-    "RouteModel": {
-      "additionalProperties": false,
-      "properties": {
-        "connectionId": {
-          "$ref": "#/$defs/Id",
-          "x-since": 2
-        },
-        "contextTokens": {
-          "$ref": "#/$defs/PositiveCounter",
-          "x-since": 2
-        },
-        "displayName": {
-          "$ref": "#/$defs/Text1To256"
-        },
-        "efforts": {
-          "$ref": "#/$defs/List_EffortName_0_128"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "endpointProfile": {
-          "$ref": "#/$defs/EndpointKind"
-        },
-        "id": {
-          "$ref": "#/$defs/Id"
-        },
-        "imageInput": {
-          "type": "boolean"
-        },
-        "revision": {
-          "$ref": "#/$defs/Revision"
-        },
-        "tierMemberships": {
-          "$ref": "#/$defs/List_TierName_0_128"
-        },
-        "tools": {
-          "type": "boolean"
-        },
-        "upstreamModelId": {
-          "$ref": "#/$defs/Text1To4096"
-        }
-      },
-      "required": [
-        "id",
-        "displayName",
-        "endpointProfile",
-        "upstreamModelId",
-        "enabled",
-        "tierMemberships",
-        "efforts",
-        "imageInput",
-        "tools",
-        "revision"
-      ],
-      "type": "object"
     },
     "RuleEffect": {
       "enum": [

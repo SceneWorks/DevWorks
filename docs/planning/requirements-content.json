@@ -1099,8 +1099,30 @@
         "Persist a successful DevWorks Auto tier decision and its policy/input provenance, then allocate and pin an eligible generation model within that tier. Classify once per new session, not once per turn. Ordinary messages, tool continuations, compaction, restart, policy edits and later complexity changes must not reclassify or automatically change the tier. Persist an already chosen tier even if generation must wait for availability. Reuse the eligible generation pin; a necessary availability replacement stays within the chosen tier, is explained and persists. If that tier cannot meet a new required capability, surface the limitation without silently changing tier. Manual named-model or tier changes remain explicit exceptions; restarting or resuming work still obeys existing holds. Restoring a previously established automatic assignment never reclassifies it; a manually started session without one needs a new session to obtain an automatic tier assignment. Explicitly auxiliary titles, embeddings and other purpose-routed inference do not establish or invalidate the conversational automatic assignment."
       ],
       [
+        "req",
+        "ROUTE-25",
+        "Confirmed",
+        "Provide stable -latest aliases for OpenAI Astra (Max), Sol (High), Terra (Mid), Luna (Low), and Anthropic Fable (Max), Opus (High), Sonnet (Mid), Haiku (Low). Refresh complete provider model lists hourly while the app is open, recheck overdue lists on reopening, and retain manual refresh. Resolve each family alias to the highest available numeric version in its configured provider/connection scope, promoting newly listed higher versions automatically. If the highest version disappears, use the highest version still listed; if none remains, the alias is unavailable. Compare parsed version components, not lexical order, response order or discovery time. Preserve connection/billing boundaries and configured allow/exclude constraints."
+      ],
+      [
+        "req",
+        "ROUTE-26",
+        "Confirmed",
+        "For all providers and models, including custom and SystemOne decision models, reconcile availability from successful complete model-list refreshes. Keep missing model records, user enablement/configuration and historical references; mark them unavailable for new selection and routing, and restore availability when they return without re-enabling user-disabled models. Failed, malformed or partial refreshes must not become authoritative shorter catalogs. Availability is scoped to the serving connection and remains distinct from user enablement, authentication, cooldowns and request-specific capability eligibility."
+      ],
+      [
+        "req",
+        "ROUTE-27",
+        "Confirmed",
+        "Every model-selection input, particularly Workspace/Home chat and its shared sidebar, offers the eight family -latest aliases alongside available explicit versions. New/replacement tier assignments round-robin across the configured latest aliases for those eight families, retaining configured custom tier members outside them. Preserve editable tier membership, independent effort and direct named-version/upstream-auto choices. Allocate once per chat and persist its resolved concrete version pin across turns, tool continuations, compaction and restart; an alias promotion alone neither invalidates an eligible pin nor reclassifies its Auto tier. Unavailable pins use normal eligible same-tier replacement. Alias intent, concrete catalog identity and provider-resolved identity remain distinguishable, and known request replay does not re-resolve an alias or consume another round-robin turn."
+      ],
+      [
         "p",
         "Automatic routing acceptance: new Auto sessions and independent workers classify once through the SystemOne pool or direct Low fallback; explicit selections and upstream Auto/Auto Beta bypass it. Verify durable tier/model affinity across turns, tool continuations, compaction and restart, bounded per-model faults, no recursive classification, no hidden cross-tier fallback, and attributed classifier/generation usage. ROUTE-21\u201324; CACHE-01\u201306. Native implementation is tracked by DW-22 and DW-107; planning and pilot judgments are not runtime acceptance."
+      ],
+      [
+        "p",
+        "Latest model acceptance: hourly complete inventories promote family aliases by numeric version, retain missing models as unavailable, and restore returning models without changing user enablement. New tier assignments and the pinless Low classifier use latest-family/custom members; eligible concrete chat pins and known request resolutions survive promotion and restart. ROUTE-25\u201327 are tracked by DW-108 with SystemOne and Auto integration in DW-22/DW-107; DW-61 reuses their native evidence. Failed or partial lists are not removals."
       ],
       [
         "p",

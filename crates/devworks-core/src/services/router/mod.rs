@@ -50,6 +50,7 @@
 //! analysis/review/assistant configuration endpoints map to `router.connections` and
 //! `router.configure` (the provider-connection item) and to the routing settings.
 pub mod connections;
+pub mod latest;
 pub mod select;
 
 use crate::context::{InvocationContext, PrincipalKind};
@@ -65,8 +66,8 @@ use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
 };
 use crate::protocol::records::{
-    EffortName, EndpointKind, OperationRef, RouteAvailability, RouteChoice, RouteIntent,
-    RouteModel, TierName,
+    EffortName, EndpointKind, OperationRef, RouteAvailability, RouteCatalogModel, RouteChoice,
+    RouteIntent, RouteModel, TierName,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Page};
@@ -152,6 +153,8 @@ pub struct AuxiliaryRequest {
 pub struct AuxiliaryRoute {
     pub model_id: Id,
     pub connection_id: Id,
+    pub upstream_model_id: String,
+    pub endpoint_profile: String,
     /// `EffortName` wire names.
     pub requested_effort: String,
     pub effective_effort: String,
@@ -211,6 +214,12 @@ fn wire_label(s: &str) -> BoundedText<1, 256> {
     label(s, "unknown")
 }
 
+/// A concrete pin never follows identity edits to its mutable catalog configuration row.
+fn pin_matches_model(pin: &StoredPin, model: &StoredRouteModel) -> bool {
+    pin.upstream_model_id.as_deref() == Some(model.upstream_model_id.as_str())
+        && pin.endpoint_profile.as_deref() == Some(model.endpoint_profile.as_str())
+}
+
 /// The wire choice of a stored pin.
 pub fn choice_of(pin: &StoredPin) -> Result<RouteChoice, StorageError> {
     Ok(RouteChoice {
@@ -222,6 +231,13 @@ pub fn choice_of(pin: &StoredPin) -> Result<RouteChoice, StorageError> {
         pin_id: pin.pin_id.clone(),
         pin_revision: rev(pin.revision),
         replaced_pin_id: pin.replaced_pin_id.clone(),
+        resolved_upstream_model_id: pin.upstream_model_id.clone().map(BoundedText),
+        resolved_endpoint_profile: pin
+            .endpoint_profile
+            .as_deref()
+            .map(parse_wire)
+            .transpose()?,
+        resolved_identity_origin: Some(wire_label(&pin.identity_origin)),
     })
 }
 
@@ -257,6 +273,32 @@ pub fn route_model(
             .filter(|n| *n > 0)
             .map(|n| crate::protocol::support::PositiveCounter(n.to_string())),
         connection_id: m.connection_id.clone(),
+    })
+}
+
+/// Query-only projection; configuration input remains the exact concrete model record.
+fn catalog_model(
+    m: &StoredRouteModel,
+    members: &BTreeMap<&'static str, Vec<Id>>,
+) -> Result<RouteCatalogModel, StorageError> {
+    let m = route_model(m, members)?;
+    Ok(RouteCatalogModel {
+        id: m.id,
+        display_name: m.display_name,
+        endpoint_profile: m.endpoint_profile,
+        upstream_model_id: m.upstream_model_id,
+        enabled: m.enabled,
+        tier_memberships: m.tier_memberships,
+        efforts: m.efforts,
+        image_input: m.image_input,
+        tools: m.tools,
+        revision: m.revision,
+        context_tokens: m.context_tokens,
+        connection_id: m.connection_id,
+        latest_family: None,
+        resolves_to_model_ids: None,
+        available: None,
+        availability_reason: None,
     })
 }
 
@@ -363,6 +405,55 @@ impl Facts {
                 .collect(),
         }
     }
+    /// A family slot retains its configured position and custom models remain exact.
+    fn family_slot(id: &Id, tier: bool) -> Option<&'static str> {
+        latest::alias_family(id.as_str()).or_else(|| {
+            tier.then(|| latest::FAMILIES.iter().copied().find(|f| *f == id.as_str()))
+                .flatten()
+        })
+    }
+
+    /// Whether a concrete pin still belongs to this selection, irrespective of promotion.
+    fn contains_pin(&self, intent: &RouteIntent, pin: &StoredPin) -> bool {
+        let Some(model) = self.models.get(pin.model_id.as_str()) else {
+            return false;
+        };
+        if !pin_matches_model(pin, model) {
+            return false;
+        }
+        let family = latest::parse(&model.upstream_model_id).map(|p| p.family);
+        self.pool(intent).iter().any(|id| {
+            match Self::family_slot(id, matches!(intent, RouteIntent::Tier { .. })) {
+                Some(slot) => family == Some(slot),
+                None => id == &pin.model_id,
+            }
+        })
+    }
+
+    fn assess_pin(
+        &self,
+        intent: &RouteIntent,
+        pin: &StoredPin,
+        connections: &[crate::ports::router::ConnectionStatus],
+        need: &Need,
+    ) -> Option<Assessed> {
+        self.contains_pin(intent, pin).then(|| {
+            let scope: Vec<_> = connections
+                .iter()
+                .filter(|c| c.id == pin.connection_id)
+                .cloned()
+                .collect();
+            select::assess(
+                &pin.model_id,
+                self.models.get(pin.model_id.as_str()),
+                &scope,
+                &self.cooling,
+                need,
+                Some(&pin.connection_id),
+            )
+        })
+    }
+
     fn assess_pool(
         &self,
         intent: &RouteIntent,
@@ -370,27 +461,131 @@ impl Facts {
         need: &Need,
         preferred: Option<(&Id, &Id)>,
     ) -> Vec<Assessed> {
-        let mut seen = Vec::new();
-        self.pool(intent)
-            .into_iter()
-            .filter(|id| {
-                // A member listed twice takes one place.
-                let fresh = !seen.contains(id);
-                seen.push(id.clone());
-                fresh
-            })
-            .map(|id| {
-                let conn = preferred.filter(|(m, _)| *m == &id).map(|(_, c)| c);
-                select::assess(
-                    &id,
-                    self.models.get(id.as_str()),
-                    connections,
-                    &self.cooling,
-                    need,
-                    conn,
-                )
-            })
-            .collect()
+        let mut out = Vec::new();
+        let tier = matches!(intent, RouteIntent::Tier { .. });
+        for slot in self.pool(intent) {
+            let family = Self::family_slot(&slot, tier);
+            let targets = family.map(|f| latest::scoped_targets(f, &self.models, connections));
+            let undiscovered = targets.as_ref().is_some_and(Vec::is_empty);
+            let ids = match (family, targets) {
+                (Some(_), Some(targets)) if !targets.is_empty() => targets
+                    .into_iter()
+                    .map(|target| (target.model_id, Some(target.connection_id)))
+                    .collect(),
+                (Some(family), _) => {
+                    // Keep the unavailable slot's actual configuration reasons visible.
+                    let configured: Vec<Id> = self
+                        .ordered
+                        .iter()
+                        .filter(|id| {
+                            self.models.get(id.as_str()).is_some_and(|m| {
+                                latest::parse(&m.upstream_model_id)
+                                    .is_some_and(|p| p.family == family)
+                            })
+                        })
+                        .cloned()
+                        .collect();
+                    if configured.is_empty() {
+                        vec![(
+                            Id::new(latest::alias_id(family)).expect("reserved alias"),
+                            None,
+                        )]
+                    } else {
+                        configured.into_iter().map(|id| (id, None)).collect()
+                    }
+                }
+                _ => vec![(slot, None)],
+            };
+            let mut assessed: Vec<Assessed> = ids
+                .into_iter()
+                .map(|(id, target_connection)| {
+                    // A globally configured model may be latest only on one connection.
+                    // A preference would permit fallback and lose that identity constraint.
+                    let scope: Option<Vec<_>> = target_connection.as_ref().map(|target| {
+                        connections
+                            .iter()
+                            .filter(|c| &c.id == target)
+                            .cloned()
+                            .collect()
+                    });
+                    let conn = target_connection
+                        .as_ref()
+                        .or_else(|| preferred.filter(|(m, _)| *m == &id).map(|(_, c)| c));
+                    let mut a = select::assess(
+                        &id,
+                        self.models.get(id.as_str()),
+                        scope.as_deref().unwrap_or(connections),
+                        &self.cooling,
+                        need,
+                        conn,
+                    );
+                    if undiscovered && a.eligible() {
+                        a.connection = None;
+                        a.blocks.push(select::Block::NotDiscovered);
+                    }
+                    a
+                })
+                .collect();
+            // Each configured family is one round-robin slot, regardless of how many
+            // connections expose it. Scope ordering is stable, and only eligible scopes
+            // compete. Preserve every reason when no scope is usable.
+            if family.is_some()
+                && let Some(at) = assessed.iter().position(Assessed::eligible)
+            {
+                assessed = vec![assessed.remove(at)];
+            }
+            for a in assessed {
+                if !out.iter().any(|old: &Assessed| {
+                    old.model_id == a.model_id
+                        && old.connection == a.connection
+                        && old.blocks == a.blocks
+                }) {
+                    out.push(a);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The exact read-only tier annotations published by a qualified catalog revision. Reused
+/// when a concrete Model edit echoes catalog metadata; tier settings have their own command.
+fn catalog_tier_members(
+    members: &BTreeMap<&'static str, Vec<Id>>,
+    models: &BTreeMap<String, StoredRouteModel>,
+    connections: &[crate::ports::router::ConnectionStatus],
+    revision: u32,
+) -> BTreeMap<&'static str, Vec<Id>> {
+    members
+        .iter()
+        .map(|(tier, ids)| {
+            let ids = ids
+                .iter()
+                .flat_map(|id| match Facts::family_slot(id, true) {
+                    Some(family) if revision >= 3 => {
+                        vec![Id::new(latest::alias_id(family)).expect("reserved alias")]
+                    }
+                    Some(family) => latest::targets(family, models, connections),
+                    None => vec![id.clone()],
+                })
+                .collect();
+            (*tier, ids)
+        })
+        .collect()
+}
+
+/// A retained pin may recover even after promotion removes it from the allocation pool.
+/// Include only dynamic blockers in diagnostics; this must never add an allocation candidate
+/// or make an older pin a substitute for capabilities or effort it does not support.
+fn include_recoverable_pin(pool: &mut Vec<Assessed>, pin: Option<&Assessed>) {
+    if let Some(pin) = pin
+        && !pin.eligible()
+        && pin.blocks.iter().all(|b| !b.is_static())
+        && !pool
+            .iter()
+            .any(|a| a.model_id == pin.model_id && a.blocks == pin.blocks)
+    {
+        pool.push(pin.clone());
     }
 }
 
@@ -524,7 +719,7 @@ impl InferenceRouter {
     }
 
     /// Resolves the session's route for `intent` and `need` in the command's unit of work.
-    /// `explicit` is `router.pin`: an unchanged selection is kept as it is.
+    /// An unchanged selection is kept only while its retained concrete identity is eligible.
     #[allow(clippy::too_many_arguments)]
     fn resolve(
         &self,
@@ -534,7 +729,6 @@ impl InferenceRouter {
         current: Option<StoredPin>,
         intent: &RouteIntent,
         need: &Need,
-        explicit: bool,
     ) -> Result<Resolution, Failure> {
         let now = tx.now_ms();
         let key = intent_key(intent);
@@ -545,19 +739,18 @@ impl InferenceRouter {
         let same_effort = current
             .as_ref()
             .is_some_and(|p| p.requested_effort == need.effort);
-        if explicit && same_intent && same_effort {
-            return Ok(Resolution::Kept(current.expect("pin")));
-        }
         let preferred = current
             .as_ref()
             .filter(|_| same_intent)
             .map(|p| (&p.model_id, &p.connection_id));
         let pool = f.assess_pool(intent, &connections, need, preferred);
-        let pinned = current.as_ref().filter(|_| same_intent).and_then(|p| {
-            pool.iter()
-                .find(|a| a.model_id == p.model_id && a.eligible())
-                .map(|a| (p, a))
-        });
+        let pinned_assessment = current
+            .as_ref()
+            .filter(|_| same_intent)
+            .and_then(|p| f.assess_pin(intent, p, &connections, need));
+        let pinned = current
+            .as_ref()
+            .zip(pinned_assessment.as_ref().filter(|a| a.eligible()));
         // The pinned model still serves this intent and need.
         if let Some((p, a)) = pinned {
             let connection = a.connection.clone().expect("eligible");
@@ -605,7 +798,9 @@ impl InferenceRouter {
         }
         let eligible: Vec<&Assessed> = pool.iter().filter(|a| a.eligible()).collect();
         if eligible.is_empty() {
-            return Err(blocked(intent, &pool, Some(&session.id)));
+            let mut diagnostics = pool.clone();
+            include_recoverable_pin(&mut diagnostics, pinned_assessment.as_ref());
+            return Err(blocked(intent, &diagnostics, Some(&session.id)));
         }
         let chosen = match intent {
             RouteIntent::Tier { tier } => {
@@ -621,6 +816,12 @@ impl InferenceRouter {
             None => "Initial",
             Some(_) if !same_intent => "SelectionChanged",
             Some(_) if !same_effort => "EffortChanged",
+            Some(p)
+                if p.model_id == chosen.model_id
+                    && chosen.connection.as_ref() != Some(&p.connection_id) =>
+            {
+                "ConnectionChanged"
+            }
             Some(_) => "Failover",
         };
         let pin = self.write_pin(
@@ -663,6 +864,9 @@ impl InferenceRouter {
             revision: current.map_or(1, |p| p.revision + 1),
             model_id: chosen.model_id.clone(),
             connection_id: chosen.connection.clone().expect("eligible"),
+            upstream_model_id: chosen.model.as_ref().map(|m| m.upstream_model_id.clone()),
+            endpoint_profile: chosen.model.as_ref().map(|m| m.endpoint_profile.clone()),
+            identity_origin: "Resolved".into(),
             intent: intent_key(intent),
             requested_effort: need.effort.clone(),
             // The effective effort is the requested one: `Default` is left to the provider, and
@@ -698,6 +902,12 @@ impl InferenceRouter {
                 "requiredCapabilities": stored.required_capabilities,
                 "replacedPinId": stored.replaced_pin_id.as_ref().map(Id::as_str),
                 "previousModelId": current.map(|p| p.model_id.as_str()),
+                "resolvedUpstreamModelId": stored.upstream_model_id,
+                "resolvedEndpointProfile": stored.endpoint_profile,
+                "identityOrigin": stored.identity_origin,
+                "previousUpstreamModelId": current.and_then(|p| p.upstream_model_id.as_deref()),
+                "previousEndpointProfile": current.and_then(|p| p.endpoint_profile.as_deref()),
+                "previousIdentityOrigin": current.map(|p| p.identity_origin.as_str()),
                 "reason": reason,
             }),
         })?;
@@ -718,15 +928,7 @@ impl InferenceRouter {
         .map_err(|_| invalid(CAPABILITY))?;
         let current = tx.router().session_pin(&session.id)?;
         Ok(
-            match self.resolve(
-                tx,
-                &session,
-                ctx.principal(),
-                current,
-                &i.intent,
-                &need,
-                false,
-            )? {
+            match self.resolve(tx, &session, ctx.principal(), current, &i.intent, &need)? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterRoute {
                         value: choice_of(&p)?,
@@ -774,7 +976,6 @@ impl InferenceRouter {
                 Some(current),
                 &i.intent,
                 &need,
-                true,
             )? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterPin {
@@ -798,15 +999,23 @@ impl InferenceRouter {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &ops::CatalogInput,
+        revision: u32,
     ) -> Result<OperationResult, Failure> {
-        let members = tier_members(snapshot.configuration())?;
+        let f = facts(
+            snapshot.configuration(),
+            snapshot.router(),
+            self.clock.now_ms().get(),
+        )?;
+        let connections = self.connections.connections(snapshot.router())?;
+        let need = Need::parse("Default", []).expect("default request");
+        let projected_members = catalog_tier_members(&f.members, &f.models, &connections, revision);
         let binding = CursorBinding::new(
             ctx,
             "router.catalog",
             &[if i.include_disabled { "all" } else { "enabled" }],
-            1,
+            revision as i64,
         );
-        let mut after: Option<(i64, String)> = match &i.page.cursor {
+        let after: Option<(i64, String)> = match &i.page.cursor {
             None => None,
             Some(c) => {
                 let at = binding.decode(&c.0)?;
@@ -817,40 +1026,149 @@ impl InferenceRouter {
                 ))
             }
         };
-        let limit = i.page.limit.get() as usize;
-        let mut items = Vec::new();
-        let mut last: Option<(i64, String)> = None;
-        let mut more = false;
-        'pages: loop {
-            let rows = snapshot.router().route_models(
-                after.as_ref().map(|(p, id)| (*p, id.as_str())),
-                CATALOG_LIMIT,
-            )?;
-            let full = rows.len() == CATALOG_LIMIT as usize;
-            for m in &rows {
-                after = Some((m.position, m.id.as_str().to_owned()));
-                if !(i.include_disabled || m.enabled) {
-                    continue;
-                }
-                if items.len() == limit {
-                    more = true;
-                    break 'pages;
-                }
-                items.push(route_model(m, &members)?);
-                last = Some((m.position, m.id.as_str().to_owned()));
+        let mut rows = Vec::new();
+        for id in &f.ordered {
+            let m = &f.models[id.as_str()];
+            if !(i.include_disabled || m.enabled) {
+                continue;
             }
-            if !full {
-                break;
+            let mut row = catalog_model(m, &projected_members)?;
+            let inventory = select::inventory(m, &connections);
+            row.available = inventory.available;
+            row.availability_reason = inventory.reason.map(wire_label);
+            rows.push((m.position, m.id.as_str().to_owned(), row));
+        }
+        if revision >= 3 {
+            for (position, family) in latest::FAMILIES.into_iter().enumerate() {
+                let id = Id::new(latest::alias_id(family)).expect("reserved alias");
+                let intent = RouteIntent::Model {
+                    model_id: id.clone(),
+                };
+                let targets = latest::targets(family, &f.models, &connections);
+                let pool = f.assess_pool(&intent, &connections, &need, None);
+                let current = pool
+                    .iter()
+                    .find(|a| a.eligible())
+                    .and_then(|a| a.model.as_ref())
+                    .or_else(|| targets.first().and_then(|id| f.models.get(id.as_str())))
+                    .or_else(|| {
+                        f.ordered
+                            .iter()
+                            .filter_map(|id| f.models.get(id.as_str()))
+                            .find(|m| {
+                                latest::parse(&m.upstream_model_id)
+                                    .is_some_and(|p| p.family == family)
+                            })
+                    });
+                let mut m = current.cloned().unwrap_or_else(|| StoredRouteModel {
+                    id: id.clone(),
+                    display_name: family.into(),
+                    endpoint_profile: if latest::FAMILIES[..4].contains(&family) {
+                        "CodexSubscriptionResponses".into()
+                    } else {
+                        "ClaudeSubscriptionMessages".into()
+                    },
+                    upstream_model_id: id.as_str().to_owned(),
+                    enabled: false,
+                    efforts: Vec::new(),
+                    image_input: false,
+                    tools: false,
+                    context_tokens: None,
+                    connection_id: None,
+                    position: 0,
+                    revision: 1,
+                    updated_at_ms: 0,
+                });
+                m.id = id.clone();
+                let mut name = family.to_owned();
+                name[..1].make_ascii_uppercase();
+                m.display_name = format!("{name} Latest");
+                let configured: Vec<_> = f
+                    .models
+                    .values()
+                    .filter(|m| {
+                        latest::parse(&m.upstream_model_id).is_some_and(|p| p.family == family)
+                    })
+                    .collect();
+                let target_rows: Vec<_> = targets
+                    .iter()
+                    .filter_map(|id| f.models.get(id.as_str()))
+                    .collect();
+                m.enabled = if target_rows.is_empty() {
+                    configured.iter().any(|m| m.enabled)
+                } else {
+                    target_rows.iter().any(|m| m.enabled)
+                };
+                // Metadata describes what some current concrete scope declares. It does not
+                // imply one scope jointly supports this union; assess_pool checks the full
+                // request on each exact target before selecting it.
+                m.efforts = target_rows
+                    .iter()
+                    .flat_map(|m| m.efforts.iter().cloned())
+                    .collect();
+                m.efforts.sort_by_key(|effort| {
+                    ["Minimal", "Low", "Medium", "High", "XHigh", "Max"]
+                        .iter()
+                        .position(|e| *e == effort)
+                });
+                m.efforts.dedup();
+                m.image_input = target_rows.iter().any(|m| m.image_input);
+                m.tools = target_rows.iter().any(|m| m.tools);
+                m.context_tokens = target_rows.iter().filter_map(|m| m.context_tokens).max();
+                // The alias is a logical family slot, not a configuration row bound to one
+                // credential. Every concrete target retains its own binding in metadata.
+                m.connection_id = None;
+                let mut row = catalog_model(&m, &projected_members)?;
+                row.latest_family = Some(Id::new(family).expect("family"));
+                row.available = if !targets.is_empty() {
+                    Some(true)
+                } else if configured
+                    .iter()
+                    .any(|m| select::inventory(m, &connections).available.is_none())
+                {
+                    None
+                } else {
+                    Some(false)
+                };
+                row.availability_reason = match row.available {
+                    Some(true) => None,
+                    None => Some(wire_label("NoInventory")),
+                    Some(false)
+                        if !configured.is_empty()
+                            && configured.iter().all(|m| {
+                                select::inventory(m, &connections).reason == Some("Excluded")
+                            }) =>
+                    {
+                        Some(wire_label("Excluded"))
+                    }
+                    Some(false) => Some(wire_label("NoListedFamilyVersion")),
+                };
+                row.resolves_to_model_ids = Some(BoundedList(targets));
+                rows.push((i64::MIN + position as i64, id.as_str().to_owned(), row));
             }
         }
-        let next_cursor = match (more, last) {
-            (true, Some((p, id))) => Some(BoundedText(binding.encode(&format!("{p}|{id}")))),
-            _ => None,
+        rows.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        let mut remaining = rows.into_iter().filter(|(p, id, _)| {
+            after
+                .as_ref()
+                .is_none_or(|a| (*p, id.as_str()) > (a.0, a.1.as_str()))
+        });
+        let selected: Vec<_> = remaining
+            .by_ref()
+            .take(i.page.limit.get() as usize)
+            .collect();
+        let more = remaining.next().is_some();
+        let next_cursor = if more {
+            selected
+                .last()
+                .map(|(p, id, _)| BoundedText(binding.encode(&format!("{p}|{id}"))))
+        } else {
+            None
         };
         Ok(OperationResult::RouterCatalog {
             value: Page {
-                items: BoundedList(items),
-                has_more: next_cursor.is_some(),
+                items: BoundedList(selected.into_iter().map(|(_, _, row)| row).collect()),
+                has_more: more,
                 next_cursor,
             },
         })
@@ -871,25 +1189,34 @@ impl InferenceRouter {
             .map_err(|_| invalid(CAPABILITY))?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
         let connections = self.connections.connections(snapshot.router())?;
-        let pool = f.assess_pool(intent, &connections, &need, None);
-        let eligible: Vec<Id> = pool
+        let mut pool = f.assess_pool(intent, &connections, &need, None);
+        let mut eligible: Vec<Id> = pool
             .iter()
             .filter(|a| a.eligible())
             .map(|a| a.model_id.clone())
             .collect();
+        let pinned_assessment = pin
+            .filter(|p| p.intent == intent_key(intent))
+            .and_then(|p| f.assess_pin(intent, p, &connections, &need));
+        let pin_eligible = pin.map(|p| {
+            p.requested_effort == need.effort
+                && pinned_assessment.as_ref().is_some_and(Assessed::eligible)
+        });
+        if pin_eligible == Some(true)
+            && let Some(pin) = pin
+            && !eligible.contains(&pin.model_id)
+        {
+            eligible.push(pin.model_id.clone());
+        }
         let available = !eligible.is_empty();
+        if !available {
+            include_recoverable_pin(&mut pool, pinned_assessment.as_ref());
+        }
         let retry_at_ms = if available {
             None
         } else {
             select::earliest_cooldown(&pool).map(counter)
         };
-        let pin_eligible = pin.map(|p| {
-            p.intent == intent_key(intent)
-                && p.requested_effort == need.effort
-                && pool
-                    .iter()
-                    .any(|a| a.model_id == p.model_id && a.eligible())
-        });
         Ok(RouteAvailability {
             intent: intent.clone(),
             available,
@@ -978,18 +1305,25 @@ impl InferenceRouter {
         if let Some(session) = &request.session_id
             && let Some(pin) = snapshot.router().session_pin(session)?
         {
+            let scope: Vec<_> = connections
+                .iter()
+                .filter(|c| c.id == pin.connection_id)
+                .cloned()
+                .collect();
             let a = select::assess(
                 &pin.model_id,
                 f.models.get(pin.model_id.as_str()),
-                &connections,
+                &scope,
                 &f.cooling,
                 &need,
                 Some(&pin.connection_id),
             );
-            if a.eligible() {
+            if a.eligible() && a.model.as_ref().is_some_and(|m| pin_matches_model(&pin, m)) {
                 return Ok(Ok(AuxiliaryRoute {
                     model_id: pin.model_id,
                     connection_id: a.connection.expect("eligible"),
+                    upstream_model_id: pin.upstream_model_id.expect("matched concrete identity"),
+                    endpoint_profile: pin.endpoint_profile.expect("matched concrete identity"),
                     requested_effort: need.effort.clone(),
                     effective_effort: need.effort,
                     pin_id: Some(pin.pin_id),
@@ -1001,6 +1335,13 @@ impl InferenceRouter {
             Some(a) => Ok(AuxiliaryRoute {
                 model_id: a.model_id.clone(),
                 connection_id: a.connection.clone().expect("eligible"),
+                upstream_model_id: a
+                    .model
+                    .as_ref()
+                    .expect("eligible")
+                    .upstream_model_id
+                    .clone(),
+                endpoint_profile: a.model.as_ref().expect("eligible").endpoint_profile.clone(),
                 requested_effort: need.effort.clone(),
                 effective_effort: need.effort,
                 pin_id: None,
@@ -1089,7 +1430,7 @@ impl QueryHandler for InferenceRouter {
             );
         };
         let answered = match input {
-            ops::Input::Catalog(i) => self.catalog(snapshot, ctx, i),
+            ops::Input::Catalog(i) => self.catalog(snapshot, ctx, i, query.schema_revision().0),
             ops::Input::Availability(i) => self.availability(snapshot, ctx, i),
             ops::Input::RequestStatus(i) => self.request_status(snapshot, ctx, i),
             _ => {

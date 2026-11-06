@@ -1697,5 +1697,28 @@
       "NOTIFY-05"
     ],
     "evidence": "ui-08/verification.json; browser prototype only"
+  },
+  "latest_model_amendment": {
+    "date": "2026-11-05",
+    "status": "Approved planning amendment; native implementation pending",
+    "requirements": [
+      "ROUTE-25",
+      "ROUTE-26",
+      "ROUTE-27"
+    ],
+    "feature": "DW-F6",
+    "items": [
+      "DW-108",
+      "DW-22",
+      "DW-107"
+    ],
+    "finalAcceptance": "DW-61",
+    "plan": "latest-model-plan.json",
+    "confirmedChoices": [
+      "Allocate once per chat and pin the concrete version",
+      "Use the highest version still listed after disappearance",
+      "Keep custom tier members outside the eight families in rotation"
+    ],
+    "nativeAcceptance": "pending"
   }
 }

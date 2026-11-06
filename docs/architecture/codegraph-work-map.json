@@ -12,18 +12,18 @@
   },
   "sourcePlan": "implementation-plan.json",
   "fullSourceRequirements": {
-    "count": 374,
+    "count": 377,
     "documentId": "3ab2d98c-4bcf-4c3d-b415-df422cbf33e0",
     "statusesPreserved": true,
     "individuallyStructuredAcrossDeliveryFeatures": true,
-    "latestAmendment": "ROUTE-19/21\u201324 and AD80: first-session DevWorks Auto, independent SystemOne pool and fixed tier/model affinity."
+    "latestAmendment": "ROUTE-25\u201327 and AD81: hourly catalogs, reversible availability, latest-family allocation and concrete pin preservation."
   },
   "structuredSharedRequirements": 3,
-  "nativeImplementationItems": 64,
+  "nativeImplementationItems": 65,
   "publicationItem": "DW-64",
-  "dependencyEdges": 304,
+  "dependencyEdges": 309,
   "nativeInitialStatus": "backlog",
-  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All374 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026.",
+  "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All377 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026. Approved latest-model amendment adds DW-108 and three requirements, preserves Auto/SystemOne ownership and extends existing final acceptance; see latestModelAmendment.",
   "items": [
     {
       "ref": "slice-contracts",
@@ -334,10 +334,10 @@
       "type": "story",
       "localSliceId": "DW-022",
       "blockedBy": [
+        "DW-5",
         "DW-17",
         "DW-18",
-        "DW-21",
-        "DW-5"
+        "DW-21"
       ],
       "acceptanceCriteria": 3,
       "featureKey": "DW-F6"
@@ -985,9 +985,11 @@
         "DW-60",
         "DW-62",
         "DW-63",
-        "DW-107"
+        "DW-104",
+        "DW-107",
+        "DW-108"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F12"
     },
     {
@@ -1245,13 +1247,28 @@
       "blockedBy": [
         "DW-16",
         "DW-20",
-        "DW-22"
+        "DW-22",
+        "DW-108"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F6"
+    },
+    {
+      "ref": "model-latest",
+      "key": "DW-108",
+      "id": "7524b1b3-bb00-4d67-bfb6-e0dfce32b7f5",
+      "title": "Keep latest model aliases and catalog availability current",
+      "type": "story",
+      "localSliceId": "DW-108",
+      "blockedBy": [
+        "DW-17",
+        "DW-18"
       ],
       "acceptanceCriteria": 3,
       "featureKey": "DW-F6"
     }
   ],
-  "structuredSourceRequirements": 374,
+  "structuredSourceRequirements": 377,
   "deliveryFeatures": [
     {
       "id": "11568b6e-16b6-48b5-b0c1-3f0c3b0cdf10",
@@ -1987,7 +2004,7 @@
     {
       "id": "84f1dddf-fa8f-46b9-836f-41e9e134e49a",
       "key": "DW-F6",
-      "version": 1,
+      "version": 6,
       "title": "Models, routing and usage",
       "items": [
         "DW-17",
@@ -1995,7 +2012,9 @@
         "DW-19",
         "DW-20",
         "DW-21",
-        "DW-22"
+        "DW-22",
+        "DW-107",
+        "DW-108"
       ],
       "sourceRequirements": [
         {
@@ -2201,6 +2220,41 @@
         {
           "id": "TOOL-09",
           "codegraphRequirement": "E41",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-21",
+          "codegraphRequirement": "E42",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-22",
+          "codegraphRequirement": "E43",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-23",
+          "codegraphRequirement": "E44",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-24",
+          "codegraphRequirement": "E45",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-25",
+          "codegraphRequirement": "E46",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-26",
+          "codegraphRequirement": "E47",
+          "status": "Confirmed"
+        },
+        {
+          "id": "ROUTE-27",
+          "codegraphRequirement": "E48",
           "status": "Confirmed"
         }
       ]
@@ -3375,5 +3429,30 @@
     "nativeAcceptance": "pending",
     "newItemStatus": "ready",
     "addedDependencyEdges": 4
-  }
+  },
+  "latestModelAmendment": {
+    "date": "2026-11-05",
+    "feature": "DW-F6",
+    "newItem": "DW-108",
+    "expandedItems": [
+      "DW-22",
+      "DW-107"
+    ],
+    "finalAcceptance": "DW-61",
+    "requirements": [
+      "ROUTE-25",
+      "ROUTE-26",
+      "ROUTE-27"
+    ],
+    "nativeAcceptance": "pending",
+    "newItemStatus": "ready",
+    "addedDependencyEdges": 4
+  },
+  "preservedExternalDependencies": [
+    {
+      "item": "DW-61",
+      "blockedBy": "DW-104",
+      "reason": "Existing live watcher-acceptance prerequisite preserved; the watcher plan is outside this baseline/EVAL/latest document snapshot."
+    }
+  ]
 }

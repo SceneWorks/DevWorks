@@ -319,6 +319,8 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "resources.waiters",
             "router.availability",
             "router.catalog",
+            "router.pin",
+            "router.route",
             "router.configure",
             "router.connections",
             "sessions.append_message",

@@ -85,10 +85,10 @@ fn the_catalog_is_typed_unique_and_self_consistent() {
     assert_eq!(
         tiers,
         [
-            json!(["fable", "astra"]),
-            json!(["opus", "sol"]),
-            json!(["sonnet", "terra"]),
-            json!(["haiku", "luna"])
+            json!(["fable-latest", "astra-latest"]),
+            json!(["opus-latest", "sol-latest"]),
+            json!(["sonnet-latest", "terra-latest"]),
+            json!(["haiku-latest", "luna-latest"])
         ]
     );
     assert!(descriptor("nope.unknown").is_none());

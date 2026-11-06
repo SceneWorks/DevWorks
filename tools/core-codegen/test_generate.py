@@ -37,6 +37,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
+            'router.route', 'router.pin',
             'knowledge.search', 'knowledge.read', 'knowledge.record', 'knowledge.revise',
             'knowledge.verify', 'knowledge.challenge', 'knowledge.diagnostics', 'knowledge.subgraph',
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
@@ -61,7 +62,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'browser.upload', 'browser.console', 'browser.network'})
         self.assertEqual(carried['features.edit'], {2})
         self.assertEqual(carried['resources.renew'], {2})
-        self.assertEqual(carried['router.availability'], {2})
+        self.assertEqual(carried['router.availability'], {2, 3})
+        self.assertEqual(carried['router.route'], {3})
+        self.assertEqual(carried['router.pin'], {3})
         self.assertEqual(carried['router.connections'], {2})
         self.assertEqual(carried['router.configure'], {2})
         # Knowledge projections expose independent challenges at revision 3; full source labels are additive.
@@ -84,6 +87,17 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['history.events'], {2})
         self.assertEqual(carried['runs.inspect'], set())
         self.assertEqual(carried['history.operation_status'], set())
+
+    def test_query_record_renames_at_its_declared_revision_without_widening_config_inputs(self):
+        record = generate.TYPES['RouteCatalogModel']
+        self.assertIn('"before": 3', generate.record_attrs(record))
+        self.assertEqual(record['since']['context_tokens'], 2)
+        self.assertEqual(record['since']['latest_family'], 3)
+        self.assertNotIn('latest_family', generate.TYPES['RouteModel']['fields'])
+        catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
+        configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
+        self.assertEqual(generate.introduced_in(catalog), {2, 3})
+        self.assertEqual(generate.introduced_in(configure), {2})
 
     def test_a_history_page_result_is_projected(self):
         # HistoryPage gates its own checkpoint, so every result carrying it is projected.

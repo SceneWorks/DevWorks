@@ -1,0 +1,153 @@
+{
+  "date": "2026-11-05",
+  "scope": "Approved latest-model source integration with the DW-71 eval catalog; document consistency only, no runtime or inference acceptance",
+  "approvedSourceCommit": "dcd122bb5224cc91ba494792403a0c190faf57be",
+  "integrationBase": "bffce8562a9b77ae8f192775b1dfd96adbb7d694",
+  "requirementsVerified": 377,
+  "unchangedPriorRequirements": 374,
+  "newRequirements": [
+    "ROUTE-25",
+    "ROUTE-26",
+    "ROUTE-27"
+  ],
+  "authoringSourceMatchesPublishedRequirements": true,
+  "counts": {
+    "slices": 77,
+    "operationFamilies": 49,
+    "operations": 356,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 356,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "evalOperationOwners": {
+    "evals.grade": "eval_recorded",
+    "evals.results": "eval_recorded"
+  },
+  "word": {
+    "pages": 73,
+    "sourceParagraphsVerified": 377,
+    "visualReview": {
+      "date": "2026-11-05",
+      "scope": "Document layout review only; no native application or provider acceptance",
+      "pagesRendered": 73,
+      "pagesInspectedInContactSheets": 73,
+      "fullSizePagesInspected": [
+        19,
+        20
+      ],
+      "result": "All page layouts inspected in contact sheets; the new ROUTE-25\u201327 text and routing-to-work section transition inspected at full size. No clipping, overlap or missing glyphs observed. Existing document styling and figures retained."
+    },
+    "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
+    "evidenceReuse": "The DOCX and complete requirements content are byte-identical to the approved source commit. Reused its existing 73-page visual QA; no new Word rendering or native acceptance claimed."
+  },
+  "readers": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/latest-model-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "sourceSha256": {
+    "docs/planning/requirements-content.json": "6de34b24444a5f0601d8219173e01a8c9d7c15054fde4626788783dfbcc1a8dc",
+    "docs/planning/latest-model-plan.json": "c3955be310e530bcb369addba81fa43faf91c5e91b8beeffd2afd67cc53fdd96",
+    "docs/architecture/architecture-contracts.json": "3bf707ec470249d87dd82102b1a270fb2bc81824a3b92b6344996a9055164186",
+    "docs/architecture/implementation-slices.json": "289d6547ecfc378670ea56b8978ffff3ba3fe42e009b65a805f3982b111b3b10",
+    "docs/architecture/implementation-plan.json": "172c9ba1ac578cc84a7f39eb93a09adc73c37c6a6302405a72b1777eb2f24404",
+    "docs/architecture/devworks-requirements-traceability.json": "23d4eaab9420af10bd850fcafd2025cd99498cd371aec8554aac4db09c4de407"
+  },
+  "allPassed": true
+}

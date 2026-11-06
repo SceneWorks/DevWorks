@@ -4776,6 +4776,27 @@ pub struct RouteChoice {
     pub pin_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_pin_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub resolved_upstream_model_id: Option<Text>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "EndpointKind", extend("x-since" = 3))]
+    pub resolved_endpoint_profile: Option<EndpointKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub resolved_identity_origin: Option<Label>,
 }
 impl Check for RouteChoice {
     fn check(&self) -> Result<(), String> {
@@ -4787,11 +4808,28 @@ impl Check for RouteChoice {
         self.pin_id.check()?;
         self.pin_revision.check()?;
         self.replaced_pin_id.check()?;
+        self.resolved_upstream_model_id.check()?;
+        self.resolved_endpoint_profile.check()?;
+        self.resolved_identity_origin.check()?;
         crate::protocol::rules::record(
             "RouteChoice",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RouteChoice {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.resolved_upstream_model_id = None;
+        }
+        if revision < 3 {
+            self.resolved_endpoint_profile = None;
+        }
+        if revision < 3 {
+            self.resolved_identity_origin = None;
+        }
     }
 }
 
@@ -4848,6 +4886,8 @@ impl Revisioned for RouteAvailability {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 2 {
             self.pin = None;
+        } else {
+            self.pin.retain_revision(revision);
         }
         if revision < 2 {
             self.pin_eligible = None;
@@ -9736,5 +9776,111 @@ impl Check for EvalObservedValue {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "RouteModel", "before": 3}))]
+pub struct RouteCatalogModel {
+    pub id: Id,
+    pub display_name: Label,
+    pub endpoint_profile: EndpointKind,
+    pub upstream_model_id: Text,
+    pub enabled: bool,
+    pub tier_memberships: Items<TierName>,
+    pub efforts: Items<EffortName>,
+    pub image_input: bool,
+    pub tools: bool,
+    pub revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 2))]
+    pub context_tokens: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub connection_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub latest_family: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 3))]
+    pub resolves_to_model_ids: Option<Items<Id>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub available: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub availability_reason: Option<Label>,
+}
+impl Check for RouteCatalogModel {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.display_name.check()?;
+        self.endpoint_profile.check()?;
+        self.upstream_model_id.check()?;
+        self.enabled.check()?;
+        self.tier_memberships.check()?;
+        self.efforts.check()?;
+        self.image_input.check()?;
+        self.tools.check()?;
+        self.revision.check()?;
+        self.context_tokens.check()?;
+        self.connection_id.check()?;
+        self.latest_family.check()?;
+        self.resolves_to_model_ids.check()?;
+        self.available.check()?;
+        self.availability_reason.check()?;
+        crate::protocol::rules::record(
+            "RouteCatalogModel",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for RouteCatalogModel {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.context_tokens = None;
+        }
+        if revision < 2 {
+            self.connection_id = None;
+        }
+        if revision < 3 {
+            self.latest_family = None;
+        }
+        if revision < 3 {
+            self.resolves_to_model_ids = None;
+        }
+        if revision < 3 {
+            self.available = None;
+        }
+        if revision < 3 {
+            self.availability_reason = None;
+        }
     }
 }

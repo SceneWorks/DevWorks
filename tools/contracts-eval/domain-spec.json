@@ -1811,7 +1811,15 @@
         "effective_effort": "EffortName",
         "pin_id": "Id",
         "pin_revision": "Revision",
-        "replaced_pin_id": "?Id"
+        "replaced_pin_id": "?Id",
+        "resolved_upstream_model_id": "?Text",
+        "resolved_endpoint_profile": "?EndpointKind",
+        "resolved_identity_origin": "?Label"
+      },
+      "since": {
+        "resolved_upstream_model_id": 3,
+        "resolved_endpoint_profile": 3,
+        "resolved_identity_origin": 3
       }
     },
     "RouteAvailability": {
@@ -3776,6 +3784,37 @@
       "fields": {
         "value": "DynamicJson"
       }
+    },
+    "RouteCatalogModel": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "display_name": "Label",
+        "endpoint_profile": "EndpointKind",
+        "upstream_model_id": "Text",
+        "enabled": "bool",
+        "tier_memberships": "Items<TierName>",
+        "efforts": "Items<EffortName>",
+        "image_input": "bool",
+        "tools": "bool",
+        "revision": "Revision",
+        "context_tokens": "?PositiveCounter",
+        "connection_id": "?Id",
+        "latest_family": "?Id",
+        "resolves_to_model_ids": "?Items<Id>",
+        "available": "?bool",
+        "availability_reason": "?Label"
+      },
+      "since": {
+        "context_tokens": 2,
+        "connection_id": 2,
+        "latest_family": 3,
+        "resolves_to_model_ids": 3,
+        "available": 3,
+        "availability_reason": 3
+      },
+      "earlierName": "RouteModel",
+      "earlierBefore": 3
     }
   },
   "operations": {
@@ -6957,10 +6996,10 @@
         "page": "PageRequest",
         "include_disabled": "bool"
       },
-      "result": "Page<RouteModel>",
+      "result": "Page<RouteCatalogModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it)."
+      "rules": "Read-only conversational catalog in display order (SystemOne decision models never appear). Schema revision 2: each model's declared context window in tokens (contextTokens, absent when unknown) and the one connection that serves it (connectionId, absent when any connection of its endpoint profile may serve it). Schema revision 3 adds query-only latestFamily, resolvesToModelIds, available and availabilityReason metadata without changing configured RouteModel input. The eight reserved family-latest IDs use existing Model route intent. Alias rows retain all concrete configured serving-scope targets; an empty target list is explicit unavailable, unknown complete inventory remains unknown rather than guessed. Inventory availability is distinct from user enablement, authentication, cooldown and request capability eligibility. Revision 1/2 readers keep their exact recorded schema and do not receive virtual alias rows. Complete authoritative inventories are per connection; failed, malformed or partial lists never remove availability, and returning models do not override user-disabled choices."
     },
     "router.connections": {
       "operation": "router.connections",
@@ -6986,7 +7025,7 @@
       "result": "RouteChoice",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Allocating/pinning is a durable command, not a read query. Persist round-robin cursor/pin atomically for new/replacement pin; reuse eligible existing pin and never translate model name into tier."
+      "rules": "Allocating/pinning is a durable command, not a read query. Persist round-robin cursor/pin atomically for new/replacement pin; reuse eligible existing pin and never translate model name into tier. Schema revision 3 returns the immutable pin upstream-model and endpoint-profile snapshot with an explicit identity origin. New resolutions are Resolved; migration-25 current-row observations are Migration25CurrentCatalog, never claimed as historical resolution. Unknown old identity remains absent/Unknown. A configured identity change requires a visible replacement pin rather than silently retargeting an existing pin; known receipts retain their recorded payload and resolution."
     },
     "router.pin": {
       "operation": "router.pin",
@@ -7000,7 +7039,7 @@
       "result": "RouteChoice",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Explicit change at safe request boundary; preserve durable request history and require compatible native continuation/context conversion."
+      "rules": "Explicit change at safe request boundary; preserve durable request history and require compatible native continuation/context conversion. Schema revision 3 returns the immutable pin upstream-model and endpoint-profile snapshot with an explicit identity origin. New resolutions are Resolved; migration-25 current-row observations are Migration25CurrentCatalog, never claimed as historical resolution. Unknown old identity remains absent/Unknown. A configured identity change requires a visible replacement pin rather than silently retargeting an existing pin; known receipts retain their recorded payload and resolution."
     },
     "router.availability": {
       "operation": "router.availability",
@@ -7014,7 +7053,7 @@
       "result": "RouteAvailability",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Read-only truthful availability of an intent for an effort and required capabilities: eligible pool members, the distinct reason codes of the others (EmptyPool for an empty pool) and, when nothing is eligible and a cooldown is the only obstacle of some member, the earliest such cooldown expiry. Schema revision 2: with sessionId (a session the caller may see), the session's current pin, whether it is eligible for this intent, effort and capabilities, and why it was last set (Initial, Failover, SelectionChanged, EffortChanged or ConnectionChanged).",
+      "rules": "Read-only truthful availability of an intent for an effort and required capabilities: eligible pool members, the distinct reason codes of the others (EmptyPool for an empty pool) and, when nothing is eligible and a cooldown is the only obstacle of some member, the earliest such cooldown expiry. Schema revision 2: with sessionId (a session the caller may see), the session's current pin, whether it is eligible for this intent, effort and capabilities, and why it was last set (Initial, Failover, SelectionChanged, EffortChanged or ConnectionChanged). Schema revision 3: the optional pin exposes its retained resolvedUpstreamModelId, resolvedEndpointProfile and resolvedIdentityOrigin observations without stamping current mutable catalog identity onto old history.",
       "since": {
         "session_id": 2
       }
@@ -8105,7 +8144,8 @@
     ],
     "router.availability": [
       1,
-      2
+      2,
+      3
     ],
     "web.search": [
       1,
@@ -8129,7 +8169,8 @@
     ],
     "router.catalog": [
       1,
-      2
+      2,
+      3
     ],
     "router.connections": [
       1,
@@ -8416,6 +8457,14 @@
     "artifacts.read": [
       1,
       4
+    ],
+    "router.route": [
+      1,
+      3
+    ],
+    "router.pin": [
+      1,
+      3
     ]
   },
   "familyRules": {

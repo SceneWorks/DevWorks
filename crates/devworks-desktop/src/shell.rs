@@ -477,6 +477,7 @@ impl Shell {
                 }
             }
             Route::Jobs => {
+                self.load_router_catalog();
                 self.load_jobs();
                 if !self.projects.list.loaded {
                     self.load_projects();
@@ -1154,7 +1155,7 @@ impl Shell {
         self.chat.routing.invalidate();
         // A load still paging may predate the change: it is replaced, not completed. So may an
         // availability query in flight for the visible conversation.
-        if self.route == Route::Chat || self.coordinator_open {
+        if self.route == Route::Chat || self.coordinator_open || self.route == Route::Jobs {
             self.load_router_catalog();
             let key = self.chat.draft_key();
             if self.pending(&Slot::RouteStatus(key.clone())) {
@@ -2693,14 +2694,25 @@ impl Shell {
         {
             self.load_transcript(&id);
         }
-        if self.route == Route::Chat || self.coordinator_open {
-            self.refresh_route_status();
+        if self.route == Route::Chat || self.coordinator_open || self.route == Route::Jobs {
+            if self.route == Route::Chat || self.coordinator_open {
+                self.refresh_route_status();
+            }
             // Catalog edits and membership changes made elsewhere reach the selectors too.
             if self.chat.routing.catalog_load.is_none() {
                 self.load_router_catalog();
             }
         }
         self.refresh_waiting_first_routes();
+        // Background discovery commits independently of the manual refresh command. Read the
+        // completed inventory on normal hints/periodic repair, including while Settings is open.
+        // Loading keeps unsaved model edits and leaves unknown configure outcomes untouched.
+        if self.route == Route::Settings
+            && self.settings.show_connections
+            && !self.settings.connections.loading
+        {
+            self.load_connections();
+        }
         match self.route {
             Route::Artifacts if !self.pending(&Slot::ArtifactsList) => self.load_artifacts(),
             Route::Resources if !self.pending(&Slot::ResourcesList) => self.load_resources(),

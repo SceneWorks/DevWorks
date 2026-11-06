@@ -7168,6 +7168,90 @@
     "schemaValid": true
   },
   {
+    "id": "r3-input-router.route",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.route\",\"sessionId\":\"id-a\",\"expectedContextEpoch\":\"0\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-router.route",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.route\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-router.pin",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.pin\",\"sessionId\":\"id-a\",\"expectedPinRevision\":\"1\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-router.pin",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.pin\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-router.availability",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.availability\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"effort\":\"Default\",\"requiredCapabilities\":[],\"sessionId\":\"session-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-router.availability",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-pin-migration-observation",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.pin\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Migration25CurrentCatalog\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-pin-unknown-identity",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.pin\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedIdentityOrigin\":\"Unknown\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-pin-no-new-history-fields",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.pin\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-pin-snapshot",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.pin\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r2-result-availability-snapshot",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.availability\",\"value\":{\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"available\":false,\"eligibleModelIds\":[],\"blockedReasonCodes\":[],\"pin\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":\"provider/astra-6.1\",\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"},\"pinEligible\":true,\"pinReason\":\"Failover\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-null-pin-snapshot",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.route\",\"value\":{\"modelId\":\"id-a\",\"connectionId\":\"id-a\",\"intent\":{\"kind\":\"Tier\",\"tier\":\"Max\"},\"requestedEffort\":\"High\",\"effectiveEffort\":\"High\",\"pinId\":\"id-a\",\"pinRevision\":\"1\",\"resolvedUpstreamModelId\":null,\"resolvedEndpointProfile\":\"OpenAiResponses\",\"resolvedIdentityOrigin\":\"Resolved\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-input-indexing.status",
     "entry": "domain-request.r2",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"indexing.status\",\"repositoryId\":\"id-a\"},\"schemaRevision\":2}",
@@ -8211,6 +8295,62 @@
     "schemaValid": true
   },
   {
+    "id": "r3-input-router.catalog",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"router.catalog\",\"page\":{\"limit\":20},\"includeDisabled\":false},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-router.catalog",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-catalog-unavailable",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[],\"available\":false,\"availabilityReason\":\"MissingFromInventory\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-catalog-unknown",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[],\"availabilityReason\":\"InventoryUnknown\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-result-catalog-latest",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r1-result-catalog-latest",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r3-result-catalog-null-availability",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"router.catalog\",\"value\":{\"items\":[{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":null,\"availabilityReason\":\"Listed\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-configure-catalog-facts",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"router.configure\",\"action\":{\"kind\":\"Model\",\"model\":{\"id\":\"astra-latest\",\"displayName\":\"Astra latest\",\"endpointProfile\":\"OpenAiResponses\",\"upstreamModelId\":\"astra-latest\",\"enabled\":false,\"tierMemberships\":[],\"efforts\":[],\"imageInput\":false,\"tools\":false,\"revision\":\"1\",\"contextTokens\":\"1000000\",\"connectionId\":\"conn-a\",\"latestFamily\":\"astra\",\"resolvesToModelIds\":[\"astra-6-1-a\",\"astra-6-1-b\"],\"available\":true,\"availabilityReason\":\"Listed\"}}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-result-router.configure",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"router.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
@@ -8883,42 +9023,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1269",
+    "id": "r3-preview-source-13-1289",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1269",
+    "id": "r3-delete-source-13-1289",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1271",
+    "id": "r3-preview-source-15-1291",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1271",
+    "id": "r3-delete-source-15-1291",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1273",
+    "id": "r3-preview-source-256-1293",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1273",
+    "id": "r3-delete-source-256-1293",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

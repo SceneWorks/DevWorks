@@ -4,7 +4,7 @@ const path = require('node:path');
 const {chromium} = require('playwright');
 (async () => {
   const root = process.cwd();
-  const out = path.join(root, '.planning-build/auto-routing/readers');
+  const out = path.join(root, '.planning-build/latest-model/readers');
   await fs.mkdir(out, {recursive:true});
   const report = {date:'2026-11-05', scope:'Routing document readers only; no native runtime or inference acceptance', readers:[], pageErrors:[]};
   const browser = await chromium.launch({headless:true});
@@ -13,6 +13,7 @@ const {chromium} = require('playwright');
     page.on('pageerror', error => report.pageErrors.push(error.message));
     for (const [file, anchor] of [
       ['docs/planning/auto-routing-plan.html', 'items'],
+      ['docs/planning/latest-model-plan.html', 'items'],
       ['docs/planning/devworks-requirements.html', 'ROUTE-21'],
       ['docs/architecture/devworks-architecture.html', 'first-session-automatic-routing'],
       ['docs/architecture/implementation-plan.html', 'dw-107'],
@@ -41,7 +42,7 @@ const {chromium} = require('playwright');
         }
       }
       if (file.includes('devworks-architecture')) {
-        for (const id of ['ROUTE-19','ROUTE-21','ROUTE-22','ROUTE-23','ROUTE-24']) {
+        for (const id of ['ROUTE-19','ROUTE-21','ROUTE-22','ROUTE-23','ROUTE-24','ROUTE-25','ROUTE-26','ROUTE-27']) {
           await page.locator('#req-search').fill(id);
           if (!await page.locator('.trace tbody tr:visible').filter({hasText:id}).count()) throw Error('Requirement filter '+id);
         }
@@ -50,6 +51,9 @@ const {chromium} = require('playwright');
         if (!await page.locator('#first-session-automatic-routing').isVisible()) throw Error('Section filter');
         await page.locator('#doc-search').fill('');
         record.filtersVerified = true;
+        await page.locator('#doc-search').fill('latest model aliases');
+        if (!await page.locator('#latest-model-aliases-and-catalog-availability').isVisible()) throw Error('Latest section filter');
+        await page.locator('#doc-search').fill('');
       }
       report.readers.push(record);
     }

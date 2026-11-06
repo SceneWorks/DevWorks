@@ -737,3 +737,22 @@ fn relative_paths_refuse_every_platform_absolute_or_escaping_form() {
     let schema = serde_json::to_value(schemars::schema_for!(PathSet)).unwrap();
     assert_eq!(schema["uniqueItems"], json!(true));
 }
+
+#[test]
+fn latest_catalog_preserves_all_preexisting_revision_one_and_two_schema_bytes() {
+    let golden: Value = serde_json::from_str(
+        &std::fs::read_to_string(common::repo_file(
+            "docs/architecture/validation/latest-model-contracts/legacy-schema-sha256.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    for (file, expected) in golden["schemas"].as_object().unwrap() {
+        let bytes = std::fs::read(common::contracts_dir().join(file)).unwrap();
+        assert_eq!(
+            devworks_core::fingerprint::sha256_hex(&bytes),
+            expected.as_str().unwrap(),
+            "{file}: latest catalog metadata changed a legacy schema"
+        );
+    }
+}

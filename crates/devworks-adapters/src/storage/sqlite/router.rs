@@ -148,7 +148,7 @@ fn validate_model(m: &StoredRouteModel) -> Result<(), StorageError> {
 // ---------------------------------------------------------------------------------------------
 // Pins
 
-const PIN_COLUMNS: &str = "session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at";
+const PIN_COLUMNS: &str = "session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at,upstream_model_id,endpoint_profile,identity_origin";
 
 type RawPin = (
     String,
@@ -163,6 +163,9 @@ type RawPin = (
     Option<String>,
     String,
     i64,
+    Option<String>,
+    Option<String>,
+    String,
 );
 fn raw_pin(r: &Row<'_>) -> rusqlite::Result<RawPin> {
     Ok((
@@ -178,6 +181,9 @@ fn raw_pin(r: &Row<'_>) -> rusqlite::Result<RawPin> {
         r.get(9)?,
         r.get(10)?,
         r.get(11)?,
+        r.get(12)?,
+        r.get(13)?,
+        r.get(14)?,
     ))
 }
 fn pin_of(r: RawPin) -> Result<StoredPin, StorageError> {
@@ -194,6 +200,9 @@ fn pin_of(r: RawPin) -> Result<StoredPin, StorageError> {
         replaced_pin_id: opt_id(r.9)?,
         reason: r.10,
         updated_at_ms: r.11,
+        upstream_model_id: r.12,
+        endpoint_profile: r.13,
+        identity_origin: r.14,
     })
 }
 fn pin(conn: &Connection, session: &Id) -> Result<Option<StoredPin>, StorageError> {
@@ -208,6 +217,20 @@ fn pin(conn: &Connection, session: &Id) -> Result<Option<StoredPin>, StorageErro
     .transpose()
 }
 fn validate_pin(p: &StoredPin) -> Result<(), StorageError> {
+    let identity_known = p
+        .upstream_model_id
+        .as_ref()
+        .is_some_and(|s| !s.is_empty() && s.len() <= 4096)
+        && p.endpoint_profile.as_ref().is_some_and(|s| !s.is_empty());
+    if !matches!(
+        p.identity_origin.as_str(),
+        "Unknown" | "Resolved" | "Migration25CurrentCatalog"
+    ) || (p.identity_origin == "Unknown"
+        && (p.upstream_model_id.is_some() || p.endpoint_profile.is_some()))
+        || (p.identity_origin != "Unknown" && !identity_known)
+    {
+        return Err(invalid("invalid concrete pin identity snapshot"));
+    }
     if p.requested_effort != "Default" && p.requested_effort != p.effective_effort {
         return Err(invalid("an explicit effort cannot change"));
     }
@@ -491,13 +514,15 @@ impl RouterRepository for Unit<'_> {
         };
         revision(next)?;
         let n = db(self.conn.execute(
-            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+            "INSERT INTO router_pins(session_id,pin_id,revision,model_id,connection_id,intent_json,requested_effort,effective_effort,capabilities_json,replaced_pin_id,reason,updated_at,upstream_model_id,endpoint_profile,identity_origin) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
              ON CONFLICT(session_id) DO UPDATE SET pin_id=excluded.pin_id, revision=excluded.revision, \
              model_id=excluded.model_id, connection_id=excluded.connection_id, intent_json=excluded.intent_json, \
              requested_effort=excluded.requested_effort, effective_effort=excluded.effective_effort, \
              capabilities_json=excluded.capabilities_json, replaced_pin_id=excluded.replaced_pin_id, \
-             reason=excluded.reason, updated_at=excluded.updated_at WHERE revision=?13",
+             reason=excluded.reason, updated_at=excluded.updated_at, \
+             upstream_model_id=excluded.upstream_model_id, endpoint_profile=excluded.endpoint_profile, \
+             identity_origin=excluded.identity_origin WHERE revision=?16",
             params![
                 p.session_id.as_str(),
                 p.pin_id.as_str(),
@@ -511,6 +536,9 @@ impl RouterRepository for Unit<'_> {
                 p.replaced_pin_id.as_ref().map(Id::as_str),
                 p.reason,
                 p.updated_at_ms,
+                p.upstream_model_id,
+                p.endpoint_profile,
+                p.identity_origin,
                 expected_revision.unwrap_or(0),
             ],
         ))?;
