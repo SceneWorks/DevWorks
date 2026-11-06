@@ -268,7 +268,17 @@ pub fn resolve_selected_read(
         .map(|p| read.operations().operation(&p.operation_id))
         .transpose()?
         .flatten();
-    let current = evidence_current(read.artifacts(), choice.qualification.as_ref())?;
+    let source_current = match choice.qualification.as_ref().and_then(|q| q.probe.as_ref()) {
+        Some(probe) => {
+            probe.store_id==read.stamp().store_id && probe.restore_epoch==read.stamp().restore_epoch
+            && read.actors().actor_kind(&probe.actor_id)?==Some(PrincipalKind::Human)
+            // This value only rechecks original facts; it is never returned as a permission.
+            && crate::authority::service::authorization_holds(read,&crate::ports::Authorization::direct().fenced_by(probe.authority_fences.clone()))?
+        }
+        None => false,
+    };
+    let current =
+        source_current && evidence_current(read.artifacts(), choice.qualification.as_ref())?;
     resolved(
         choice,
         authority_witness(ctx, principal.as_ref(), &policy),
@@ -303,7 +313,17 @@ pub fn resolve_selected_in(
         .map(|p| tx.operations().operation(&p.operation_id))
         .transpose()?
         .flatten();
-    let current = evidence_current(&*tx.artifacts(), choice.qualification.as_ref())?;
+    let source_current = match choice.qualification.as_ref().and_then(|q| q.probe.as_ref()) {
+        Some(probe) => {
+            probe.store_id == tx.store().store_id
+                && probe.restore_epoch == tx.store().restore_epoch
+                && tx.actors().actor_kind(&probe.actor_id)? == Some(PrincipalKind::Human)
+                && crate::authority::service::fences_hold(tx, &probe.authority_fences)?
+        }
+        None => false,
+    };
+    let current =
+        source_current && evidence_current(&*tx.artifacts(), choice.qualification.as_ref())?;
     resolved(
         choice,
         authority_witness(ctx, principal.as_ref(), &policy),

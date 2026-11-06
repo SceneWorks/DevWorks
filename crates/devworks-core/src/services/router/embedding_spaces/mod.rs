@@ -14,3 +14,5 @@ mod evidence;
 pub use evidence::{NativeProbeResult, VerifiedProbeEvidence};
 
 mod inputs;
+
+mod commands;
