@@ -1140,7 +1140,21 @@
         "decision_id": "?Id",
         "root_id": "?RootId",
         "acknowledged": "bool",
-        "created_at_ms": "Counter"
+        "created_at_ms": "Counter",
+        "category": "?Label",
+        "project_id": "?ProjectId",
+        "read": "?bool",
+        "source_id": "?Id",
+        "links": "?Items<NotificationLink>",
+        "requires_input": "?bool"
+      },
+      "since": {
+        "category": 3,
+        "project_id": 3,
+        "read": 3,
+        "source_id": 3,
+        "links": 3,
+        "requires_input": 3
       }
     },
     "NotificationConfig": {
@@ -3976,6 +3990,117 @@
         "feature_id": "Id",
         "requirement_ids": "Items<Id>"
       }
+    },
+    "ApprovalViewRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "content_digest": "Digest",
+        "state": "ApprovalState",
+        "operation_kind": "Label",
+        "target_id": "Id",
+        "target_revision": "Revision",
+        "summary": "Content",
+        "artifact": "?ArtifactRef",
+        "scope": "?DataScope",
+        "payload": "?ApprovalContent",
+        "stale": "?bool",
+        "requested_by": "?ActorId",
+        "created_at_ms": "?Counter",
+        "scope_digest": "?Digest",
+        "reviewed_content": "?DynamicJson",
+        "rationale": "?Content",
+        "resume_status": "?Label",
+        "resumed_operation_id": "?OperationId",
+        "operation_preview": "?SavedOperationPreview"
+      },
+      "earlierName": "ProposalRecord",
+      "earlierBefore": 3,
+      "since": {
+        "scope": 3,
+        "payload": 3,
+        "stale": 3,
+        "requested_by": 3,
+        "created_at_ms": 3,
+        "scope_digest": 3,
+        "reviewed_content": 3,
+        "rationale": 3,
+        "resume_status": 3,
+        "resumed_operation_id": 3,
+        "operation_preview": 3
+      }
+    },
+    "SavedOperationPreview": {
+      "kind": "record",
+      "fields": {
+        "effect": "Label",
+        "target_ids": "Items<Id>",
+        "project_ids": "Items<ProjectId>",
+        "request_digest": "Digest"
+      }
+    },
+    "ApprovalContent": {
+      "kind": "union",
+      "variants": {
+        "Settings": {
+          "entries": "NonEmpty<SettingAssignment>"
+        },
+        "FeaturePlan": {
+          "proposal_id": "Id"
+        },
+        "FindingRisk": {
+          "feature_id": "Id",
+          "finding_id": "Id",
+          "assessment_revision": "Revision"
+        },
+        "SavedOperation": {
+          "schema_revision": "PositiveCounter",
+          "input": "DynamicJson"
+        }
+      }
+    },
+    "KnowledgeReviewKind": {
+      "kind": "enum",
+      "values": [
+        "Challenge",
+        "ProposedRule",
+        "Contradiction"
+      ]
+    },
+    "KnowledgeReviewItem": {
+      "kind": "record",
+      "fields": {
+        "kind": "KnowledgeReviewKind",
+        "entry": "KnowledgeClaim",
+        "other": "?KnowledgeClaim",
+        "priority": "Label",
+        "recurrence": "Counter",
+        "since_ms": "Counter",
+        "challenges": "Rows<LessonChallenge>",
+        "more_challenges": "?Counter",
+        "author": "?ActorId",
+        "other_author": "?ActorId",
+        "informational": "bool"
+      }
+    },
+    "KnowledgeReviewPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<KnowledgeReviewItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "NotificationLink": {
+      "kind": "record",
+      "fields": {
+        "kind": "Label",
+        "target_id": "?Id",
+        "url": "?Url",
+        "artifact": "?ArtifactRef",
+        "project_id": "?ProjectId"
+      }
     }
   },
   "operations": {
@@ -6234,7 +6359,7 @@
         "page": "PageRequest",
         "state": "?ApprovalState"
       },
-      "result": "Page<ProposalRecord>",
+      "result": "Page<ApprovalViewRecord>",
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
@@ -6245,7 +6370,7 @@
       "fields": {
         "proposal_id": "Id"
       },
-      "result": "ProposalRecord",
+      "result": "ApprovalViewRecord",
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
@@ -6259,12 +6384,16 @@
         "target": "RevisionedRef",
         "content_digest": "Digest",
         "summary": "Content",
-        "artifact": "?ArtifactRef"
+        "artifact": "?ArtifactRef",
+        "payload": "?ApprovalContent"
       },
-      "result": "ProposalRecord",
+      "result": "ApprovalViewRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Proposal operation/target/schema must match registered approvable capability; no generic approval-token factory."
+      "rules": "Proposal operation/target/schema must match registered approvable capability; no generic approval-token factory. Schema 3 payload selects immutable settings entries, an existing feature-plan proposal, exact finding assessment, or a saved registered operation. SavedOperation.input is the closed argument body without envelope/kind/caller-authority fields; its positive schema revision must fit u16 and be registered. Actual admission derives normalized request/effect/targets; owner preflight remains mandatory. Snapshot and provenance bind exact content, target revision and digest. Disabled, read-only and hard-blocked capabilities are never waived.",
+      "since": {
+        "payload": 3
+      }
     },
     "approvals.record_human_decision": {
       "operation": "approvals.record_human_decision",
@@ -6276,10 +6405,10 @@
         "decision": "ProposalDecision",
         "rationale": "Content"
       },
-      "result": "ProposalRecord",
+      "result": "ApprovalViewRecord",
       "effect": "Local",
       "authority": "HumanDecision",
-      "rules": "Authenticated host human-event context only, never callable with self-claimed human=true. Binds exact proposal/target/digest; does not Continue paused root. For feature-plan proposals, recheck the exact pending draft/content and human authority, then atomically replace active plan/approval/effective scope and publish the adoption event. Rejection or stale approval leaves the active plan unchanged. Neither outcome clears manual holds."
+      "rules": "Authenticated host human-event context only, never callable with self-claimed human=true. Binds exact proposal/target/digest; does not Continue paused root. For feature-plan proposals, recheck the exact pending draft/content and human authority, then atomically replace active plan/approval/effective scope and publish the adoption event. Rejection or stale approval leaves the active plan unchanged. Neither outcome clears manual holds. Human witness and saved-operation resume grant are private host context, never wire fields. Original actor/context remain original; a narrow reviewed-operation proof records the deciding human separately. Finding risk acceptance binds the specific finding, assessment/scope revision and rationale; generic acknowledgment cannot close findings."
     },
     "notifications.list": {
       "operation": "notifications.list",
@@ -6287,12 +6416,20 @@
       "fields": {
         "scope": "DataScope",
         "page": "PageRequest",
-        "unacknowledged_only": "bool"
+        "unacknowledged_only": "bool",
+        "categories": "?Items<Label>",
+        "read": "?bool",
+        "completion_only": "?bool"
       },
       "result": "Page<NotificationRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Per-recipient durable notification projection. Completion category is Completion; completion cards use newest-first stable (createdAtMs,id) ordering and sourceId deduplication. Read state and acknowledgment are independent; filters do not mutate either.",
+      "since": {
+        "categories": 3,
+        "read": 3,
+        "completion_only": 3
+      }
     },
     "notifications.read": {
       "operation": "notifications.read",
@@ -6303,7 +6440,7 @@
       "result": "NotificationRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Pure detail query. Opening/reading a notification never marks read, acknowledges, dismisses or resolves its linked decision."
     },
     "notifications.acknowledge": {
       "operation": "notifications.acknowledge",
@@ -6315,7 +6452,7 @@
       "result": "NotificationRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Acknowledgment cannot approve/resolve linked human decision."
+      "rules": "Explicit durable individual completion-card dismissal, retained in history across navigation/restart. Acknowledgment cannot approve/resolve a linked human decision or resume paused work."
     },
     "notifications.settings": {
       "operation": "notifications.settings",
@@ -8156,6 +8293,33 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Read the authoritative queue and workflow revisions, including empty queues. With featureId, validate visible same-project feature ownership and return its task queue revision; otherwise return the project feature/standalone queue revision. No allocation, receipt or revision bump. Introduced at schema revision 3; older callers cannot select this operation."
+    },
+    "approvals.review_queue": {
+      "operation": "approvals.review_queue",
+      "mode": "Query",
+      "introducedRevision": 3,
+      "fields": {
+        "project_id": "?ProjectId",
+        "page": "PageRequest"
+      },
+      "result": "KnowledgeReviewPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Informational Knowledge review candidates only; never approval or autonomous acknowledgment authority. Default limit 20, maximum 50. Bound candidates to 500 per kind; show at most 3 open challenges with moreChallenges. Prompt/RelayedPrompt source priority Highest; Review/RelayedReview High; other Normal. Rank priority, recurrence descending, oldest first, entry ID; deduplicate challenged entries and contradiction pairs. Only visible eligible existing Knowledge records; unsupported future producers are not advertised."
+    },
+    "notifications.mark_read": {
+      "operation": "notifications.mark_read",
+      "mode": "Command",
+      "introducedRevision": 3,
+      "fields": {
+        "notification_id": "Id",
+        "expected_revision": "Revision",
+        "read": "bool"
+      },
+      "result": "NotificationRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Explicit per-recipient revisioned read/unread mutation. Does not acknowledge, dismiss, resolve a linked decision or resume work."
     }
   },
   "earlierInputResults": {
@@ -8733,6 +8897,40 @@
     ],
     "projects.create": [
       1,
+      3
+    ],
+    "approvals.list": [
+      1,
+      3
+    ],
+    "approvals.inspect": [
+      1,
+      3
+    ],
+    "approvals.propose": [
+      1,
+      3
+    ],
+    "approvals.record_human_decision": [
+      1,
+      3
+    ],
+    "notifications.list": [
+      1,
+      3
+    ],
+    "notifications.read": [
+      1,
+      3
+    ],
+    "notifications.acknowledge": [
+      1,
+      3
+    ],
+    "approvals.review_queue": [
+      3
+    ],
+    "notifications.mark_read": [
       3
     ]
   },

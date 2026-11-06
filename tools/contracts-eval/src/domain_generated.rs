@@ -2756,6 +2756,48 @@ pub struct NotificationRecord {
     pub root_id: Option<RootId>,
     pub acknowledged: bool,
     pub created_at_ms: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub category: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 3))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub read: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub source_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<NotificationLink>", extend("x-since" = 3))]
+    pub links: Option<Items<NotificationLink>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub requires_input: Option<bool>,
 }
 impl Check for NotificationRecord {
     fn check(&self) -> Result<(), String> {
@@ -2767,11 +2809,40 @@ impl Check for NotificationRecord {
         self.root_id.check()?;
         self.acknowledged.check()?;
         self.created_at_ms.check()?;
+        self.category.check()?;
+        self.project_id.check()?;
+        self.read.check()?;
+        self.source_id.check()?;
+        self.links.check()?;
+        self.requires_input.check()?;
         super::domain_rules::record(
             "NotificationRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for NotificationRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.category = None;
+        }
+        if revision < 3 {
+            self.project_id = None;
+        }
+        if revision < 3 {
+            self.read = None;
+        }
+        if revision < 3 {
+            self.source_id = None;
+        }
+        if revision < 3 {
+            self.links = None;
+        }
+        if revision < 3 {
+            self.requires_input = None;
+        }
     }
 }
 
@@ -10488,6 +10559,351 @@ impl Check for WorkInheritanceOrigin {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "ProposalRecord", "before": 3}))]
+pub struct ApprovalViewRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub content_digest: Digest,
+    pub state: ApprovalState,
+    pub operation_kind: Label,
+    pub target_id: Id,
+    pub target_revision: Revision,
+    pub summary: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 3))]
+    pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalContent", extend("x-since" = 3))]
+    pub payload: Option<ApprovalContent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub stale: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 3))]
+    pub requested_by: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub scope_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DynamicJson", extend("x-since" = 3))]
+    pub reviewed_content: Option<DynamicJson>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub resume_status: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 3))]
+    pub resumed_operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SavedOperationPreview", extend("x-since" = 3))]
+    pub operation_preview: Option<SavedOperationPreview>,
+}
+impl Check for ApprovalViewRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.content_digest.check()?;
+        self.state.check()?;
+        self.operation_kind.check()?;
+        self.target_id.check()?;
+        self.target_revision.check()?;
+        self.summary.check()?;
+        self.artifact.check()?;
+        self.scope.check()?;
+        self.payload.check()?;
+        self.stale.check()?;
+        self.requested_by.check()?;
+        self.created_at_ms.check()?;
+        self.scope_digest.check()?;
+        self.reviewed_content.check()?;
+        self.rationale.check()?;
+        self.resume_status.check()?;
+        self.resumed_operation_id.check()?;
+        self.operation_preview.check()?;
+        super::domain_rules::record(
+            "ApprovalViewRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ApprovalViewRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.scope = None;
+        }
+        if revision < 3 {
+            self.payload = None;
+        }
+        if revision < 3 {
+            self.stale = None;
+        }
+        if revision < 3 {
+            self.requested_by = None;
+        }
+        if revision < 3 {
+            self.created_at_ms = None;
+        }
+        if revision < 3 {
+            self.scope_digest = None;
+        }
+        if revision < 3 {
+            self.reviewed_content = None;
+        }
+        if revision < 3 {
+            self.rationale = None;
+        }
+        if revision < 3 {
+            self.resume_status = None;
+        }
+        if revision < 3 {
+            self.resumed_operation_id = None;
+        }
+        if revision < 3 {
+            self.operation_preview = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedOperationPreview {
+    pub effect: Label,
+    pub target_ids: Items<Id>,
+    pub project_ids: Items<ProjectId>,
+    pub request_digest: Digest,
+}
+impl Check for SavedOperationPreview {
+    fn check(&self) -> Result<(), String> {
+        self.effect.check()?;
+        self.target_ids.check()?;
+        self.project_ids.check()?;
+        self.request_digest.check()?;
+        super::domain_rules::record(
+            "SavedOperationPreview",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ApprovalContent {
+    Settings {
+        entries: NonEmpty<SettingAssignment>,
+    },
+    FeaturePlan {
+        proposal_id: Id,
+    },
+    FindingRisk {
+        feature_id: Id,
+        finding_id: Id,
+        assessment_revision: Revision,
+    },
+    SavedOperation {
+        schema_revision: PositiveCounter,
+        input: DynamicJson,
+    },
+}
+impl Check for ApprovalContent {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Settings { entries } => {
+                entries.check()?;
+            }
+            Self::FeaturePlan { proposal_id } => {
+                proposal_id.check()?;
+            }
+            Self::FindingRisk {
+                feature_id,
+                finding_id,
+                assessment_revision,
+            } => {
+                feature_id.check()?;
+                finding_id.check()?;
+                assessment_revision.check()?;
+            }
+            Self::SavedOperation {
+                schema_revision,
+                input,
+            } => {
+                schema_revision.check()?;
+                input.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeReviewKind {
+    Challenge,
+    ProposedRule,
+    Contradiction,
+}
+impl Check for KnowledgeReviewKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeReviewItem {
+    pub kind: KnowledgeReviewKind,
+    pub entry: KnowledgeClaim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<KnowledgeClaim>,
+    pub priority: Label,
+    pub recurrence: Counter,
+    pub since_ms: Counter,
+    pub challenges: Rows<LessonChallenge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more_challenges: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_author: Option<ActorId>,
+    pub informational: bool,
+}
+impl Check for KnowledgeReviewItem {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.entry.check()?;
+        self.other.check()?;
+        self.priority.check()?;
+        self.recurrence.check()?;
+        self.since_ms.check()?;
+        self.challenges.check()?;
+        self.more_challenges.check()?;
+        self.author.check()?;
+        self.other_author.check()?;
+        self.informational.check()?;
+        super::domain_rules::record(
+            "KnowledgeReviewItem",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeReviewItem {
+    fn retain_revision(&mut self, revision: u32) {
+        self.entry.retain_revision(revision);
+        self.other.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeReviewPage {
+    pub items: Rows<KnowledgeReviewItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for KnowledgeReviewPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "KnowledgeReviewPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeReviewPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationLink {
+    pub kind: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
+impl Check for NotificationLink {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.target_id.check()?;
+        self.url.check()?;
+        self.artifact.check()?;
+        self.project_id.check()?;
+        super::domain_rules::record(
+            "NotificationLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DomainQuery {
     #[serde(rename = "projects.list")]
@@ -11031,6 +11447,27 @@ pub enum DomainQuery {
         scope: DataScope,
         page: PageRequest,
         unacknowledged_only: bool,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+        categories: Option<Items<Label>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        read: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        completion_only: Option<bool>,
     },
     #[serde(rename = "notifications.read")]
     NotificationsRead { notification_id: Id },
@@ -11461,6 +11898,13 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feature_id: Option<Id>,
     },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "approvals.review_queue")]
+    ApprovalsReviewQueue {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        page: PageRequest,
+    },
 }
 impl DomainQuery {
     pub fn operation(&self) -> &'static str {
@@ -11605,6 +12049,7 @@ impl DomainQuery {
             Self::McpServerClients { .. } => "mcp_server.clients",
             Self::EvalsResults { .. } => "evals.results",
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
+            Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
         }
     }
 }
@@ -12190,10 +12635,16 @@ impl Check for DomainQuery {
                 scope,
                 page,
                 unacknowledged_only,
+                categories,
+                read,
+                completion_only,
             } => {
                 scope.check()?;
                 page.check()?;
                 unacknowledged_only.check()?;
+                categories.check()?;
+                read.check()?;
+                completion_only.check()?;
             }
             Self::NotificationsRead { notification_id } => {
                 notification_id.check()?;
@@ -12652,6 +13103,10 @@ impl Check for DomainQuery {
                 project_id.check()?;
                 feature_id.check()?;
             }
+            Self::ApprovalsReviewQueue { project_id, page } => {
+                project_id.check()?;
+                page.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -12766,6 +13221,22 @@ impl Revisioned for DomainQuery {
                     *view = None;
                 }
             }
+            Self::NotificationsList {
+                categories,
+                read,
+                completion_only,
+                ..
+            } => {
+                if revision < 3 {
+                    *categories = None;
+                }
+                if revision < 3 {
+                    *read = None;
+                }
+                if revision < 3 {
+                    *completion_only = None;
+                }
+            }
             Self::JobsInspect { history, usage, .. } => {
                 if revision < 2 {
                     *history = None;
@@ -12837,6 +13308,9 @@ impl Revisioned for DomainQuery {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ApprovalsReviewQueue { .. } if revision < 3 => {
                 Err("operation predates its introduction".into())
             }
             _ => Ok(()),
@@ -13680,6 +14154,13 @@ pub enum DomainCommand {
         summary: Content,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<ArtifactRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ApprovalContent", extend("x-since" = 3))]
+        payload: Option<ApprovalContent>,
     },
     #[serde(rename = "approvals.record_human_decision")]
     ApprovalsRecordHumanDecision {
@@ -14297,6 +14778,13 @@ pub enum DomainCommand {
         session_id: Id,
         suite: EvalSuiteSnapshot,
     },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "notifications.mark_read")]
+    NotificationsMarkRead {
+        notification_id: Id,
+        expected_revision: Revision,
+        read: bool,
+    },
 }
 impl DomainCommand {
     pub fn operation(&self) -> &'static str {
@@ -14469,6 +14957,7 @@ impl DomainCommand {
             Self::TasksSetFeature { .. } => "tasks.set_feature",
             Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::EvalsGrade { .. } => "evals.grade",
+            Self::NotificationsMarkRead { .. } => "notifications.mark_read",
         }
     }
 }
@@ -15482,6 +15971,7 @@ impl Check for DomainCommand {
                 content_digest,
                 summary,
                 artifact,
+                payload,
             } => {
                 scope.check()?;
                 operation_kind.check()?;
@@ -15489,6 +15979,7 @@ impl Check for DomainCommand {
                 content_digest.check()?;
                 summary.check()?;
                 artifact.check()?;
+                payload.check()?;
             }
             Self::ApprovalsRecordHumanDecision {
                 proposal_id,
@@ -16226,6 +16717,15 @@ impl Check for DomainCommand {
                 session_id.check()?;
                 suite.check()?;
             }
+            Self::NotificationsMarkRead {
+                notification_id,
+                expected_revision,
+                read,
+            } => {
+                notification_id.check()?;
+                expected_revision.check()?;
+                read.check()?;
+            }
         }
         super::domain_rules::input(
             self.operation(),
@@ -16385,6 +16885,11 @@ impl Revisioned for DomainCommand {
                     *reason = None;
                 }
             }
+            Self::ApprovalsPropose { payload, .. } => {
+                if revision < 3 {
+                    *payload = None;
+                }
+            }
             Self::ResourcesAcquire {
                 purpose,
                 priority,
@@ -16476,8 +16981,11 @@ impl Revisioned for DomainCommand {
             _ => {}
         }
     }
-    fn check_revision(&self, _revision: u32) -> Result<(), String> {
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::NotificationsMarkRead { .. } if revision < 3 => {
+                Err("operation predates its introduction".into())
+            }
             _ => Ok(()),
         }
     }
@@ -16844,13 +17352,13 @@ pub enum OperationResult {
     #[serde(rename = "skills.resources")]
     SkillsResources { value: Page<ArtifactRef> },
     #[serde(rename = "approvals.list")]
-    ApprovalsList { value: Page<ProposalRecord> },
+    ApprovalsList { value: Page<ApprovalViewRecord> },
     #[serde(rename = "approvals.inspect")]
-    ApprovalsInspect { value: ProposalRecord },
+    ApprovalsInspect { value: ApprovalViewRecord },
     #[serde(rename = "approvals.propose")]
-    ApprovalsPropose { value: ProposalRecord },
+    ApprovalsPropose { value: ApprovalViewRecord },
     #[serde(rename = "approvals.record_human_decision")]
-    ApprovalsRecordHumanDecision { value: ProposalRecord },
+    ApprovalsRecordHumanDecision { value: ApprovalViewRecord },
     #[serde(rename = "notifications.list")]
     NotificationsList { value: Page<NotificationRecord> },
     #[serde(rename = "notifications.read")]
@@ -17130,6 +17638,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "next_work.inspect_queue")]
     NextWorkInspectQueue { value: AllocationQueueSnapshot },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "approvals.review_queue")]
+    ApprovalsReviewQueue { value: KnowledgeReviewPage },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "notifications.mark_read")]
+    NotificationsMarkRead { value: NotificationRecord },
     #[serde(rename = "runs.start")]
     RunsStart { value: RootSnapshot },
     #[serde(rename = "runs.pause")]
@@ -17553,6 +18067,8 @@ impl OperationResult {
             Self::EvalsGrade { .. } => "evals.grade",
             Self::EvalsResults { .. } => "evals.results",
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
+            Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
+            Self::NotificationsMarkRead { .. } => "notifications.mark_read",
             Self::RunsStart { .. } => "runs.start",
             Self::RunsPause { .. } => "runs.pause",
             Self::RunsContinue { .. } => "runs.continue",
@@ -17916,6 +18432,8 @@ impl Check for OperationResult {
             Self::EvalsGrade { value } => value.check()?,
             Self::EvalsResults { value } => value.check()?,
             Self::NextWorkInspectQueue { value } => value.check()?,
+            Self::ApprovalsReviewQueue { value } => value.check()?,
+            Self::NotificationsMarkRead { value } => value.check()?,
             Self::RunsStart { value } => value.check()?,
             Self::RunsPause { value } => value.check()?,
             Self::RunsContinue { value } => value.check()?,
@@ -18042,6 +18560,13 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::ApprovalsList { value } => value.retain_revision(revision),
+            Self::ApprovalsInspect { value } => value.retain_revision(revision),
+            Self::ApprovalsPropose { value } => value.retain_revision(revision),
+            Self::ApprovalsRecordHumanDecision { value } => value.retain_revision(revision),
+            Self::NotificationsList { value } => value.retain_revision(revision),
+            Self::NotificationsRead { value } => value.retain_revision(revision),
+            Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -18075,6 +18600,8 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::TasksSetFeature { value } => value.retain_revision(revision),
+            Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
+            Self::NotificationsMarkRead { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::AddonsInstall { value } => value.retain_revision(revision),
@@ -18092,6 +18619,12 @@ impl Revisioned for OperationResult {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ApprovalsReviewQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

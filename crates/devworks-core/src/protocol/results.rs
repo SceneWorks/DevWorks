@@ -431,13 +431,16 @@ pub enum OperationResult {
     #[serde(rename = "roles.rollback")]
     RolesRollback { value: InstructionRecord },
     #[serde(rename = "approvals.list")]
-    ApprovalsList { value: Page<ProposalRecord> },
+    ApprovalsList { value: Page<ApprovalViewRecord> },
     #[serde(rename = "approvals.inspect")]
-    ApprovalsInspect { value: ProposalRecord },
+    ApprovalsInspect { value: ApprovalViewRecord },
     #[serde(rename = "approvals.propose")]
-    ApprovalsPropose { value: ProposalRecord },
+    ApprovalsPropose { value: ApprovalViewRecord },
     #[serde(rename = "approvals.record_human_decision")]
-    ApprovalsRecordHumanDecision { value: ProposalRecord },
+    ApprovalsRecordHumanDecision { value: ApprovalViewRecord },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "approvals.review_queue")]
+    ApprovalsReviewQueue { value: KnowledgeReviewPage },
     #[serde(rename = "notifications.list")]
     NotificationsList { value: Page<NotificationRecord> },
     #[serde(rename = "notifications.read")]
@@ -446,6 +449,9 @@ pub enum OperationResult {
     NotificationsAcknowledge { value: NotificationRecord },
     #[serde(rename = "notifications.settings")]
     NotificationsSettings { value: NotificationSettingsRecord },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "notifications.mark_read")]
+    NotificationsMarkRead { value: NotificationRecord },
     #[serde(rename = "git.worktree")]
     GitWorktree { value: GitInspection },
     #[serde(rename = "git.inspect")]
@@ -950,10 +956,12 @@ impl OperationResult {
             Self::ApprovalsInspect { .. } => "approvals.inspect",
             Self::ApprovalsPropose { .. } => "approvals.propose",
             Self::ApprovalsRecordHumanDecision { .. } => "approvals.record_human_decision",
+            Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::NotificationsList { .. } => "notifications.list",
             Self::NotificationsRead { .. } => "notifications.read",
             Self::NotificationsAcknowledge { .. } => "notifications.acknowledge",
             Self::NotificationsSettings { .. } => "notifications.settings",
+            Self::NotificationsMarkRead { .. } => "notifications.mark_read",
             Self::GitWorktree { .. } => "git.worktree",
             Self::GitInspect { .. } => "git.inspect",
             Self::GitDiff { .. } => "git.diff",
@@ -1315,10 +1323,12 @@ impl Check for OperationResult {
             Self::ApprovalsInspect { value } => value.check()?,
             Self::ApprovalsPropose { value } => value.check()?,
             Self::ApprovalsRecordHumanDecision { value } => value.check()?,
+            Self::ApprovalsReviewQueue { value } => value.check()?,
             Self::NotificationsList { value } => value.check()?,
             Self::NotificationsRead { value } => value.check()?,
             Self::NotificationsAcknowledge { value } => value.check()?,
             Self::NotificationsSettings { value } => value.check()?,
+            Self::NotificationsMarkRead { value } => value.check()?,
             Self::GitWorktree { value } => value.check()?,
             Self::GitInspect { value } => value.check()?,
             Self::GitDiff { value } => value.check()?,
@@ -1538,6 +1548,15 @@ impl Revisioned for OperationResult {
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
+            Self::ApprovalsList { value } => value.retain_revision(revision),
+            Self::ApprovalsInspect { value } => value.retain_revision(revision),
+            Self::ApprovalsPropose { value } => value.retain_revision(revision),
+            Self::ApprovalsRecordHumanDecision { value } => value.retain_revision(revision),
+            Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
+            Self::NotificationsList { value } => value.retain_revision(revision),
+            Self::NotificationsRead { value } => value.retain_revision(revision),
+            Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
+            Self::NotificationsMarkRead { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -1582,6 +1601,12 @@ impl Revisioned for OperationResult {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ApprovalsReviewQueue { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),

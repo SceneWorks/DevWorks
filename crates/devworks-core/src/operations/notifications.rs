@@ -25,17 +25,51 @@ pub struct ListInput {
     pub scope: DataScope,
     pub page: PageRequest,
     pub unacknowledged_only: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub categories: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub read: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub completion_only: Option<bool>,
 }
 impl Check for ListInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
         self.page.check()?;
         self.unacknowledged_only.check()?;
+        self.categories.check()?;
+        self.read.check()?;
+        self.completion_only.check()?;
         Ok(())
     }
 }
 impl Revisioned for ListInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.categories = None;
+        }
+        if revision < 3 {
+            self.read = None;
+        }
+        if revision < 3 {
+            self.completion_only = None;
+        }
+    }
 }
 
 /// `notifications.read` Query input.
@@ -103,6 +137,26 @@ impl Revisioned for SettingsCommandInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `notifications.mark_read` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkReadInput {
+    pub notification_id: Id,
+    pub expected_revision: Revision,
+    pub read: bool,
+}
+impl Check for MarkReadInput {
+    fn check(&self) -> Result<(), String> {
+        self.notification_id.check()?;
+        self.expected_revision.check()?;
+        self.read.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for MarkReadInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `notifications` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -116,6 +170,8 @@ pub enum Input {
     SettingsQuery(SettingsQueryInput),
     /// `notifications.settings` (Command).
     SettingsCommand(SettingsCommandInput),
+    /// `notifications.mark_read` (Command).
+    MarkRead(MarkReadInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -125,6 +181,7 @@ impl Input {
             Self::Acknowledge(_) => "notifications.acknowledge",
             Self::SettingsQuery(_) => "notifications.settings",
             Self::SettingsCommand(_) => "notifications.settings",
+            Self::MarkRead(_) => "notifications.mark_read",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -134,6 +191,7 @@ impl Input {
             Self::Acknowledge(_) => Mode::Command,
             Self::SettingsQuery(_) => Mode::Query,
             Self::SettingsCommand(_) => Mode::Command,
+            Self::MarkRead(_) => Mode::Command,
         }
     }
 }

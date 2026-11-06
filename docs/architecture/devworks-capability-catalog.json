@@ -397,7 +397,8 @@
         "list",
         "inspect",
         "propose",
-        "record_human_decision"
+        "record_human_decision",
+        "review_queue"
       ],
       "effectAndAuthority": "Agent read/propose; human decision actor is host-bound and not agent-callable authority",
       "status": "Proposed; exact command/tool schemas require review"
@@ -409,7 +410,8 @@
         "list",
         "read",
         "acknowledge",
-        "settings"
+        "settings",
+        "mark_read"
       ],
       "effectAndAuthority": "Read/acknowledge separate from linked decision resolution",
       "status": "Proposed; exact command/tool schemas require review"

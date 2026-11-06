@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-05",
-  "catalogSha256": "42eb09c370648265cbc775b1fcf326a1fe6f06e5440fd25e674707b70e515070",
+  "catalogSha256": "605c2b629d94df4257fe563b03b8fe80d440a5492c03ae7fbba902570d4fbe2a",
   "familyCount": 49,
-  "operationCount": 357,
-  "concreteInputCandidates": 357,
+  "operationCount": 359,
+  "concreteInputCandidates": 359,
   "domainInputsPending": 0,
   "families": [
     {
@@ -10437,7 +10437,7 @@
             "pointer": "/kind",
             "equals": "approvals.list"
           },
-          "resultValueType": "Page<ProposalRecord>",
+          "resultValueType": "Page<ApprovalViewRecord>",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -10447,6 +10447,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -10483,7 +10491,7 @@
             "pointer": "/kind",
             "equals": "approvals.inspect"
           },
-          "resultValueType": "ProposalRecord",
+          "resultValueType": "ApprovalViewRecord",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -10493,6 +10501,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -10529,7 +10545,7 @@
             "pointer": "/kind",
             "equals": "approvals.propose"
           },
-          "resultValueType": "ProposalRecord",
+          "resultValueType": "ApprovalViewRecord",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -10541,11 +10557,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Proposal operation/target/schema must match registered approvable capability; no generic approval-token factory.",
+          "semanticRules": "Proposal operation/target/schema must match registered approvable capability; no generic approval-token factory. Schema 3 payload selects immutable settings entries, an existing feature-plan proposal, exact finding assessment, or a saved registered operation. SavedOperation.input is the closed argument body without envelope/kind/caller-authority fields; its positive schema revision must fit u16 and be registered. Actual admission derives normalized request/effect/targets; owner preflight remains mandatory. Snapshot and provenance bind exact content, target revision and digest. Disabled, read-only and hard-blocked capabilities are never waived.",
           "familyRules": "Only authenticated host human interaction mints a human decision. Bind target/revision/content; approval does not clear pause.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10575,7 +10599,7 @@
             "pointer": "/kind",
             "equals": "approvals.record_human_decision"
           },
-          "resultValueType": "ProposalRecord",
+          "resultValueType": "ApprovalViewRecord",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -10587,11 +10611,66 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "HumanDecision",
           "effect": "Local",
-          "semanticRules": "Authenticated host human-event context only, never callable with self-claimed human=true. Binds exact proposal/target/digest; does not Continue paused root. For feature-plan proposals, recheck the exact pending draft/content and human authority, then atomically replace active plan/approval/effective scope and publish the adoption event. Rejection or stale approval leaves the active plan unchanged. Neither outcome clears manual holds.",
+          "semanticRules": "Authenticated host human-event context only, never callable with self-claimed human=true. Binds exact proposal/target/digest; does not Continue paused root. For feature-plan proposals, recheck the exact pending draft/content and human authority, then atomically replace active plan/approval/effective scope and publish the adoption event. Rejection or stale approval leaves the active plan unchanged. Neither outcome clears manual holds. Human witness and saved-operation resume grant are private host context, never wire fields. Original actor/context remain original; a narrow reviewed-operation proof records the deciding human separately. Finding risk acceptance binds the specific finding, assessment/scope revision and rationale; generic acknowledgment cannot close findings.",
+          "familyRules": "Only authenticated host human interaction mints a human decision. Bind target/revision/content; approval does not clear pause.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 3,
+          "operation": "approvals.review_queue",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "approvals.review_queue",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "approvals.review_queue"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "approvals.review_queue"
+          },
+          "resultValueType": "KnowledgeReviewPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Informational Knowledge review candidates only; never approval or autonomous acknowledgment authority. Default limit 20, maximum 50. Bound candidates to 500 per kind; show at most 3 open challenges with moreChallenges. Prompt/RelayedPrompt source priority Highest; Review/RelayedReview High; other Normal. Rank priority, recurrence descending, oldest first, entry ID; deduplicate challenged entries and contradiction pairs. Only visible eligible existing Knowledge records; unsupported future producers are not advertised.",
           "familyRules": "Only authenticated host human interaction mints a human decision. Bind target/revision/content; approval does not clear pause.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10640,11 +10719,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Per-recipient durable notification projection. Completion category is Completion; completion cards use newest-first stable (createdAtMs,id) ordering and sourceId deduplication. Read state and acknowledgment are independent; filters do not mutate either.",
           "familyRules": "Acknowledgment is presentation state, never approval or root Continue. OS denial preserves in-app access.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10686,11 +10773,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Pure detail query. Opening/reading a notification never marks read, acknowledges, dismisses or resolves its linked decision.",
           "familyRules": "Acknowledgment is presentation state, never approval or root Continue. OS denial preserves in-app access.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10732,11 +10827,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Acknowledgment cannot approve/resolve linked human decision.",
+          "semanticRules": "Explicit durable individual completion-card dismissal, retained in history across navigation/restart. Acknowledgment cannot approve/resolve a linked human decision or resume paused work.",
           "familyRules": "Acknowledgment is presentation state, never approval or root Continue. OS denial preserves in-app access.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10789,6 +10892,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
+          "familyRules": "Acknowledgment is presentation state, never approval or root Continue. OS denial preserves in-app access.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 3,
+          "operation": "notifications.mark_read",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "notifications.mark_read",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "notifications.mark_read"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "notifications.mark_read"
+          },
+          "resultValueType": "NotificationRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Explicit per-recipient revisioned read/unread mutation. Does not acknowledge, dismiss, resolve a linked decision or resume work.",
           "familyRules": "Acknowledgment is presentation state, never approval or root Continue. OS denial preserves in-app access.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

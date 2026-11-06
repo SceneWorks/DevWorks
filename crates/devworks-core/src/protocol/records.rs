@@ -2758,6 +2758,48 @@ pub struct NotificationRecord {
     pub root_id: Option<RootId>,
     pub acknowledged: bool,
     pub created_at_ms: Counter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub category: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 3))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub read: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub source_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<NotificationLink>", extend("x-since" = 3))]
+    pub links: Option<Items<NotificationLink>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub requires_input: Option<bool>,
 }
 impl Check for NotificationRecord {
     fn check(&self) -> Result<(), String> {
@@ -2769,11 +2811,40 @@ impl Check for NotificationRecord {
         self.root_id.check()?;
         self.acknowledged.check()?;
         self.created_at_ms.check()?;
+        self.category.check()?;
+        self.project_id.check()?;
+        self.read.check()?;
+        self.source_id.check()?;
+        self.links.check()?;
+        self.requires_input.check()?;
         crate::protocol::rules::record(
             "NotificationRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for NotificationRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.category = None;
+        }
+        if revision < 3 {
+            self.project_id = None;
+        }
+        if revision < 3 {
+            self.read = None;
+        }
+        if revision < 3 {
+            self.source_id = None;
+        }
+        if revision < 3 {
+            self.links = None;
+        }
+        if revision < 3 {
+            self.requires_input = None;
+        }
     }
 }
 
@@ -10483,6 +10554,351 @@ impl Check for WorkInheritanceOrigin {
         self.requirement_ids.check()?;
         crate::protocol::rules::record(
             "WorkInheritanceOrigin",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("x-earlier" = {"name": "ProposalRecord", "before": 3}))]
+pub struct ApprovalViewRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub content_digest: Digest,
+    pub state: ApprovalState,
+    pub operation_kind: Label,
+    pub target_id: Id,
+    pub target_revision: Revision,
+    pub summary: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 3))]
+    pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ApprovalContent", extend("x-since" = 3))]
+    pub payload: Option<ApprovalContent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub stale: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ActorId", extend("x-since" = 3))]
+    pub requested_by: Option<ActorId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub created_at_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub scope_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DynamicJson", extend("x-since" = 3))]
+    pub reviewed_content: Option<DynamicJson>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub resume_status: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "OperationId", extend("x-since" = 3))]
+    pub resumed_operation_id: Option<OperationId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SavedOperationPreview", extend("x-since" = 3))]
+    pub operation_preview: Option<SavedOperationPreview>,
+}
+impl Check for ApprovalViewRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.content_digest.check()?;
+        self.state.check()?;
+        self.operation_kind.check()?;
+        self.target_id.check()?;
+        self.target_revision.check()?;
+        self.summary.check()?;
+        self.artifact.check()?;
+        self.scope.check()?;
+        self.payload.check()?;
+        self.stale.check()?;
+        self.requested_by.check()?;
+        self.created_at_ms.check()?;
+        self.scope_digest.check()?;
+        self.reviewed_content.check()?;
+        self.rationale.check()?;
+        self.resume_status.check()?;
+        self.resumed_operation_id.check()?;
+        self.operation_preview.check()?;
+        crate::protocol::rules::record(
+            "ApprovalViewRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ApprovalViewRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.scope = None;
+        }
+        if revision < 3 {
+            self.payload = None;
+        }
+        if revision < 3 {
+            self.stale = None;
+        }
+        if revision < 3 {
+            self.requested_by = None;
+        }
+        if revision < 3 {
+            self.created_at_ms = None;
+        }
+        if revision < 3 {
+            self.scope_digest = None;
+        }
+        if revision < 3 {
+            self.reviewed_content = None;
+        }
+        if revision < 3 {
+            self.rationale = None;
+        }
+        if revision < 3 {
+            self.resume_status = None;
+        }
+        if revision < 3 {
+            self.resumed_operation_id = None;
+        }
+        if revision < 3 {
+            self.operation_preview = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedOperationPreview {
+    pub effect: Label,
+    pub target_ids: Items<Id>,
+    pub project_ids: Items<ProjectId>,
+    pub request_digest: Digest,
+}
+impl Check for SavedOperationPreview {
+    fn check(&self) -> Result<(), String> {
+        self.effect.check()?;
+        self.target_ids.check()?;
+        self.project_ids.check()?;
+        self.request_digest.check()?;
+        crate::protocol::rules::record(
+            "SavedOperationPreview",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ApprovalContent {
+    Settings {
+        entries: NonEmpty<SettingAssignment>,
+    },
+    FeaturePlan {
+        proposal_id: Id,
+    },
+    FindingRisk {
+        feature_id: Id,
+        finding_id: Id,
+        assessment_revision: Revision,
+    },
+    SavedOperation {
+        schema_revision: PositiveCounter,
+        input: DynamicJson,
+    },
+}
+impl Check for ApprovalContent {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Settings { entries } => {
+                entries.check()?;
+            }
+            Self::FeaturePlan { proposal_id } => {
+                proposal_id.check()?;
+            }
+            Self::FindingRisk {
+                feature_id,
+                finding_id,
+                assessment_revision,
+            } => {
+                feature_id.check()?;
+                finding_id.check()?;
+                assessment_revision.check()?;
+            }
+            Self::SavedOperation {
+                schema_revision,
+                input,
+            } => {
+                schema_revision.check()?;
+                input.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeReviewKind {
+    Challenge,
+    ProposedRule,
+    Contradiction,
+}
+impl Check for KnowledgeReviewKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeReviewItem {
+    pub kind: KnowledgeReviewKind,
+    pub entry: KnowledgeClaim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<KnowledgeClaim>,
+    pub priority: Label,
+    pub recurrence: Counter,
+    pub since_ms: Counter,
+    pub challenges: Rows<LessonChallenge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more_challenges: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_author: Option<ActorId>,
+    pub informational: bool,
+}
+impl Check for KnowledgeReviewItem {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.entry.check()?;
+        self.other.check()?;
+        self.priority.check()?;
+        self.recurrence.check()?;
+        self.since_ms.check()?;
+        self.challenges.check()?;
+        self.more_challenges.check()?;
+        self.author.check()?;
+        self.other_author.check()?;
+        self.informational.check()?;
+        crate::protocol::rules::record(
+            "KnowledgeReviewItem",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeReviewItem {
+    fn retain_revision(&mut self, revision: u32) {
+        self.entry.retain_revision(revision);
+        self.other.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeReviewPage {
+    pub items: Rows<KnowledgeReviewItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for KnowledgeReviewPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        crate::protocol::rules::record(
+            "KnowledgeReviewPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeReviewPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationLink {
+    pub kind: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<Url>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+}
+impl Check for NotificationLink {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.target_id.check()?;
+        self.url.check()?;
+        self.artifact.check()?;
+        self.project_id.check()?;
+        crate::protocol::rules::record(
+            "NotificationLink",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
