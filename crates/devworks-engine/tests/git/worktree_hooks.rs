@@ -266,9 +266,19 @@ pub(super) fn assert_reviewed_create(
         .unwrap();
         let branch = tree.branch.strip_prefix("refs/heads/").unwrap();
         git(source, &["branch", "--", branch, &tree.head.hex]);
+        let checkout_argument =
+            devworks_core::services::indexing::git::path_argument(Path::new(&tree.path))
+                .expect("stored native worktree path is representable by Git");
         git(
             source,
-            &["worktree", "add", "--no-checkout", "--", &tree.path, branch],
+            &[
+                "worktree",
+                "add",
+                "--no-checkout",
+                "--",
+                &checkout_argument,
+                branch,
+            ],
         );
         assert!(matches!(
             service.observe(&record),
