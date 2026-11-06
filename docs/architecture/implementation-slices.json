@@ -414,12 +414,23 @@
         "credentials",
         "store"
       ],
-      "acceptance": "Weekly/manual official price snapshots, OpenRouter reported costs, local free/custom untracked and subscription estimates preserve provenance. Feature budgets warn at 75%, reserve/admit atomically and require Continue after caps; issues/jobs have no caps. Include every attempt/auxiliary purpose and unknown tail.",
+      "acceptance": "Weekly/manual official price snapshots, OpenRouter reported costs, local free/custom untracked and subscription estimates preserve provenance. Feature budgets warn at 75%, reserve/admit atomically and require Continue after caps; issues/jobs have no caps. Include every attempt/auxiliary purpose and unknown tail. Preserve all six retained AdminReports views, filters, normalized time buckets, summaries/series/breakdowns and filter options through bounded revision-bound pages. Canonical attempt identities suppress session/job mirrors; historic observations without deduplication evidence remain explicitly separate coverage gaps and raw fact subtotals. Expose nullable cache/token/cost metrics, reasoning subsets, partial monetary coverage and unknown tails. Current catalog has immutable exact tariff/source history and explicit override clearing; no retrospective repricing or guessed first CAS revision. Feature-only budgets use all existing creation/import/edit surfaces with real human authority for cap lifts and exact approval for pending cap changes; bootstrap readiness and unknown coverage remain visible. Local-free classification uses an explicit human-authored connection flag (defaultfalse/omitted updatepreserves), never hostname inference; admitted attempts retain that connection revision.",
       "gates": [
         "G03",
         "G12"
       ],
-      "status": "Planned; implementation not authorized or started"
+      "status": "Native implementation in progress; acceptance tracked by DW-21",
+      "integratesOperations": [
+        "features.create",
+        "features.edit",
+        "projects.create",
+        "tasks.sync_plan",
+        "approvals.inspect",
+        "approvals.record_human_decision",
+        "features.request_plan_approval",
+        "router.configure",
+        "router.connections"
+      ]
     },
     {
       "key": "systemone",

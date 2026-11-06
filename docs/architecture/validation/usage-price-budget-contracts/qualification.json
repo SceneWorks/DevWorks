@@ -1,0 +1,202 @@
+{
+  "date": "2026-11-05",
+  "scope": "DW-21 typed contracts/probe/docs/ownership only; no inference or integrated native accounting/price/UI acceptance",
+  "baseCommit": "2d1327b",
+  "reviewedSourcePrerequisites": [
+    "01f5625",
+    "b3184bd"
+  ],
+  "sourceCommits": [
+    "7f884ff",
+    "77b10d0",
+    "c9953d6",
+    "9945f5f",
+    "f97efa9",
+    "85b3d73"
+  ],
+  "counts": {
+    "slices": 78,
+    "operationFamilies": 49,
+    "operations": 359,
+    "requirements": 377,
+    "requirementsByStatus": {
+      "Confirmed": 230,
+      "Proposed": 147
+    },
+    "inputSchemaCandidates": 359,
+    "inputSchemasPending": 0,
+    "sourceEntries": 558,
+    "retainedSourceEntries": 494,
+    "excludedSourceEntries": 64,
+    "capabilityAcceptanceGroups": 33,
+    "workloadSpecifications": 12,
+    "unownedOperations": 0,
+    "unownedRequirements": 0,
+    "unownedRetainedEntries": 0
+  },
+  "domainTypes": 352,
+  "operationModeBindings": 364,
+  "operationModeRevisionBindings": 546,
+  "legacySchemasByteIdentical": 56,
+  "schemaFixtures": 1902,
+  "domainFixtures": 1573,
+  "negativeDomainFixtures": 370,
+  "generatorTestsPassed": 11,
+  "nativeProbeIntegrationTests": {
+    "usage_projection": 4,
+    "allocation_projection": 3,
+    "approval_review": 2,
+    "allPassed": true
+  },
+  "nativeCoreChecks": {
+    "status": "awaiting compile-ready owning WorkRecord/feature/connection constructor integration",
+    "command": "cargo test --locked -p devworks-core --test registry --test schema_revisions --test recorded_fixtures",
+    "noStubsOrHandwrittenOwnerEdits": true
+  },
+  "contractChecksPassed": true,
+  "word": {
+    "sha256": "9a5df098265d9e977b01cc2aa5d62f2d467ee2f28caed6bd918eee6760401d19",
+    "unchangedApprovedBlob": true,
+    "qa": "Existing approved Word QA reused; no new render/layout change"
+  },
+  "retainedSourceAudit": "retained-source-audit.json",
+  "domainReaders": {
+    "scope": "DW21 changed domain readers; document QA only",
+    "readers": [
+      {
+        "stem": "domain-operation-contracts",
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "localLinksChecked": 14
+      },
+      {
+        "stem": "domain-operation-reference",
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "qualifiedOperationRows": 359,
+        "localLinksChecked": 28
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "planningReaders": {
+    "date": "2026-11-05",
+    "scope": "Routing document readers only; no native runtime or inference acceptance",
+    "readers": [
+      {
+        "file": "docs/planning/auto-routing-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/latest-model-plan.html",
+        "images": 0,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/planning/devworks-requirements.html",
+        "images": 3,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      },
+      {
+        "file": "docs/architecture/devworks-architecture.html",
+        "images": 44,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ],
+        "filtersVerified": true
+      },
+      {
+        "file": "docs/architecture/implementation-plan.html",
+        "images": 1,
+        "layouts": [
+          {
+            "width": 1440,
+            "overflow": false,
+            "brokenImages": 0
+          },
+          {
+            "width": 800,
+            "overflow": false,
+            "brokenImages": 0
+          }
+        ]
+      }
+    ],
+    "pageErrors": [],
+    "passed": true
+  },
+  "sourceSha256": {
+    "docs/architecture/implementation-slices.json": "5a7cfc073edc201069cc2f70db1742c7e6f4fe9c7c17ddf8e9231564002bfc3f",
+    "docs/architecture/implementation-plan.json": "252aa38ff6c60ca626003c0823003487b77356d8ced94ece41a4cddaef62d624",
+    "docs/architecture/codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4",
+    "docs/architecture/contracts/family-coverage.json": "4a250ad7968cc97f4e447030a15c69f794d7d1410ee6dca3b5832cc0ecf9ef57"
+  },
+  "initialQualificationFindings": [
+    "Generic Page legacy alias needed referenced numbered-family resolution; fixed in native/probe normalizers without hardcoded family numbers",
+    "Historical fixture sourceId corrected to existing opaque ASCII identifier grammar; no schema widened"
+  ]
+}

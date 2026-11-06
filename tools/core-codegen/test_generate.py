@@ -71,8 +71,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})
         self.assertEqual(carried['router.pin'], {3})
-        self.assertEqual(carried['router.connections'], {2})
-        self.assertEqual(carried['router.configure'], {2})
+        self.assertEqual(carried['router.connections'], {2, 3})
+        self.assertEqual(carried['router.configure'], {2, 3})
         # Knowledge projections expose independent challenges at revision 3; full source labels are additive.
         self.assertEqual(carried['knowledge.subgraph'], {2, 3})
         self.assertEqual(carried['knowledge.tag'], {2})
@@ -103,7 +103,7 @@ class SchemaRevisionRules(unittest.TestCase):
         catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3})
-        self.assertEqual(generate.introduced_in(configure), {2})
+        self.assertEqual(generate.introduced_in(configure), {2, 3})
 
     def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):
         view = generate.TYPES['ApprovalViewRecord']

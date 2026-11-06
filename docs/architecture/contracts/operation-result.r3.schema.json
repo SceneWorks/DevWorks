@@ -633,6 +633,16 @@
         {
           "additionalProperties": false,
           "properties": {
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FeatureBudgetInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "kind": {
               "const": "FeaturePlan",
               "type": "string"
@@ -1583,6 +1593,10 @@
         "lifecycle": {
           "$ref": "#/$defs/ConnectionLifecycle",
           "x-since": 2
+        },
+        "localFree": {
+          "type": "boolean",
+          "x-since": 3
         },
         "name": {
           "$ref": "#/$defs/Text1To256"
@@ -3929,6 +3943,98 @@
       "required": [
         "kind",
         "sourceRef"
+      ],
+      "type": "object"
+    },
+    "FeatureBudgetInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Off",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Limit",
+              "type": "string"
+            },
+            "microUsd": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "microUsd"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FeatureBudgetView": {
+      "additionalProperties": false,
+      "properties": {
+        "accountingReady": {
+          "type": "boolean"
+        },
+        "continueRequired": {
+          "type": "boolean"
+        },
+        "legacyUsageFacts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "limitMicroUsd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monetaryIncompleteAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "reservedMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "spentMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "unknownTailAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "untrackedAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "warning": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revision",
+        "spentMicroUsd",
+        "reservedMicroUsd",
+        "warning",
+        "continueRequired",
+        "untrackedAttempts",
+        "unknownTailAttempts",
+        "accountingReady",
+        "monetaryIncompleteAttempts",
+        "legacyUsageFacts"
       ],
       "type": "object"
     },
@@ -6572,9 +6678,9 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_ModelPriceStatus_0_500": {
+    "List_ModelPriceView_0_500": {
       "items": {
-        "$ref": "#/$defs/ModelPriceStatus"
+        "$ref": "#/$defs/ModelPriceView"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -6644,9 +6750,49 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PriceCatalogEntry_0_500": {
+      "items": {
+        "$ref": "#/$defs/PriceCatalogEntry"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_PriceSourceSnapshot_0_500": {
+      "items": {
+        "$ref": "#/$defs/PriceSourceSnapshot"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_PriceTariff_0_500": {
+      "items": {
+        "$ref": "#/$defs/PriceTariff"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_PriceTariff_1_128": {
+      "items": {
+        "$ref": "#/$defs/PriceTariff"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
     "List_ProjectRecord_0_500": {
       "items": {
         "$ref": "#/$defs/ProjectRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ProviderPriceStatus_0_500": {
+      "items": {
+        "$ref": "#/$defs/ProviderPriceStatus"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -6908,9 +7054,49 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_UsageAttemptRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/UsageAttemptRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_UsageCacheDiagnostic_0_500": {
+      "items": {
+        "$ref": "#/$defs/UsageCacheDiagnostic"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_UsageFilterOption_0_500": {
+      "items": {
+        "$ref": "#/$defs/UsageFilterOption"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_UsageItem_0_500": {
       "items": {
         "$ref": "#/$defs/UsageItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_UsageMeasuredQuantity_0_500": {
+      "items": {
+        "$ref": "#/$defs/UsageMeasuredQuantity"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_UsageReportRow_0_500": {
+      "items": {
+        "$ref": "#/$defs/UsageReportRow"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -7470,26 +7656,16 @@
       ],
       "type": "object"
     },
-    "ModelPriceStatus": {
+    "ModelPriceView": {
       "additionalProperties": false,
       "properties": {
         "modelId": {
           "$ref": "#/$defs/Id"
         },
-        "nextCheckAtMs": {
+        "overrideRevision": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Counter"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "price": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PriceRecord"
+              "$ref": "#/$defs/Revision"
             },
             {
               "type": "null"
@@ -7499,14 +7675,34 @@
         "priceKind": {
           "$ref": "#/$defs/UsagePriceKind"
         },
-        "stale": {
-          "type": "boolean"
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "snapshotId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrackedReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "modelId",
-        "priceKind",
-        "stale"
+        "revision",
+        "priceKind"
       ],
       "type": "object"
     },
@@ -9342,32 +9538,6 @@
       ],
       "type": "object"
     },
-    "Page39": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_ModelPriceStatus_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
     "Page4": {
       "additionalProperties": false,
       "properties": {
@@ -10021,6 +10191,131 @@
       ],
       "type": "string"
     },
+    "PriceCatalogEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "modelId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/PriceOrigin"
+        },
+        "overrideRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/Id"
+        },
+        "snapshotId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tariff": {
+          "$ref": "#/$defs/PriceTariff"
+        },
+        "upstreamModelId": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "providerId",
+        "upstreamModelId",
+        "origin",
+        "tariff"
+      ],
+      "type": "object"
+    },
+    "PriceCatalogResult": {
+      "$ref": "#/$defs/PriceCatalogView",
+      "x-since": 3
+    },
+    "PriceCatalogView": {
+      "additionalProperties": false,
+      "properties": {
+        "catalogRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_PriceCatalogEntry_0_500"
+        },
+        "models": {
+          "$ref": "#/$defs/List_ModelPriceView_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providers": {
+          "$ref": "#/$defs/List_ProviderPriceStatus_0_500"
+        },
+        "snapshots": {
+          "$ref": "#/$defs/List_PriceSourceSnapshot_0_500"
+        }
+      },
+      "required": [
+        "catalogRevision",
+        "items",
+        "snapshots",
+        "providers",
+        "hasMore",
+        "coverage",
+        "models"
+      ],
+      "type": "object"
+    },
+    "PriceChargeKind": {
+      "enum": [
+        "Input",
+        "Output",
+        "CacheRead",
+        "CacheWrite",
+        "Request",
+        "Runtime"
+      ],
+      "type": "string"
+    },
+    "PriceModality": {
+      "enum": [
+        "Text",
+        "Image",
+        "Audio",
+        "Video",
+        "Any"
+      ],
+      "type": "string"
+    },
     "PriceOrigin": {
       "enum": [
         "OfficialSnapshot",
@@ -10031,67 +10326,205 @@
       ],
       "type": "string"
     },
-    "PriceRecord": {
+    "PriceOverrideOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Set",
+              "type": "string"
+            },
+            "modelId": {
+              "$ref": "#/$defs/Id"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "tariffs": {
+              "$ref": "#/$defs/List_PriceTariff_1_128"
+            }
+          },
+          "required": [
+            "kind",
+            "modelId",
+            "revision",
+            "tariffs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Cleared",
+              "type": "string"
+            },
+            "modelId": {
+              "$ref": "#/$defs/Id"
+            },
+            "revision": {
+              "$ref": "#/$defs/Revision"
+            }
+          },
+          "required": [
+            "kind",
+            "modelId",
+            "revision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PriceOverrideResult": {
+      "$ref": "#/$defs/PriceOverrideOutcome",
+      "x-since": 3
+    },
+    "PriceSourceSnapshot": {
       "additionalProperties": false,
       "properties": {
-        "cacheReadUsdPerMillion": {
+        "effectiveDate": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Money"
+              "$ref": "#/$defs/Text1To256"
             },
             {
               "type": "null"
             }
           ]
         },
-        "cacheWriteUsdPerMillion": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Money"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "inputUsdPerMillion": {
-          "$ref": "#/$defs/Money"
-        },
-        "modelId": {
-          "$ref": "#/$defs/Id"
-        },
-        "observedAtMs": {
+        "fetchedAtMs": {
           "$ref": "#/$defs/Counter"
         },
-        "origin": {
-          "$ref": "#/$defs/PriceOrigin"
+        "id": {
+          "$ref": "#/$defs/Id"
         },
-        "outputUsdPerMillion": {
-          "$ref": "#/$defs/Money"
+        "parserVersion": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "providerId": {
+          "$ref": "#/$defs/Id"
         },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
+        "sourceDigest": {
+          "$ref": "#/$defs/Digest"
+        },
         "sourceUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "verifiedAtMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "id",
+        "providerId",
+        "revision",
+        "sourceUrl",
+        "sourceDigest",
+        "parserVersion",
+        "fetchedAtMs",
+        "verifiedAtMs"
+      ],
+      "type": "object"
+    },
+    "PriceTariff": {
+      "additionalProperties": false,
+      "properties": {
+        "amountUsd": {
+          "$ref": "#/$defs/Money"
+        },
+        "cacheTtlSeconds": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Url"
+              "$ref": "#/$defs/PositiveCounter"
             },
             {
               "type": "null"
             }
           ]
+        },
+        "chargeKind": {
+          "$ref": "#/$defs/PriceChargeKind"
+        },
+        "contextLowerExclusive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextUpperInclusive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpointProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modality": {
+          "$ref": "#/$defs/PriceModality"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "unit": {
+          "$ref": "#/$defs/PriceUnit"
+        },
+        "units": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "upstreamModelId": {
+          "$ref": "#/$defs/Text1To4096"
         }
       },
       "required": [
-        "modelId",
-        "revision",
-        "inputUsdPerMillion",
-        "outputUsdPerMillion",
-        "origin",
-        "observedAtMs"
+        "upstreamModelId",
+        "serviceTier",
+        "modality",
+        "chargeKind",
+        "unit",
+        "units",
+        "amountUsd"
       ],
       "type": "object"
+    },
+    "PriceUnit": {
+      "enum": [
+        "Token",
+        "Second",
+        "Image",
+        "Request",
+        "Character"
+      ],
+      "type": "string"
     },
     "Probability": {
       "maximum": 1,
@@ -10278,6 +10711,76 @@
         "1.0-draft.1"
       ],
       "type": "string"
+    },
+    "ProviderPriceStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastCheckedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCheckAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/Id"
+        },
+        "refreshOperationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "snapshotId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stale": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "providerId",
+        "revision",
+        "stale"
+      ],
+      "type": "object"
     },
     "PruneKind": {
       "enum": [
@@ -11856,6 +12359,10 @@
         }
       ]
     },
+    "RouterUsageResult": {
+      "$ref": "#/$defs/UsageQueryResult",
+      "x-since": 3
+    },
     "RuleEffect": {
       "enum": [
         "UserInstruction",
@@ -13210,6 +13717,710 @@
       "pattern": "^https?://[^\\s]+$",
       "type": "string"
     },
+    "UsageAggregatePage": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/UsageQueryContext"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_UsageReportRow_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "items",
+        "hasMore",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "UsageAppliedFilters": {
+      "additionalProperties": false,
+      "properties": {
+        "jobRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rootId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UsageAttemptPage": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/UsageQueryContext"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_UsageAttemptRecord_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totals": {
+          "$ref": "#/$defs/UsageTotals"
+        }
+      },
+      "required": [
+        "context",
+        "items",
+        "totals",
+        "hasMore",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "UsageAttemptRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "actorId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assignmentId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptNumber": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheDiagnostics": {
+          "$ref": "#/$defs/List_UsageCacheDiagnostic_0_500"
+        },
+        "cacheReadMicroUsd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheReadTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheWriteMicroUsd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheWriteTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connectionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connectionRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost": {
+          "$ref": "#/$defs/UsageCostSnapshot"
+        },
+        "featureId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "inputSemantics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jobRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "reasoningTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/Id"
+        },
+        "resolvedModelId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "startedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "uncachedInputTokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unitQuantities": {
+          "$ref": "#/$defs/List_UsageMeasuredQuantity_0_500"
+        },
+        "unknownTail": {
+          "type": "boolean"
+        },
+        "workId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "requestId",
+        "sourceKind",
+        "sourceId",
+        "purpose",
+        "state",
+        "cost",
+        "cacheDiagnostics",
+        "unknownTail",
+        "unitQuantities"
+      ],
+      "type": "object"
+    },
+    "UsageCacheDiagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inferred": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "sourceRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "inferred"
+      ],
+      "type": "object"
+    },
+    "UsageCostKind": {
+      "enum": [
+        "Reported",
+        "Estimated",
+        "Free",
+        "Untracked",
+        "Unknown"
+      ],
+      "type": "string"
+    },
+    "UsageCostSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "amountMicroUsd": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "monetaryComplete": {
+          "type": "boolean"
+        },
+        "originalAmount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrideRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priceKind": {
+          "$ref": "#/$defs/UsageCostKind"
+        },
+        "priceOrigin": {
+          "$ref": "#/$defs/PriceOrigin"
+        },
+        "priceRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priceSnapshotId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subscriptionEquivalent": {
+          "type": "boolean"
+        },
+        "tariffs": {
+          "$ref": "#/$defs/List_PriceTariff_0_500"
+        },
+        "untrackedReason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "priceKind",
+        "priceOrigin",
+        "subscriptionEquivalent",
+        "incomplete",
+        "tariffs",
+        "monetaryComplete"
+      ],
+      "type": "object"
+    },
+    "UsageFilterOption": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "value": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "dimension",
+        "value"
+      ],
+      "type": "object"
+    },
+    "UsageFilterOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/UsageQueryContext"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_UsageFilterOption_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "items",
+        "hasMore",
+        "coverage"
+      ],
+      "type": "object"
+    },
     "UsageItem": {
       "additionalProperties": false,
       "properties": {
@@ -13278,6 +14489,40 @@
       ],
       "type": "object"
     },
+    "UsageMeasuredQuantity": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheWriteTtlMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chargeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "modality": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "quantity": {
+          "$ref": "#/$defs/Counter"
+        },
+        "unit": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "modality",
+        "chargeKind",
+        "unit",
+        "quantity"
+      ],
+      "type": "object"
+    },
     "UsagePriceKind": {
       "enum": [
         "Reported",
@@ -13286,6 +14531,89 @@
         "Untracked"
       ],
       "type": "string"
+    },
+    "UsageQueryContext": {
+      "additionalProperties": false,
+      "properties": {
+        "appliedFilters": {
+          "$ref": "#/$defs/UsageAppliedFilters"
+        },
+        "interval": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "range": {
+          "$ref": "#/$defs/UsageReportRange"
+        },
+        "readRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "reportKind": {
+          "$ref": "#/$defs/UsageReportKind"
+        }
+      },
+      "required": [
+        "reportKind",
+        "range",
+        "interval",
+        "appliedFilters",
+        "readRevision"
+      ],
+      "type": "object"
+    },
+    "UsageQueryResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Attempts",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/UsageAttemptPage"
+            }
+          },
+          "required": [
+            "kind",
+            "page"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Report",
+              "type": "string"
+            },
+            "report": {
+              "$ref": "#/$defs/UsageAggregatePage"
+            }
+          },
+          "required": [
+            "kind",
+            "report"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "filters": {
+              "$ref": "#/$defs/UsageFilterOptions"
+            },
+            "kind": {
+              "const": "Filters",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "filters"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "UsageReport": {
       "additionalProperties": false,
@@ -13318,6 +14646,181 @@
         "totalTrackedUsd",
         "untrackedRequests",
         "incompleteRequests"
+      ],
+      "type": "object"
+    },
+    "UsageReportKind": {
+      "enum": [
+        "Attempts",
+        "AssistantUsage",
+        "AssistantActivity",
+        "McpUsage",
+        "CodeReviewUsage",
+        "RepositoryAnalysisUsage",
+        "Filters"
+      ],
+      "type": "string"
+    },
+    "UsageReportRange": {
+      "additionalProperties": false,
+      "properties": {
+        "endMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "startMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "startMs",
+        "endMs"
+      ],
+      "type": "object"
+    },
+    "UsageReportRow": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "Total",
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "value": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "key",
+            "label",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bucketStartMs": {
+              "$ref": "#/$defs/Counter"
+            },
+            "key": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "SeriesPoint",
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "value": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "key",
+            "label",
+            "bucketStartMs",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dimension": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "key": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "kind": {
+              "const": "Breakdown",
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "value": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "dimension",
+            "key",
+            "label",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UsageTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "estimatedMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "incompleteAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "legacyObservationMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "legacyUntrackedFacts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "legacyUsageFacts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "localFreeAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "monetaryIncompleteAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "reportedMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "reservedMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "trackedMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "unknownTailAttempts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "untrackedAttempts": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "attempts",
+        "trackedMicroUsd",
+        "reportedMicroUsd",
+        "estimatedMicroUsd",
+        "reservedMicroUsd",
+        "localFreeAttempts",
+        "untrackedAttempts",
+        "unknownTailAttempts",
+        "incompleteAttempts",
+        "monetaryIncompleteAttempts",
+        "legacyUsageFacts",
+        "legacyUntrackedFacts",
+        "legacyObservationMicroUsd"
       ],
       "type": "object"
     },
@@ -13765,6 +15268,10 @@
         },
         "attempts": {
           "$ref": "#/$defs/List_WorkAttempt_0_500"
+        },
+        "budget": {
+          "$ref": "#/$defs/FeatureBudgetView",
+          "x-since": 3
         },
         "callerRef": {
           "anyOf": [
@@ -17961,7 +19468,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/UsageReport"
+          "$ref": "#/$defs/RouterUsageResult"
         }
       },
       "required": [
@@ -17995,7 +19502,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page39"
+          "$ref": "#/$defs/PriceCatalogResult"
         }
       },
       "required": [
@@ -18029,7 +19536,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/PriceRecord"
+          "$ref": "#/$defs/PriceOverrideResult"
         }
       },
       "required": [

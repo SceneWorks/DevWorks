@@ -8778,7 +8778,7 @@
       "result": "KnowledgeReviewPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Informational Knowledge review candidates only; never approval or autonomous acknowledgment authority. Default limit 20, maximum 50. Bound candidates to 500 per kind; show at most 3 open challenges with moreChallenges. Prompt/RelayedPrompt source priority Highest; Review/RelayedReview High; other Normal. Rank priority, recurrence descending, oldest first, entry ID; deduplicate challenged entries and contradiction pairs. Only visible eligible existing Knowledge records; unsupported future producers are not advertised."
+      "rules": "Informational Knowledge review candidates only; never approval or autonomous acknowledgment authority. Default limit 20, maximum 50. Bound candidates to 500 per kind; show at most 3 open challenges with moreChallenges. Prompt/RelayedPrompt source priority Highest; Review/RelayedReview High; other Normal. Rank priority, recurrence descending, oldest first, entry ID; deduplicate challenged entries and contradiction pairs. Only visible eligible existing Knowledge records; unsupported future producers are not advertised. Requires explicit projectId or the trusted host current project; absent both is InvalidArgument/project_required. Apply exact project ownership before candidate bounds/pagination; workspace inheritance is excluded. Optional wire field permits valid host lineage, not global aggregation."
     },
     "notifications.mark_read": {
       "operation": "notifications.mark_read",
