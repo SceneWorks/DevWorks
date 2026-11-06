@@ -17,6 +17,10 @@ pub(super) fn count(
     {
         return Ok(None);
     }
+    if reader.gaps.contains(&"graph_visited_limit") {
+        reader.gaps.push("unmapped_counts_incomplete");
+        return Ok(None);
+    }
     let mut sources = BTreeMap::<(&str, &str), BTreeSet<&str>>::new();
     let mut files = BTreeSet::new();
     for node in nodes {

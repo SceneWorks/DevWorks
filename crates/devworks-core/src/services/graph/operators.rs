@@ -118,7 +118,7 @@ pub(super) fn detail(
     }
     Ok(GraphResult::NodeDetail {
         value: model::wire(
-            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
+            json!({"node":node,"neighbors":neighbors.into_values().collect::<Vec<_>>(),"incoming":incoming,"outgoing":outgoing,"crossRepository":cross,"relationshipsComplete":reader.next.is_none()&&reader.budget.exhausted.is_none()&&!reader.gaps.contains(&"graph_visited_limit")&&reader.selected.pin.unavailable_repositories.is_empty()&&unmapped.is_none_or(|count|count==0)}),
         )?,
     })
 }
