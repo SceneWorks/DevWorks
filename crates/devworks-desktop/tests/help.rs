@@ -17,9 +17,16 @@ fn open(engine: &devworks_desktop::host::Engine, root: &Root) -> Ui {
     let mut h = harness(shell(engine, root, Script::default()), 1600.0, 1100.0);
     settle(&mut h);
     click_nav(&mut h, "Help");
+    ready(&mut h);
     assert!(h.state().help.loaded, "real Help service answered");
     assert!(h.state().help.error.is_none(), "{:?}", h.state().help.error);
     h
+}
+fn ready(h: &mut Ui) {
+    step_until(h, "real initial Help publication", |shell| {
+        !shell.help.topics.is_empty() && !shell.help.generating
+    });
+    settle(h);
 }
 fn press(h: &mut Ui, label: &str) {
     click(h, Role::Button, label);
@@ -163,6 +170,7 @@ fn native_help_search_and_bounded_passages_use_local_version_references() {
     h.state_mut().navigate(Route::Chat);
     settle(&mut h);
     click_nav(&mut h, "Help");
+    ready(&mut h);
     assert_eq!(h.state().help.query, query);
     assert_eq!(selected(&h), (topic.id.as_str(), topic.version.0.as_str()));
     assert_eq!(
@@ -195,6 +203,7 @@ fn native_help_generation_unknown_outcome_replays_the_exact_frame_after_relaunch
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
+    ready(&mut h);
     assert!(h.state().help.snapshot.as_ref().unwrap().can_generate);
     press(&mut h, "Regenerate capability documentation");
     assert!(h.state().help.generating && h.state().help.generation_unknown);
@@ -208,7 +217,9 @@ fn native_help_generation_unknown_outcome_replays_the_exact_frame_after_relaunch
     assert_eq!(saved.pending.commands.len(), 1);
     assert_eq!(saved.pending.commands[0].frame, frames[0]);
     drop(h);
-    let again = LoseAcks::over(real, "help.generate_capability_docs", 0);
+    // Startup automatically confirms saved outcomes with their original frames. Keep that
+    // first confirmation uncertain too, then explicitly confirm without creating a new key.
+    let again = LoseAcks::over(real, "help.generate_capability_docs", 4);
     let mut h = harness(
         shell_with(Ok(again.clone()), &root, Script::default(), None),
         1600.0,
@@ -219,10 +230,9 @@ fn native_help_generation_unknown_outcome_replays_the_exact_frame_after_relaunch
     press(&mut h, "Confirm outcomes");
     assert!(!h.state().help.generation_unknown);
     assert_eq!(h.state().unconfirmed_count(), 0);
-    assert_eq!(
-        again.frames.lock().unwrap().as_slice(),
-        &[frames[0].clone()]
-    );
+    let confirmed = again.frames.lock().unwrap();
+    assert_eq!(confirmed.len(), 5);
+    assert!(confirmed.iter().all(|frame| frame == &frames[0]));
 }
 
 struct HelpOnly {
@@ -285,6 +295,8 @@ fn help_only(engine: &devworks_desktop::host::Engine) -> Arc<HelpOnly> {
     let actor = ActorId(Id::new("help-only-reviewer").unwrap());
     let who = actor.clone();
     run_write(&*store, WriteOptions::default(), move |tx| {
+        tx.actors()
+            .register(&who, PrincipalKind::Agent, "Help reviewer")?;
         devworks_core::authority::service::bind_principal(
             tx,
             &user,
@@ -331,6 +343,7 @@ fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generat
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
+    ready(&mut h);
     let snapshot = h
         .state()
         .help
@@ -376,8 +389,9 @@ fn native_read_only_help_needs_no_artifact_or_addon_authority_and_cannot_generat
         ),
     ));
     assert!(
-        matches!(denied, Err(devworks_desktop::ops::Failure::Refused(fault)) if matches!(fault.code, devworks_core::protocol::DomainErrorCode::PermissionDenied)),
-        "the real gateway also refuses a direct read-only bypass"
+        matches!(&denied, Err(devworks_desktop::ops::Failure::Rejected(code)) if code == "PermissionDenied"),
+        "the real gateway also rejects a direct read-only bypass before admission: {:?}",
+        denied.as_ref().err()
     );
 }
 
@@ -504,12 +518,6 @@ fn native_notification_preferences_help_keeps_the_unsaved_preference_draft() {
     );
 }
 
-fn generation_id(result: hops::Generated) -> String {
-    match result {
-        hops::Generated::Accepted(id) => id.0.as_str().into(),
-        hops::Generated::Recorded(operation) => operation.operation_id.0.as_str().into(),
-    }
-}
 fn wait_generated(
     b: &dyn Backend,
     operation: &str,
@@ -532,7 +540,8 @@ fn wait_generated(
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "Help generation never completed"
+            "Help generation {operation} never completed; latest snapshot: {:?}",
+            page.snapshot
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -598,6 +607,12 @@ fn native_help_regeneration_reports_actual_completion_and_registration_facts() {
 }
 #[test]
 fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_search() {
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
     let root = Root::new("help-generation-stale");
     let engine = start(&root);
     let real = engine.backend();
@@ -609,6 +624,7 @@ fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_searc
     );
     settle(&mut h);
     click_nav(&mut h, "Help");
+    ready(&mut h);
     let topic = h.state().help.topics[0].clone();
     press(
         &mut h,
@@ -620,6 +636,7 @@ fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_searc
     );
     let before = h.state().help.snapshot.as_ref().unwrap().clone();
     gate.close();
+    let _release = Release(gate.clone());
     h.get_by_role_and_label(Role::Button, "Regenerate capability documentation")
         .click();
     step_until(&mut h, "native generation request captured", |shell| {
@@ -634,17 +651,18 @@ fn native_stale_generation_refusal_keeps_the_inspected_version_and_unsaved_searc
     h.step();
     h.step();
     assert_eq!(h.state().help.query, "unsaved search draft");
-    let accepted = hops::generated(real.command(
-        "help.generate_capability_docs",
-        &hops::generate(
-            &*real,
-            before.registry_revision.get(),
-            before.help_revision.get(),
-        ),
-    ))
-    .unwrap();
-    let id = generation_id(accepted);
-    let after = wait_generated(&*real, &id);
+    // An unchanged regeneration may legitimately retain its content revision. Change the
+    // actual signed source, then publish it, while the older native request remains captured.
+    install_guide(
+        &engine,
+        &root,
+        "1.0.0",
+        "# Changed local source\n\nA real installed guide changes this catalog.\n",
+        false,
+    );
+    let after = hops::topics(real.query("help.search", &hops::search(&*real, "*", None)))
+        .unwrap()
+        .snapshot;
     assert_ne!(
         after.help_revision, before.help_revision,
         "real generation advances its CAS token"
@@ -751,9 +769,43 @@ fn install_guide(
         "exact source was actually installed: {installed:?}"
     );
     if installed.enabled {
-        ops::command_result(b.command("addons.disable", &addons::lifecycle_frame(&*b,json!({"kind":"Disable","packageId":installed.id,"expectedRevision":installed.revision})))).unwrap();
+        let (_, registry, _) =
+            addons::catalog(b.query("addons.catalog", &addons::catalog_frame(&*b, None))).unwrap();
+        ops::command_result(b.command("addons.disable", &addons::lifecycle_frame(&*b,json!({"kind":"Disable","packageId":installed.id,"expectedRegistryRevision":registry.to_string()})))).unwrap();
     }
     assert_eq!(installed.digest.as_str(), manifest_digest);
+    // Installation changes the registry, not its published documentation. Await the real
+    // background owner and its completed source; do not race it with another mutation.
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        let page = hops::topics(b.query(
+            "help.package_guides",
+            &hops::guides(&*b, "local-help-fixture", version, None),
+        ))
+        .unwrap();
+        if page.items.0.iter().any(|topic| {
+            matches!(&topic.provenance,
+            Some(HelpProvenance::Package {package_version, manifest_digest: digest, ..})
+                if package_version.0 == version && digest.as_str() == manifest_digest)
+        }) && page
+            .snapshot
+            .generation_operation
+            .as_ref()
+            .is_some_and(|operation| {
+                matches!(
+                    operation.state,
+                    devworks_core::protocol::OperationState::ObservedComplete
+                )
+            })
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "installed guide never published: {page:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     manifest_digest
 }
 #[test]
@@ -766,6 +818,10 @@ fn native_installed_package_help_has_exact_unicode_passages_and_stale_version_co
     );
     let digest = install_guide(&engine, &root, "1.0.0", &first, false);
     let mut h = open(&engine, &root);
+    // The native app uses egui's default fallback box for uninstalled glyphs. The harness
+    // defaults to panicking instead; keep the exact Unicode text to test passage boundaries.
+    h.ctx
+        .set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     replace(&mut h, "Search local Help", "Offline guide marker");
     press(&mut h, "Search Help");
     let topic = h.state().help.topics.iter().find(|topic| matches!(&topic.provenance,Some(HelpProvenance::Package {package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("installed package guide is discoverable with Help search").clone();
@@ -822,6 +878,10 @@ fn native_context_help_returns_to_the_same_conversation_and_unsent_draft() {
     );
     let conversation = h.state().chat.selected.clone();
     press(&mut h, "Help for current screen");
+    step_until(&mut h, "published contextual Help passage", |shell| {
+        shell.help.read.is_some()
+    });
+    settle(&mut h);
     assert_eq!(selected(&h).0, "chat");
     press(&mut h, "Back to previous screen");
     assert_eq!(h.state().route(), Route::Chat);
