@@ -126,11 +126,15 @@ impl Shell {
             state.reader.loading = true;
             state.reader.error = None;
             let mut body = serde_json::json!({"scope":scope.wire(),"format":(["Markdown","Raw","Manifest","SectionPath"][target.format]),"maxChars":cop::PASSAGE_CHARS.to_string()});
-            body[if target.by_slug {
-                "slug"
+            if let Some(path) = &target.path {
+                body["path"] = serde_json::json!(path);
             } else {
-                "conventionId"
-            }] = serde_json::json!(target.id);
+                body[if target.by_slug {
+                    "slug"
+                } else {
+                    "conventionId"
+                }] = serde_json::json!(target.id);
+            }
             if let Some(revision) = target.revision {
                 body["revision"] = serde_json::json!(revision.to_string());
             }
@@ -431,7 +435,9 @@ impl Shell {
                 match cop::document(outcome) {
                     Ok(view) => {
                         let target = s.reader.target.as_mut()?;
-                        if (!target.by_slug && view.convention.id.as_str() != target.id)
+                        if (!target.by_slug
+                            && target.path.is_none()
+                            && view.convention.id.as_str() != target.id)
                             || target
                                 .revision
                                 .is_some_and(|revision| revision != view.convention.revision.get())
@@ -441,6 +447,7 @@ impl Shell {
                         }
                         target.id = view.convention.id.as_str().into();
                         target.by_slug = false;
+                        target.path = None;
                         target.revision = Some(view.convention.revision.get());
                         s.reader.view = Some(view);
                         s.reader.error = None;
@@ -1026,6 +1033,7 @@ impl Shell {
                     .map(|r| Target {
                         id: r.id.as_str().into(),
                         by_slug: false,
+                        path: None,
                         revision: Some(r.revision.get()),
                         format: 0,
                         section: None,
@@ -1182,12 +1190,28 @@ impl Shell {
                 }
             }
             cv::Action::Read(target) => self.read_convention(target.clone(), true),
+            cv::Action::OpenPath => {
+                if let Some(path) = self.conventions.state().map(|s| s.path_input.clone()) {
+                    self.read_convention(
+                        Target {
+                            id: String::new(),
+                            by_slug: false,
+                            path: Some(path),
+                            revision: None,
+                            format: 0,
+                            section: None,
+                        },
+                        true,
+                    );
+                }
+            }
             cv::Action::OpenSlug => {
                 if let Some(slug) = self.conventions.state().map(|s| s.slug_input.clone()) {
                     self.read_convention(
                         Target {
                             id: slug,
                             by_slug: true,
+                            path: None,
                             revision: None,
                             format: 0,
                             section: None,

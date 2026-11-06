@@ -43,6 +43,7 @@ impl Scope {
 pub struct Target {
     pub id: String,
     pub by_slug: bool,
+    pub path: Option<Vec<String>>,
     pub revision: Option<i64>,
     pub format: usize,
     pub section: Option<ConventionIndexedPath>,
@@ -213,6 +214,7 @@ pub struct ScopeState {
     pub active_search: Option<(u64, devworks_core::ports::storage::Cancellation)>,
     pub text: String,
     pub slug_input: String,
+    pub path_input: Vec<String>,
     pub applicability: Vec<String>,
     pub lifecycle: usize,
     pub order: usize,
@@ -313,6 +315,7 @@ pub enum Action {
     CancelSearch,
     Read(Target),
     OpenSlug,
+    OpenPath,
     Page(bool),
     Back,
     New,
@@ -561,6 +564,22 @@ fn browse(
         }
     });
 
+    egui::CollapsingHeader::new("Open an exact hierarchy").show(ui, |ui| {
+        widgets::caption(
+            ui,
+            "Enter the root and child slugs as separate components. Slashes, spaces, and empty components stay literal.",
+        );
+        labels(ui, &mut s.path_input, "Hierarchy component");
+        if ui
+            .add_enabled(
+                online && !s.path_input.is_empty(),
+                egui::Button::new("Open exact convention hierarchy"),
+            )
+            .clicked()
+        {
+            a.push(Action::OpenPath);
+        }
+    });
     ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
@@ -710,6 +729,7 @@ fn browse(
                         format: 0,
                         section: None,
                         by_slug: false,
+                        path: None,
                     }));
                 }
                 widgets::caption(
@@ -725,6 +745,7 @@ fn browse(
                     a.push(Action::Read(Target {
                         id: hit.convention.id.as_str().into(),
                         by_slug: false,
+                        path: None,
                         revision: Some(hit.convention.revision.get()),
                         format: 3,
                         section: Some(hit.indexed_path.clone()),
@@ -747,6 +768,7 @@ fn browse(
                         format: 0,
                         section: None,
                         by_slug: false,
+                        path: None,
                     }));
                 }
                 widgets::caption(
@@ -961,6 +983,7 @@ fn reader(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
                     format,
                     section: None,
                     by_slug: false,
+                    path: None,
                 }));
             }
         }
@@ -1350,6 +1373,7 @@ fn versions(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) 
                 format: 0,
                 section: None,
                 by_slug: false,
+                path: None,
             }));
         }
     }
@@ -1414,6 +1438,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
                 a.push(Action::Read(Target {
                     id: record.id.as_str().into(),
                     by_slug: false,
+                    path: None,
                     revision: Some(record.revision.get()),
                     format: 0,
                     section: None,
@@ -1650,6 +1675,7 @@ fn operations(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>
                 a.push(Action::Read(Target {
                     id: convention.as_str().into(),
                     by_slug: false,
+                    path: None,
                     revision: None,
                     format: 0,
                     section: None,

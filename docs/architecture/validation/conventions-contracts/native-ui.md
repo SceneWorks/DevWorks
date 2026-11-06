@@ -16,7 +16,7 @@ and export retain the verified complete document.
 | Edit/version/provenance | Markdown/raw NUL and CRLF preserved; inspect prior version and return; set/remove raw; concurrent edit refuses, retains full opening source and requires explicit rebase |
 | Complete source bounds | Actual 16,777,215-byte Markdown import, full page collection/digest verification before editing, save and byte-equal full export |
 | Applicability/lifecycle/delete | Literal comma-containing label; Active↔Retired; soft deletion and retained resource metadata |
-| Move | Whole parent/child subtree moves to a real project; child parent/revision/scope verified; independent opening draft retained |
+| Move/hierarchy | Whole parent/child subtree moves to a real project; literal slash/NUL hierarchy components resolve through the shared read selector; subsequent source pages retain the served ID/revision; independent opening draft retained |
 | Resources | Actual binary pages/non-UTF-8/NUL bytes, original 200-character descriptive media type, explicit empty media, metadata edit, chosen byte replacement/save, exact download, retired/deleted metadata |
 | Virtual resources | Distinct catalog and exact-root document modes; dropped manifests stay in the Conventions owner |
 | Export | Portable manifest and exact full Markdown/raw downloads through owning passage APIs |
@@ -35,16 +35,23 @@ a real query acknowledgment; all successful results remain actual runtime result
 recorded stream blocks body reads so cancellation is an observed interaction, not a timing race.
 The independent close handle and cleanup guard release that fixture on failure.
 
-At this checkpoint, the same-query confirmation after clearing the selected embedding space is
-still a discriminating RED: the owner returns a fresh lexical result instead of `CursorExpired`.
-The UI keeps the earlier unknown custody visible even when a result omits it. The source owner
-is supplying the early custody-validation fix; this assertion is retained unchanged. Full default
-native suite acceptance is pending that dependency and the additive literal hierarchy selector.
+The original same-query confirmation after clearing the selected embedding space was a
+native RED (fresh lexical result instead of `CursorExpired`). With the owning custody validation
+(`a9ebfde4`, `7ca4610b`) it is GREEN: the exact request is refused before new admission, the UI
+retains its actual last-reported Unknown preparation, and only an explicit new search creates a
+new intent. The earlier custody remains inspectable after reopening. The literal hierarchy UI
+uses the qualified shared selector (`1ac4f14f`), never client splitting or normalization.
 
-Qualified individually so far: source/portable/raw/history 10.96s; complete-source stale/rebase
-14.61s; resource replacement/deletion 9.66s; dropped manifest/applicability/virtual resources
-9.71s; subtree move 11.13s; real persisted-space hybrid/exact lost-ACK replay 11.23s; maximum legal
-source 23.36s; server ordering/empty slug 13.05s; index cancellation/scope replacement/reopen
-14.87s. Desktop library strict Clippy passed; desktop all-target strict Clippy passed before the
-last label/rebase changes and will be rerun on the final source. These are source qualification
-results, not tracker acceptance or cross-platform CI claims.
+Final qualification on the combined source:
+
+- `cargo test -p devworks-desktop --test conventions -- --nocapture`: **16 passed**, no ignored,
+  skipped or filtered cases, default runner/concurrency, **42.65s**.
+- `cargo clippy -p devworks-desktop --all-targets --no-deps -- -D warnings`: **passed, 35.09s**.
+- Desktop formatting and `git diff --check`: passed.
+
+The complete native suite includes the actual maximum legal source fixture, which independently
+passed in 23.36s, not just an injected editor buffer. Recorded qualification/index/query requests
+use the persisted DW119 setup; no host-space injection is substituted. After-send cancellation
+retains Unknown rather than claiming cancellation proves absence of financial custody. No test
+timeouts, assertions or concurrency settings were weakened. Local macOS headless native results
+are not cross-platform CI or tracker acceptance claims; root delivery owns those gates.

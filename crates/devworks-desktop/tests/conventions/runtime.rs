@@ -126,7 +126,14 @@ fn manifest_at(
     let raw_hash = raw.map(|s| digest(s.as_bytes()));
     let mut md = markdown.as_bytes();
     let mut raw_bytes = raw.map(str::as_bytes);
-    let path = root.file(&format!("{slug}.json"), b"");
+    static NEXT_MANIFEST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let path = root.file(
+        &format!(
+            "manifest-{}.json",
+            NEXT_MANIFEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ),
+        b"",
+    );
     let mut output = BufWriter::new(File::create(&path).unwrap());
     write_editor_manifest(
         &mut output,
@@ -682,15 +689,21 @@ fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_d
     let project=match devworks_desktop::ops::command_result(backend.command("projects.create",&cop::command(&*backend,"projects.create",serde_json::json!({"name":"Convention destination","description":"Scoped convention fixture","repositoryIds":[]})))).unwrap(){OperationResult::ProjectsCreate{value}=>value,other=>panic!("actual projectcreation: {other:?}")};
     let files = Files::default();
     let mut h = open(backend, &root, files.clone());
-    let parent = manifest(&root, "parent", "Parent guide", "# Parent source\n", None);
+    let parent = manifest(
+        &root,
+        "parent/root",
+        "Parent guide",
+        "# Parent source\n",
+        None,
+    );
     import(&mut h, &files, parent);
     let child = manifest_at(
         &root,
-        "child",
+        "child\0/entry",
         "Child guide",
         "# Child source\n",
         None,
-        &["parent".into()],
+        &["parent/root".into()],
     );
     import(&mut h, &files, child);
     let first = select(&mut h, "Parent guide");
@@ -734,7 +747,36 @@ fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_d
         h.state().conventions.scope,
         Scope::Project(project.id.0.as_str().into())
     );
-    let child = select(&mut h, "Child guide");
+    click(&mut h, Role::DisclosureTriangle, "Open an exact hierarchy");
+    click(&mut h, Role::Button, "Add Hierarchy component");
+    replace(&mut h, "Hierarchy component 1", "parent/root");
+    click(&mut h, Role::Button, "Add Hierarchy component");
+    replace(&mut h, "Hierarchy component 2", "child\0/entry");
+    click(&mut h, Role::Button, "Open exact convention hierarchy");
+    let child = h
+        .state()
+        .conventions
+        .state()
+        .unwrap()
+        .record()
+        .unwrap()
+        .clone();
+    assert_eq!(child.title.0, "Child guide");
+    assert_eq!(child.slug.0, "child\0/entry");
+    let target = h
+        .state()
+        .conventions
+        .state()
+        .unwrap()
+        .reader
+        .target
+        .as_ref()
+        .unwrap();
+    assert!(
+        target.path.is_none(),
+        "later source pages bind the served identity, never re-resolve mutable hierarchy"
+    );
+    assert_eq!(target.id, child.id.as_str());
     assert_eq!(child.parent_id.as_ref(), Some(&first.id));
     assert_eq!(child.revision.get(), 2);
     assert_eq!(
