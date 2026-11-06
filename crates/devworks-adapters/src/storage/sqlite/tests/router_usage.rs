@@ -241,10 +241,16 @@ fn native_attempt_replay_stream_zero_and_late_reported_correction() {
         .host()
         .drive(attempt.attempt_id.clone(), src, Cancellation::new())
         .unwrap();
-    let DriveOutcome::Settled(replayed) = replayed else {
-        panic!("settled admission must replay its existing balance")
+    assert!(matches!(replayed, DriveOutcome::AlreadyDispatched));
+    let Admission::Admitted {
+        attempt: settled,
+        reused: true,
+    } = f.admit()
+    else {
+        panic!("settled admission must retain its existing source receipt")
     };
-    assert_eq!(replayed, late);
+    assert_eq!(settled.state, "Settled");
+    assert_eq!(settled.attempt_id, attempt.attempt_id);
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(
         f.fx.read(|s| s.usage().attempt_balance(&attempt.attempt_id))
