@@ -61,7 +61,11 @@ impl Revisioned for GetInput {
 #[schemars(extend("oneOf" = [{"required": ["repositoryId", "views", "page"]}, {"required": ["repositoryId", "current", "page"], "x-since": 3}]))]
 pub struct NodesInput {
     pub repository_id: Id,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "ViewSelection")]
     pub views: Option<ViewSelection>,
     #[serde(

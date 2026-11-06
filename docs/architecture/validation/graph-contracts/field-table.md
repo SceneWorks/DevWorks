@@ -1,6 +1,6 @@
 # Revision-3 graph field table
 
-Generated from the concrete authoring types; all are typed records or tagged unions.
+Generated from canonical Code* authoring types.
 
 ## CodeSearchMode
 
@@ -60,23 +60,20 @@ Values: NodeWindow, WholeFile.
 | `line` | `?PositiveCounter` |
 | `depth` | `?Depth` |
 
-## CodeRepositorySelection
-
-| Field | Type |
-| --- | --- |
-| `repository_id` | `Id` |
-
 ## CodeSourceLocation
 
 | Field | Type |
 | --- | --- |
-| `citation` | `Citation` |
+| `snapshot` | `RepositorySnapshot` |
+| `unit_key` | `RelativePath` |
+| `source_digest` | `Digest` |
 | `path` | `Content` |
 | `start_line` | `Counter` |
 | `end_line` | `Counter` |
 | `start_byte` | `?Counter` |
 | `end_byte` | `?Counter` |
 | `language` | `?Label` |
+| `legacy_citation` | `?Citation` |
 
 ## CodeProperty
 
@@ -95,7 +92,7 @@ Values: NodeWindow, WholeFile.
 | `node_id` | `Id` |
 | `repository_id` | `Id` |
 | `view_id` | `Id` |
-| `unit_key` | `Id` |
+| `unit_key` | `GraphUnitKey` |
 | `node_kind` | `Label` |
 | `name` | `Content` |
 | `qualified_name` | `Content` |
@@ -111,6 +108,10 @@ Values: NodeWindow, WholeFile.
 | `confidence` | `?Label` |
 | `extraction_source` | `?Label` |
 | `fallback_reason` | `?Content` |
+| `trust_revision` | `Revision` |
+| `content_digest` | `?Digest` |
+| `view_digest` | `Digest` |
+| `content_identity` | `Content` |
 
 ## CodeEdge
 
@@ -121,15 +122,15 @@ Values: NodeWindow, WholeFile.
 | `target_id` | `Id` |
 | `source_repository_id` | `Id` |
 | `target_repository_id` | `Id` |
-| `producing_unit` | `?Id` |
+| `producing_unit` | `?GraphUnitKey` |
 | `edge_kind` | `Label` |
 | `resolution` | `?Label` |
 | `confidence` | `?Probability` |
 | `confidence_band` | `?Label` |
 | `properties` | `Rows<CodeProperty>` |
 | `properties_complete` | `bool` |
-| `source_unit_key` | `Id` |
-| `target_unit_key` | `Id` |
+| `source_unit_key` | `GraphUnitKey` |
+| `target_unit_key` | `GraphUnitKey` |
 
 ## CodeSearchRepository
 
@@ -192,7 +193,7 @@ Values: NodeWindow, WholeFile.
 | --- | --- |
 | `source` | `CodeSourceLocation` |
 | `node_id` | `?Id` |
-| `text` | `Content` |
+| `text` | `GraphText` |
 | `start_byte` | `Counter` |
 | `end_byte` | `Counter` |
 | `total_bytes` | `Counter` |

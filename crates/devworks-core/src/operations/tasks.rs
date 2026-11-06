@@ -150,7 +150,11 @@ pub struct PrioritizeInput {
     pub feature_id: Option<RootId>,
     pub expected_queue_revision: Revision,
     pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "NonEmpty<Id>")]
     pub ordered_task_ids: Option<NonEmpty<Id>>,
     #[serde(

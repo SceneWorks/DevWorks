@@ -13,18 +13,18 @@ REC=ATTR+'#[serde(rename_all = "camelCase", deny_unknown_fields)]\n'
 TAG=ATTR+'#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]\n'
 def camel(s):return re.sub(r'_([a-z])',lambda m:m[1].upper(),s)
 def literal(v):return json.dumps(v)
-def fields(fs,indent='    ',since=None,one=(),schema=None):
+def fields(fs,indent='    ',since=None,one=(),schema=None,strict=()):
  # `one`: members of an exactly-one choice (rendered without null); `schema`: extra keywords.
  lines=[];schema=schema or {}
  for n,t in fs.items():
   extra=''.join(f', {literal(k)} = {literal(v)}' for k,v in schema.get(n,{}).items())
   if since and n in since:lines += [indent+'#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]',indent+f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]']
   elif t.startswith('?'):
-   lines.append(indent+'#[serde(default, skip_serializing_if = "Option::is_none")]')
+   lines.append(indent+('#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]'if n in strict or n in one else'#[serde(default, skip_serializing_if = "Option::is_none")]'))
    if n in one:lines.append(indent+f'#[schemars(with = "{rust(t[1:])}")]')
   lines.append(indent+f'pub {n}: {rust(t)},')
  return '\n'.join(lines)
-def enumfields(fs,since=None,one=(),schema=None):return fields(fs,'        ',since,one,schema).replace('pub ','')
+def enumfields(fs,since=None,one=(),schema=None,strict=()):return fields(fs,'        ',since,one,schema,strict).replace('pub ','')
 def choice(fs,one,since,kind):
  """`oneOf` of an exactly-one member choice: each alternative lists the full required set (in
  field order) with that member; one introduced later carries its `x-since`."""
@@ -60,7 +60,7 @@ lines=['//! Generated architecture DTOs. Edit domain_spec.py and regenerate; no 
  'use super::domain_support::*;',
  'use crate::{Id,Revision,Counter,ProjectId,RootId,ActorId,AssignmentId,OperationId,QueryId,RequestKey,CommandId,EventId,StoreId,ResourceId,CorrelationId,Protocol,ReadStamp,OperationState,RootControl,Activation,Blockers,EligibilityTarget,Purpose,Event,CommandReply};',
  'use crate::provider::{Digest,ArtifactRef,SchemaRef,TranscriptPage};',
- 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags,Citation,RepositorySnapshot,ResolvedViewSet};',
+ 'use crate::data_delivery::{DataScope,ViewSelection,Coverage,GitOid,GraphPage,RetrievalPage,DeliveryBarrier,DeliverySnapshot,ArtifactTags,Citation,RepositorySnapshot};',
  'use serde::{Serialize,Deserialize}; use schemars::JsonSchema;', '']
 for name,d in TYPES.items():
  if d['kind']=='record':
@@ -91,7 +91,7 @@ for mode in ['Query','Command']:
  for n,d in OPS.items():
   if included(d,mode):
    one=d.get('exactlyOne',[]);fs=opfields(d,mode)
-   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema')),'    },']
+   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema'),d.get('strictOptional',())),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')

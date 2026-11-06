@@ -30,13 +30,11 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
 
 fn code_record(name: &str, v: &Value) -> Result<(), String> {
     let number = |key: &str| v[key].as_str().and_then(|n| n.parse::<u64>().ok());
-    if matches!(name, "CodeSearchSelection" | "CodeFileSelection") {
-        if name == "CodeSearchSelection" && v["mode"] != "Unified" {
-            require(
-                v["text"].as_str().is_some_and(|s| !s.trim().is_empty()),
-                "node search requires a name pattern",
-            )?;
-        }
+    if name == "CodeSearchSelection" && v["mode"] != "Unified" {
+        require(
+            v["text"].as_str().is_some_and(|s| !s.trim().is_empty()),
+            "node search requires a name pattern",
+        )?;
     }
     if name == "CodeProperty" {
         let (Some(offset), Some(total), Some(text)) = (
@@ -77,7 +75,11 @@ fn code_record(name: &str, v: &Value) -> Result<(), String> {
             "source byte range mismatch",
         )?;
         require(
-            number("firstLine").is_some_and(|n| n > 0) && ordered(v, "firstLine", "lastLine"),
+            if total == 0 {
+                number("firstLine") == Some(0) && number("lastLine") == Some(0)
+            } else {
+                number("firstLine").is_some_and(|n| n > 0) && ordered(v, "firstLine", "lastLine")
+            },
             "invalid source lines",
         )?;
         require(
@@ -119,6 +121,16 @@ fn code_record(name: &str, v: &Value) -> Result<(), String> {
                 v[rows].as_array().is_some_and(|a| a.len() as u64 <= total),
                 "graph page exceeds total",
             )?;
+        }
+    }
+    if matches!(name, "CodeNode" | "CodeSourceLocation" | "CodeEdge") {
+        for key in ["unitKey", "sourceUnitKey", "targetUnitKey", "producingUnit"] {
+            if let Some(unit) = v[key].as_str() {
+                require(
+                    !unit.contains('\\'),
+                    "graph unit keys use canonical separators",
+                )?;
+            }
         }
     }
     Ok(())
@@ -313,6 +325,40 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             "saved operation input is the closed argument object without operation kind",
         )?;
     }
+    if name == "HelpSnapshot" {
+        require(
+            v["canGenerate"] == !present(v, "cannotGenerateReason"),
+            "Help generation permission needs an exact refusal reason",
+        )?;
+    }
+    if name == "HelpCapabilityMetadata" {
+        require(
+            v["available"] == !present(v, "unavailableReason"),
+            "Help capability availability needs an exact reason",
+        )?;
+    }
+    if matches!(name, "HelpPassage" | "HelpTopicPage") {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "Help continuation mismatch",
+        )?;
+    }
+    if matches!(name, "HelpTopicSummary" | "HelpTopicPage") && v["availability"] != "Available" {
+        require(present(v, "reason"), "unavailable Help needs a reason")?;
+    }
+    if name == "HelpReadView" {
+        match v["kind"].as_str() {
+            Some("Available") => require(
+                v["topic"]["availability"] == "Available",
+                "available Help read needs an available topic",
+            )?,
+            Some("Unavailable") => require(
+                v["availability"] != "Available",
+                "unavailable Help cannot claim availability",
+            )?,
+            _ => {}
+        }
+    }
     eval_record(name, v)?;
     match name {
         "ClaimDraft" => require(
@@ -505,6 +551,25 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
                 && v.get("current").is_none_or(|v| v == true),
             "repository nodes requires explicit or current views",
         )?;
+    }
+
+    if op == "help.read" && present(v, "maxChars") {
+        require(
+            v["maxChars"]
+                .as_str()
+                .and_then(|n| n.parse::<u32>().ok())
+                .is_some_and(|n| (1..=65536).contains(&n)),
+            "Help passage limit is 1..65536 characters",
+        )?;
+    }
+    if op == "help.topic_for_screen" {
+        require(
+            present(v, "capabilityRevision") != present(v, "current"),
+            "Help screen query needs exactly one revision selector",
+        )?;
+    }
+    if op == "help.topic_for_screen" && present(v, "current") {
+        require(v["current"] == true, "Help current selector must be true")?;
     }
 
     if op == "router.price_override" {

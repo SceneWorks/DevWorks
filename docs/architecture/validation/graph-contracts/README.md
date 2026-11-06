@@ -28,7 +28,10 @@ Current results are closed `GraphResult` alternatives containing the generated
 `Code*` records listed in `field-table.md`. Rich nodes include actual repository,
 view and unit identities. Source-less external/package nodes have no fabricated
 citation. Edge endpoint identity is repository + unit + node; relationships may
-not point outside the returned scoped graph. Properties are exact serialized
+not point outside the returned scoped graph. Canonical graph unit keys preserve both relative file paths and the directory namespace
+(`/`, `/src`); file source locations retain relative paths. Nodes expose the exact opaque
+stored content identity and trust revision. A raw SHA-256 is optional and only appears
+when actual captured source supplies it. Properties are exact serialized
 JSON fragments with offsets/total bytes, permitting inspection of large values
 without replacing them with truncated strings. Completion and continuation must
 remain explicit when bounded work stops.
@@ -38,7 +41,7 @@ and missing-view reason remain visible; no fake pin or baseline view is invented
 Existing freshness, language, semantic-pack and overlay records carry lifecycle
 states instead of collapsing them into generic coverage.
 
-Trust revision 3 binds repository + unit + node, expected content digest, exact
+Trust revision 3 binds repository + unit + node, exactly one opaque content identity or known captured SHA-256, exact
 view digest and trust revision. The immutable view identity is not caller
 permission. Revision 1 retains its recorded arguments and requires unambiguous
 host resolution. New optional members reject explicit null, and exact-one rules
