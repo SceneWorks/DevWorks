@@ -206,6 +206,13 @@ impl EmbeddingSpaceService {
                 candidate_id,
                 expected_revision,
             } => {
+                if !self.qualification_available() {
+                    return Err(denied(
+                        DomainErrorCode::UnsupportedCapability,
+                        "native_embedding_runtime",
+                        Some(candidate_id.clone()),
+                    ));
+                }
                 let q = qualification(tx, candidate_id, expected_revision.get())?;
                 if let Some(previous) = q.probe.as_ref()
                     && tx
