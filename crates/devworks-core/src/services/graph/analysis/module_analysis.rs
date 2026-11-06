@@ -77,6 +77,13 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         reader.gaps.push("ambiguous_internal_module");
     }
     let complete = reader.budget.exhausted.is_none() && !ambiguous_membership;
+    let indexed_complete = complete
+        && reader
+            .selected
+            .layers
+            .iter()
+            .filter(|layer| scope.views.iter().any(|v| v.view_id == layer.view.view_id))
+            .all(|layer| layer.view.coverage["state"] == "Complete");
     let mut out = Vec::new();
     for ((repo, name), group) in modules {
         let mut module = json!({"repositoryId":repo,"moduleName":name});
@@ -85,7 +92,7 @@ pub(super) fn query(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Vec<V
         }
         let mut value = json!({"module":module,"state":"NotAnalyzed","reason":"analysis_not_recorded",
             "observedNodeCounts":group.counts.into_iter().map(|(name,count)|json!({"name":name,"count":count.to_string()})).collect::<Vec<_>>(),
-            "observedCoverage":{"state":if complete{"Complete"}else{"Partial"},"gaps":[],"moreGaps":false},
+            "observedCoverage":{"state":if indexed_complete{"Complete"}else{"Partial"},"gaps":[],"moreGaps":false},
             "endpoints":drilldown("Route",group.endpoints,complete),"services":drilldown("Service",group.services,complete),"tables":drilldown("Table",group.tables,complete)});
         if let Some(source) = group.source {
             // Accept only the closed current typed record, including its actual provenance.

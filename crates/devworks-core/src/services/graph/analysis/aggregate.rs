@@ -269,7 +269,9 @@ pub(super) fn repository_summary(
     scope: &GraphScope,
 ) -> Result<(Option<String>, Option<String>), Failure> {
     let props = repository_properties(reader, scope)?.unwrap_or(Value::Null);
-    Ok((text(&props, "summary"), text(&props, "confidence")))
+    let summary = text(&props, "summary");
+    let confidence = summary.as_ref().and_then(|_| text(&props, "confidence"));
+    Ok((summary, confidence))
 }
 pub(super) fn rust_semantic(reader: &mut Reader<'_>, scope: &GraphScope) -> Result<Value, Failure> {
     let props = repository_properties(reader, scope)?.unwrap_or(Value::Null);

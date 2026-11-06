@@ -100,11 +100,17 @@ pub(super) fn overview(
     let mut value = json!({"repositories":repositories,"dependencies":[],"stamp":metadata.stamp,
         "graphCoverage":{"state":"Unavailable","gaps":[],"moreGaps":false},"unavailableReason":"graph_not_indexed","internalModules":[]});
     if let Some(reader) = reader.as_mut() {
-        {
-            let budget = metadata.budget.borrow();
-            reader.budget.visited = reader.budget.visited.saturating_add(budget.visited);
-            if reader.budget.exhausted.is_none() {
-                reader.budget.exhausted = budget.exhausted;
+        reader.budget.absorb_usage(&metadata.budget.borrow());
+        for row in value["repositories"].as_array_mut().expect("repositories") {
+            let id: Id = model::wire(row["repositoryId"].clone())?;
+            if reader
+                .scope()
+                .views
+                .iter()
+                .any(|binding| binding.repository_id == id)
+                && let Some(source) = reader.readme_source(&id)?
+            {
+                row["readmeSource"] = serde_json::to_value(source).expect("typed source");
             }
         }
         let scope = match repository {
@@ -126,7 +132,7 @@ pub(super) fn overview(
         value["internalModules"] = json!(module_analysis::query(reader, &scope)?);
         value["graphTotals"] =
             json!({"nodeCount":counts.nodes.to_string(),"edgeCount":counts.edges.to_string()});
-        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() { "Partial" } else { "Complete" },"gaps":[],"moreGaps":false});
+        value["graphCoverage"] = json!({"state": if reader.budget.exhausted.is_some() || !reader.gaps.is_empty() || !reader.selected.pin.unavailable_repositories.is_empty() || reader.selected.layers.iter().any(|v|v.view.coverage["state"]!="Complete") { "Partial" } else { "Complete" },"gaps":[],"moreGaps":false});
         value
             .as_object_mut()
             .expect("object")
