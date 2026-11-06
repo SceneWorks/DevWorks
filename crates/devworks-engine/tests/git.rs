@@ -21,17 +21,55 @@ use devworks_core::{
     },
 };
 use std::{io::Read, path::Path, process::Command, sync::Arc};
-fn git(path: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(["-c", "commit.gpgsign=false"])
-        .args(args)
+// Fixture setup preserves intentional repository-local hooks and filters, but never reads
+// the developer's auth/signing configuration or inherits executable Git environment settings.
+fn fixture_command(program: &str, path: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.env_clear();
+    for key in [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    command
         .current_dir(path)
+        .env("HOME", path)
+        .env("USERPROFILE", path)
+        .env("XDG_CONFIG_HOME", path)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", null)
+        .env("GIT_CONFIG_GLOBAL", null)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
         .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-        .output()
-        .unwrap();
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid");
+    command
+}
+fn fixture_git(path: &Path) -> Command {
+    let mut command = fixture_command("git", path);
+    command.args([
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "tag.gpgsign=false",
+        "-c",
+        "push.gpgsign=false",
+    ]);
+    command
+}
+fn git(path: &Path, args: &[&str]) -> String {
+    let output = fixture_git(path).args(args).output().unwrap();
     assert!(
         output.status.success(),
         "git {args:?} exited {:?}: stdout={} stderr={}",
@@ -178,7 +216,7 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
             .to_string()
             .contains("UnsupportedCapability")
     );
-    let marker = Command::new("git")
+    let marker = fixture_git(&source)
         .args(["config", "--get", "probe.executed"])
         .current_dir(&source)
         .output()
@@ -266,7 +304,7 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
             .contains("UnsupportedCapability")
     );
     assert_eq!(
-        Command::new("git")
+        fixture_git(&parent.join("sub"))
             .args(["config", "--get", "probe.executed"])
             .current_dir(parent.join("sub"))
             .status()
@@ -792,7 +830,7 @@ fn native_task_lifecycle_transport(
         committed_head,
         "recovery must not create another commit"
     );
-    let raw = Command::new("git")
+    let raw = fixture_git(tree_path)
         .args(["cat-file", "commit", "HEAD"])
         .current_dir(tree_path)
         .output()

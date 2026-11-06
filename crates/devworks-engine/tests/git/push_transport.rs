@@ -656,7 +656,7 @@ impl TlsServer {
         use std::io::BufRead;
         let certificate = home.join("fixture.crt");
         let key = home.join("fixture.key");
-        let output = Command::new("openssl")
+        let output = fixture_command("openssl", home)
             .env("OPENSSL_CONF", null_config())
             .args([
                 "req",
@@ -680,7 +680,7 @@ impl TlsServer {
         std::fs::write(&script, include_str!("https_server.py")).unwrap();
         let log = home.join("https-server.log");
         let error_log = std::fs::File::create(&log).unwrap();
-        let mut child = Command::new("python3")
+        let mut child = fixture_command("python3", home)
             .env("OPENSSL_CONF", null_config())
             .arg(script)
             .arg(root)
