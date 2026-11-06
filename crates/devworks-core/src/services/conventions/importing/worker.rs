@@ -25,6 +25,9 @@ impl ImportService {
     pub fn execute(&self, operation: &OperationRecord) -> ImportOutcome {
         match self.run(operation) {
             Ok(result) => ImportOutcome::Completed(result),
+            Err(StorageError::Busy) => ImportOutcome::NotApplied(
+                "Private import staging raced current blob metadata; recheck required".into(),
+            ),
             Err(StorageError::Cancelled) => {
                 ImportOutcome::NotApplied("Import cancelled or host closing".into())
             }
@@ -160,6 +163,11 @@ impl ImportService {
         } else {
             i64::MAX as u64
         };
+        if lease.version.byte_count as u64 > max_resource {
+            return Err(invalid(
+                "portable manifest exceeds current artifact file limit",
+            ));
+        }
         let mut reader = lease.reader(stopped.clone());
         let mut checkpoint: parser::Checkpoint = serde_json::from_value(draft.checkpoint.clone())
             .map_err(|_| invalid("import checkpoint"))?;
@@ -280,6 +288,21 @@ impl ImportService {
                 .map_err(failure)?;
             let parent = parent_path(tx, &d.scope, metadata.parent_path.as_deref().unwrap_or(&[]))
                 .map_err(failure)?;
+            let documents =
+                tx.conventions()
+                    .convention_import_artifacts(&d.operation_id, None, 2)?;
+            let document_ref = |kind: &str| {
+                documents
+                    .iter()
+                    .find(|row| row.kind == kind)
+                    .map(|row| {
+                        serde_json::to_value(crate::services::artifacts::version_ref(&row.version))
+                            .map_err(|_| invalid("private document ref"))
+                    })
+                    .transpose()
+            };
+            let content_ref = document_ref("Markdown")?;
+            let raw_content_ref = document_ref("Raw")?;
             let now = tx.now_ms();
             let proto = StoredConvention {
                 id: d.convention_id.clone(),
@@ -292,8 +315,8 @@ impl ImportService {
                 lifecycle: metadata
                     .lifecycle
                     .ok_or_else(|| invalid("missing lifecycle"))?,
-                content_ref: None,
-                raw_content_ref: None,
+                content_ref,
+                raw_content_ref,
                 applicability: metadata.applicability.unwrap_or_default(),
                 provenance: serde_json::to_value(
                     crate::protocol::records::ConventionProvenance::Imported {
@@ -398,11 +421,19 @@ impl ImportService {
             after = rows.last().map(|r| r.operation_id.clone());
             for row in rows {
                 if matches!(row.phase.as_str(), "Cancelled" | "Failed") {
-                    let id = row.operation_id.clone();
-                    self.write(move |tx| {
-                        tx.conventions()
-                            .discard_convention_import_artifacts(&id, 32)
-                    })?;
+                    loop {
+                        if self.is_stopped() {
+                            return Ok(count);
+                        }
+                        let id = row.operation_id.clone();
+                        let finished = self.write(move |tx| {
+                            tx.conventions()
+                                .discard_convention_import_artifacts(&id, 32)
+                        })?;
+                        if finished {
+                            break;
+                        }
+                    }
                     count += 1;
                 }
             }

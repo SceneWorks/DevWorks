@@ -31,15 +31,19 @@ fn status(
     d: StoredConventionImport,
     cancel: bool,
 ) -> ConventionOperationStatus {
-    let phase = match d.phase.as_str() {
-        "Published" if op.state == crate::protocol::OperationState::ObservedComplete => {
+    let phase = match (op.state, d.phase.as_str()) {
+        (crate::protocol::OperationState::CancelledBeforeDispatch, _) => {
+            ConventionOperationPhase::Cancelled
+        }
+        (crate::protocol::OperationState::Failed, _) => ConventionOperationPhase::Failed,
+        (crate::protocol::OperationState::ObservedComplete, "Published") => {
             ConventionOperationPhase::Completed
         }
-        "Published" => ConventionOperationPhase::Publishing,
-        "Failed" => ConventionOperationPhase::Failed,
-        "Cancelled" => ConventionOperationPhase::Cancelled,
-        "Parsing" => ConventionOperationPhase::Preparing,
-        "Ready" => ConventionOperationPhase::Publishing,
+        (_, "Published") => ConventionOperationPhase::Publishing,
+        (_, "Failed") => ConventionOperationPhase::Failed,
+        (_, "Cancelled") => ConventionOperationPhase::Cancelled,
+        (_, "Parsing") => ConventionOperationPhase::Preparing,
+        (_, "Ready") => ConventionOperationPhase::Publishing,
         _ => ConventionOperationPhase::Queued,
     };
     ConventionOperationStatus {

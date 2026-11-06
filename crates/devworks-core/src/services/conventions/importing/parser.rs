@@ -587,36 +587,6 @@ impl<'a> Parser<'a> {
             non_whitespace: sink.non_whitespace,
         })
     }
-    /// Decode exactly a previously validated payload into a bounded staging reader's sink.
-    pub fn copy_payload(&mut self, payload: &Payload, output: &mut dyn Write) -> Result<(), Error> {
-        self.reader.seek(SeekFrom::Start(payload.start))?;
-        self.offset = payload.start;
-        if payload.base64 {
-            let mut decoded = Base64Sink {
-                inner: output,
-                quartet: Vec::with_capacity(4),
-                ended: false,
-            };
-            self.string(
-                &mut decoded,
-                payload
-                    .byte_length
-                    .saturating_add(2)
-                    .saturating_div(3)
-                    .saturating_mul(4),
-            )?;
-            if !decoded.quartet.is_empty() {
-                return Err(Error::Invalid("incomplete base64 quartet"));
-            }
-            decoded.flush()?;
-        } else {
-            self.string(output, payload.byte_length)?;
-        }
-        if self.offset != payload.end {
-            return Err(Error::Invalid("payload source locator changed"));
-        }
-        Ok(())
-    }
     fn scalar(&mut self) -> Result<Option<([u8; 4], usize)>, Error> {
         let byte = self.byte()?;
         if byte == b'"' {
@@ -1005,6 +975,119 @@ mod tests {
                 .next(Checkpoint::default()),
             Err(Error::Stopped)
         ));
+    }
+    #[test]
+    fn maximum_escaped_documents_use_bounded_seek_reads_and_checkpoint_state() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Remove(std::path::PathBuf);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        struct Measured {
+            file: std::fs::File,
+            maximum: Arc<AtomicUsize>,
+        }
+        impl Read for Measured {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                self.maximum.fetch_max(out.len(), Ordering::Relaxed);
+                self.file.read(out)
+            }
+        }
+        impl Seek for Measured {
+            fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+                self.file.seek(from)
+            }
+        }
+        let bytes = super::super::super::model::MAX_MARKDOWN_BYTES;
+        let mut hash = Sha256::new();
+        let zeros = [0u8; 65536];
+        let mut remaining = bytes;
+        while remaining > 0 {
+            let n = remaining.min(zeros.len() as u64) as usize;
+            hash.update(&zeros[..n]);
+            remaining -= n as u64;
+        }
+        let digest = hash
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let path = std::env::temp_dir().join(format!(
+            "devworks-portable-documents-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cleanup = Remove(path.clone());
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(br#"{"format":"devworks-convention","version":1,"slug":"","title":"Exact NUL documents","parentPath":[],"sortOrder":0,"lifecycle":"Active","applicability":[],"resources":[],"#).unwrap();
+        let escaped = r"\u0000".repeat(4096);
+        for (i, key) in ["markdown", "rawContent"].iter().enumerate() {
+            if i > 0 {
+                file.write_all(b",").unwrap();
+            }
+            write!(
+                file,
+                "\"{key}\":{{\"sha256\":\"{digest}\",\"byteLength\":\"{bytes}\",\"text\":\""
+            )
+            .unwrap();
+            let mut remaining = bytes;
+            while remaining > 0 {
+                let n = remaining.min(4096) as usize;
+                file.write_all(&escaped.as_bytes()[..n * 6]).unwrap();
+                remaining -= n as u64;
+            }
+            file.write_all(b"\"}").unwrap();
+        }
+        file.write_all(b"}").unwrap();
+        drop(file);
+        assert!(std::fs::metadata(&path).unwrap().len() > 192_000_000);
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let mut source = Measured {
+            file: std::fs::File::open(&path).unwrap(),
+            maximum: maximum.clone(),
+        };
+        let mut checkpoint = Checkpoint::default();
+        let mut documents = 0;
+        loop {
+            match Parser::new(&mut source, &checkpoint, bytes, &|| false)
+                .unwrap()
+                .next(checkpoint.clone())
+                .unwrap()
+            {
+                Step::Entry {
+                    entry,
+                    checkpoint: next,
+                } => {
+                    assert_eq!(entry.payload.byte_length, bytes);
+                    assert_eq!(entry.payload.sha256, digest);
+                    assert!(serde_json::to_vec(&next).unwrap().len() < 4096);
+                    let mut decoded =
+                        PayloadReader::new(&mut source, entry.payload, &|| false).unwrap();
+                    assert_eq!(io::copy(&mut decoded, &mut io::sink()).unwrap(), bytes);
+                    documents += 1;
+                    checkpoint = next;
+                }
+                Step::Complete { resources, .. } => {
+                    assert_eq!(resources, 0);
+                    break;
+                }
+            }
+        }
+        assert_eq!(documents, 2);
+        assert!(maximum.load(Ordering::Relaxed) <= 65536);
+        drop(cleanup);
     }
     #[test]
     fn preserves_source_slug_components_but_refuses_blank_authored_title_and_markdown() {
