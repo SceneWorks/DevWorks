@@ -151,6 +151,7 @@ impl Shell {
             return;
         }
         let id = claim.to_owned();
+        self.work.allocation_inspect_errors.remove(claim);
         self.query(
             Slot::AllocationInspect(id.clone()),
             "Inspecting work claim",
@@ -334,7 +335,7 @@ impl Shell {
                             let key = (project.clone(), feature.clone());
                             if !self.command(
                                 Slot::AllocationClaim(project, feature),
-                                "Selecting eligible work",
+                                "Selecting work",
                                 operation,
                                 move |b| wops::allocation_command(b, operation, body),
                             ) {
@@ -405,7 +406,12 @@ impl Shell {
                     Ok(claim) => {
                         self.work.allocation_claims.insert(id, claim);
                     }
-                    Err(error) => self.work_failure("Inspecting the work claim", error),
+                    Err(error) => {
+                        let text =
+                            format!("The claim could not be inspected: {}", error.describe());
+                        self.work.allocation_inspect_errors.insert(id, text.clone());
+                        self.work.message = Some((Tone::Bad, text));
+                    }
                 }
             }
             (slot, reply) => return Some((slot, reply)),
@@ -436,7 +442,7 @@ impl Shell {
         self.work.allocation_claims.insert(id, claim);
         self.work.message = Some((
             Tone::Good,
-            format!("Selected {title}. Use Start when you are ready to execute it."),
+            format!("Selected {title}. Open it to review its current controls; Start is separate."),
         ));
         self.load_work();
     }
@@ -469,11 +475,12 @@ fn field(ui: &mut Ui, label: &str, value: &mut String) {
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
 }
 fn lease(work: &WorkUi) -> Option<u64> {
-    if work.claim_lease_ms.is_empty() {
-        Some(300_000)
-    } else {
-        work.claim_lease_ms.parse().ok().filter(|n| *n > 0)
-    }
+    work.claim_lease_ms
+        .as_deref()
+        .unwrap_or("300000")
+        .parse()
+        .ok()
+        .filter(|n| *n > 0)
 }
 pub(super) fn next_task(
     ui: &mut Ui,
@@ -521,18 +528,17 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
         {
             actions.push(Action::Allocate(None, lease(work).expect("enabled lease")));
         }
-        let mut value = if work.claim_lease_ms.is_empty() {
-            "300000".into()
-        } else {
-            work.claim_lease_ms.clone()
-        };
+        let mut value = work
+            .claim_lease_ms
+            .clone()
+            .unwrap_or_else(|| "300000".into());
         ui.label("Claim lease (ms)");
         let response = ui.add(egui::TextEdit::singleline(&mut value).desired_width(90.0));
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Claim lease (ms)")
         });
         if response.changed() {
-            work.claim_lease_ms = value;
+            work.claim_lease_ms = Some(value);
         }
     });
     let repositories = work.allocation_repositories.clone();
@@ -541,8 +547,14 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
         let repository = filters
             .repository_id
             .as_ref()
-            .and_then(|id| repositories.iter().find(|(key, _)| key == id))
-            .map_or("Any repository", |(_, name)| name.as_str());
+            .map(|id| {
+                repositories
+                    .iter()
+                    .find(|(key, _)| key == id)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| format!("{id} (no longer in this project)"))
+            })
+            .unwrap_or_else(|| "Any repository".into());
         egui::ComboBox::from_label("Selection repository")
             .selected_text(repository)
             .show_ui(ui, |ui| {
@@ -597,7 +609,17 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
         .filter_map(|w| w.claim.as_ref())
     {
         if !work.allocation_claims.contains_key(claim.id.as_str()) {
-            actions.push(Action::InspectClaim(claim.id.as_str().into()));
+            if let Some(error) = work.allocation_inspect_errors.get(claim.id.as_str()) {
+                chip(ui, error.clone(), Tone::Attention);
+                if ui
+                    .button(format!("Retry claim {}", claim.id.as_str()))
+                    .clicked()
+                {
+                    actions.push(Action::InspectClaim(claim.id.as_str().into()));
+                }
+            } else {
+                actions.push(Action::InspectClaim(claim.id.as_str().into()));
+            }
         }
     }
     let claims: Vec<_> = work
@@ -608,6 +630,7 @@ pub(super) fn controls(ui: &mut Ui, work: &mut WorkUi, enabled: bool, actions: &
         .collect();
     for claim in claims {
         ui.group(|ui| {
+            if let Some(error) = work.allocation_inspect_errors.get(claim.id.as_str()) { chip(ui,format!("Last known claim; {error}"),Tone::Attention); }
             let name = work
                 .freshest(claim.work_id.as_str())
                 .map(|w| w.title.0)
