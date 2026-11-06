@@ -233,3 +233,111 @@ pub(super) fn approve_owned_force(
     assert_eq!(row.principal, ActorId(id("force-worker")));
     operation
 }
+
+fn assert_filtered_untracked_manifest_is_nonexecuting(driver: &str, file: &std::ffi::OsStr) {
+    use devworks_core::services::indexing::git::{Git, GitFault};
+    let h = Harness::new();
+    let store = h.open();
+    let dir = h.root.join("filtered-manifest");
+    std::fs::create_dir(&dir).unwrap();
+    git(&dir, &["init", "-b", "main"]);
+    std::fs::write(dir.join(".gitattributes"), "*.probe filter=probe\n").unwrap();
+    git(&dir, &["add", ".gitattributes"]);
+    git(&dir, &["commit", "-m", "attributes"]);
+    let head = git(&dir, &["rev-parse", "HEAD"]);
+    let path = dir.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "untracked filtered contents\n").unwrap();
+    let command = if driver == "clean" {
+        "printf ran > .git/filter-marker; cat"
+    } else {
+        "printf ran > .git/filter-marker; exit 1"
+    };
+    git(
+        &dir,
+        &["config", &format!("filter.probe.{driver}"), command],
+    );
+    // Positive control is the exact no-index diff used by manifest capture. Neither
+    // --no-ext-diff nor --no-textconv disables clean/process conversion.
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "--no-renames",
+            "--",
+            "/dev/null",
+        ])
+        .arg(file)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let marker = dir.join(".git/filter-marker");
+    assert!(
+        marker.exists(),
+        "fixture did not execute {driver}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_file(&marker).unwrap();
+    let helpers = SupervisedHelpers {
+        supervisor: Arc::new(ProcessSupervisor::new(
+            store.clone(),
+            Arc::new(NativeProcessHost),
+            Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+        )),
+        store: store.clone(),
+        fs: Arc::new(NativeFilesystem::new()),
+    };
+    let info = store.info();
+    let ctx = HostIngress::new(&*store).context(
+        info.host_actor,
+        PrincipalKind::Host,
+        id("filtered-manifest-invoke"),
+        id("filtered-manifest-session"),
+        Counter::new(info.restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    );
+    let capture = Git {
+        runner: &helpers,
+        ctx: &ctx,
+        program: "git",
+        deadline: std::time::Duration::from_secs(30),
+        stop: &|| false,
+    };
+    let result = capture.commit_manifest(&dir, &head);
+    assert!(
+        !marker.exists(),
+        "approval preparation executed the {driver} filter for {file:?}: {result:?}"
+    );
+    assert!(
+        matches!(result, Err(GitFault::Unqualified)),
+        "filtered untracked path must be refused before diff: {result:?}"
+    );
+    assert_eq!(
+        git(&dir, &["diff", "--cached", "--stat"]),
+        "",
+        "qualification never stages contents"
+    );
+}
+#[test]
+fn saved_commit_manifest_rejects_untracked_clean_and_process_filters_before_execution() {
+    for driver in ["clean", "process"] {
+        assert_filtered_untracked_manifest_is_nonexecuting(
+            driver,
+            std::ffi::OsStr::new("new.probe"),
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn saved_commit_manifest_qualifies_nul_separated_untracked_filter_paths() {
+    for file in [
+        std::ffi::OsString::from("sub dir/line\n name.probe"),
+        std::ffi::OsString::from("tab\tname.probe"),
+    ] {
+        assert_filtered_untracked_manifest_is_nonexecuting("clean", &file);
+    }
+}

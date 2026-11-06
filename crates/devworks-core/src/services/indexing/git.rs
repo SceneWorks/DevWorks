@@ -570,8 +570,8 @@ impl Git<'_> {
     }
 
     /// Git may run arbitrary clean/process filters while computing status. Determine whether
-    /// tracked paths need them before hashing; never invent a dirty bit using raw bytes in
-    /// place of a configured canonical transformation. Submodules are read separately so
+    /// tracked or untracked paths need them before hashing; never invent a dirty bit using raw
+    /// bytes in place of a configured canonical transformation. Submodules are read separately so
     /// each repository's local filter configuration receives the same checks.
     fn safe_dirty(&self, dir: &Path, depth: usize) -> Result<bool, GitFault> {
         if depth > 32 {
@@ -638,6 +638,16 @@ impl Git<'_> {
                         .to_owned(),
                 ));
             }
+        }
+        if !filters.is_empty() {
+            // A no-index diff applies clean/process conversion to new files too. Qualify all
+            // untracked paths without decoding or line-splitting their NUL-delimited names.
+            let untracked = self.run(
+                dir,
+                &["ls-files", "-z", "--others", "--exclude-standard"],
+                MAX_LISTING_BYTES,
+            )?;
+            paths.extend_from_slice(&untracked);
         }
         if !filters.is_empty() && !paths.is_empty() {
             let attributes = self.runner.run(
@@ -1329,6 +1339,72 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn filter_qualification_preserves_every_nul_delimited_path_byte() {
+        use crate::context::PrincipalKind;
+        use crate::protocol::{ActorId, Counter, Id, Revision, StoreId};
+        struct Qualification;
+        impl HelperRunner for Qualification {
+            fn run(
+                &self,
+                _: &InvocationContext,
+                spec: ProcessSpec,
+                _: HelperLimits,
+                _: &(dyn Fn() -> bool + Sync),
+            ) -> Result<Vec<u8>, HelperFault> {
+                if spec.args.iter().any(|a| a == "rev-parse") {
+                    return Ok("a".repeat(40).into_bytes());
+                }
+                if spec.args.iter().any(|a| a == "config") {
+                    return Ok(b"filter.probe.clean\nexternal-program\0".to_vec());
+                }
+                if spec.args.iter().any(|a| a == "ls-files") {
+                    if spec.args.iter().any(|a| a == "--stage") {
+                        return Ok(
+                            format!("100644 {} 0\t.gitattributes\0", "a".repeat(40)).into_bytes()
+                        );
+                    }
+                    assert!(spec.args.iter().any(|a| a == "--others"));
+                    return Ok(b"sub dir/line\nname.probe\0non-utf8-\xff.probe\0".to_vec());
+                }
+                if spec.args.iter().any(|a| a == "check-attr") {
+                    assert_eq!(
+                        spec.stdin.as_deref(),
+                        Some(
+                            b".gitattributes\0sub dir/line\nname.probe\0non-utf8-\xff.probe\0"
+                                .as_slice()
+                        )
+                    );
+                    return Ok(b".gitattributes\0filter\0unspecified\0sub dir/line\nname.probe\0filter\0probe\0non-utf8-\xff.probe\0filter\0probe\0".to_vec());
+                }
+                panic!(
+                    "filter qualification must refuse before status or diff: {:?}",
+                    spec.args
+                );
+            }
+        }
+        let ctx = InvocationContext::new(
+            ActorId(Id::new("host").unwrap()),
+            PrincipalKind::Host,
+            Id::new("invoke").unwrap(),
+            Id::new("git").unwrap(),
+            StoreId(Id::new("store").unwrap()),
+            Counter::new(0).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let capture = Git {
+            runner: &Qualification,
+            ctx: &ctx,
+            program: "git",
+            deadline: Duration::from_secs(5),
+            stop: &|| false,
+        };
+        assert!(matches!(
+            capture.revision_observation(Path::new("/owned/worktree")),
+            Err(GitFault::Unqualified)
+        ));
+    }
 
     #[test]
     fn a_blob_read_admits_the_largest_accepted_file() {
