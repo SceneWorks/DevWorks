@@ -181,7 +181,7 @@ impl HelperRunner for SupervisedHelpers {
         limits: HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, HelperFault> {
-        self.run_owned(ctx, spec, limits, stop, None, false, false)
+        self.run_owned(ctx, spec, limits, stop, RunOptions::default())
     }
 
     fn run_recorded(
@@ -198,9 +198,11 @@ impl HelperRunner for SupervisedHelpers {
             spec,
             limits,
             stop,
-            Some(operation.clone()),
-            approved_hold,
-            false,
+            RunOptions {
+                operation: Some(operation.clone()),
+                approved_hold,
+                difference: false,
+            },
         )
     }
     fn run_difference(
@@ -211,7 +213,16 @@ impl HelperRunner for SupervisedHelpers {
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<Vec<u8>, HelperFault> {
         difference_command(&spec)?;
-        self.run_owned(ctx, spec, limits, stop, None, false, true)
+        self.run_owned(
+            ctx,
+            spec,
+            limits,
+            stop,
+            RunOptions {
+                difference: true,
+                ..RunOptions::default()
+            },
+        )
     }
     fn run_recorded_difference(
         &self,
@@ -227,9 +238,11 @@ impl HelperRunner for SupervisedHelpers {
             spec,
             limits,
             stop,
-            Some(operation.clone()),
-            false,
-            true,
+            RunOptions {
+                operation: Some(operation.clone()),
+                approved_hold: false,
+                difference: true,
+            },
         )
     }
 }
@@ -246,6 +259,12 @@ fn difference_command(spec: &ProcessSpec) -> Result<(), HelperFault> {
     }
     Ok(())
 }
+#[derive(Default)]
+struct RunOptions {
+    operation: Option<OperationId>,
+    approved_hold: bool,
+    difference: bool,
+}
 impl SupervisedHelpers {
     fn run_owned(
         &self,
@@ -253,9 +272,7 @@ impl SupervisedHelpers {
         mut spec: ProcessSpec,
         limits: HelperLimits,
         stop: &(dyn Fn() -> bool + Sync),
-        operation: Option<OperationId>,
-        approved_hold: bool,
-        difference: bool,
+        options: RunOptions,
     ) -> Result<Vec<u8>, HelperFault> {
         if stop() {
             return Err(HelperFault::Cancelled);
@@ -274,9 +291,9 @@ impl SupervisedHelpers {
                 ctx,
                 LaunchRequest {
                     spec,
-                    operation_id: operation,
+                    operation_id: options.operation,
                     lease: None,
-                    approved_hold,
+                    approved_hold: options.approved_hold,
                 },
                 &policy,
             )
@@ -330,7 +347,7 @@ impl SupervisedHelpers {
         if over {
             return Err(HelperFault::OutputTooLarge);
         }
-        if exit != Some(0) && !(difference && exit == Some(1)) {
+        if exit != Some(0) && !(options.difference && exit == Some(1)) {
             let text = String::from_utf8_lossy(&stderr);
             let text: String = Redactor::new()
                 .redact_text(text.trim())

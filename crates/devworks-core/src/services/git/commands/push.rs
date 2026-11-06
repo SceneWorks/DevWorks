@@ -306,32 +306,6 @@ impl GitService {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::transport;
-    #[test]
-    fn push_transport_refuses_executable_helpers_and_embedded_credentials() {
-        for url in [
-            "ext::sh -c bad",
-            "-x",
-            "https://user:secret@github.com/o/r",
-            "https://github.com/o/r?token=secret",
-            "git@github.com:../r",
-            "ssh://user:secret@host/r",
-        ] {
-            assert!(!transport(url), "{url}");
-        }
-        for url in [
-            "https://github.com/o/r.git",
-            "git@github.com:o/r.git",
-            "ssh://git@github.com/o/r.git",
-            "file:///tmp/registered.git",
-        ] {
-            assert!(transport(url), "{url}");
-        }
-    }
-}
-
 impl GitService {
     /// The ordinary push preparation is read-only and already verifies physical source and
     /// registered destination. Review exposes those exact facts, never a guessed remote name.
@@ -359,6 +333,32 @@ impl GitService {
                         .into(),
                 )
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transport;
+    #[test]
+    fn push_transport_refuses_executable_helpers_and_embedded_credentials() {
+        for url in [
+            "ext::sh -c bad",
+            "-x",
+            "https://user:secret@github.com/o/r",
+            "https://github.com/o/r?token=secret",
+            "git@github.com:../r",
+            "ssh://user:secret@host/r",
+        ] {
+            assert!(!transport(url), "{url}");
+        }
+        for url in [
+            "https://github.com/o/r.git",
+            "git@github.com:o/r.git",
+            "ssh://git@github.com/o/r.git",
+            "file:///tmp/registered.git",
+        ] {
+            assert!(transport(url), "{url}");
         }
     }
 }
