@@ -1,0 +1,288 @@
+//! Immutable embedding inputs and their actual caller-owned preparation operation. Artifact
+//! staging is a phase; the preparation stays Dispatching until the native owner settles.
+use super::{IndexService, embedding::EmbeddingOrigin};
+use crate::{
+    context::InvocationContext,
+    fingerprint::sha256_hex,
+    ports::{AuthorityFence, storage::*},
+    protocol::{Id, OperationId, OperationState, provider::ArtifactRef},
+    services::{
+        approvals,
+        artifacts::{host::HostArtifactPublication, version_ref},
+    },
+};
+use serde_json::{Value, json};
+
+const CAPABILITY: &str = "conventions.embedding_prepare";
+#[derive(Clone, Debug)]
+pub struct PreparedInputs {
+    pub request_id: Id,
+    pub operation_id: OperationId,
+    pub context: InvocationContext,
+    pub input_refs: Vec<ArtifactRef>,
+}
+/// A batch is captured from an actual admitted query or index operation, never caller wire.
+pub struct InputPreparation<'a> {
+    pub context: &'a InvocationContext,
+    pub origin: &'a EmbeddingOrigin,
+    pub embedding_space: &'a str,
+    pub configuration_source_digest: &'a str,
+    pub texts: &'a [&'a str],
+    pub fences: &'a [AuthorityFence],
+    pub cancellation: &'a Cancellation,
+    pub deadline_ms: Option<i64>,
+}
+fn invalid(message: &str) -> StorageError {
+    StorageError::InvalidRecord(message.into())
+}
+fn digest(value: &Value) -> Result<String, StorageError> {
+    Ok(sha256_hex(
+        crate::jcs::canonicalize(value)
+            .map_err(|_| invalid("embedding identity"))?
+            .as_bytes(),
+    ))
+}
+fn identity(prefix: &str, value: &str) -> Id {
+    Id::new(format!("{prefix}{}", &sha256_hex(value.as_bytes())[..40])).expect("host digest ID")
+}
+fn check(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    fences: &[AuthorityFence],
+) -> Result<(), StorageError> {
+    if &tx.store().store_id != ctx.store_id()
+        || tx.store().restore_epoch != ctx.restore_epoch().get()
+        || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
+        || !crate::authority::fences_hold(tx, fences)?
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(())
+}
+fn captured(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    row: &StoredConventionEmbeddingInputs,
+    operation: &OperationId,
+    args_digest: &str,
+) -> Result<PreparedInputs, StorageError> {
+    let op = tx
+        .operations()
+        .operation(operation)?
+        .ok_or_else(|| invalid("missing embedding preparation"))?;
+    if op.capability != CAPABILITY
+        || op.args_digest != args_digest
+        || op.payload["requestId"] != json!(row.request_id)
+        || op.payload["inputDigest"] != row.input_digest
+        || op.payload["contextDigest"] != row.context_digest
+        || op.payload["embeddingSpace"] != row.embedding_space
+        || row.actor_id != *ctx.principal()
+        || row.project_id.as_ref() != ctx.project_id()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let original = approvals::restore_source_context(
+        tx.store(),
+        ctx.principal(),
+        ctx.principal_kind(),
+        &op.payload["sourceContext"],
+    )?;
+    Ok(PreparedInputs {
+        request_id: row.request_id.clone(),
+        operation_id: operation.clone(),
+        context: original,
+        input_refs: row
+            .input_refs
+            .iter()
+            .cloned()
+            .map(|v| serde_json::from_value(v).map_err(|_| invalid("captured embedding ref")))
+            .collect::<Result<_, _>>()?,
+    })
+}
+impl IndexService {
+    /// Exact winner refs are reused across retries; concurrent losing files never become
+    /// artifact rows. No source/provider bytes are read inside the publishing transaction.
+    pub fn prepare_embedding_inputs(
+        &self,
+        input: InputPreparation<'_>,
+    ) -> Result<PreparedInputs, StorageError> {
+        let InputPreparation {
+            context,
+            origin,
+            embedding_space,
+            configuration_source_digest,
+            texts,
+            fences,
+            cancellation,
+            deadline_ms,
+        } = input;
+        let bounded = || {
+            if cancellation.is_cancelled()
+                || deadline_ms.is_some_and(|d| self.clock.now_ms().get() >= d)
+            {
+                Err(StorageError::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        bounded()?;
+        if texts.is_empty() || texts.len() > 32 {
+            return Err(invalid("embedding batch must contain 1..32 actual inputs"));
+        }
+        let source = approvals::save_source_context(context);
+        let mut stable_context = source.clone();
+        stable_context["invocationContext"]
+            .as_object_mut()
+            .ok_or_else(|| invalid("embedding context"))?
+            .remove("invocation");
+        let context_digest =
+            digest(&json!({"context":stable_context,"configuration":configuration_source_digest}))?;
+        let input_digest = digest(&json!(
+            texts
+                .iter()
+                .map(|t| json!({"sha256":sha256_hex(t.as_bytes()),"byteCount":t.len()}))
+                .collect::<Vec<_>>()
+        ))?;
+        let origin = match origin {
+            EmbeddingOrigin::Query {
+                query_id,
+                fingerprint,
+                scope_digest,
+            } => {
+                json!({"kind":"Query","queryId":query_id,"fingerprint":fingerprint,"scopeDigest":scope_digest})
+            }
+            EmbeddingOrigin::Index {
+                operation_id,
+                generation_id,
+                source_digest,
+                first_chunk,
+            } => {
+                json!({"kind":"Index","operationId":operation_id,"generationId":generation_id,"sourceDigest":source_digest,"firstChunk":first_chunk})
+            }
+        };
+        let args_digest = digest(
+            &json!({"origin":origin,"context":context_digest,"space":embedding_space,"inputs":input_digest}),
+        )?;
+        let request_id = identity("cemb_", &args_digest);
+        let operation_id = OperationId(identity("cprep_", &args_digest));
+        let (
+            ctx,
+            fs,
+            op_id,
+            request,
+            space,
+            input_hash,
+            context_hash,
+            args,
+            source_value,
+            cancelled,
+        ) = (
+            context.clone(),
+            fences.to_vec(),
+            operation_id.clone(),
+            request_id.clone(),
+            embedding_space.to_owned(),
+            input_digest.clone(),
+            context_digest.clone(),
+            args_digest.clone(),
+            source,
+            cancellation.clone(),
+        );
+        let prior = self.write(move |tx| {
+            if cancelled.is_cancelled() || deadline_ms.is_some_and(|d| tx.now_ms() >= d) {
+                return Err(StorageError::Cancelled);
+            }
+            check(tx,&ctx,&fs)?;
+            if let Some(row)=tx.conventions().convention_embedding_inputs(&request)? {
+                return captured(tx,&ctx,&row,&op_id,&args).map(Some);
+            }
+            let op = match tx.operations().operation(&op_id)? {
+                Some(op) => { if op.capability != CAPABILITY || op.args_digest != args { return Err(StorageError::ScopeDenied); } op },
+                None => tx.operations().record_intent(NewOperation {id:op_id.clone(),root_id:ctx.root_id().cloned(),assignment_id:ctx.assignment_id().cloned(),capability:CAPABILITY.into(),schema_version:1,args_digest:args.clone(),
+                    payload:json!({"requestId":request,"sourceContext":source_value,"embeddingSpace":space,"contextDigest":context_hash,"inputDigest":input_hash,"origin":origin})})?,
+            };
+            let op = if matches!(op.state,OperationState::IntentRecorded|OperationState::RetryPending) {
+                tx.operations().begin_attempt(&op.id,op.revision,AttemptBinding{policy_revision:Some(ctx.policy_revision().get()),..Default::default()})?;
+                tx.operations().operation(&op.id)?.ok_or_else(||invalid("embedding operation disappeared"))?
+            } else {op};
+            if op.state==OperationState::Preflighted {
+                tx.operations().transition(&op.id,op.revision,op.latest_attempt().map(|a|a.fence()).as_ref(),OperationState::Dispatching,None)?;
+            } else if !matches!(op.state,OperationState::Dispatching|OperationState::OutcomeUnknown) {
+                return Err(invalid("embedding preparation cannot restart terminal operation"));
+            }
+            Ok(None)
+        })?;
+        if let Some(prior) = prior {
+            return Ok(prior);
+        }
+        let mut staged = Vec::with_capacity(texts.len());
+        let stage_result = self.publication(|| {
+            for (index,text) in texts.iter().enumerate() {
+                bounded()?;
+                staged.push(self.artifacts.stage_host_bytes(self.store.as_ref(),text.as_bytes(),json!({"kind":"ConventionEmbeddingInput","requestId":request_id,"inputIndex":index}))?
+                    .map_err(|reason|StorageError::InvalidRecord(reason))?);
+            }
+            Ok(())
+        });
+        if let Err(error) = stage_result {
+            for file in &staged {
+                self.artifacts
+                    .settle_host_bytes(self.store.as_ref(), file, false);
+            }
+            return Err(error);
+        }
+        let (
+            ctx,
+            fs,
+            op_id,
+            request,
+            space,
+            input_hash,
+            context_hash,
+            args,
+            files,
+            artifacts,
+            cancellation,
+        ) = (
+            context.clone(),
+            fences.to_vec(),
+            operation_id,
+            request_id,
+            embedding_space.to_owned(),
+            input_digest,
+            context_digest,
+            args_digest,
+            staged.clone(),
+            self.artifacts.clone(),
+            cancellation.clone(),
+        );
+        let now = self.clock.now_ms().get();
+        let result = self.write(move |tx| {
+            if cancellation.is_cancelled() || deadline_ms.is_some_and(|d|tx.now_ms()>=d) {return Err(StorageError::Cancelled);}
+            check(tx,&ctx,&fs)?;
+            if let Some(row)=tx.conventions().convention_embedding_inputs(&request)? {
+                return captured(tx,&ctx,&row,&op_id,&args).map(|p|(p,false));
+            }
+            let mut refs=Vec::with_capacity(files.len());
+            for (index,file) in files.iter().enumerate() {
+                let version=artifacts.commit_host_bytes_in_scope(tx,file,HostArtifactPublication {
+                    title:"Convention embedding input",media_type:"text/plain; charset=utf-8",
+                    scope:ctx.project_id().cloned().map_or(ArtifactScope::Workspace,ArtifactScope::Project),owner:ctx.principal().clone(),
+                    provenance:json!({"kind":"ConventionEmbeddingInput","requestId":request,"contextDigest":context_hash,"embeddingSpace":space,"inputDigest":input_hash,"inputIndex":index}),
+                })?;
+                refs.push(serde_json::to_value(version_ref(&version)).map_err(|_|invalid("embedding input ref"))?);
+            }
+            let row=tx.conventions().insert_convention_embedding_inputs(&StoredConventionEmbeddingInputs {request_id:request,actor_id:ctx.principal().clone(),project_id:ctx.project_id().cloned(),context_digest:context_hash,embedding_space:space,input_digest:input_hash,input_refs:refs,created_at_ms:now})?;
+            // This observation completes input publication, not the actual inference owner.
+            let op=tx.operations().operation(&op_id)?.ok_or_else(||invalid("embedding operation disappeared"))?;
+            tx.operations().observe(&op_id,op.latest_attempt().ok_or_else(||invalid("embedding attempt missing"))?.attempt_no,json!({"inputsPublished":true,"requestId":row.request_id}))?;
+            captured(tx,&ctx,&row,&op_id,&args).map(|p|(p,true))
+        });
+        let committed = result.as_ref().is_ok_and(|(_, committed)| *committed);
+        for file in &staged {
+            self.artifacts
+                .settle_host_bytes(self.store.as_ref(), file, committed);
+        }
+        result.map(|(prepared, _)| prepared)
+    }
+}

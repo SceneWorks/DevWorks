@@ -396,6 +396,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0031_graph.sql"),
         rebuilds_tables: false,
     },
+    // Earlier writers cannot preserve convention revision/resource/index identity.
+    Migration {
+        version: 32,
+        minimum_reader: 8,
+        minimum_writer: 32,
+        sql: include_str!("migrations/0032_conventions.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -729,3 +737,7 @@ pub const MIGRATION_0030_SHA256: &str =
 /// Recorded checksum of migration 31.
 pub const MIGRATION_0031_SHA256: &str =
     "4d3d1401b9da77b2511dbef64f1a1cc057a56f0818f970b7976ba967d7892963";
+
+/// Recorded checksum of migration 32; updated only before its first publication.
+pub const MIGRATION_0032_SHA256: &str =
+    "200216474dfef210009051fd13968fad1cac37e701d268bb56c028bd78b76cc8";

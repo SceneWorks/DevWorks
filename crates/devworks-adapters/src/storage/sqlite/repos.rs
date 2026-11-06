@@ -1065,6 +1065,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn evals(&self) -> &dyn EvalRead {
         self
     }
+    fn conventions(&self) -> &dyn ConventionRead {
+        self
+    }
     fn help(&self) -> &dyn HelpRead {
         self
     }
@@ -1312,6 +1315,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn evals(&mut self) -> &mut dyn EvalRepository {
+        self
+    }
+    fn conventions(&mut self) -> &mut dyn ConventionRepository {
         self
     }
     fn help(&mut self) -> &mut dyn HelpRepository {

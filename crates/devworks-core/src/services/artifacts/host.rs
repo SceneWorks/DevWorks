@@ -41,8 +41,33 @@ impl ArtifactService {
         bytes: &[u8],
         source: Value,
     ) -> Result<Result<StagedFile, String>, StorageError> {
+        self.stage_host_reader(
+            store,
+            &mut std::io::Cursor::new(bytes),
+            &sha256_hex(bytes),
+            bytes.len() as u64,
+            source,
+        )
+    }
+
+    /// Stages a verified host stream without buffering the complete source. The caller binds
+    /// its declared byte budget and digest to an immutable source and polls cancellation in
+    /// its reader. Publication and crash recovery use the same journal as byte-slice staging.
+    pub fn stage_host_reader(
+        &self,
+        store: &dyn ApplicationStore,
+        reader: &mut dyn std::io::Read,
+        expected_digest: &str,
+        expected_bytes: u64,
+        source: Value,
+    ) -> Result<Result<StagedFile, String>, StorageError> {
+        let byte_count = i64::try_from(expected_bytes).map_err(|_| {
+            StorageError::InvalidRecord("host stream length exceeds store range".into())
+        })?;
+        let digest = expected_digest.to_owned();
+        crate::protocol::provider::Digest::try_from(digest.clone())
+            .map_err(|error| StorageError::InvalidRecord(error.into()))?;
         let env = Preparation::new(store, None, None);
-        let digest = sha256_hex(bytes);
         let d = digest.clone();
         let reuse = env
             .read(|s| s.artifacts().blob(&d))?
@@ -50,17 +75,11 @@ impl ArtifactService {
             .map(|b| b.generation);
         let payload = json!({
             "digest": digest,
-            "byteCount": bytes.len(),
+            "byteCount": byte_count,
             "source": source,
         });
-        let (staging, published) = self.journal_and_publish(
-            &env,
-            &mut std::io::Cursor::new(bytes),
-            &digest,
-            bytes.len() as i64,
-            reuse.as_deref(),
-            payload,
-        )?;
+        let (staging, published) =
+            self.journal_and_publish(&env, reader, &digest, byte_count, reuse.as_deref(), payload)?;
         let published = match published {
             Ok(p) => p,
             Err(fault) => {
@@ -78,7 +97,7 @@ impl ArtifactService {
         Ok(Ok(StagedFile {
             operation_id: staging.operation_id.clone(),
             digest,
-            byte_count: bytes.len() as i64,
+            byte_count,
             generation: published.generation,
             reused: published.reused,
             relative_path: published.relative_path,

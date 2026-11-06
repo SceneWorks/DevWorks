@@ -381,31 +381,31 @@ pub enum OperationResult {
     #[serde(rename = "artifacts.tag")]
     ArtifactsTag { value: MutationSummary },
     #[serde(rename = "conventions.list")]
-    ConventionsList { value: Page<InstructionRecord> },
+    ConventionsList { value: ConventionPageResult },
     #[serde(rename = "conventions.read")]
-    ConventionsRead { value: InstructionRecord },
+    ConventionsRead { value: ConventionReadResult },
     #[serde(rename = "conventions.edit")]
-    ConventionsEdit { value: InstructionRecord },
+    ConventionsEdit { value: ConventionRecordResult },
     #[serde(rename = "conventions.version")]
-    ConventionsVersion { value: Page<InstructionRecord> },
+    ConventionsVersion { value: ConventionPageResult },
     #[serde(rename = "conventions.applicability")]
-    ConventionsApplicability { value: InstructionRecord },
+    ConventionsApplicability { value: ConventionRecordResult },
     #[serde(rename = "conventions.retire")]
-    ConventionsRetire { value: MutationSummary },
+    ConventionsRetire { value: ConventionMutationResult },
     #[serde(rename = "conventions.index")]
-    ConventionsIndex { value: MutationSummary },
+    ConventionsIndex { value: ConventionMutationResult },
     #[serde(rename = "conventions.import")]
-    ConventionsImport { value: InstructionRecord },
+    ConventionsImport { value: ConventionRecordResult },
     #[serde(rename = "conventions.delete")]
-    ConventionsDelete { value: MutationSummary },
+    ConventionsDelete { value: ConventionMutationResult },
     #[serde(rename = "conventions.move")]
-    ConventionsMove { value: InstructionRecord },
+    ConventionsMove { value: ConventionRecordResult },
     #[serde(rename = "conventions.resources")]
-    ConventionsResources { value: Page<InstructionRecord> },
+    ConventionsResources { value: ConventionResourcePageResult },
     #[serde(rename = "conventions.delete_resource")]
-    ConventionsDeleteResource { value: MutationSummary },
+    ConventionsDeleteResource { value: ConventionMutationResult },
     #[serde(rename = "conventions.search")]
-    ConventionsSearch { value: Page<InstructionRecord> },
+    ConventionsSearch { value: ConventionSearchPageResult },
     #[serde(rename = "skills.discover")]
     SkillsDiscover { value: Page<InstructionRecord> },
     #[serde(rename = "skills.read")]
@@ -624,6 +624,9 @@ pub enum OperationResult {
     RouterDecisionModels { value: Page<DecisionModel> },
     #[serde(rename = "router.decide")]
     RouterDecide { value: DecisionResult },
+    #[schemars(extend("x-since" = 3))]
+    #[serde(rename = "router.embedding_spaces")]
+    RouterEmbeddingSpaces { value: EmbeddingSpacePage },
     #[serde(rename = "mcp.servers")]
     McpServers { value: Page<McpServer> },
     #[serde(rename = "mcp.configure")]
@@ -1050,6 +1053,7 @@ impl OperationResult {
             Self::RouterConfigure { .. } => "router.configure",
             Self::RouterDecisionModels { .. } => "router.decision_models",
             Self::RouterDecide { .. } => "router.decide",
+            Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
             Self::McpServers { .. } => "mcp.servers",
             Self::McpConfigure { .. } => "mcp.configure",
             Self::McpConnect { .. } => "mcp.connect",
@@ -1415,6 +1419,7 @@ impl Check for OperationResult {
             Self::RouterConfigure { value } => value.check()?,
             Self::RouterDecisionModels { value } => value.check()?,
             Self::RouterDecide { value } => value.check()?,
+            Self::RouterEmbeddingSpaces { value } => value.check()?,
             Self::McpServers { value } => value.check()?,
             Self::McpConfigure { value } => value.check()?,
             Self::McpConnect { value } => value.check()?,
@@ -1566,6 +1571,19 @@ impl Revisioned for OperationResult {
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
+            Self::ConventionsList { value } => value.retain_revision(revision),
+            Self::ConventionsRead { value } => value.retain_revision(revision),
+            Self::ConventionsEdit { value } => value.retain_revision(revision),
+            Self::ConventionsVersion { value } => value.retain_revision(revision),
+            Self::ConventionsApplicability { value } => value.retain_revision(revision),
+            Self::ConventionsRetire { value } => value.retain_revision(revision),
+            Self::ConventionsIndex { value } => value.retain_revision(revision),
+            Self::ConventionsImport { value } => value.retain_revision(revision),
+            Self::ConventionsDelete { value } => value.retain_revision(revision),
+            Self::ConventionsMove { value } => value.retain_revision(revision),
+            Self::ConventionsResources { value } => value.retain_revision(revision),
+            Self::ConventionsDeleteResource { value } => value.retain_revision(revision),
+            Self::ConventionsSearch { value } => value.retain_revision(revision),
             Self::ApprovalsList { value } => value.retain_revision(revision),
             Self::ApprovalsInspect { value } => value.retain_revision(revision),
             Self::ApprovalsPropose { value } => value.retain_revision(revision),
@@ -1635,6 +1653,9 @@ impl Revisioned for OperationResult {
             Self::NotificationsMarkRead { .. } if revision < 3 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::RouterEmbeddingSpaces { .. } if revision < 3 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
@@ -1655,6 +1676,19 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::ConventionsList { value } => value.check_revision(revision),
+            Self::ConventionsRead { value } => value.check_revision(revision),
+            Self::ConventionsEdit { value } => value.check_revision(revision),
+            Self::ConventionsVersion { value } => value.check_revision(revision),
+            Self::ConventionsApplicability { value } => value.check_revision(revision),
+            Self::ConventionsRetire { value } => value.check_revision(revision),
+            Self::ConventionsIndex { value } => value.check_revision(revision),
+            Self::ConventionsImport { value } => value.check_revision(revision),
+            Self::ConventionsDelete { value } => value.check_revision(revision),
+            Self::ConventionsMove { value } => value.check_revision(revision),
+            Self::ConventionsResources { value } => value.check_revision(revision),
+            Self::ConventionsDeleteResource { value } => value.check_revision(revision),
+            Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

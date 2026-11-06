@@ -418,6 +418,10 @@ impl Revisioned for ConfigureInput {
     fn retain_revision(&mut self, revision: u32) {
         self.action.retain_revision(revision);
     }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.action.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `router.decision_models` Query input.
@@ -466,6 +470,22 @@ impl Revisioned for DecideInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `router.embedding_spaces` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbeddingSpacesInput {
+    pub page: PageRequest,
+}
+impl Check for EmbeddingSpacesInput {
+    fn check(&self) -> Result<(), String> {
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for EmbeddingSpacesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `router` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -495,6 +515,8 @@ pub enum Input {
     DecisionModels(DecisionModelsInput),
     /// `router.decide` (Command).
     Decide(DecideInput),
+    /// `router.embedding_spaces` (Query).
+    EmbeddingSpaces(EmbeddingSpacesInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -512,6 +534,7 @@ impl Input {
             Self::Configure(_) => "router.configure",
             Self::DecisionModels(_) => "router.decision_models",
             Self::Decide(_) => "router.decide",
+            Self::EmbeddingSpaces(_) => "router.embedding_spaces",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -529,6 +552,7 @@ impl Input {
             Self::Configure(_) => Mode::Command,
             Self::DecisionModels(_) => Mode::Query,
             Self::Decide(_) => Mode::Command,
+            Self::EmbeddingSpaces(_) => Mode::Query,
         }
     }
 }
