@@ -105,6 +105,7 @@ impl NativeHttp {
         let names: &[&str] = if metadata {
             &[
                 "etag",
+                "last-modified",
                 "link",
                 "date",
                 "x-poll-interval",
@@ -212,7 +213,7 @@ mod tests {
     #[test]
     fn conditional_exchange_preserves_control_headers_without_logging_values() {
         let (base, seen) = serve(vec![(Duration::ZERO,
-            "HTTP/1.1 304 Not Modified\r\nETag: W/\"opaque-private\"\r\nLink: </page2>; rel=\"next\"\r\nLink: </page9>; rel=\"last\"\r\nX-Poll-Interval: 60\r\nRetry-After: 120\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 12345\r\nX-OAuth-Scopes: repo,read:org\r\nSet-Cookie: private-cookie\r\nAuthorization: private-response-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())]);
+            "HTTP/1.1 304 Not Modified\r\nETag: W/\"opaque-private\"\r\nLast-Modified: Fri, 06 Nov 2026 10:00:00 GMT\r\nLink: </page2>; rel=\"next\"\r\nLink: </page9>; rel=\"last\"\r\nX-Poll-Interval: 60\r\nRetry-After: 120\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 12345\r\nX-OAuth-Scopes: repo,read:org\r\nSet-Cookie: private-cookie\r\nAuthorization: private-response-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())]);
         let exchange = NativeHttp::direct()
             .send_with_headers(
                 &HttpRequest::get(format!("{base}/issues"))
@@ -230,6 +231,7 @@ mod tests {
             ["</page2>; rel=\"next\"", "</page9>; rel=\"last\""]
         );
         for (name, value) in [
+            ("last-modified", "Fri, 06 Nov 2026 10:00:00 GMT"),
             ("x-poll-interval", "60"),
             ("retry-after", "120"),
             ("x-ratelimit-remaining", "0"),
