@@ -31,3 +31,46 @@ The unchanged large native case passes39.58s including setup and three bounded q
 all27 native indexing cases pass77.07s, and all11 graph storage cases pass11.28s including
 masking, scope, pin, source, cancellation and pool reuse. Query budgets/deadlines and fixture
 population remain unchanged. Hosted exact-head qualification is still required.
+
+### Stream broad node pages without sorting repository payloads
+
+Broad keyset reads now stream composed visible-unit metadata in repository/unit order, then
+read each selected unit through the node primary key. The exact-ID path retains its indexed
+predicate. Both paths use one shared SQL predicate builder, the same authorized read snapshot,
+whole-unit layer masking, name/kind/trust selection, cursor order and limit+1 boundary. Read
+page size, graph budgets and request deadlines are unchanged.
+
+All 11 native graph storage cases pass (11.22 s). All 27 full-runtime indexing cases now use
+the existing bounded case admission; each of the two >20k fixtures atomically owns both
+permits. Their internal concurrency and assertions/timeouts are unchanged. In the full run,
+both large regressions pass and 26/27 cases pass (87.16 s). The existing shutdown/reopen case
+fails DataRootInUse while retaining the first boot's executor; the unchanged case passes
+alone (3.50 s). Its proposed test-only physical executor teardown is tracked as DW-129 and
+is awaiting user approval. No full-suite green claim is made. Adapter/engine all-target
+strict checks pass (4.57 s) after covering the exclusive permit entry in the helper test.
+
+DW-129 was approved in chat and applied exactly as prepared: the first executor is dropped
+before reopening the data root, and the second boot owns a fresh executor. Every original
+shutdown/process/recovery assertion and timeout remains. The complete default native indexing
+suite now passes 27/27 (90.23 s), including both large regressions. The permit helper1/1 and
+engine all-target strict checks (29.32 s) pass. The first full-run failure and unchanged isolated
+pass remain above as provenance; no product shutdown change or proven product-cause claim is made.
+
+### Related hydration, cursor work limits and captured path case
+
+Related consumers/publishers retain a budgeted deduplication prefix of endpoint identities and
+load full source payloads only after a distinct endpoint enters the requested page. The page
+limit and wire-byte boundary stop hydration; the previous full-payload candidate vector is gone.
+This preserves original first-edge order and deduplication while bounding retained payloads.
+
+Graph cursor identity now includes all QueryLimits, including maxVisited and deadlineMs.
+The existing >20k native search case verifies both changed limits produce CursorExpired and
+that the unchanged original request still continues with disjoint results on the same pin.
+Module ownership preserves the exact captured Git directory spelling; a core regression checks
+Foo and foo as separate owners, deepest nested ownership and prefix/case near misses.
+
+All9 core graph cases pass (0.06s), all27 actual native indexing/graph cases pass (86.21s),
+and affected core/engine all-target strict checks pass (27.48s). The original 16MiB retained
+memory budget, scan limits, request deadlines, page sizes and assertions remain unchanged.
+These checks establish behavior and the page-only hydration structure; no exact allocator
+peak measurement is claimed. Fresh exact-head CI/review remains required.

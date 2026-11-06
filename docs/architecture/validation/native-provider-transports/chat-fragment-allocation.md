@@ -50,3 +50,39 @@ request. All five native subscription/access cases pass in 10.36 s, including ge
 31.81 s. Fixture setup initially used an invalid profile name; that failure was corrected
 before the causal regression. No learned inference, real account or OS credential store
 was accessed. CI cost is the added local HTTP case plus compilation; existing bounds remain.
+
+The complete native provider suite subsequently exposed an older expected classification for
+HTTP402 in `native_http_fault_categories_and_entitlement_precedence_survive_into_recorded_result`.
+Its matrix now expects Provider for402, retaining every status and entitlement assertion. All43
+native provider cases pass65.54s, including the full prior category matrix and explicit payment
+recovery. This is an owned behavior-expectation update for the reviewed classification change.
+
+### Incremental leading whitespace (review 4497083989)
+
+`ThinkTagFilter` retains an offset at the UTF-8 boundary after leading whitespace already
+examined. New fragments scan only the suffix; the exact prefix remains available when the
+stream flushes or turns out to be prose. Split opening tags keep their bounded prefix check.
+The scan-count regression failed on the old implementation after two 512-byte fragments
+(1,536 bytes examined for 1,024 bytes supplied). The corrected regression feeds 8,192
+fragments for both ASCII and Unicode whitespace, then checks blank flush, prose, partial tag,
+and a completed reasoning block without rescanning the retained prefix.
+
+All 56 native core provider/codec cases pass (0.73 s), including every retained tag boundary,
+explicit reasoning precedence and exact continuation behavior. Core all-target strict checks
+pass (18.57 s). These checks decode recorded JSON; no account, OS credential store or learned
+inference is used. Exact-head hosted CI and fresh review remain required.
+
+### Indexed native reasoning-detail identities (review 4497287470)
+
+Streamed reasoning details now use a native identity/compatibility index. Each fragment probes
+at most four type/ID keys and selects the earliest compatible original position. Updating a
+missing type or ID removes the old wildcard entries before indexing the completed identity;
+index precedence over ID and JSON-value equality remain intact. Distinct conflicting details
+are retained in original order, without rescanning the prior population.
+
+The counted old-source regression fails after10 fragments (45 comparisons versus a40-probe
+bound). The fixed case qualifies50,000 distinct details on both Chat profiles. A bounded
+1,000-fragment differential oracle checks the retained source merge semantics for missing,
+null, conflicting and completed type/ID fields, ID fallback, index precedence and composite
+JSON identities. All58 core provider cases pass (1.65s); core all-target strict checks pass
+(20.06s). No smaller input limits, larger timeouts, OS credentials or learned inference.

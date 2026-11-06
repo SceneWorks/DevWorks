@@ -79,6 +79,7 @@ fn write_repo(root: &Path, files: &[(&str, &str)]) {
 
 #[test]
 fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -212,6 +213,7 @@ fn native_impact_counts_the_full_closure_before_paging_and_uses_retained_sources
 
 #[test]
 fn native_file_impact_distinguishes_unindexed_language_and_missing_indexed_file() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -263,6 +265,7 @@ fn native_file_impact_distinguishes_unindexed_language_and_missing_indexed_file(
 
 #[test]
 fn native_file_impact_uses_only_pinned_crate_manifests_and_preserves_missing_repository_coverage() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -435,6 +438,7 @@ fn refresh_overlay(
 
 #[test]
 fn native_deleted_file_impact_reports_unmapped_inherited_callers_without_baseline_fallback() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -636,6 +640,7 @@ impl devworks_core::ports::indexing::StructuralParser for ScriptedSemanticCaptur
 
 #[test]
 fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_are_scoped() {
+    let _case = native_runtime_case();
     use devworks_core::ports::indexing::StructuralParser;
     let h = Harness::new();
     let executor = runtime();
@@ -820,6 +825,7 @@ fn native_exact_semantic_capture_cross_repository_risk_and_publisher_direction_a
 
 #[test]
 fn native_impact_totals_are_not_capped_by_the_five_hundred_row_wire_page() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();

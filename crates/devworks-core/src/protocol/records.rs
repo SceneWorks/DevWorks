@@ -15538,6 +15538,13 @@ pub struct ConventionPage {
     pub has_more: bool,
     pub scope_revision: Revision,
     pub manifest_schema: SchemaRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 4))]
+    pub source_scope_revision: Option<Revision>,
 }
 impl Check for ConventionPage {
     fn check(&self) -> Result<(), String> {
@@ -15546,11 +15553,20 @@ impl Check for ConventionPage {
         self.has_more.check()?;
         self.scope_revision.check()?;
         self.manifest_schema.check()?;
+        self.source_scope_revision.check()?;
         crate::protocol::rules::record(
             "ConventionPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ConventionPage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 4 {
+            self.source_scope_revision = None;
+        }
     }
 }
 
@@ -15667,6 +15683,13 @@ pub struct ConventionSearchPage {
     pub has_more: bool,
     pub scope_revision: Revision,
     pub retrieval: ConventionRetrieval,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 4))]
+    pub source_scope_revision: Option<Revision>,
 }
 impl Check for ConventionSearchPage {
     fn check(&self) -> Result<(), String> {
@@ -15675,6 +15698,7 @@ impl Check for ConventionSearchPage {
         self.has_more.check()?;
         self.scope_revision.check()?;
         self.retrieval.check()?;
+        self.source_scope_revision.check()?;
         crate::protocol::rules::record(
             "ConventionSearchPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -15685,6 +15709,9 @@ impl Check for ConventionSearchPage {
 
 impl Revisioned for ConventionSearchPage {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 4 {
+            self.source_scope_revision = None;
+        }
         self.retrieval.retain_revision(revision);
     }
 }
@@ -15991,6 +16018,9 @@ impl Revisioned for ConventionPageResult {
                 *self = Self::Legacy(legacy);
             }
         }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
@@ -16089,6 +16119,9 @@ impl Revisioned for ConventionResourcePageResult {
             if let Some(legacy) = legacy {
                 *self = Self::Legacy(legacy);
             }
+        }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
@@ -16676,6 +16709,14 @@ impl Check for ConventionResourcesView {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for ConventionResourcesView {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Catalog { page, .. } = self {
+            page.retain_revision(revision);
+        }
     }
 }
 

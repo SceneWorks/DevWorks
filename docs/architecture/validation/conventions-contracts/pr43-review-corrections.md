@@ -41,3 +41,27 @@ phrase, stays within 360 characters and preserves exact stored source. All 23 SQ
 cases pass in 24.96 s; adapters all-target strict checks pass in 30.66 s. Earlier fixture setup
 errors (invalid term formatting, then mismatched token count) were corrected before the causal
 RED result. Existing query and test bounds remain unchanged; no inference compute runs.
+
+## Response-byte paging and exact bulk-index source revisions
+
+Search hits use the same serialized-row budget as catalog pages, leaving16KiB for the reply
+envelope, cursor and retrieval metadata. The continuation offset advances by the hits actually
+retained. A real native project fixture with128 distinct256-character applicability labels and
+more than50 published chunks pages all50 selected hits without repetition; each actual serialized
+reply stays within the protocol frame limit. No field is truncated and topK is unchanged.
+
+`ConventionPage` and `ConventionSearchPage` expose optional `sourceScopeRevision` at revision4.
+It is the exact target scope's current source revision. Existing `scopeRevision` still binds
+inherited listing pages or the search index. The native manager retains the two independently
+and uses the source revision for “Index this scope”, including after search. Shared page-result
+users list/search/version/resources register4; unchanged inputs reuse the revision3 shape.
+
+All6 actual desktop project-scope cases pass (16.17s), including clicks that accept and complete
+bulk project indexing after both listing and search. All earlier revision1/2/3 schema documents
+are byte-identical; four unmerged revision4 output documents add the gated member. All1800
+existing fixture objects remain identical. Four revision4 input admissions, four outputs and
+six refusal cases add14 fixtures: native recorded suite7/7 passes (0.25s), independently checked
+JSON Schema14/14 passes, and generator13/13 passes (11.11s). Native admission covers588 exact
+operation/mode/revision bindings. Final composed workspace strict passes (38.19s), including
+current-main prompt picker, provider identity-index and approved routine fixture corrections.
+Fresh exact-head hosted CI and automatic review remain required before merge/acceptance.

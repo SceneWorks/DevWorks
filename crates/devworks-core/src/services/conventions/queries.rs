@@ -69,7 +69,7 @@ fn invalid(error: impl std::fmt::Display) -> StorageError {
 pub(super) fn parse<T: DeserializeOwned>(value: Value) -> Result<T, StorageError> {
     serde_json::from_value(value).map_err(invalid)
 }
-fn page_budget<T: Serialize>(rows: &mut Vec<T>) -> Result<bool, StorageError> {
+pub(super) fn page_budget<T: Serialize>(rows: &mut Vec<T>) -> Result<bool, StorageError> {
     // Keep room for the actual envelope, stamp, cursor and metadata. Never truncate a field.
     let ceiling = crate::framing::MAX_FRAME_BYTES - 16_384;
     let mut bytes = 0_usize;
@@ -163,6 +163,9 @@ impl ConventionService {
             },
             has_more: more,
             scope_revision: rev(revision),
+            source_scope_revision: Some(rev(read
+                .conventions()
+                .convention_scope_revision(&scoped.exact)?)),
             manifest_schema: model::manifest_schema(),
         })
     }
@@ -214,6 +217,9 @@ impl ConventionService {
             },
             has_more: more,
             scope_revision: rev(revision),
+            source_scope_revision: Some(rev(read
+                .conventions()
+                .convention_scope_revision(&scoped.exact)?)),
             manifest_schema: model::manifest_schema(),
         })
     }

@@ -9502,6 +9502,14 @@
               "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -9662,6 +9670,14 @@
               "inputSchema": "domain-request.r3.schema.json",
               "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -10042,6 +10058,14 @@
               "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -10148,6 +10172,14 @@
               "inputSchema": "domain-request.r3.schema.json",
               "resultSchema": "operation-result.r3.schema.json",
               "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 4,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r4.schema.json",
+              "queryReplySchema": "domain-query-reply.r4.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }

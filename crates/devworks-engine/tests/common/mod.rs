@@ -31,6 +31,13 @@ pub fn native_runtime_case() -> impl Drop {
     case_budget::acquire()
 }
 
+/// A large indexing fixture owns the complete case budget; internal parser/runtime work
+/// remains concurrent and every original watchdog still starts after case admission.
+#[must_use = "hold the case permit until runtime cleanup has finished"]
+pub fn exclusive_native_runtime_case() -> impl Drop {
+    case_budget::acquire_exclusive()
+}
+
 /// Failure-only metadata snapshot; no source/document bodies are read or printed.
 pub fn help_startup_diagnostics<'a>(
     store: &'a dyn ApplicationStore,

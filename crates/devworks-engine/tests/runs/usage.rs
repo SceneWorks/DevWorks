@@ -288,6 +288,24 @@ impl OwnedInferenceSource for ManualChatSource {
 
 #[test]
 fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() {
+    let _native_case = native_runtime_case();
+    struct Phase {
+        scenario: (bool, bool, bool, bool, Option<bool>),
+        step: std::cell::Cell<&'static str>,
+        started: std::time::Instant,
+    }
+    impl Drop for Phase {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "MANAGED_CUSTODY_FAILURE scenario={:?} phase={} elapsed={:?}",
+                    self.scenario,
+                    self.step.get(),
+                    self.started.elapsed()
+                );
+            }
+        }
+    }
     runtime().block_on(async {
         within("managed inference closure", async {
             for (worker, bounded_shutdown, membership, panic_source, manual_failed_close) in [
@@ -299,7 +317,9 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                 (false, false, false, false, Some(false)),
                 (false, false, false, false, Some(true)),
             ] {
+                let phase = Phase { scenario: (worker, bounded_shutdown, membership, panic_source, manual_failed_close), step: std::cell::Cell::new("fixture setup"), started: std::time::Instant::now() };
                 let f = Fx::new();
+                phase.step.set("source admission setup");
                 let selected_router = router(&f);
                 let physical_child = std::env::var_os("DW21_CAPTURE_OWNER").is_some();
                 if physical_child || manual_failed_close.is_some() {
@@ -522,6 +542,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     manual_before=Some(balance);
                 }
                 if panic_source {
+                    phase.step.set("panic-source production");
                     assert!(
                         runtime
                             .produce(
@@ -576,6 +597,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                         .attempts,
                         1
                     );
+                    phase.step.set("panic-source drain");
                     runtime.stop();
                     runtime.drain().await;
                     continue;
@@ -621,6 +643,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     host.produce(context, logical, ReportCategory::Assistant, request, source)
                         .await
                 });
+                phase.step.set("managed source open");
                 if start.await.is_err(){panic!("valid independent coordinator was not admitted: {:?}",produce.await.unwrap());}
                 if let Some(before)=&manual_before{assert_eq!(read(&*f.store,|s|s.usage().attempt_balance(&before.attempt_id)).as_ref(),Some(before),"managed admission must not retire or reprice manual custody");}
                 if let Some(signal) = std::env::var_os("DW21_CAPTURE_OWNER") {
@@ -640,6 +663,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     .runs()
                     .inference_quiescent(&RootId(id(execution_root)))));
                 if let Some(app) = &app {
+                    phase.step.set("bounded application shutdown");
                     let began = std::time::Instant::now();
                     let report = app.shutdown().await;
                     assert!(
@@ -745,6 +769,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                         "{stopped:?}"
                     );
                 }
+                phase.step.set("managed source cancellation");
                 runtime.tick().await.unwrap();
                 close.await.unwrap();
                 // Source has observed cancellation, but its actual local close is still blocked.
@@ -794,6 +819,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     assert_eq!(moved.session_id, assignment.session_id);
                     assert!(moved.generation > assignment.generation);
                 }
+                phase.step.set("final owned-source drain");
                 runtime.drain().await;
                 if let Some(task)=manual_task{assert!(matches!(task.await.unwrap().unwrap(),DriveOutcome::Settled(_)));}
                 if manual_failed_close==Some(true){let before=manual_before.unwrap();assert_eq!(read(&*f.store,|s|s.usage().attempt_balance(&before.attempt_id)),Some(before),"failed manual close retains its own expense/reservation without claiming execution custody");}
@@ -805,6 +831,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
 
 #[test]
 fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits() {
+    let _native_case = native_runtime_case();
     runtime().block_on(within("primary job inference custody", async {
         for started in [false, true] {
             let f = Fx::new();
@@ -1020,6 +1047,7 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
 /// SQLite clone represents a reopened/restored workspace while that owner is still alive.
 #[test]
 fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_exit() {
+    let _native_case = native_runtime_case();
     runtime().block_on(within("physical inference owner recovery", async {
         use devworks_adapters::process::NativeProcessHost;
         use devworks_adapters::storage::sqlite::{SqliteConfig, SqliteStore};
@@ -1102,6 +1130,7 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
 
 #[test]
 fn settled_unknown_and_cancelled_producer_replay_never_reopens_the_same_admission() {
+    let _native_case = native_runtime_case();
     runtime().block_on(async {
         struct TerminalSource {
             opened: Arc<AtomicUsize>,
@@ -1305,6 +1334,7 @@ fn settled_unknown_and_cancelled_producer_replay_never_reopens_the_same_admissio
 
 #[test]
 fn native_audio_token_subsets_keep_text_remainder_in_the_actual_immutable_quote() {
+    let _native_case = native_runtime_case();
     runtime().block_on(async {
  struct Audio { first:bool,cached:i64 }
  impl OwnedInferenceSource for Audio {

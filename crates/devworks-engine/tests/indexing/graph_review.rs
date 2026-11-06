@@ -81,6 +81,7 @@ fn gaps(page: &GraphPage) -> Value {
 
 #[test]
 fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is_exhausted() {
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -178,6 +179,19 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
             // budget-exhausted continuation is exercised through the caller-bounded API.
             continue;
         }
+        // Budget-dependent candidate prefixes cannot share an offset cursor after a work
+        // limit changes. Keep page size and exact published scope unchanged in both refusals.
+        for (field, value) in [("maxVisited", 20001), ("deadlineMs", 30001)] {
+            let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"review-limits","scope":{"kind":"Workspace"},"query":query,"current":true,"cursor":cursor,"limits":{"maxResults":100,"maxVisited":20000,"deadlineMs":30000}});
+            frame["limits"][field] = json!(value);
+            let refused = app
+                .query(&ctx, operation, frame.to_string().as_bytes())
+                .unwrap();
+            assert!(
+                matches!(refused,DomainQueryReply::Rejected{ref fault,..} if fault.code==devworks_core::protocol::DomainErrorCode::CursorExpired),
+                "changed {field}: {refused:?}"
+            );
+        }
         let second = graph(&app, &ctx, operation, query, Some(cursor), None);
         assert_eq!(
             first.view.as_ref().unwrap().pin_id,
@@ -236,6 +250,7 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
 
 #[test]
 fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_rescans() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -366,6 +381,7 @@ fn native_swift_scope_linking_reads_each_visible_units_edges_without_repository_
 
 #[test]
 fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member_is_indexed() {
+    let _case = native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -423,15 +439,18 @@ fn native_overview_keeps_unindexed_repository_metadata_when_another_scope_member
 
 #[test]
 fn native_direct_id_traversal_retains_useful_relationships_when_edge_scan_is_partial() {
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
     let src = sources();
     let repo = src.join("large-calls");
     std::fs::create_dir_all(repo.join("src")).unwrap();
-    for unit in 0..210 {
+    // Preserve 21,000 real CALLS edges while keeping each native Git/parser unit below
+    // its file/node caps and avoiding 210 Windows Git subprocess round trips.
+    for unit in 0..7 {
         let mut source = format!("pub fn leaf_{unit:03}() {{}}\n");
-        for item in 0..100 {
+        for item in 0..3000 {
             source.push_str(&format!(
                 "pub fn caller_{unit:03}_{item:03}() {{ leaf_{unit:03}(); }}\n"
             ));

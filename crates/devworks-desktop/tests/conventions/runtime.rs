@@ -169,6 +169,7 @@ fn import(h: &mut Ui, files: &Files, path: PathBuf) {
 
 #[test]
 fn native_passage_continuations_keep_slug_path_and_refreshed_id_intents() {
+    let _native_case = native_runtime_case();
     let _case = native_runtime_case();
     let root = Root::new("conventions-cursor-intent");
     let engine = start(&root);
@@ -249,6 +250,7 @@ fn native_passage_continuations_keep_slug_path_and_refreshed_id_intents() {
 
 #[test]
 fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-source");
     let engine = start(&root);
     let files = Files::default();
@@ -394,6 +396,7 @@ fn native_registered_creation_edit_versions_and_source_exports_are_lossless() {
 }
 #[test]
 fn native_registered_import_loads_all_source_pages_and_stale_save_keeps_opening_source() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-stale");
     let engine = start(&root);
     let backend = engine.backend();
@@ -475,6 +478,7 @@ fn native_registered_import_loads_all_source_pages_and_stale_save_keeps_opening_
 }
 #[test]
 fn native_registered_unknown_artifact_save_recovers_exact_pipeline_after_reopen() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-unknown");
     let engine = start(&root);
     let real = engine.backend();
@@ -518,6 +522,7 @@ fn native_registered_unknown_artifact_save_recovers_exact_pipeline_after_reopen(
 
 #[test]
 fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revisions() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-resources");
     let engine = start(&root);
     let files = Files::default();
@@ -646,6 +651,7 @@ fn native_registered_resource_bytes_lifecycle_and_deletion_use_exact_owner_revis
 
 #[test]
 fn native_registered_applicability_retirement_and_virtual_document_resources_remain_inspectable() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-lifecycle");
     let engine = start(&root);
     let files = Files::default();
@@ -762,6 +768,7 @@ fn native_registered_applicability_retirement_and_virtual_document_resources_rem
 
 #[test]
 fn native_registered_hierarchical_move_preserves_subtree_scope_and_independent_draft() {
+    let _native_case = native_runtime_case();
     use devworks_core::protocol::results::OperationResult;
     let root = Root::new("conventions-real-move");
     let engine = start(&root);
@@ -1033,6 +1040,7 @@ impl Backend for QueryWire {
 
 #[test]
 fn native_persisted_embedding_setup_indexes_searches_and_replays_lost_query_without_new_usage() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-hybrid");
     let http = Arc::new(embedding::RecordedEmbedding::default());
     let engine = embedding::configured(&root, http.clone());
@@ -1161,6 +1169,7 @@ fn native_persisted_embedding_setup_indexes_searches_and_replays_lost_query_with
 
 #[test]
 fn native_full_legal_markdown_with_nul_is_verified_before_edit_and_never_truncated_on_save() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-max-source");
     let engine = start(&root);
     let files = Files::default();
@@ -1317,6 +1326,7 @@ impl devworks_core::ports::provider_http::StreamingHttp for ControlledEmbedding 
 #[test]
 fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_selection_changes()
 {
+    let _native_case = native_runtime_case();
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     let root = Root::new("conventions-real-cancel");
     let http = Arc::new(embedding::RecordedEmbedding::default());
@@ -1456,6 +1466,7 @@ fn native_search_cancel_reaches_owned_transport_and_keeps_unknown_custody_after_
 
 #[test]
 fn native_new_conventions_use_server_order_and_preserve_an_explicit_empty_slug() {
+    let _native_case = native_runtime_case();
     let root = Root::new("conventions-real-default-order");
     let engine = start(&root);
     let mut h = open(engine.backend(), &root, Files::default());
@@ -1512,6 +1523,7 @@ fn native_new_conventions_use_server_order_and_preserve_an_explicit_empty_slug()
 
 #[test]
 fn native_owned_index_operation_can_be_inspected_cancelled_and_replaced_by_scope_index() {
+    let _native_case = native_runtime_case();
     use std::sync::atomic::Ordering::SeqCst;
     let root = Root::new("conventions-real-index-cancel");
     let http = Arc::new(embedding::RecordedEmbedding::default());

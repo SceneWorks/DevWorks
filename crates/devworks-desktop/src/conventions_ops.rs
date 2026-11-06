@@ -15,7 +15,14 @@ use serde_json::Value;
 pub const PAGE: u16 = 50;
 pub const PASSAGE_CHARS: u32 = 16384;
 pub fn query(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
-    ops::at_revision(ops::query_frame(b, operation, body), 3)
+    ops::at_revision(
+        ops::query_frame(b, operation, body),
+        if matches!(operation, "conventions.list" | "conventions.search") {
+            4
+        } else {
+            3
+        },
+    )
 }
 pub fn command(b: &dyn Backend, operation: &str, body: Value) -> Vec<u8> {
     ops::at_revision(ops::command_frame(b, operation, body), 3)
