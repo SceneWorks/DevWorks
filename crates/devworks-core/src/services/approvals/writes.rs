@@ -72,6 +72,7 @@ impl ApprovalService {
                     schema_revision.0.parse().unwrap_or(0),
                     &input.0,
                 )?;
+                check_authority(tx, ctx, &request)?;
                 let prepared = c
                     .prepared::<PreparedOwner>()
                     .ok_or_else(|| invalid("owner_preview"))?;
@@ -121,10 +122,17 @@ impl ApprovalService {
                     return Err(invalid("content_digest"));
                 }
                 let binding = json!({"featureId":feature_id,"finding":finding,"assessmentRevision":r.revision,"assessmentDigest":model::hash(&r.body),"restoreEpoch":ctx.restore_epoch()});
+                let mut proposal = i.clone();
+                proposal.summary = crate::services::sessions::content(
+                    finding
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Review the exact finding risk"),
+                );
                 let p = stage_generic(
                     tx,
                     ctx,
-                    i,
+                    &proposal,
                     scope,
                     json!({"content":payload,"reviewed":binding,"binding":binding,"invocation":super::save_context(ctx)}),
                 )?;
@@ -259,6 +267,7 @@ impl ApprovalService {
                             schema_revision.0.parse().unwrap_or(0),
                             &input.0,
                         )?;
+                        check_authority(tx, &original, &request)?;
                         let prepared = c
                             .prepared::<PreparedOwner>()
                             .ok_or_else(|| invalid("owner_preview"))?;
@@ -372,6 +381,7 @@ pub fn stage_saved(
     {
         return Err(invalid("reviewed_binding"));
     }
+    check_authority(tx, ctx, request)?;
     let authority = super::authority_binding(tx, ctx)?;
     let mut input = i.clone();
     input.summary = crate::services::sessions::content(&preview.summary);
@@ -411,11 +421,7 @@ fn stage_generic(
         target_revision: i.target.revision.get(),
         content_digest: i.content_digest.0.clone(),
         scope_digest: super::scope_digest(&payload["binding"], payload.get("authority")),
-        summary: payload["reviewed"]
-            .get("summary")
-            .and_then(Value::as_str)
-            .unwrap_or(&i.summary.0)
-            .into(),
+        summary: i.summary.0.clone(),
         artifact: i
             .artifact
             .as_ref()

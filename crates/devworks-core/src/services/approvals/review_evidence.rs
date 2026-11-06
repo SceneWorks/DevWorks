@@ -74,10 +74,7 @@ pub(crate) fn seal(
 }
 /// Restore the exact historical owner inputs after validating their immutable artifact and
 /// identity. The private full document makes restart/rejection safe without a transient cache.
-pub(crate) fn expand(
-    read: &dyn ArtifactRead,
-    preview: &OwnerPreview,
-) -> Result<OwnerPreview, Failure> {
+pub(crate) fn expand_historical(preview: &OwnerPreview) -> Result<OwnerPreview, Failure> {
     let Some(envelope) = preview.binding.get("reviewEnvelope") else {
         return Ok(preview.clone());
     };
@@ -86,9 +83,6 @@ pub(crate) fn expand(
     }
     let reference: ArtifactRef =
         serde_json::from_value(envelope["artifact"]["reference"].clone()).map_err(|_| changed())?;
-    if artifact_binding(read, &reference)? != envelope["artifact"] {
-        return Err(changed());
-    }
     let document = envelope["document"].clone();
     let encoded = bytes(&document);
     if reference.media_type != "application/json"
@@ -118,9 +112,51 @@ pub(crate) fn expand(
     })
 }
 
+/// Current metadata is an execution/approval fence; a historical rejection can retain the
+/// exact saved document even after its evidence is retagged, removed or otherwise unavailable.
+pub(crate) fn expand(
+    read: &dyn ArtifactRead,
+    preview: &OwnerPreview,
+) -> Result<OwnerPreview, Failure> {
+    let raw = expand_historical(preview)?;
+    if let Some(envelope) = preview.binding.get("reviewEnvelope") {
+        let reference: ArtifactRef =
+            serde_json::from_value(envelope["artifact"]["reference"].clone())
+                .map_err(|_| changed())?;
+        if artifact_binding(read, &reference)? != envelope["artifact"] {
+            return Err(changed());
+        }
+    }
+    Ok(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn historical_rejection_restores_exact_private_facts_without_current_artifact_io() {
+        let raw = OwnerPreview {
+            scope: ConfigScope::Workspace,
+            target_id: Id::new("job").unwrap(),
+            target_revision: 2,
+            summary: "Review job".into(),
+            reviewed: json!({"original":"facts"}),
+            binding: json!({"priorRevision":2}),
+        };
+        let document = document(&raw);
+        let encoded = bytes(&document);
+        let reference = json!({"artifactId":"artifact","versionId":"version","sha256":crate::fingerprint::sha256_hex(&encoded),"byteLength":encoded.len().to_string(),"mediaType":"application/json"});
+        let mut retained = raw.clone();
+        retained.reviewed = json!({"artifact":reference});
+        retained.binding = json!({"reviewEnvelope":{"version":1,"artifact":{"reference":reference},"document":document}});
+        assert_eq!(expand_historical(&retained).unwrap(), raw);
+        let mut changed = retained.clone();
+        changed.binding["reviewEnvelope"]["document"]["reviewed"]["original"] = json!("changed");
+        assert!(expand_historical(&changed).is_err());
+        changed = retained;
+        changed.target_id = Id::new("other-job").unwrap();
+        assert!(expand_historical(&changed).is_err());
+    }
     #[test]
     fn evidence_is_needed_for_shape_limits_even_when_contents_are_small() {
         let mut value = json!("leaf");

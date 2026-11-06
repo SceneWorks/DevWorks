@@ -94,6 +94,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_configure_keeps_existing_inner_dynamic_shape_limits() {
+        let mut deep = json!("leaf");
+        for _ in 0..63 {
+            deep = json!([deep]);
+        }
+        for value in [json!({"a":deep}), json!({"a":vec![Value::Null;9998]})] {
+            serde_json::from_value::<crate::protocol::support::DynamicJson>(value.clone())
+                .expect("original config value is legal");
+            let args = json!({"packageId":"package","expectedRevision":"1","config":{"schema":{"schemaId":"package/config","revision":"1","sha256":"a".repeat(64)},"value":value}});
+            decode("addons.configure", 1, &args, true)
+                .expect("existing selected operation accepts this shape");
+            let content = serde_json::from_value::<crate::protocol::records::ApprovalContent>(
+                json!({"kind":"SavedOperation","schemaRevision":"1","input":args}),
+            );
+            assert!(
+                content.is_ok(),
+                "saved aggregate must not narrow existing inner config shape: {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_configure_keeps_existing_legal_near_limit_input() {
+        let value = json!({"text":"x".repeat(524270)});
+        assert!(serde_json::to_vec(&value).unwrap().len() <= 524288);
+        let args = json!({"packageId":"package","expectedRevision":"1","config":{"schema":{"schemaId":"package/config","revision":"1","sha256":"a".repeat(64)},"value":value}});
+        let size = serde_json::to_vec(&args).unwrap().len();
+        assert!(size > 524288 && size < crate::framing::MAX_FRAME_BYTES);
+        let decoded = decode("addons.configure", 1, &args, true)
+            .expect("the existing selected operation accepts this config");
+        assert_eq!(decoded.normalized, args);
+        let content = serde_json::from_value::<crate::protocol::records::ApprovalContent>(
+            json!({"kind":"SavedOperation","schemaRevision":"1","input":args}),
+        );
+        assert!(
+            content.is_ok(),
+            "saved operation must retain the existing legal closed input: {content:?}"
+        );
+    }
+
+    #[test]
     fn saved_input_is_the_actual_registered_admission_and_never_caller_authority() {
         let args = json!({"jobId":"job-1", "expectedRevision":"1"});
         let decoded = decode("jobs.enable", 2, &args, true).unwrap();
