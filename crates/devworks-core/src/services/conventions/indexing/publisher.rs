@@ -93,6 +93,7 @@ fn current(
     }
     let context =
         approvals::restore_source_context(tx.store(), &job.actor, kind, &job.source_context)?;
+    super::selection::validate_child(tx, job, &context)?;
     let scoped = access::scope_in(tx, &context, Some(&job.scope), true)
         .map_err(|_| StorageError::ScopeDenied)?;
     let configuration = configuration::resolved_configuration(
@@ -712,6 +713,9 @@ impl IndexService {
             read.operations().operation(&operation.id)
         })?
         .ok_or_else(|| invalid("index operation missing"))?;
+        if actual.payload["kind"] == super::selection::SELECTION_KIND {
+            return self.run_selection(operation, cancellation, deadline_ms);
+        }
         if let Some(result) = recorded(&actual) {
             return Ok(IndexOutcome::Completed(result));
         }

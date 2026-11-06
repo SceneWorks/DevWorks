@@ -9,6 +9,7 @@ pub mod preparation;
 pub mod publisher;
 pub mod query;
 pub mod rank;
+pub mod selection;
 mod status;
 
 use crate::{

@@ -46,6 +46,8 @@ pub struct IndexJob {
     pub delivery_id: Id,
     pub configuration_source_digest: String,
     pub embedding_space: Option<String>,
+    pub selection_event: Option<EventId>,
+    pub selection_revision: Option<i64>,
 }
 impl IndexService {
     pub fn decide_index(
@@ -151,10 +153,63 @@ impl IndexService {
         fences: Vec<AuthorityFence>,
         fingerprint: &str,
     ) -> Result<OperationId, StorageError> {
-        let operation = OperationId(tx.new_id(IdKind::Operation));
-        let delivery = tx.new_id(IdKind::QueueEntry);
-        let event = EventId(tx.new_id(IdKind::Event));
-        let configuration = self.configuration_in(tx, ctx)?;
+        Self::enqueue_with(
+            tx,
+            ctx,
+            (target, scope),
+            fences,
+            EnqueueIdentity {
+                fingerprint,
+                selection: None,
+            },
+            self.native_available(),
+        )
+    }
+    pub(super) fn enqueue_with(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        target_scope: (IndexTarget, DataScope),
+        fences: Vec<AuthorityFence>,
+        identity: EnqueueIdentity<'_>,
+        available: bool,
+    ) -> Result<OperationId, StorageError> {
+        let (target, scope) = target_scope;
+        let key = identity.selection.map(|(event, revision)| {
+            format!(
+                "{}:{revision}:{}",
+                event.0.as_str(),
+                serde_json::to_string(&scope).expect("typed scope")
+            )
+        });
+        let operation = OperationId(key.as_ref().map_or_else(
+            || tx.new_id(IdKind::Operation),
+            |key| super::publisher::identity("csel_index_", key),
+        ));
+        if let Some(existing) = tx.operations().operation(&operation)? {
+            let prior: IndexJob =
+                serde_json::from_value(existing.payload).map_err(|_| StorageError::ScopeDenied)?;
+            if existing.capability != "conventions.index"
+                || existing.args_digest != identity.fingerprint
+                || model::scope_storage(&prior.scope) != model::scope_storage(&scope)
+                || prior.source_context != approvals::save_source_context(ctx)
+                || prior.selection_event.as_ref() != identity.selection.map(|(event, _)| event)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            return Ok(operation);
+        }
+        let delivery = key.as_ref().map_or_else(
+            || tx.new_id(IdKind::QueueEntry),
+            |key| super::publisher::identity("csel_delivery_", key),
+        );
+        let event = EventId(key.as_ref().map_or_else(
+            || tx.new_id(IdKind::Event),
+            |key| super::publisher::identity("csel_event_", key),
+        ));
+        let configuration = super::configuration::resolved_configuration(
+            &crate::services::router::embedding_spaces::resolve_selected_in(tx, ctx)?,
+            available,
+        );
         if let Some(space) = &configuration.space {
             tx.conventions().put_convention_embedding_space(space)?;
         }
@@ -171,6 +226,8 @@ impl IndexService {
             delivery_id: delivery.clone(),
             configuration_source_digest: configuration.source_digest,
             embedding_space: configuration.space.map(|space| space.id),
+            selection_event: identity.selection.map(|(event, _)| event.clone()),
+            selection_revision: identity.selection.map(|(_, revision)| revision),
         };
         tx.operations().record_intent(NewOperation {
             id: operation.clone(),
@@ -178,7 +235,7 @@ impl IndexService {
             assignment_id: ctx.assignment_id().cloned(),
             capability: "conventions.index".into(),
             schema_version: 1,
-            args_digest: fingerprint.into(),
+            args_digest: identity.fingerprint.into(),
             payload: serde_json::to_value(&job)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         })?;
@@ -236,29 +293,7 @@ impl IndexService {
         ctx: &InvocationContext,
         row: &StoredConvention,
     ) -> Result<OperationId, StorageError> {
-        let mut fences = Vec::new();
-        if !matches!(
-            ctx.principal_kind(),
-            PrincipalKind::Human | PrincipalKind::Host
-        ) {
-            let binding = tx
-                .authority()
-                .principal(ctx.principal())?
-                .ok_or(StorageError::ScopeDenied)?;
-            if !binding.active {
-                return Err(StorageError::ScopeDenied);
-            }
-            fences.push(AuthorityFence::Principal {
-                actor: ctx.principal().clone(),
-                revision: binding.revision,
-            });
-        }
-        let policy =
-            crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?;
-        fences.push(AuthorityFence::Policy {
-            project_id: ctx.project_id().cloned(),
-            digest: policy.digest(),
-        });
+        let fences = source_fences(tx, ctx)?;
         let fingerprint = crate::fingerprint::sha256_hex(
             format!(
                 "{}:{}:{}",
@@ -282,4 +317,37 @@ impl IndexService {
             &fingerprint,
         )
     }
+}
+
+pub(super) struct EnqueueIdentity<'a> {
+    pub fingerprint: &'a str,
+    pub selection: Option<(&'a EventId, i64)>,
+}
+pub(super) fn source_fences(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+) -> Result<Vec<AuthorityFence>, StorageError> {
+    let mut fences = Vec::new();
+    if !matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Human | PrincipalKind::Host
+    ) {
+        let binding = tx
+            .authority()
+            .principal(ctx.principal())?
+            .ok_or(StorageError::ScopeDenied)?;
+        if !binding.active {
+            return Err(StorageError::ScopeDenied);
+        }
+        fences.push(AuthorityFence::Principal {
+            actor: ctx.principal().clone(),
+            revision: binding.revision,
+        });
+    }
+    let policy = crate::authority::policy::resolve_policy(tx.configuration(), ctx.project_id())?;
+    fences.push(AuthorityFence::Policy {
+        project_id: ctx.project_id().cloned(),
+        digest: policy.digest(),
+    });
+    Ok(fences)
 }
