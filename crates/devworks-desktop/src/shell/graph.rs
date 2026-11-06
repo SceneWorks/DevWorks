@@ -38,7 +38,7 @@ impl Shell {
         )]);
         self.open_graph_read(
             Read::new(
-                "code.architecture",
+                "code.overview",
                 "Overview",
                 json!({"kind":"Overview","repositoryId":repository}),
             ),
@@ -59,6 +59,12 @@ impl Shell {
                 tab: self.graph.tab,
             });
         }
+        self.graph.tab = match read.operation {
+            "code.overview" | "code.architecture" => 0,
+            "repositories.nodes" | "code.search" | "code.node_detail" | "code.source"
+            | "code.snippet" => 1,
+            _ => 2,
+        };
         self.graph.read = Some(read);
         self.read_graph();
     }
@@ -150,9 +156,6 @@ impl Shell {
                                     || self.graph.repository.clone(),
                                     |repository| repository.name.0.clone(),
                                 );
-                            if let Some(source) = &value.node.source {
-                                self.graph.file = source.path.0.clone();
-                            }
                         }
                         if let Some(read) = &mut self.graph.read {
                             if matches!(
@@ -326,7 +329,7 @@ impl Shell {
                 Action::Repository(repository) => {
                     self.open_graph_read(
                         Read::new(
-                            "code.architecture",
+                            "code.overview",
                             "Overview",
                             json!({"kind":"Overview","repositoryId":repository}),
                         ),
@@ -404,7 +407,7 @@ impl Shell {
                     self.graph.selected = None;
                     self.open_graph_read(
                         Read::new(
-                            "code.architecture",
+                            "code.overview",
                             "Overview",
                             json!({"kind":"Overview","repositoryId":self.graph.repository}),
                         ),

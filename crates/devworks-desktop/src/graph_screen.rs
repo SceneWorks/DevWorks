@@ -72,6 +72,7 @@ pub struct GraphScreen {
     pub line_end: String,
     pub file_node_line: String,
     pub target_name: String,
+    pub target_all: bool,
     pub depth: u16,
     pub relationship_depth: u16,
     pub direction: usize,
@@ -151,9 +152,11 @@ impl GraphScreen {
     }
     fn target(&self) -> Option<Value> {
         if !self.target_name.trim().is_empty() {
-            Some(
-                json!({"kind":"Name","name":self.target_name.trim(),"repositoryId":self.repository}),
-            )
+            let mut target = json!({"kind":"Name","name":self.target_name.trim()});
+            if !self.target_all {
+                target["repositoryId"] = json!(self.repository);
+            }
+            Some(target)
         } else {
             self.selected
                 .as_ref()
@@ -186,10 +189,12 @@ impl GraphScreen {
                 }
             },
             |ui, (state, actions), tab| {
+                egui::ScrollArea::vertical().id_salt("repository-graph-body").show(ui, |ui| {
+
                 if tab != state.tab {
                     state.tab = tab;
                     match tab {
-                        0=>actions.push(Action::Read(Read::new("code.architecture","Overview",json!({"kind":"Overview","repositoryId":state.repository})))),
+                        0=>actions.push(Action::Read(Read::new("code.overview","Overview",json!({"kind":"Overview","repositoryId":state.repository})))),
                         1=>actions.push(Action::Read(state.nodes())),
                         2=>actions.push(Action::Read(Read::new("code.repository_dependencies","Dependencies",json!({"kind":"RepositoryDependencies","repositoryId":state.repository})))),
                         _=>{}
@@ -257,22 +262,12 @@ impl GraphScreen {
                             trust_busy: state.trust_busy,
                             expand: state.expand_containers.take(),
                         };
-                        egui::ScrollArea::vertical()
-                            .id_salt(("repository-graph", read.operation, &read.title))
-                            .show(ui, |ui| {
-                                render(
-                                    ui,
-                                    page,
-                                    &read.module_pages,
-                                    &state.repository,
-                                    &presentation,
-                                    actions,
-                                );
-                            });
+                        render(ui,page,&read.module_pages,&state.repository,&presentation,actions);
                     } else if !state.loading && state.error.is_none() {
                         ui.label("No graph view has been read. Choose a view and refresh.");
                     }
                 }
+                });
             },
         );
     }
@@ -415,8 +410,8 @@ impl GraphScreen {
         ui.horizontal_wrapped(|ui| {
             for (label, op, query) in [
                 (
-                    "Repository overview",
-                    "code.overview",
+                    "Repository architecture",
+                    "code.architecture",
                     json!({"kind":"Overview","repositoryId":self.repository}),
                 ),
                 (
@@ -443,12 +438,22 @@ impl GraphScreen {
                 }
             }
         });
-        if let Some(node) = &self.selected {
+        if let Some(node) = self.selected.clone() {
             widgets::caption(
                 ui,
                 format!("Selected: {} · {}", node.qualified_name.0, node.node_kind.0),
             );
             ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        node.source.is_some(),
+                        egui::Button::new("Use selected node file"),
+                    )
+                    .clicked()
+                    && let Some(source) = &node.source
+                {
+                    self.file = source.unit_key.0.clone();
+                }
                 for (label, whole) in [("Read node source", false), ("Read whole file", true)] {
                     if ui
                         .add_enabled(
@@ -479,6 +484,7 @@ impl GraphScreen {
         egui::CollapsingHeader::new("Explore calls, impact and data flow").show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
                 field(ui,"Target name",&mut self.target_name,"Use selected node when empty");
+                ui.checkbox(&mut self.target_all,"Find target in captured scope");
                 let depth_label=ui.label("Call and impact depth");
                 ui.add(egui::DragValue::new(&mut self.depth).range(0..=32)).labelled_by(depth_label.id);
                 let relationship_label=ui.label("Relationship depth");
@@ -589,6 +595,7 @@ fn node_link(ui: &mut Ui, node: &CodeNode, actions: &mut Vec<Action>) {
             node.repository_id.as_str(),
             node.unit_key.0.as_str(),
             node.node_id.as_str(),
+            ui.next_auto_id(),
         )),
         |ui| {
             let name = if !node.name.0.is_empty() {
@@ -795,17 +802,21 @@ fn links(ui: &mut Ui, items: &[CodeRepositoryLink], actions: &mut Vec<Action>) {
                 link.count.as_str()
             ),
         );
-        if ui
-            .small_button(format!(
-                "Open related repository {}",
-                link.target_repository_id.as_str()
-            ))
-            .clicked()
-        {
-            actions.push(Action::Repository(
-                link.target_repository_id.as_str().into(),
-            ));
-        }
+        ui.horizontal_wrapped(|ui| {
+            for (side, repository) in [
+                ("source", &link.source_repository_id),
+                ("target", &link.target_repository_id),
+            ] {
+                ui.push_id((side, ui.next_auto_id()), |ui| {
+                    if ui
+                        .small_button(format!("Open {side} repository {}", repository.as_str()))
+                        .clicked()
+                    {
+                        actions.push(Action::Repository(repository.as_str().into()));
+                    }
+                });
+            }
+        });
     }
 }
 fn entries(ui: &mut Ui, items: &[CodeTraversalEntry], actions: &mut Vec<Action>) {
@@ -969,7 +980,10 @@ fn render(
                 match item {
                     CodeSearchHit::Node { node } => node_link(ui, node, actions),
                     CodeSearchHit::Repository { repository } => {
-                        ui.heading(&repository.name.0);
+                        if ui.button(&repository.name.0).clicked() {
+                            actions
+                                .push(Action::Repository(repository.repository_id.as_str().into()));
+                        }
                         optional(
                             ui,
                             "Description",
@@ -1158,6 +1172,13 @@ fn render(
             }
             for repo in &value.repositories.0 {
                 ui.heading(&repo.name.0);
+                if let Some(source) = &repo.readme_source {
+                    if ui.button("Read captured README").clicked() {
+                        actions.push(Action::Read(Read::new("code.source","README",json!({"kind":"Source","selection":{"kind":"File","repositoryId":repo.repository_id,"path":source.unit_key,"startLine":"0","endLine":"0"}}))));
+                    }
+                } else {
+                    widgets::caption(ui, "No README was captured in this repository view.");
+                }
                 optional(
                     ui,
                     "Source group",
