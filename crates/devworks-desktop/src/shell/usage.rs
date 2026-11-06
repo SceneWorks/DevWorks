@@ -234,15 +234,45 @@ impl Shell {
             .map(|e| TariffForm::from_tariff(&e.tariff))
             .collect::<Vec<_>>();
         let mut tariffs = if configured.is_empty() {
+            // Official rows belong to an upstream model in an immutable provider snapshot,
+            // rather than to a local catalog model ID. Resolve that exact identity before
+            // seeding an override; history can contain other snapshots and upstream models.
+            let upstream = if record.snapshot_id.is_some() {
+                let Some(selected) = self
+                    .chat
+                    .routing
+                    .catalog
+                    .iter()
+                    .find(|r| r.id.as_str() == model)
+                else {
+                    self.usage.price_error = Some(
+                        "Reload the model catalog before editing this official tariff.".into(),
+                    );
+                    return;
+                };
+                Some(
+                    if matches!(selected.endpoint_profile, EndpointKind::OpenRouterChat) {
+                        selected
+                            .upstream_model_id
+                            .0
+                            .split_once('/')
+                            .map_or(selected.upstream_model_id.0.as_str(), |(_, upstream)| {
+                                upstream
+                            })
+                    } else {
+                        selected.upstream_model_id.0.as_str()
+                    },
+                )
+            } else {
+                None
+            };
             prices
                 .items
                 .0
                 .iter()
                 .filter(|entry| {
-                    entry
-                        .model_id
-                        .as_ref()
-                        .is_some_and(|id| id.as_str() == model)
+                    matches!(entry.origin, PriceOrigin::OfficialSnapshot)
+                        && upstream.is_some_and(|upstream| entry.upstream_model_id.0 == upstream)
                         && record.snapshot_id.as_ref().is_some_and(|current| {
                             entry
                                 .snapshot_id
