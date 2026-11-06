@@ -2,12 +2,22 @@ use super::*;
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
 use std::{io::Read, path::Path, sync::Condvar};
 
+#[derive(Clone)]
+struct HeldPublication {
+    child: OperationId,
+    generation: Id,
+    staging: OperationId,
+    run: Id,
+}
 struct PublishGate {
     inner: NativeArtifactFiles,
     armed: AtomicBool,
     entered: AtomicBool,
     released: Mutex<bool>,
     wake: Condvar,
+    store: Mutex<Option<std::sync::Weak<dyn ApplicationStore>>>,
+    job: Mutex<Option<Id>>,
+    held: Mutex<Option<HeldPublication>>,
 }
 impl PublishGate {
     fn new(h: &Harness) -> Arc<Self> {
@@ -17,6 +27,9 @@ impl PublishGate {
             entered: AtomicBool::new(false),
             released: Mutex::new(false),
             wake: Condvar::new(),
+            store: Mutex::new(None),
+            job: Mutex::new(None),
+            held: Mutex::new(None),
         })
     }
     fn arm(&self) {
@@ -24,19 +37,89 @@ impl PublishGate {
         self.entered.store(false, Ordering::SeqCst);
         self.armed.store(true, Ordering::SeqCst);
     }
-    fn pause(&self) {
-        if self.armed.swap(false, Ordering::SeqCst) {
+    fn pause(&self, generation: &str) {
+        if !self.armed.load(Ordering::SeqCst) {
+            return;
+        }
+        let store = self
+            .store
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.upgrade());
+        let Some(store) = store else { return };
+        let Some(job) = self.job.lock().unwrap().clone() else {
+            return;
+        };
+        let staging = devworks_core::protocol::OperationId(Id::new(generation).unwrap());
+        let owned = read(&*store, |s| {
+            let Some(staged) = s.operations().operation(&staging)? else {
+                return Ok(None);
+            };
+            let source = &staged.payload["source"];
+            if source["kind"] != "HelpTopic" {
+                return Ok(None);
+            }
+            let Some(inner) = s.help().help_head()?.generation_operation_id else {
+                return Ok(None);
+            };
+            let Some(owner) = s.operations().operation(&inner)? else {
+                return Ok(None);
+            };
+            if owner.state != OperationState::Dispatching
+                || source["generationId"] != owner.payload["generation"]
+            {
+                return Ok(None);
+            }
+            let Some(run) = s
+                .jobs()
+                .job_runs(&job, None, 20)?
+                .into_iter()
+                .max_by_key(|run| run.seq)
+            else {
+                return Ok(None);
+            };
+            if run.status != "Running"
+                || run
+                    .inner_operation_id
+                    .as_ref()
+                    .is_some_and(|id| id != &inner)
+            {
+                return Ok(None);
+            }
+            let captured: Value = serde_json::from_str(run.checkpoint.as_ref().unwrap()).unwrap();
+            let frame: Value = serde_json::from_str(captured["frame"].as_str().unwrap()).unwrap();
+            assert_eq!(frame["requestKey"], json!(run.id));
+            assert_eq!(
+                frame["body"]["registryRevision"].as_str().unwrap(),
+                owner.payload["registryRevision"].to_string()
+            );
+            assert_eq!(
+                frame["body"]["expectedHelpRevision"].as_str().unwrap(),
+                owner.payload["expectedHelpRevision"].to_string()
+            );
+            Ok(Some(HeldPublication {
+                child: inner,
+                generation: Id::new(source["generationId"].as_str().unwrap()).unwrap(),
+                staging: staging.clone(),
+                run: run.id,
+            }))
+        });
+        if let Some(owned) = owned.filter(|_| self.armed.swap(false, Ordering::SeqCst)) {
+            *self.held.lock().unwrap() = Some(owned);
             self.entered.store(true, Ordering::SeqCst);
             let guard = self.released.lock().unwrap();
-            let (_released_guard, wait) = self
+            let (released_guard, wait) = self
                 .wake
                 .wait_timeout_while(guard, Duration::from_secs(20), |released| !*released)
                 .unwrap();
+            // Do not poison cleanup's mutex when the unchanged watchdog fails.
+            drop(released_guard);
             assert!(!wait.timed_out(), "Help artifact gate timed out");
         }
     }
     fn release(&self) {
-        *self.released.lock().unwrap() = true;
+        *self.released.lock().unwrap_or_else(|e| e.into_inner()) = true;
         self.wake.notify_all();
     }
 }
@@ -59,7 +142,8 @@ impl ArtifactFiles for PublishGate {
         let published = self
             .inner
             .publish(name, source, digest, bytes, reuse, generation)?;
-        self.pause();
+        // The input is this new staging intent; returned backing may be reused.
+        self.pause(generation);
         Ok(published)
     }
     fn managed_path(&self, d: &str, g: &str) -> Result<String, FileFault> {
@@ -85,7 +169,6 @@ impl ArtifactFiles for PublishGate {
         stopped: &mut dyn FnMut() -> bool,
     ) -> Result<Box<dyn Read + Send>, FileFault> {
         let reader = self.inner.open_controlled(d, g, n, stopped)?;
-        self.pause();
         Ok(reader)
     }
     fn read_range_controlled(
@@ -135,8 +218,30 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     let rt = runtime();
     let gate = PublishGate::new(&h);
     let app = boot_help_with_files(&rt, &h, gate.clone());
+    *gate.store.lock().unwrap() = Some(Arc::downgrade(&app.store));
     let (scheduler, _) = scheduler(&app, 0);
     let old_head = app.head();
+    // Make one real generated source unavailable. Recovery must produce new bytes
+    // (the explicit source-loss notice), so cancellation can hold THIS generation's
+    // fresh publication instead of an arbitrary reader of shared old backing.
+    let generated = id(&format!(
+        "capability-{}",
+        &devworks_core::fingerprint::sha256_hex(b"help.search\0Query")[..40]
+    ));
+    let topic = read(&*app.store, |s| {
+        s.help()
+            .help_topic(old_head.generation_id.as_ref().unwrap(), &generated)
+    })
+    .unwrap();
+    let reference: devworks_core::protocol::provider::ArtifactRef =
+        serde_json::from_value(topic.content_ref.clone().unwrap()).unwrap();
+    let version = read(&*app.store, |s| {
+        s.artifacts().version(&reference.version_id)
+    })
+    .unwrap();
+    gate.inner
+        .unlink(reference.sha256.as_str(), &version.blob_generation)
+        .unwrap();
     let registry = read(&*app.store, |s| s.packages().registry_revision());
     write(&*app.store, move |tx| {
         tx.packages().advance_registry(registry)
@@ -148,14 +253,15 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
         None,
         json!({"retained":true}),
     );
-    gate.arm();
-    let release = Release(gate.clone());
     let job = app.create(
         "Cancel accepted Help generation",
         json!({"kind":"Manual"}),
         app.definition(json!({}), true),
         true,
     );
+    *gate.job.lock().unwrap() = Some(job.clone());
+    gate.arm();
+    let release = Release(gate.clone());
     value(app.command(
         "jobs.run_now",
         json!({"jobId":job,"expectedRevision":"1"}),
@@ -167,11 +273,39 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
             tokio::task::yield_now().await;
         }
     }));
-    let running = app.runs(&job).into_iter().max_by_key(|r| r.seq).unwrap();
-    let inner = running
-        .inner_operation_id
-        .clone()
-        .expect("actual Accepted Help operation");
+    let HeldPublication {
+        child: held_child,
+        generation: held_generation,
+        staging: held_staging,
+        run,
+    } = gate.held.lock().unwrap().clone().unwrap();
+    // Publication is proven to belong to the async child, so its gateway acknowledgment
+    // can finish independently. Wait for this exact run's persisted Accepted link.
+    let running = rt.block_on(within("Help job records its accepted child", async {
+        loop {
+            let run = read(&*app.store, |s| s.jobs().job_run(&run)).unwrap();
+            if run.inner_operation_id.is_some() {
+                break run;
+            }
+            tokio::task::yield_now().await;
+        }
+    }));
+    let inner = running.inner_operation_id.clone().unwrap();
+    assert_eq!(
+        held_child, inner,
+        "the held publication belongs to this accepted child"
+    );
+    let owner = read(&*app.store, |s| s.operations().operation(&inner)).unwrap();
+    assert_eq!(owner.payload["generation"], json!(held_generation));
+    let staged = read(&*app.store, |s| s.operations().operation(&held_staging)).unwrap();
+    assert_eq!(
+        staged.payload["source"]["generationId"],
+        json!(held_generation)
+    );
+    assert_ne!(held_generation, old_head.generation_id.clone().unwrap());
+    eprintln!(
+        "HELP_CANCEL_BOUND child={held_child:?} generation={held_generation:?} staging={held_staging:?}"
+    );
     let queue = read(&*app.store, |s| {
         s.queue().deliveries(
             &DeliveryFilter {
@@ -183,6 +317,7 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
         )
     });
     assert_eq!(queue.entries.len(), 1);
+    assert_eq!(queue.entries[0].state, QueueState::Claimed);
     let delivery = queue.entries[0].id.clone();
     let cancel = app.command(
         "jobs.cancel",
@@ -221,6 +356,14 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     assert_eq!(after.revision, old_head.revision);
     assert_eq!(after.generation_id, old_head.generation_id);
     assert_eq!(after.source_digest, old_head.source_digest);
+    assert_eq!(
+        read(&*app.store, |s| s
+            .help()
+            .help_topic(&topic.generation_id, &topic.id))
+        .unwrap(),
+        topic,
+        "cancellation keeps the prior catalog/reference metadata; the fixture removed its physical body"
+    );
     let operation = read(&*app.store, |s| s.operations().operation(&inner)).unwrap();
     assert!(matches!(
         operation.state,
@@ -228,3 +371,6 @@ fn cancelling_an_accepted_help_job_cancels_only_its_delivery_and_prevents_catalo
     ));
     rt.block_on(app.runtime.shutdown());
 }
+
+#[path = "conventions_cancel.rs"]
+mod conventions;

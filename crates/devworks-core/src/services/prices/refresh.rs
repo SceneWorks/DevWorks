@@ -87,7 +87,10 @@ pub(crate) fn model(
         return Ok(Some(m));
     }
     let Some(m) = read.decision_model(id)? else {
-        return Ok(None);
+        return read
+            .embedding_price_subject(id)?
+            .map(|subject| embedding_model(read, subject))
+            .transpose();
     };
     let profile = read
         .connection(&m.connection_id)?
@@ -107,6 +110,31 @@ pub(crate) fn model(
         revision: m.revision,
         updated_at_ms: m.updated_at_ms,
     }))
+}
+// A billing subject is an internal price projection, never a conversational catalog row.
+fn embedding_model(
+    read: &dyn RouterRead,
+    subject: StoredEmbeddingPriceSubject,
+) -> Result<StoredRouteModel, StorageError> {
+    let connection = read.connection(&subject.connection_id)?;
+    Ok(StoredRouteModel {
+        id: subject.model_id,
+        display_name: subject.upstream_model_id.clone(),
+        endpoint_profile: "Embedding".into(),
+        upstream_model_id: subject.upstream_model_id,
+        enabled: subject.current_candidate_id.is_some()
+            && connection.as_ref().is_some_and(|c| c.enabled),
+        efforts: vec![],
+        image_input: false,
+        tools: false,
+        context_tokens: None,
+        connection_id: Some(subject.connection_id),
+        position: 0,
+        revision: connection
+            .as_ref()
+            .map_or(subject.created_connection_revision, |c| c.revision),
+        updated_at_ms: connection.map_or(subject.created_at_ms, |c| c.updated_at_ms),
+    })
 }
 pub(crate) fn models(
     read: &dyn RouterRead,
@@ -146,6 +174,20 @@ pub(crate) fn models(
             if let Some(m) = model(read, &row.id)?
                 && !visit(m)?
             {
+                return Ok(());
+            }
+        }
+        if n < usize::from(PAGE) {
+            break;
+        }
+    }
+    let mut after = None;
+    loop {
+        let rows = read.embedding_price_subjects(after.as_ref(), PAGE)?;
+        let n = rows.len();
+        for subject in rows {
+            after = Some(subject.model_id.clone());
+            if !visit(embedding_model(read, subject)?)? {
                 return Ok(());
             }
         }

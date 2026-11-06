@@ -1,0 +1,79 @@
+[
+  {
+    "id": "path-literal-empty-nul-max-four",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "path-refused-old-1",
+    "entry": "domain-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":1,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-refused-old-2",
+    "entry": "domain-request.r2",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":2,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-xor-slug",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"],\"slug\":\"actual-id\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-xor-conventionId",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"],\"conventionId\":\"actual-id\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-xor-operationId",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"],\"operationId\":\"actual-id\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-invalid-empty",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-invalid-five",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"a\",\"a\",\"a\",\"a\",\"a\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-invalid-oversized",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-invalid-null",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"scope\":{\"kind\":\"Workspace\"},\"path\":null}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "path-requires-scope",
+    "entry": "domain-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"mode\":\"Query\",\"queryId\":\"path-query\",\"schemaRevision\":3,\"body\":{\"kind\":\"conventions.read\",\"path\":[\"\",\"a/b\\u0000\",\" \",\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]}}",
+    "typedValid": false,
+    "schemaValid": true
+  }
+]

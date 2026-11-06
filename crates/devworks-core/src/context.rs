@@ -102,6 +102,8 @@ pub struct InvocationContext {
     principal_kind: PrincipalKind,
     invocation_id: Id,
     session_id: Option<Id>,
+    /// Actual durable job occurrence, bound only by the owning core job runner.
+    job_run_id: Option<Id>,
     ingress_namespace: Id,
     store_id: StoreId,
     restore_epoch: Counter,
@@ -193,6 +195,7 @@ impl InvocationContext {
             principal_kind,
             invocation_id,
             session_id: None,
+            job_run_id: None,
             ingress_namespace,
             store_id,
             restore_epoch,
@@ -225,6 +228,15 @@ impl InvocationContext {
     pub(crate) fn with_reviewed_operation(mut self, reviewed: ReviewedOperation) -> Self {
         self.reviewed_operation = Some(reviewed);
         self
+    }
+
+    pub(crate) fn with_job_run(mut self, run_id: Id) -> Self {
+        self.job_run_id = Some(run_id);
+        self
+    }
+    /// Original scheduled occurrence; this is provenance, never permission or a dispatch grant.
+    pub fn job_run_id(&self) -> Option<&Id> {
+        self.job_run_id.as_ref()
     }
 
     pub fn with_session(mut self, session_id: Id) -> Self {

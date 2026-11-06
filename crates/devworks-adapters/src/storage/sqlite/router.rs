@@ -410,6 +410,11 @@ impl RouterRepository for Unit<'_> {
         m: &StoredRouteModel,
         expected_revision: Option<i64>,
     ) -> Result<StoredRouteModel, StorageError> {
+        if super::embedding::has_price_subject(self.conn, &m.id)? {
+            return Err(invalid(
+                "an embedding price subject cannot become a conversational model",
+            ));
+        }
         validate_model(m)?;
         let efforts = serde_json::to_string(&m.efforts).map_err(|e| invalid(e.to_string()))?;
         let current = model(self.conn, &m.id)?;

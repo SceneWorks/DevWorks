@@ -338,6 +338,8 @@ pub struct Runtime {
     runs: Arc<RunSupervisor>,
     usage: Arc<crate::usage::UsageRuntime>,
     providers: Option<Arc<crate::providers::driver::NativeProviders>>,
+    embedding_probes: Option<Arc<crate::conventions::probes::ProbeRuntime>>,
+    conventions: Arc<devworks_core::services::conventions::ConventionService>,
     usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
@@ -542,6 +544,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .with_work(work)
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
         .with_diagnostics(diagnostics.clone());
+    let conventions = Arc::new(
+        devworks_core::services::conventions::ConventionService::new(
+            store.clone(),
+            artifacts.clone(),
+            ids.clone(),
+            clock.clone(),
+        ),
+    );
+    consumers.push(crate::conventions::indexing::consumer(
+        store.clone(),
+        conventions.indexing(),
+    ));
+    consumers.push(crate::conventions_import::consumer(conventions.imports()));
+    let use_cases = use_cases.with_conventions(conventions.clone());
     // A deliberately supplied native-job fixture may own DOCS. Production composes the
     // complete Help family and its consumer together; it never attaches to a foreign journal.
     let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
@@ -556,6 +572,31 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let use_cases = if let Some(service) = &help {
         consumers.push(crate::help::consumer(service.clone()));
         use_cases.with_help(service.clone())
+    } else {
+        use_cases
+    };
+    // Install metadata and the durable consumer together. Transport is installed later, after
+    // the complete capability/schema registry exists, and before delivery can start.
+    let embedding_spaces = if use_cases.connection_service().is_some() {
+        let service = Arc::new(
+            devworks_core::services::router::embedding_spaces::EmbeddingSpaceService::new(
+                store.clone(),
+            ),
+        );
+        if !service.install_selection_indexer(Arc::downgrade(&conventions.indexing())) {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        Some(service)
+    } else {
+        None
+    };
+    let embedding_probes = embedding_spaces.as_ref().map(|service| {
+        let worker = crate::conventions::probes::ProbeRuntime::new(service.clone());
+        consumers.push(worker.consumer());
+        worker
+    });
+    let use_cases = if let Some(service) = &embedding_spaces {
+        use_cases.with_embedding_spaces(service.clone())
     } else {
         use_cases
     };
@@ -700,6 +741,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         }
         None => None,
     };
+    if let (Some(provider), Some(service), Some(worker)) =
+        (&providers, &embedding_spaces, &embedding_probes)
+    {
+        let executor = crate::conventions::embedding::NativeEmbeddings::new(
+            store.clone(),
+            artifacts.clone(),
+            provider.clone(),
+            service.clone(),
+            clock.clone(),
+        );
+        conventions
+            .indexing()
+            .set_embeddings(Some(Arc::new(executor.clone())));
+        if !worker.install(executor) {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        service.enable_native_qualification();
+    }
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -845,6 +904,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     let browser_supervision = Arc::new(BrowserSupervision::default());
     let mut tasks = vec![delivery, collection, housekeeping];
+    let (imports, collection_wakeup) = (conventions.imports(), collector.clone());
+    tasks.push(tokio::spawn(async move {
+        let mut after = None;
+        while !imports.is_stopped() {
+            let (service, position) = (imports.clone(), after.clone());
+            if let Ok(Ok(pass)) =
+                tokio::task::spawn_blocking(move || service.cleanup_terminal_page(position)).await
+            {
+                after = pass.next;
+                if pass.released {
+                    collection_wakeup.trigger.notify_one();
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }));
     if let Some(service) = &git {
         tasks.push(tokio::spawn(crate::git::run(service.clone())));
     }
@@ -928,6 +1003,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(worker) = &embedding_probes {
+        let worker = worker.clone();
+        tasks.push(tokio::spawn(async move {
+            while !worker.is_stopped() {
+                let current = worker.clone();
+                let _ = tokio::task::spawn_blocking(move || current.reconcile()).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     let mut scheduler = Scheduler::new(
         store.clone(),
         jobs.clone(),
@@ -965,6 +1050,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         runs: run_supervisor,
         usage,
         providers,
+        embedding_probes,
+        conventions,
         usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
@@ -1114,6 +1201,10 @@ impl Runtime {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
     /// Canonical native producers and bounded historical accounting over the same router.
+    /// The same owner serves UI/tools, durable body indexing and scheduled maintenance.
+    pub fn conventions(&self) -> &Arc<devworks_core::services::conventions::ConventionService> {
+        &self.conventions
+    }
     pub fn providers(&self) -> Option<&Arc<crate::providers::driver::NativeProviders>> {
         self.providers.as_ref()
     }
@@ -1188,7 +1279,26 @@ impl Runtime {
     }
 
     pub fn query(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> QueryOutcome {
-        let outcome = self.use_cases.query(&self.gateway(), ctx, operation, raw);
+        self.query_with(
+            ctx,
+            operation,
+            raw,
+            &devworks_core::ports::storage::ReadOptions::default(),
+        )
+    }
+
+    /// The native caller owns this exact cancellation/deadline. It is passed unchanged to
+    /// preparation, the read snapshot and any auxiliary native inference source.
+    pub fn query_with(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        raw: &[u8],
+        options: &devworks_core::ports::storage::ReadOptions,
+    ) -> QueryOutcome {
+        let outcome =
+            self.use_cases
+                .query_with(&self.gateway(), ctx, operation, raw, options.clone());
         if operation == DISCOVERS_REPOSITORIES
             && let Some(ix) = &self.indexing
             && discovery_scans_inline(ctx, &outcome)
@@ -1202,11 +1312,22 @@ impl Runtime {
                 return outcome;
             }
             let env = ix.env().clone();
-            let never = || false;
+            let cancelled = || {
+                options
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(devworks_core::ports::storage::Cancellation::is_cancelled)
+            };
             // A scan that fails leaves the recorded registrations to answer.
-            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &never);
+            let _ = devworks_core::services::indexing::discover::scan(&env, ctx, None, &cancelled);
             drop(open);
-            return self.use_cases.query(&self.gateway(), ctx, operation, raw);
+            return self.use_cases.query_with(
+                &self.gateway(),
+                ctx,
+                operation,
+                raw,
+                options.clone(),
+            );
         }
         outcome
     }
@@ -1485,6 +1606,10 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.conventions.stop();
+        if let Some(probes) = &self.embedding_probes {
+            probes.stop();
+        }
         if let Some(help) = &self.help {
             help.stop();
         }

@@ -44,9 +44,13 @@ pub(super) fn raw_at<'a>(raw: &'a str, path: &[&str]) -> Option<&'a str> {
         let items: Vec<&RawValue> = serde_json::from_str(raw).ok()?;
         raw_at(items.get(path[0].parse::<usize>().ok()?)?.get(), &path[1..])
     } else {
-        let fields: BTreeMap<&str, &RawValue> = serde_json::from_str(raw).ok()?;
+        let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw).ok()?;
         raw_at(fields.get(path[0])?.get(), &path[1..])
     }
+}
+
+pub(super) fn raw_array_at<'a>(raw: &'a str, path: &[&str]) -> Option<Vec<&'a RawValue>> {
+    serde_json::from_str(raw_at(raw, path)?).ok()
 }
 
 /// Expand JSON's decimal exponent exactly, bounded by the containing event and a finite

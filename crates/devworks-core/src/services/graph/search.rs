@@ -94,32 +94,56 @@ pub(super) fn query(
         Some(id) => reader.scoped_repository(id)?,
         None => reader.scope().clone(),
     };
-    let mut rows = reader.raw_nodes(
-        &scope,
-        &GraphNodeFilter {
-            kinds: query.kinds,
-            ..Default::default()
-        },
-    )?;
+    let filter = GraphNodeFilter {
+        kinds: query.kinds,
+        ..Default::default()
+    };
     let mut selected = Vec::new();
-    for node in rows.drain(..) {
-        if !reader.budget.visit() {
+    let mut after = None;
+    // Match within the bounded scan. Exhausting visits must retain already found hits,
+    // rather than spend the entire budget before examining the first candidate.
+    'scan: loop {
+        let page = reader
+            .read
+            .graph()
+            .graph_nodes(&scope, &filter, after.as_ref(), 32)?;
+        let more = page.has_more;
+        for node in page.items {
+            if !reader.budget.visit() {
+                break 'scan;
+            }
+            after = Some(GraphPosition {
+                repository_id: node.repository_id.clone(),
+                unit_key: node.node.unit_key.clone(),
+                item_id: node.node.node_id.clone(),
+            });
+            if !matches_with(query.text, &node.node.name, || reader.budget.visit()) {
+                continue;
+            }
+            if matches!(query.mode, CodeSearchMode::Unified)
+                && !UNIFIED_KINDS.contains(&node.node.kind.as_str())
+            {
+                continue;
+            }
+            if let Some(module) = query.module
+                && !reader.module_matches(&node, module)?
+            {
+                continue;
+            }
+            let bytes = std::mem::size_of::<GraphNode>()
+                + node.node.unit_key.len()
+                + node.node.node_id.len()
+                + node.node.name.len()
+                + node.node.kind.len()
+                + node.node.payload.to_string().len();
+            if !reader.budget.retain(bytes) {
+                break 'scan;
+            }
+            selected.push(node);
+        }
+        if !more {
             break;
         }
-        if !matches_with(query.text, &node.node.name, || reader.budget.visit()) {
-            continue;
-        }
-        if matches!(query.mode, CodeSearchMode::Unified)
-            && !UNIFIED_KINDS.contains(&node.node.kind.as_str())
-        {
-            continue;
-        }
-        if let Some(module) = query.module
-            && !reader.module_matches(&node, module)?
-        {
-            continue;
-        }
-        selected.push(node);
     }
     let wildcard = query.text.contains(['%', '*']);
     // Trust is an exact view/content annotation. Keep untrusted results visible, as retained.

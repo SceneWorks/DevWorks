@@ -1143,6 +1143,31 @@ pub fn connection_records(
     }
 }
 /// The whole query catalog, including availability and logical family targets (revision 3).
+pub fn router_embedding_spaces(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    let mut page = json!({"limit":100});
+    if let Some(cursor) = cursor {
+        page["cursor"] = json!(cursor);
+    }
+    at_revision(
+        query_frame(backend, "router.embedding_spaces", json!({"page":page})),
+        3,
+    )
+}
+pub fn embedding_space_page(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::EmbeddingSpacePage, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RouterEmbeddingSpaces { value }, _) => {
+            if value.has_more && value.next_cursor.is_none() {
+                return Err(Failure::Other(
+                    "router.embedding_spaces reported more pages without a cursor".into(),
+                ));
+            }
+            Ok(value)
+        }
+        (other, _) => Err(unexpected("router.embedding_spaces", &other)),
+    }
+}
 pub fn router_catalog_all(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     let mut page = json!({"limit": PAGE_LIMIT});
     if let Some(c) = cursor {

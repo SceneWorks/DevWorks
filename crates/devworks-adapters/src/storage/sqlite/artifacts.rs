@@ -240,6 +240,7 @@ fn version_by_operation(
 }
 fn list(
     conn: &Connection,
+    host: &ActorId,
     project: &ProjectId,
     tags: &[String],
     after: Option<&ListPosition>,
@@ -257,13 +258,24 @@ fn list(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
          WHERE a.state='Live' AND a.current_version_id IS NOT NULL AND a.retention='Explicit'
            AND (a.current_project_id=?1 OR EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
+           AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
+                    AND json_extract(a.provenance_json,'$.producedBy') IS ?7
+                    AND json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic')
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
          ORDER BY a.created_at DESC, a.id DESC LIMIT ?4"
     )))?;
     let rows = db(db(s.query_map(
-        params![project.0.as_str(), at, id, limit, wanted, tags.len() as i64],
+        params![
+            project.0.as_str(),
+            at,
+            id,
+            limit,
+            wanted,
+            tags.len() as i64,
+            host.0.as_str()
+        ],
         artifact_row,
     ))?
     .collect::<rusqlite::Result<Vec<_>>>())?;
@@ -271,6 +283,7 @@ fn list(
 }
 fn list_workspace(
     conn: &Connection,
+    host: &ActorId,
     owner: Option<&ActorId>,
     tags: &[String],
     after: Option<&ListPosition>,
@@ -286,6 +299,9 @@ fn list_workspace(
         "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
          WHERE a.scope_kind='Workspace' AND a.state='Live' AND a.current_version_id IS NOT NULL
            AND a.retention='Explicit' AND (?1 IS NULL OR a.owner_actor_id=?1)
+           AND NOT (json_extract(a.provenance_json,'$.principalKind') IS 'Host'
+                    AND json_extract(a.provenance_json,'$.producedBy') IS ?7
+                    AND json_extract(a.provenance_json,'$.derived.kind') IS 'HelpTopic')
            AND (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND a.id<?3))
            AND (?6=0 OR (SELECT COUNT(*) FROM artifact_tags t WHERE t.artifact_id=a.id
                          AND t.tag IN (SELECT value FROM json_each(?5)))=?6)
@@ -298,7 +314,8 @@ fn list_workspace(
             id,
             limit,
             wanted,
-            tags.len() as i64
+            tags.len() as i64,
+            host.0.as_str()
         ],
         artifact_row,
     ))?
@@ -405,6 +422,19 @@ fn subject_exists(
     }
 }
 
+// Help backing bodies remain point-readable and retained, but are not user/work outputs.
+// Bind the SQL classification to the actual store host, not a title/tag/caller-selected value.
+impl Snapshot<'_> {
+    fn artifact_host_actor(&self) -> &ActorId {
+        self.host_actor
+    }
+}
+impl Unit<'_> {
+    fn artifact_host_actor(&self) -> &ActorId {
+        &self.info.host_actor
+    }
+}
+
 macro_rules! artifact_reads {
     ($t:ty) => {
         impl ArtifactRead for $t {
@@ -440,7 +470,7 @@ macro_rules! artifact_reads {
                 after: Option<&ListPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
-                list(self.conn, project, tags, after, limit)
+                list(self.conn, self.artifact_host_actor(), project, tags, after, limit)
             }
             fn list_workspace(
                 &self,
@@ -449,7 +479,7 @@ macro_rules! artifact_reads {
                 after: Option<&ListPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
-                list_workspace(self.conn, owner, tags, after, limit)
+                list_workspace(self.conn, self.artifact_host_actor(), owner, tags, after, limit)
             }
             fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
                 tags(self.conn, artifact)
@@ -484,7 +514,7 @@ macro_rules! artifact_reads {
             fn live_references(&self, digest: &str) -> Result<i64, StorageError> {
                 count(
                     self.conn,
-                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE blob_digest=?1)",
+                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE blob_digest=?1) + (SELECT COUNT(*) FROM convention_import_artifacts a JOIN convention_imports d ON d.operation_id=a.operation_id WHERE a.blob_digest=?1 AND d.phase!='Published')",
                     [digest],
                 )
             }

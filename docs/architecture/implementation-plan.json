@@ -21,15 +21,15 @@
     "codegraph-work-map.json": "acaafbfc31cd13b0d6bc60f27375af236fd296af174c43aaf7cf39e2e10351d4"
   },
   "counts": {
-    "slices": 78,
+    "slices": 79,
     "operationFamilies": 49,
-    "operations": 359,
+    "operations": 360,
     "requirements": 377,
     "requirementsByStatus": {
       "Confirmed": 230,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 359,
+    "inputSchemaCandidates": 360,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -118,7 +118,8 @@
     "DW-079",
     "DW-080",
     "DW-081",
-    "DW-082"
+    "DW-082",
+    "DW-119"
   ],
   "slices": [
     {
@@ -5524,6 +5525,59 @@
       "workloads": [],
       "pendingInputSchemas": [],
       "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
+      "key": "embedding_spaces",
+      "id": "DW-119",
+      "type": "Feature",
+      "title": "Configure and qualify persistent native embedding spaces",
+      "operations": [
+        "router.embedding_spaces"
+      ],
+      "dependsOnKeys": [
+        "files",
+        "credentials",
+        "transports",
+        "usage"
+      ],
+      "acceptance": "Explicit persistent candidate setup, accounted native positive qualification and separately revisioned selection; no automatic paid/first-conversation route. Current connection/account/model/config identity fences use without rewriting historical spaces. Scoped status, cancellation/replay and native UI/SQLite/transport evidence remain required.",
+      "gates": [
+        "G03",
+        "G06",
+        "G11"
+      ],
+      "status": "Native extension in progress; no acceptance claimed",
+      "dependsOn": [
+        "DW-007",
+        "DW-018",
+        "DW-019",
+        "DW-021"
+      ],
+      "ownedOperations": [
+        "router.embedding_spaces"
+      ],
+      "supportingOperations": [
+        "router.configure"
+      ],
+      "configurationActions": [
+        "CreateEmbeddingSpace",
+        "QualifyEmbeddingSpace",
+        "SelectEmbeddingSpace",
+        "ClearEmbeddingSpace"
+      ],
+      "primaryRequirements": [
+        "ROUTE-09",
+        "ROUTE-10",
+        "RAG-04",
+        "RAG-07",
+        "RAG-08"
+      ],
+      "supportingRequirements": [],
+      "capabilityCases": [
+        "CAP-ROUTER"
+      ],
+      "sourceEntryIds": [],
+      "sourceKind": "Explicit native extension tracked in DW-119; not a fabricated retained source entry"
     }
   ],
   "requirements": [
@@ -17498,6 +17552,20 @@
         "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "router.embedding_spaces",
+      "family": "router",
+      "serviceOwner": "InferenceRouter",
+      "primarySlice": "embedding_spaces",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Qualified revision-3 native extension; actual service acceptance remains separate",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EmbeddingSpacePage",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "In progress; no production operation acceptance claimed"
     }
   ],
   "sourceEntries": [

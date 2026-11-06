@@ -201,6 +201,7 @@
 //! clocks and scripted handlers, without inference, network or containers.
 pub mod approvals;
 pub mod browser;
+pub mod conventions;
 pub mod diagnostics;
 pub mod dispatch;
 pub mod evals;
@@ -237,3 +238,5 @@ pub use runtime::{
 pub mod prices;
 
 pub mod providers;
+
+pub mod conventions_import;

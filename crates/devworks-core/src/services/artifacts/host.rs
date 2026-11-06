@@ -70,51 +70,16 @@ impl ArtifactService {
         bytes: &[u8],
         source: Value,
     ) -> Result<Result<StagedFile, String>, StorageError> {
-        let env = Preparation::new(store, None, None);
-        let digest = sha256_hex(bytes);
-        let d = digest.clone();
-        let reuse = env
-            .read(|s| s.artifacts().blob(&d))?
-            .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
-            .map(|b| b.generation);
-        let payload = json!({
-            "digest": digest,
-            "byteCount": bytes.len(),
-            "source": source,
-        });
-        let (staging, published) = self.journal_and_publish(
-            &env,
-            &mut std::io::Cursor::new(bytes),
-            &digest,
-            bytes.len() as i64,
-            reuse.as_deref(),
-            payload,
-        )?;
-        let published = match published {
-            Ok(p) => p,
-            Err(fault) => {
-                self.abandon_or_defer(
-                    &env,
-                    &staging,
-                    json!({"abandoned": "the host file was not published"}),
-                );
-                if let (FileFault::Corrupt(_), Some(g)) = (&fault, reuse.as_deref()) {
-                    let _ = self.files.quarantine(&digest, g);
-                }
-                return Ok(Err(format!("host file publication failed: {fault:?}")));
-            }
-        };
-        Ok(Ok(StagedFile {
-            operation_id: staging.operation_id.clone(),
-            digest,
-            byte_count: bytes.len() as i64,
-            generation: published.generation,
-            reused: published.reused,
-            relative_path: published.relative_path,
-            origin: SourceOrigin::default(),
-            source,
-            fence: staging.fence,
-        }))
+        self.stage_host_reader(
+            store,
+            HostStream {
+                reader: &mut std::io::Cursor::new(bytes),
+                digest: &sha256_hex(bytes),
+                byte_count: bytes.len() as u64,
+                source,
+            },
+            &mut || false,
+        )
     }
 
     /// Streams a bounded host source through the existing staging journal. Both source and
@@ -310,7 +275,10 @@ impl ArtifactService {
         if stopped() {
             return Err(StorageError::Cancelled);
         }
-        result.map_err(|_| StorageError::ViewUnavailable)
+        result.map_err(|error| match error {
+            FileFault::NotFound | FileFault::Corrupt(_) => StorageError::ViewUnavailable,
+            other => super::file_failure(other),
+        })
     }
     pub(crate) fn read_help_range(
         &self,

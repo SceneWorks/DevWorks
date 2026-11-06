@@ -1,0 +1,397 @@
+//! Retained MarkdownWikiChunker semantics (CodeGraph afe73560), without a document-sized
+//! word/chunk array. One bounded source is owned at a time; the overlap window is 512 words.
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
+
+pub const WORDS: usize = 512;
+pub const OVERLAP: usize = 64;
+
+/// A single retained heading segment. Parent sharing bounds the entire generation's
+/// breadcrumb bytes by its source, including repeated large ancestor headings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadingSpan {
+    pub level: u8,
+    pub first_byte: u64,
+    pub byte_length: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownSection {
+    pub index: u64,
+    pub heading: Arc<str>,
+    /// Exact trimmed title in the ORIGINAL source bytes, excluding hashes/whitespace.
+    pub source_span: Option<HeadingSpan>,
+    pub parent: Option<Arc<MarkdownSection>>,
+}
+impl MarkdownSection {
+    pub fn path(&self) -> String {
+        match &self.parent {
+            Some(parent) => format!("{} > {}", parent.path(), self.heading),
+            None => self.heading.to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownChunk {
+    pub index: u64,
+    pub section: Arc<MarkdownSection>,
+    pub text: String,
+}
+impl MarkdownChunk {
+    /// Materialize only the input currently being sent, never every generation prefix.
+    pub fn embedding_text(&self) -> String {
+        format!("{}\n\n{}", self.section.path(), self.text)
+    }
+}
+struct Section {
+    text: String,
+    path: Arc<MarkdownSection>,
+    offset: usize,
+    window: VecDeque<String>,
+    short: bool,
+    done: bool,
+}
+impl Section {
+    fn new(text: &str, path: Arc<MarkdownSection>) -> Self {
+        Self {
+            text: text.to_owned(),
+            path,
+            offset: 0,
+            window: VecDeque::new(),
+            short: text.split_whitespace().take(WORDS + 1).count() <= WORDS,
+            done: false,
+        }
+    }
+    fn part(&mut self) -> Option<String> {
+        if self.done {
+            return None;
+        }
+        if self.short {
+            self.done = true;
+            return Some(self.text.clone());
+        }
+        while self.window.len() < WORDS {
+            let remaining = &self.text[self.offset..];
+            let lead = remaining.len() - remaining.trim_start().len();
+            self.offset += lead;
+            if self.offset == self.text.len() {
+                break;
+            }
+            let end = self.text[self.offset..]
+                .find(char::is_whitespace)
+                .map_or(self.text.len(), |end| self.offset + end);
+            self.window
+                .push_back(self.text[self.offset..end].to_owned());
+            self.offset = end;
+        }
+        if self.window.is_empty() {
+            self.done = true;
+            return None;
+        }
+        let part = self
+            .window
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if self.text[self.offset..].trim_start().is_empty() {
+            self.done = true;
+        } else {
+            while self.window.len() > OVERLAP {
+                self.window.pop_front();
+            }
+        }
+        Some(part)
+    }
+}
+
+/// A streaming chunk iterator over one source-legal Markdown body. No source text is
+/// truncated: a single long word or heading can exceed an ordinary display-field bound.
+pub struct MarkdownChunks {
+    source: String,
+    original: String,
+    raw_scan: usize,
+    root: Arc<MarkdownSection>,
+    scan: usize,
+    section_start: usize,
+    breadcrumb: BTreeMap<usize, Arc<MarkdownSection>>,
+    section_breadcrumb: Arc<MarkdownSection>,
+    next_section: u64,
+    current: Option<Section>,
+    ended: bool,
+    index: u64,
+}
+impl MarkdownChunks {
+    pub fn new(markdown: &str, section_path: &str) -> Self {
+        let source = markdown.replace("\r\n", "\n");
+        let start = if let Some(rest) = source.strip_prefix("---") {
+            rest.find("\n---")
+                .map(|end| end + 3)
+                .map(|end| {
+                    source[end + 4..]
+                        .find('\n')
+                        .map_or(source.len(), |next| end + 4 + next + 1)
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let root = Arc::new(MarkdownSection {
+            index: 0,
+            heading: Arc::from(section_path),
+            source_span: None,
+            parent: None,
+        });
+        let original = markdown.to_owned();
+        let mut raw_scan = 0;
+        let mut normalized = 0;
+        while normalized < start {
+            if original.as_bytes()[raw_scan..].starts_with(b"\r\n") {
+                raw_scan += 1;
+            }
+            raw_scan += 1;
+            normalized += 1;
+        }
+        Self {
+            source,
+            original,
+            raw_scan,
+            root: root.clone(),
+            scan: start,
+            section_start: start,
+            breadcrumb: BTreeMap::new(),
+            section_breadcrumb: root,
+            next_section: 1,
+            current: None,
+            ended: false,
+            index: 0,
+        }
+    }
+    fn section(&mut self) -> Option<Section> {
+        while !self.ended {
+            let mut end = self.source.len();
+            let mut next = None;
+            while self.scan < self.source.len() {
+                let start = self.scan;
+                let raw_start = self.raw_scan;
+                let line_end = self.source[start..]
+                    .find('\n')
+                    .map_or(self.source.len(), |n| start + n);
+                self.scan = if line_end < self.source.len() {
+                    line_end + 1
+                } else {
+                    line_end
+                };
+                self.raw_scan += line_end - start;
+                if line_end < self.source.len() {
+                    if self.original.as_bytes()[self.raw_scan..].starts_with(b"\r\n") {
+                        self.raw_scan += 1;
+                    }
+                    self.raw_scan += 1;
+                }
+                if let Some((level, title)) = heading(&self.source[start..line_end]) {
+                    let title_offset =
+                        title.as_ptr() as usize - self.source[start..line_end].as_ptr() as usize;
+                    let span = HeadingSpan {
+                        level: level as u8,
+                        first_byte: (raw_start + title_offset) as u64,
+                        byte_length: title.len() as u64,
+                    };
+                    end = start;
+                    next = Some((level, title.to_owned(), self.scan, span));
+                    break;
+                }
+            }
+            let text = self.source[self.section_start..end].trim();
+            let section = (!text.is_empty() && !pure_code(text))
+                .then(|| Section::new(text, self.section_breadcrumb.clone()));
+            if let Some((level, title, start, span)) = next {
+                self.breadcrumb.retain(|key, _| *key < level);
+                let parent = self
+                    .breadcrumb
+                    .last_key_value()
+                    .map_or_else(|| self.root.clone(), |(_, parent)| parent.clone());
+                let heading = Arc::new(MarkdownSection {
+                    index: self.next_section,
+                    heading: Arc::from(format!("{} {title}", "#".repeat(level))),
+                    source_span: Some(span),
+                    parent: Some(parent),
+                });
+                self.next_section += 1;
+                self.breadcrumb.insert(level, heading.clone());
+                self.section_breadcrumb = heading;
+                self.section_start = start;
+            } else {
+                self.ended = true;
+            }
+            if section.is_some() {
+                return section;
+            }
+        }
+        None
+    }
+}
+impl Iterator for MarkdownChunks {
+    type Item = MarkdownChunk;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(section) = &mut self.current
+                && let Some(text) = section.part()
+            {
+                let text = text.trim().to_owned();
+                if text.is_empty() {
+                    continue;
+                }
+                let index = self.index;
+                self.index += 1;
+                return Some(MarkdownChunk {
+                    index,
+                    section: section.path.clone(),
+                    text,
+                });
+            }
+            self.current = self.section();
+            self.current.as_ref()?;
+        }
+    }
+}
+fn heading(line: &str) -> Option<(usize, &str)> {
+    let level = line.bytes().take_while(|b| *b == b'#').count();
+    if !(1..=3).contains(&level) || !line[level..].starts_with(char::is_whitespace) {
+        return None;
+    }
+    let text = line[level..].trim();
+    (!text.is_empty()).then_some((level, text))
+}
+fn pure_code(text: &str) -> bool {
+    text.starts_with("```")
+        && text
+            .rfind("```")
+            .is_some_and(|last| last > 0 && last >= text.len() - 3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn frozen_breadcrumb_frontmatter_and_code_exclusion_are_preserved() {
+        let input = "---\r\nowner: platform\r\n---\r\n# Overview\r\n\r\nIntro text.\r\n\r\n## Consumers\r\n\r\nPrefer idempotent consumers.\r\n### Code\r\n```rust\r\nlet n = 1;\r\n```\r\n## Next\r\n#### Keep this lower heading\r\nText.";
+        let chunks: Vec<_> = MarkdownChunks::new(input, "Messaging").collect();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks[0].embedding_text(),
+            "Messaging > # Overview\n\nIntro text."
+        );
+        assert_eq!(
+            chunks[1].section.path(),
+            "Messaging > # Overview > ## Consumers"
+        );
+        assert_eq!(chunks[1].index, 1);
+        assert!(chunks[2].text.starts_with("#### Keep this lower heading"));
+        assert!(
+            !chunks
+                .iter()
+                .any(|c| c.text.contains("owner:") || c.text.contains("let n"))
+        );
+        assert!(
+            MarkdownChunks::new("---\nkey: value\n---", "P")
+                .next()
+                .is_none()
+        );
+    }
+    #[test]
+    fn long_sections_have_exact_512_word_windows_and_64_word_overlap() {
+        let source = (0..1025)
+            .map(|n| format!("word{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let chunks: Vec<_> = MarkdownChunks::new(&source, "P").collect();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| c.text.split_whitespace().count())
+                .collect::<Vec<_>>(),
+            [512, 512, 129]
+        );
+        assert!(chunks[0].text.ends_with("word511"));
+        assert!(chunks[1].text.starts_with("word448 "));
+        assert!(chunks[2].text.starts_with("word896 "));
+        assert!(chunks[2].text.ends_with("word1024"));
+        assert_eq!(
+            MarkdownChunks::new("line one\n\nline two", "P")
+                .next()
+                .unwrap()
+                .text,
+            "line one\n\nline two"
+        );
+    }
+    #[test]
+    fn legal_long_words_and_headings_are_not_narrowed_to_display_bounds() {
+        let heading = "h".repeat(70_000);
+        let word = "w".repeat(1_000_000);
+        let chunk = MarkdownChunks::new(&format!("# {heading}\n{word}"), "P")
+            .next()
+            .unwrap();
+        assert_eq!(chunk.text, word);
+        assert_eq!(chunk.section.path(), format!("P > # {heading}"));
+        assert!(chunk.embedding_text().ends_with(&word));
+        assert_eq!(
+            MarkdownChunks::new(&"x".repeat(16_777_215), "P")
+                .next()
+                .unwrap()
+                .text
+                .len(),
+            16_777_215
+        );
+    }
+    #[test]
+    fn legal_large_ancestor_heading_is_shared_across_all_chunks_and_child_sections() {
+        let heading = "h".repeat(8 * 1024 * 1024);
+        let source = format!(
+            "# {heading}\n{}\n## First\nfirst\n## Second\nsecond",
+            "word ".repeat(600_000)
+        );
+        assert!(source.len() < 16_777_215);
+        let mut chunks = MarkdownChunks::new(&source, "P");
+        let first = chunks.next().unwrap();
+        let ancestor = first.section.clone();
+        let mut count = 1;
+        for chunk in chunks {
+            count += 1;
+            if chunk.section.index == ancestor.index {
+                assert!(Arc::ptr_eq(&chunk.section, &ancestor));
+            } else {
+                assert!(Arc::ptr_eq(
+                    chunk.section.parent.as_ref().unwrap(),
+                    &ancestor
+                ));
+            }
+        }
+        assert!(count > 1_000);
+        assert_eq!(ancestor.heading.len(), heading.len() + 2);
+    }
+    #[test]
+    fn heading_spans_point_to_original_utf8_titles_through_crlf_frontmatter_and_trim() {
+        let source =
+            "---\r\nx: true\r\n---\r\n#  é root \t\r\nbody\r\n### \t child\0末 \t\r\nother";
+        let chunks: Vec<_> = MarkdownChunks::new(source, "Owner title").collect();
+        assert_eq!(chunks.len(), 2);
+        let root = chunks[0].section.source_span.as_ref().unwrap();
+        assert_eq!(
+            &source[root.first_byte as usize..(root.first_byte + root.byte_length) as usize],
+            "é root"
+        );
+        assert_eq!(root.level, 1);
+        let child = chunks[1].section.source_span.as_ref().unwrap();
+        assert_eq!(
+            &source[child.first_byte as usize..(child.first_byte + child.byte_length) as usize],
+            "child\0末"
+        );
+        assert_eq!(child.level, 3);
+        assert_eq!(
+            chunks[1].section.path(),
+            "Owner title > # é root > ### child\0末"
+        );
+    }
+}

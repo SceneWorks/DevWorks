@@ -404,7 +404,8 @@ impl NativeArtifactFiles {
             .remove(&(digest.to_owned(), generation.to_owned()));
     }
 
-    /// Hashes a generation in controlled chunks and rewinds that exact verified handle.
+    /// Reuses a settled proof only for the same open handle identity and timestamps. Unknown
+    /// or changed generations are hashed in controlled chunks before any range is served.
     fn open_controlled_file(
         &self,
         digest: &str,
@@ -416,34 +417,62 @@ impl NativeArtifactFiles {
         if stopped() {
             return Err(interrupted());
         }
+        // Match open_verified's racy-timestamp rule: verification time precedes the stamp,
+        // and both native modification/change times must have settled before reuse.
+        let verified_at = SystemTime::now();
         let mut file = File::open(self.blob_path(digest, generation)?).map_err(fault)?;
-        let mut hash = Sha256::new();
-        let mut bytes = 0u64;
-        let mut buffer = [0; 64 * 1024];
-        loop {
+        let before = stamp(&file).map_err(fault)?;
+        if before.len != byte_count {
+            self.forget(digest, generation);
+            return Err(corrupt(digest));
+        }
+        let key = (digest.to_owned(), generation.to_owned());
+        let known = self
+            .verified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .copied();
+        if known != Some(before) {
+            let mut hash = Sha256::new();
+            let mut bytes = 0u64;
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                if stopped() {
+                    return Err(interrupted());
+                }
+                let count = file.read(&mut buffer).map_err(fault)?;
+                if count == 0 {
+                    break;
+                }
+                bytes = bytes
+                    .checked_add(count as u64)
+                    .ok_or_else(|| corrupt(digest))?;
+                if bytes > byte_count {
+                    self.forget(digest, generation);
+                    return Err(corrupt(digest));
+                }
+                hash.update(&buffer[..count]);
+            }
             if stopped() {
                 return Err(interrupted());
             }
-            let count = file.read(&mut buffer).map_err(fault)?;
-            if count == 0 {
-                break;
-            }
-            bytes = bytes
-                .checked_add(count as u64)
-                .ok_or_else(|| corrupt(digest))?;
-            if bytes > byte_count {
+            if bytes != byte_count || hex(hash) != digest {
+                self.forget(digest, generation);
                 return Err(corrupt(digest));
             }
-            hash.update(&buffer[..count]);
+            let after = stamp(&file).map_err(fault)?;
+            if after == before && before.settled(verified_at) {
+                self.verified
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(key, before);
+            }
+            file.seek(SeekFrom::Start(0)).map_err(fault)?;
         }
         if stopped() {
             return Err(interrupted());
         }
-        if bytes != byte_count || hex(hash) != digest {
-            self.forget(digest, generation);
-            return Err(corrupt(digest));
-        }
-        file.seek(SeekFrom::Start(0)).map_err(fault)?;
         Ok(file)
     }
 
@@ -1094,6 +1123,76 @@ mod tests {
             files.read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || false),
             Err(FileFault::Corrupt(_))
         ));
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn controlled_ranges_reuse_only_settled_unchanged_verification() {
+        let data = root("controlled-settled");
+        let files = NativeArtifactFiles::new(&data, data.join("cache"));
+        let bytes = vec![b'a'; 2 * 1024 * 1024];
+        let d = digest(&bytes);
+        let n = bytes.len() as u64;
+        files
+            .publish("op-1.part", &mut bytes.as_slice(), &d, n, None, "op-1")
+            .unwrap();
+        // A real unchanged file must age beyond the filesystem's racy timestamp window.
+        // Backdating mtime alone would not qualify its native change-time stamp.
+        std::thread::sleep(RACY_WINDOW + Duration::from_millis(100));
+        let mut first = 0;
+        assert_eq!(
+            files
+                .read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || {
+                    first += 1;
+                    false
+                })
+                .unwrap(),
+            b"aaaa"
+        );
+        assert!(
+            first >= 32,
+            "the first source verification is actually streamed"
+        );
+        assert_eq!(
+            files.verified.lock().unwrap().len(),
+            1,
+            "settled same-handle verification must be reusable"
+        );
+        for offset in [0, n - 8] {
+            let mut checks = 0;
+            assert_eq!(
+                files
+                    .read_range_controlled(&d, "op-1", n, offset, 4, &mut || {
+                        checks += 1;
+                        false
+                    })
+                    .unwrap(),
+                b"aaaa"
+            );
+            assert!(
+                checks <= 4,
+                "an unchanged page must not rehash the whole source: {checks} checks"
+            );
+        }
+        assert!(
+            files
+                .read_range_controlled(&d, "op-1", n, 0, 4, &mut || true)
+                .is_err(),
+            "a cache hit never bypasses cancellation"
+        );
+        let path = files.blob_path(&d, "op-1").unwrap();
+        let mut file = OpenOptions::new().write(true).open(path).unwrap();
+        file.write_all(b"b").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        assert!(
+            matches!(
+                files.read_range_controlled(&d, "op-1", n, n - 4, 4, &mut || false),
+                Err(FileFault::Corrupt(_))
+            ),
+            "a changed byte outside the page must invalidate the cached proof"
+        );
+        assert!(files.verified.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(data);
     }
 

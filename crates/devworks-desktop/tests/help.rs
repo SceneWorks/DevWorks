@@ -728,6 +728,16 @@ fn install_guide(
     help: &str,
     update: bool,
 ) -> String {
+    install_named_guide(engine, root, "local-help-fixture", version, help, update)
+}
+fn install_named_guide(
+    engine: &devworks_desktop::host::Engine,
+    root: &Root,
+    package_id: &str,
+    version: &str,
+    help: &str,
+    update: bool,
+) -> String {
     use devworks_core::fingerprint::sha256_hex;
     use devworks_core::protocol::results::OperationResult;
     use devworks_desktop::{addons, ops};
@@ -741,7 +751,7 @@ fn install_guide(
     } else {
         "bin/helper"
     };
-    let manifest = json!({"packageId":"local-help-fixture","version":version,"publisherId":"help-test-publisher","protocolMin":{"major":1,"minor":0},"protocolMax":{"major":1,"minor":0},"minimumHostVersion":"0.1.0","dependencies":[],"runtimes":[],"schemaAssets":[],"requestedLimits":{"maxConcurrent":1,"queueCapacity":4,"maxMemoryBytes":"1048576","streamCreditBytes":4096},"targets":[{"targetTriple":devworks_adapters::packages::host_target_triple(),"entrypoint":entry}],"files":[{"path":entry,"sha256":sha256_hex(helper),"byteLength":helper.len().to_string()},{"path":"help.md","sha256":sha256_hex(help.as_bytes()),"byteLength":help.len().to_string()}],"stateSchema":{"schemaId":"local-help-fixture/state","revision":"1","sha256":"a".repeat(64)},"configurationSchema":{"schemaId":"local-help-fixture/config","revision":"1","sha256":"b".repeat(64)},"helpFile":"help.md","requestedPermissions":[],"contributions":[{"kind":"Tool","meta":{"id":"local-help-fixture/inspect","inputSchema":{"schemaId":"local-help-fixture/in","revision":"1","sha256":"c".repeat(64)},"outputSchema":{"schemaId":"local-help-fixture/out","revision":"1","sha256":"d".repeat(64)},"helpTopic":"help","required":false,"cancellation":"Cooperative"},"requestedEffect":"ReadCandidate"}]}).to_string();
+    let manifest = json!({"packageId":package_id,"version":version,"publisherId":"help-test-publisher","protocolMin":{"major":1,"minor":0},"protocolMax":{"major":1,"minor":0},"minimumHostVersion":"0.1.0","dependencies":[],"runtimes":[],"schemaAssets":[],"requestedLimits":{"maxConcurrent":1,"queueCapacity":4,"maxMemoryBytes":"1048576","streamCreditBytes":4096},"targets":[{"targetTriple":devworks_adapters::packages::host_target_triple(),"entrypoint":entry}],"files":[{"path":entry,"sha256":sha256_hex(helper),"byteLength":helper.len().to_string()},{"path":"help.md","sha256":sha256_hex(help.as_bytes()),"byteLength":help.len().to_string()}],"stateSchema":{"schemaId":format!("{package_id}/state"),"revision":"1","sha256":"a".repeat(64)},"configurationSchema":{"schemaId":format!("{package_id}/config"),"revision":"1","sha256":"b".repeat(64)},"helpFile":"help.md","requestedPermissions":[],"contributions":[{"kind":"Tool","meta":{"id":format!("{package_id}/inspect"),"inputSchema":{"schemaId":format!("{package_id}/in"),"revision":"1","sha256":"c".repeat(64)},"outputSchema":{"schemaId":format!("{package_id}/out"),"revision":"1","sha256":"d".repeat(64)},"helpTopic":"help","required":false,"cancellation":"Cooperative"},"requestedEffect":"ReadCandidate"}]}).to_string();
     let key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
     let bundle = devworks_adapters::packages::write_bundle(
         manifest.as_bytes(),
@@ -757,7 +767,7 @@ fn install_guide(
         "actual native bundle signature verification"
     );
     let manifest_digest = inspected.inspection.manifest_digest;
-    let path = root.file(&format!("local-help-fixture-{version}.dwpkg"), &bundle);
+    let path = root.file(&format!("{package_id}-{version}.dwpkg"), &bundle);
     let ticket = b.mint_workspace_upload(&path).unwrap();
     let artifact = ops::saved_artifact(b.command(
         "artifacts.save",
@@ -777,7 +787,7 @@ fn install_guide(
     let (op, frame) = addons::install_saved(
         &*b,
         &artifact.artifact,
-        update.then_some("local-help-fixture"),
+        update.then_some(package_id),
         revision,
     );
     let installed = match ops::command_result(b.command(op, &frame)).unwrap() {
@@ -801,7 +811,7 @@ fn install_guide(
     loop {
         let page = hops::topics(b.query(
             "help.package_guides",
-            &hops::guides(&*b, "local-help-fixture", version, None),
+            &hops::guides(&*b, package_id, version, None),
         ))
         .unwrap();
         if page.items.0.iter().any(|topic| {
@@ -915,5 +925,165 @@ fn native_context_help_returns_to_the_same_conversation_and_unsent_draft() {
             .value()
             .as_deref(),
         Some("Keep this unsent draft while reading Help")
+    );
+}
+
+#[test]
+fn native_help_rebases_passage_cursor_after_unrelated_catalog_revision_without_changing_selection()
+{
+    let _guard = native_help_guard();
+    let root = Root::new("help-cursor-snapshot-change");
+    let engine = start(&root);
+    let first = format!(
+        "# Stable package guide\n\nStable cursor marker.\n{}\nEnd.\n",
+        "unchanged Unicode λ line.\n".repeat(1500)
+    );
+    install_guide(&engine, &root, "1.0.0", &first, false);
+    let gate = Gate::holding_replies("help.read").with_frame_field("/body/cursor");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1100.0,
+    );
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    h.ctx
+        .set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    settle(&mut h);
+    replace(
+        &mut h,
+        devworks_desktop::chat::COMPOSER_LABEL,
+        "Keep my unsent conversation draft",
+    );
+    press(&mut h, "Help for current screen");
+    ready(&mut h);
+    replace(&mut h, "Search local Help", "Stable cursor marker");
+    press(&mut h, "Search Help");
+    let topic=h.state().help.topics.iter().find(|topic|matches!(&topic.provenance,Some(HelpProvenance::Package{package_id,..}) if package_id.as_str()=="local-help-fixture")).expect("actual signed package guide").clone();
+    press(
+        &mut h,
+        &format!(
+            "Read Help topic {} version {}",
+            topic.id.as_str(),
+            topic.version.0
+        ),
+    );
+    press(&mut h, "Next Help passage");
+    assert!(
+        matches!(&h.state().help.read,Some(HelpReadView::Available{passage,..}) if passage.offset.get()==hops::PASSAGE_CHARS as i64)
+    );
+    assert_eq!(h.state().help.read_cursors.len(), 2);
+    let old_snapshot = h.state().help.snapshot.as_ref().unwrap().clone();
+    let selection = h.state().help.selected.clone();
+    replace(
+        &mut h,
+        "Search local Help",
+        "Keep my unsubmitted Help search draft",
+    );
+    // A different, genuinely installed signed package changes the catalog and registry while
+    // the selected guide's exact version and captured bytes remain unchanged.
+    install_named_guide(
+        &engine,
+        &root,
+        "unrelated-help-fixture",
+        "1.0.0",
+        "# Other guide\n\nAn unrelated installed source.\n",
+        false,
+    );
+    step_until(&mut h, "adopted changed Help snapshot", |s| {
+        s.help.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.registry_revision != old_snapshot.registry_revision
+                && snapshot.help_revision != old_snapshot.help_revision
+        })
+    });
+    settle(&mut h);
+    assert!(
+        h.state().help.read_error.is_none(),
+        "a new snapshot must not reuse a prior passage cursor: {:?}",
+        h.state().help.read_error
+    );
+    assert_eq!(
+        h.state().help.selected,
+        selection,
+        "keep the exact selected topic and version"
+    );
+    assert_eq!(
+        h.state().help.query,
+        "Keep my unsubmitted Help search draft"
+    );
+    assert_eq!(h.state().help.read_cursors, vec![None]);
+    assert!(
+        matches!(&h.state().help.read,Some(HelpReadView::Available{topic:actual,passage,..}) if actual.id==topic.id&&actual.version.0=="1.0.0"&&passage.offset.get()==0&&first.starts_with(&passage.text.0))
+    );
+    press(&mut h, "Next Help passage");
+    assert!(h.state().help.read_error.is_none());
+    assert!(
+        matches!(&h.state().help.read,Some(HelpReadView::Available{passage,..}) if passage.offset.get()==hops::PASSAGE_CHARS as i64)
+    );
+    // Also change the real snapshot while an old, already-read later passage is in flight.
+    // A fresh first-page read must complete without waiting for that held old reply.
+    h.get_by_role_and_label(Role::Button, "Next Help passage")
+        .scroll_to_me();
+    settle(&mut h);
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Next Help passage")
+        .click();
+    step_until(&mut h, "held prior-snapshot passage", |s| s.help.reading);
+    let before_late = h.state().help.snapshot.as_ref().unwrap().clone();
+    install_named_guide(
+        &engine,
+        &root,
+        "unrelated-help-fixture",
+        "2.0.0",
+        "# Other updated guide\n\nAnother unrelated source revision.\n",
+        true,
+    );
+    step_until(
+        &mut h,
+        "fresh passage supersedes in-flight old cursor",
+        |s| {
+            s.help
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.registry_revision != before_late.registry_revision)
+                && !s.help.reading
+                && matches!(&s.help.read,Some(HelpReadView::Available{passage,..}) if passage.offset.get()==0)
+        },
+    );
+    let adopted = h.state().help.snapshot.as_ref().unwrap().clone();
+    gate.open();
+    settle(&mut h);
+    assert_eq!(
+        h.state().help.snapshot.as_ref().unwrap().registry_revision,
+        adopted.registry_revision,
+        "late old read cannot roll back the adopted snapshot"
+    );
+    assert_eq!(h.state().help.read_cursors, vec![None]);
+    assert_eq!(h.state().help.selected, selection);
+    assert!(h.state().help.read_error.is_none());
+    assert!(
+        matches!(&h.state().help.read,Some(HelpReadView::Available{passage,..}) if passage.offset.get()==0)
+    );
+    press(&mut h, "Refresh Help");
+    assert!(h.state().help.read_error.is_none());
+    assert_eq!(h.state().help.selected, selection);
+    press(&mut h, "Back to previous screen");
+    assert_eq!(h.state().route(), Route::Chat);
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, devworks_desktop::chat::COMPOSER_LABEL)
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("Keep my unsent conversation draft")
     );
 }

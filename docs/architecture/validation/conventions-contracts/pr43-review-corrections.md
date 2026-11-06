@@ -1,0 +1,12 @@
+# PR43 review corrections
+
+The exact `aa3558c9` review identified five material gaps. The corrections preserve current authority, source/version fences, bounds and the existing public schemas.
+
+- Project edits and source-backed breadcrumbs now carry the already-authorized owner's actual scope. The actual desktop Human has no project lineage. Native baseline reproduced three NotFound failures; the corrected four-case suite passes, including current/raw/resource sources, historical preservation, search/SectionPath and wrong-scope refusal.
+- Hybrid fusion computes actual compatible cosine for every admitted lexical candidate. The frozen implementation's sparse-score approximation is explicitly corrected: dense top4K limits candidate discovery, not scoring. A lexical-best chunk outside four dense-only neighbors now scores0.935 and remains first at topK1/2/50. Excluded dense-only rows cannot beat the retained topK under the same stable tie ordering. Scoped eligibility and full-corpus lexical statistics remain unchanged.
+- Configuration freshness excludes only transient invocation identity. Real new-invocation and app shutdown/drop/reopen recovery reuse the original paid query with unchanged attempts, preparation, balance and HTTP count. Actual selection changes still expire the request.
+- Production maintenance releases terminal private import captures in bounded pages, under the existing publication fence and actual terminal journal checks. Deleting references and invoking the shared blob-release helper occur in the same transaction; the normal collector performs physical removal. Live checkpoints, original caller input and published/history references remain intact. The task starts at boot and stops with its owning service.
+
+On the composed delivery source, strict workspace all-target Clippy passes (12.97s), along with formatting and zero-drift regeneration. Native desktop project-scope cases4/4 pass (9.68s), full import suite20/20 passes (22.31s), and actual paid query/job cases6/6 pass (27.06s). The separate SQL retrieval suite6/6 and affected query suite6/6 pass; recorded vectors execute no learned model computation. Both missing runtime wiring and missing physical blob-release marking have causal failures at the unchanged watchdog bounds.
+
+These local results close the identified source gaps. Fresh exact-head code/security review, all-platform CI, merge and integrated CodeGraph acceptance remain required.

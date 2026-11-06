@@ -2,7 +2,10 @@
 use devworks_core::protocol::provider::EndpointProfile;
 use devworks_core::providers::decode::{DecodedFrame, DecodedOutcome, Decoder};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+static MEASUREMENT: Mutex<()> = Mutex::new(());
 
 struct Allocator;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
@@ -107,6 +110,7 @@ fn decode(profile: EndpointProfile, raw: &str, streaming: bool) -> Vec<DecodedFr
 }
 #[test]
 fn aggregate_and_stream_terminal_many_item_retention_and_allocations_are_linear() {
+    let _measurement = MEASUREMENT.lock().unwrap();
     for profile in [
         EndpointProfile::OpenAiResponses,
         EndpointProfile::CodexSubscriptionResponses,
@@ -196,6 +200,239 @@ fn aggregate_and_stream_terminal_many_item_retention_and_allocations_are_linear(
                     );
                 } else {
                     small = Some((wire.len(), allocated));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn messages_many_blocks_parse_work_and_exact_evidence_are_linear() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    let block = r#"{ "type":"text", "text":"native text", "opaque":{"amount":1.2300e+004,"integer":9007199254740993,"escaped":"\u0061"} }"#;
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        let mut small = None;
+        for count in [64, 2_000] {
+            let wire = format!(
+                r#"{{"id":"native-message","type":"message","role":"assistant","content":[{}],"stop_reason":"end_turn"}}"#,
+                vec![block; count].join(",")
+            );
+            let (frames, allocated, peak) = measured(|| decode(profile.clone(), &wire, false));
+            assert!(matches!(
+                frames.last(),
+                Some(DecodedFrame::Terminal {
+                    outcome: DecodedOutcome::Completed,
+                    ..
+                })
+            ));
+            let blocks: Vec<_> = native(&frames).filter(|item| item.kind == "text").collect();
+            assert_eq!(blocks.len(), count);
+            for (i, observation) in blocks.iter().enumerate() {
+                assert_eq!(observation.ordinal, Some(i as u64));
+                assert_eq!(observation.raw_json, block);
+            }
+            assert_eq!(
+                native(&frames).filter(|item| item.raw_json == wire).count(),
+                1
+            );
+            assert_eq!(frames.iter().filter(|f| matches!(f, DecodedFrame::TextDelta { text, .. } if text == "native text")).count(), count);
+            eprintln!(
+                "Messages count={count} wireBytes={} allocated={allocated} peakLive={peak}",
+                wire.len()
+            );
+            assert!(
+                allocated < wire.len() * 128,
+                "repeated enclosing-array parse: {allocated} allocated for {} bytes",
+                wire.len()
+            );
+            if let Some((small_bytes, small_allocated)) = small {
+                assert!(
+                    (allocated as u128) * (small_bytes as u128)
+                        < 2 * (small_allocated as u128) * (wire.len() as u128),
+                    "parse allocations grow faster than input"
+                );
+            } else {
+                small = Some((wire.len(), allocated));
+            }
+        }
+    }
+}
+
+fn chat_decode(profile: EndpointProfile, raw: &str, streaming: bool) -> Vec<DecodedFrame> {
+    let mut decoder = Decoder::new(profile);
+    if streaming {
+        let mut frames = decoder.consume_data_event(None, raw);
+        frames.extend(decoder.consume_data_event(None, "[DONE]"));
+        frames.extend(decoder.finish());
+        frames
+    } else {
+        decoder.consume_aggregate(raw.as_bytes())
+    }
+}
+
+#[test]
+fn chat_many_choices_retain_one_envelope_and_linear_exact_choice_evidence() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for streaming in [false, true] {
+            let mut small = None;
+            for count in [64, 512, 5_000] {
+                let field = if streaming { "delta" } else { "message" };
+                let choices: Vec<_> = (0..count).map(|i|format!(r#"{{ "index":{i}, "{field}":{{"content":"native text"}}, "finish_reason":"stop", "opaque":1.2300e+004 }}"#)).collect();
+                let wire = format!(
+                    r#"{{"id":"native-chat","choices":[{}],"opaque":9007199254740993}}"#,
+                    choices.join(",")
+                );
+                let (frames, allocated, peak) =
+                    measured(|| chat_decode(profile.clone(), &wire, streaming));
+                eprintln!(
+                    "Chat choices profile={profile:?} stream={streaming} count={count} wireBytes={} allocated={allocated} peakLive={peak}",
+                    wire.len()
+                );
+                assert!(
+                    allocated < wire.len() * 128,
+                    "repeated enclosing response copies: {allocated} allocated for {} bytes",
+                    wire.len()
+                );
+                if let Some((small_bytes, small_allocated)) = small {
+                    assert!(
+                        (allocated as u128) * (small_bytes as u128)
+                            < 2 * (small_allocated as u128) * (wire.len() as u128),
+                        "choice retention grows faster than input"
+                    );
+                } else {
+                    small = Some((wire.len(), allocated));
+                }
+                // The bounded RED fails before allocating the old 5,000-choice envelope
+                // population. GREEN also covers that full legal input.
+                if count == 64 {
+                    continue;
+                }
+                assert!(matches!(
+                    frames.last(),
+                    Some(DecodedFrame::Terminal {
+                        outcome: DecodedOutcome::Failed,
+                        ..
+                    })
+                ));
+                let retained: Vec<_> = native(&frames)
+                    .filter(|v| v.kind == "additional_chat_choice")
+                    .collect();
+                assert_eq!(retained.len(), count - 1);
+                for (i, observation) in retained.iter().enumerate() {
+                    assert_eq!(observation.ordinal, Some((i + 1) as u64));
+                    assert_eq!(observation.raw_json, choices[i + 1]);
+                    assert_eq!(
+                        observation.replay,
+                        devworks_core::providers::decode::NativeReplay::Unsupported
+                    );
+                }
+                assert_eq!(
+                    native(&frames).filter(|item| item.raw_json == wire).count(),
+                    1
+                );
+                assert_eq!(
+                    frames
+                        .iter()
+                        .filter(
+                            |f| matches!(f,DecodedFrame::TextDelta{text,..}if text=="native text")
+                        )
+                        .count(),
+                    1
+                );
+                assert!(
+                    !frames
+                        .iter()
+                        .any(|f| matches!(f, DecodedFrame::ToolCallComplete { .. }))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn chat_nested_unsupported_populations_keep_linear_exact_item_evidence() {
+    let _measurement = MEASUREMENT.lock().unwrap();
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for streaming in [false, true] {
+            for tools in [false, true] {
+                let mut small = None;
+                for count in [64, 512, 2_000] {
+                    let items:Vec<_>=(0..count).map(|i| if tools {
+                        format!(r#"{{ "index":{i}, "id":"native_{i}", "type":"future_tool", "opaque":9.8700e-009 }}"#)
+                    }else{format!(r#"{{ "type":"future_content", "position":{i}, "opaque":1.2300e+004, "escaped":"\u0061" }}"#)}).collect();
+                    let field = if streaming { "delta" } else { "message" };
+                    let body = if tools {
+                        format!(
+                            r#"{{"content":"native text","tool_calls":[{}]}}"#,
+                            items.join(",")
+                        )
+                    } else {
+                        format!(r#"{{"content":[{}]}}"#, items.join(","))
+                    };
+                    let wire = format!(
+                        r#"{{"choices":[{{"index":0,"{field}":{body},"finish_reason":"stop"}}]}}"#
+                    );
+                    let (frames, allocated, peak) =
+                        measured(|| chat_decode(profile.clone(), &wire, streaming));
+                    eprintln!(
+                        "Chat nested profile={profile:?} stream={streaming} tools={tools} count={count} wireBytes={} allocated={allocated} peakLive={peak}",
+                        wire.len()
+                    );
+                    assert!(
+                        allocated < wire.len() * 128,
+                        "nested envelope copies: {allocated} allocated for {} bytes",
+                        wire.len()
+                    );
+                    if let Some((small_bytes, small_allocated)) = small {
+                        assert!(
+                            (allocated as u128) * (small_bytes as u128)
+                                < 2 * (small_allocated as u128) * (wire.len() as u128),
+                            "nested retention grows faster than input"
+                        );
+                    } else {
+                        small = Some((wire.len(), allocated));
+                    }
+                    if count == 64 {
+                        continue;
+                    }
+                    assert!(matches!(
+                        frames.last(),
+                        Some(DecodedFrame::Terminal {
+                            outcome: DecodedOutcome::Failed,
+                            ..
+                        })
+                    ));
+                    let kind = if tools {
+                        "nonfunction_chat_tool"
+                    } else {
+                        "chat_content"
+                    };
+                    let retained: Vec<_> = native(&frames).filter(|v| v.kind == kind).collect();
+                    assert_eq!(retained.len(), count);
+                    for (i, observation) in retained.iter().enumerate() {
+                        assert_eq!(observation.raw_json, items[i]);
+                        assert_eq!(observation.ordinal, Some(if tools { i as u64 } else { 0 }));
+                        assert_eq!(
+                            observation.replay,
+                            devworks_core::providers::decode::NativeReplay::Unsupported
+                        );
+                    }
+                    assert_eq!(native(&frames).filter(|v| v.raw_json == wire).count(), 1);
+                    assert!(
+                        !frames
+                            .iter()
+                            .any(|f| matches!(f, DecodedFrame::ToolCallComplete { .. }))
+                    );
                 }
             }
         }

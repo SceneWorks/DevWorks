@@ -8,7 +8,7 @@ def generate(name, definition, types):
     current = definition['current']
     revision = definition['revision']
     variants = definition.get('claimVariants')
-    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page'):
+    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page', 'convention_record', 'convention_read', 'convention_page', 'convention_resources', 'convention_search', 'convention_mutation'):
         raise ValueError(f'{name}: an explicit legacy projection strategy is required')
     conversion = ''
     if variants:
@@ -24,6 +24,8 @@ def generate(name, definition, types):
 """
     if definition.get('projection', '').startswith('help_'):
         conversion = help_conversion(definition, types)
+    if definition.get('projection', '').startswith('convention_'):
+        conversion = convention_conversion(definition)
     def revisioned(ty, seen=None):
         seen = set() if seen is None else seen
         for token in re.findall(r'[A-Za-z_][A-Za-z0-9_]*', ty):
@@ -85,6 +87,55 @@ def help_conversion(definition, types):
     return f'''        if revision < {revision} {{
             let legacy: Option<{legacy}> = match self {{
                 {projection}
+                _ => None,
+            }};
+            if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
+        }}
+'''
+
+
+def convention_conversion(definition):
+    """Project real recorded identities/content; lifecycle never supplies approval."""
+    legacy, current, revision = (definition[k] for k in ('legacy', 'current', 'revision'))
+    kind = definition['projection']
+    project = """            let project = |topic: &ConventionRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.title.0.chars().count()) || topic.title.0.contains('\\0') { return None; }
+                let content = topic.content.clone()?;
+                let row = InstructionRecord { id: topic.id.clone(), revision: topic.revision.clone(),
+                    name: BoundedText(topic.title.0.clone()), scope: topic.scope.clone(), content,
+                    source_path: None, approved: topic.legacy_approved, applicability: topic.applicability.clone() };
+                row.check().ok().map(|()| row)
+            };\n"""
+    resource = """            let resource = |topic: &ConventionResourceRecord| -> Option<InstructionRecord> {
+                if !(1..=256).contains(&topic.name.0.chars().count()) || topic.name.0.contains('\\0') { return None; }
+                let row = InstructionRecord { id: topic.id.clone(), revision: topic.revision.clone(),
+                    name: BoundedText(topic.name.0.clone()), scope: topic.scope.clone(), content: topic.content.clone(),
+                    source_path: None, approved: false, applicability: topic.applicability.clone() };
+                row.check().ok().map(|()| row)
+            };\n"""
+    if kind == 'convention_mutation':
+        helpers = ''
+        arm = 'Self::Current(value) => Some(MutationSummary { id: value.id.clone(), revision: value.revision.clone(), changed: value.changed }),'
+    elif kind == 'convention_record':
+        helpers = project
+        arm = 'Self::Current(value) => project(value),'
+    elif kind == 'convention_read':
+        helpers = project
+        arm = 'Self::Current(ConventionReadOutcome::Document { view }) if matches!(view.format, ConventionFormat::Markdown) => project(&view.convention),'
+    elif kind == 'convention_resources':
+        helpers = project + resource
+        arm = """Self::Current(ConventionResourcesView::Catalog { page }) => page.items.0.iter().map(project).collect::<Option<Vec<_>>>()
+                    .map(|items| Page { items: BoundedList(items), next_cursor: page.next_cursor.clone(), has_more: page.has_more }),
+                Self::Current(ConventionResourcesView::Attachments { page }) => page.items.0.iter().map(resource).collect::<Option<Vec<_>>>()
+                    .map(|items| Page { items: BoundedList(items), next_cursor: page.next_cursor.clone(), has_more: page.has_more }),"""
+    else:
+        helpers = project
+        mapping = '|topic| project(&topic.convention)' if kind == 'convention_search' else 'project'
+        arm = f'''Self::Current(value) => value.items.0.iter().map({mapping}).collect::<Option<Vec<_>>>()
+                    .map(|items| Page {{ items: BoundedList(items), next_cursor: value.next_cursor.clone(), has_more: value.has_more }}),'''
+    return f'''        if revision < {revision} {{
+{helpers}            let legacy: Option<{legacy}> = match self {{
+                {arm}
                 _ => None,
             }};
             if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}

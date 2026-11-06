@@ -213,7 +213,7 @@ pub static SCREENS: [Screen; 20] = [
         summary: "Claims, entities, evidence and documents.",
         group: NavGroup::Intelligence,
         help_topic: "knowledge",
-        subviews: &["Entries", "Documents"],
+        subviews: &["Entries", "Documents", "Conventions"],
         inner_sidebar: Some("Entry"),
         summary_strip: &[],
         pending: None,

@@ -548,6 +548,24 @@ fn messages_arguments_keep_exact_native_numeric_lexemes_and_empty_fragments_are_
 }
 
 #[test]
+fn messages_escaped_structural_keys_preserve_exact_block_and_argument_bytes() {
+    let arguments = r#"{ "n":9007199254740993, "small":1.2300e+004, "escaped":"\u0061" }"#;
+    let block =
+        format!(r#"{{"type":"tool_use","id":"native","name":"lookup","in\u0070ut":{arguments}}}"#);
+    let wire = format!(r#"{{"co\u006etent":[{block}],"stop_reason":"tool_use"}}"#);
+    for profile in [
+        EndpointProfile::AnthropicMessages,
+        EndpointProfile::ClaudeSubscriptionMessages,
+    ] {
+        let frames = Decoder::new(profile).consume_aggregate(wire.as_bytes());
+        assert_eq!(outcome(&frames), &DecodedOutcome::ToolCallsReady);
+        assert_eq!(calls(&frames)[0].arguments_raw, arguments);
+        assert!(frames.iter().any(|f| matches!(f, DecodedFrame::Native { observation } if observation.kind == "tool_use" && observation.raw_json == block)));
+        assert_eq!(frames.iter().filter(|f| matches!(f, DecodedFrame::Native { observation } if observation.raw_json == wire)).count(), 1);
+    }
+}
+
+#[test]
 fn contradictory_native_stop_reasons_are_not_reclassified_as_tool_ready() {
     for reason in ["end_turn", "max_tokens"] {
         let frames=Decoder::new(EndpointProfile::AnthropicMessages).consume_aggregate(&serde_json::to_vec(&json!({"content":[{"type":"tool_use","id":"native","name":"lookup","input":{}}],"stop_reason":reason})).unwrap());
@@ -824,6 +842,60 @@ fn responses_item_and_unknown_part_evidence_keeps_exact_native_lexemes() {
                 )
             );
             assert!(frames.iter().any(|frame|matches!(frame,DecodedFrame::Error{error} if error.kind==DecodeErrorKind::UnsupportedReplay)));
+            assert!(calls(&frames).is_empty());
+        }
+    }
+}
+
+#[test]
+fn chat_nested_raw_evidence_follows_escaped_and_duplicate_structural_keys() {
+    let part = r#"{ "type":"future_content", "huge":1e9999, "escaped":"\u0061" }"#;
+    let tool = r#"{ "index":3, "type":"future_tool", "huge":1e9999 }"#;
+    for profile in [
+        EndpointProfile::CompatibleChat,
+        EndpointProfile::OpenRouterChat,
+    ] {
+        for streaming in [false, true] {
+            let key = if streaming {
+                r"del\u0074a"
+            } else {
+                r"mes\u0073age"
+            };
+            let first = format!(
+                r#"{{ "index":0, "{key}":{{"content":[],"con\u0074ent":[{part}],"tool_calls":[],"tool_\u0063alls":[{tool}]}}, "finish_reason":"stop" }}"#
+            );
+            let extra = r#"{ "index":7, "opaque":1.2300e+004 }"#;
+            let wire = format!(
+                r#"{{"choices":[],"cho\u0069ces":[{first},{extra}],"usage":{{"input_tokens":1,"input_\u0074okens":9007199254740993,"output_tokens":2}}}}"#
+            );
+            let mut decoder = Decoder::new(profile.clone());
+            let frames = if streaming {
+                let mut frames = decoder.consume_data_event(None, &wire);
+                frames.extend(decoder.consume_data_event(None, "[DONE]"));
+                frames.extend(decoder.finish());
+                frames
+            } else {
+                decoder.consume_aggregate(wire.as_bytes())
+            };
+            assert_eq!(outcome(&frames), &DecodedOutcome::Failed);
+            for (kind, raw) in [
+                ("chat_content", part),
+                ("nonfunction_chat_tool", tool),
+                ("additional_chat_choice", extra),
+            ] {
+                let found: Vec<_> = frames
+                    .iter()
+                    .filter_map(|f| match f {
+                        DecodedFrame::Native { observation } if observation.kind == kind => {
+                            Some(observation)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(found.len(), 1);
+                assert_eq!(found[0].raw_json, raw);
+            }
+            assert!(frames.iter().any(|f|matches!(f,DecodedFrame::Usage{observation}if observation.input_tokens==Some(9007199254740993))));
             assert!(calls(&frames).is_empty());
         }
     }

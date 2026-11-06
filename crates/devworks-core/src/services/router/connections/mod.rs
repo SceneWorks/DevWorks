@@ -91,7 +91,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// The operations [`ConnectionService`] is registered for.
 pub const OPERATIONS: [&str; 2] = ["router.connections", "router.configure"];
@@ -245,6 +245,7 @@ pub struct ConnectionService {
     live: Mutex<Live>,
     refresh_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     lifecycle: lifecycle::Lifecycle,
+    embedding_spaces: OnceLock<Arc<super::embedding_spaces::EmbeddingSpaceService>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -709,6 +710,13 @@ fn canonical_constraints(o: &OpenRouterConstraints) -> Result<String, Failure> {
 // The service
 
 impl ConnectionService {
+    /// Installed by the native composition alongside its accounted qualification consumer.
+    pub fn install_embedding_spaces(
+        &self,
+        service: Arc<super::embedding_spaces::EmbeddingSpaceService>,
+    ) -> bool {
+        self.embedding_spaces.set(service).is_ok()
+    }
     pub fn new(
         ids: Arc<dyn IdSource>,
         clock: Arc<dyn Clock>,
@@ -728,6 +736,7 @@ impl ConnectionService {
             live: Mutex::new(Live::default()),
             refresh_locks: Mutex::new(BTreeMap::new()),
             lifecycle: Default::default(),
+            embedding_spaces: OnceLock::new(),
         }
     }
     /// Replaces the subscription OAuth endpoints (tests point them at a local fake).
@@ -2055,6 +2064,11 @@ impl ConnectionService {
                 &String::from(notice_sha256.clone()),
                 *accepted,
             ),
+            _ => Err(refuse(
+                DomainErrorCode::UnsupportedCapability,
+                "embedding_configuration",
+                None,
+            )),
         }
     }
 
@@ -3613,6 +3627,21 @@ impl CommandHandler for ConnectionService {
     ) -> Result<Decided, HandlerFailure> {
         if self.is_closed() {
             return Err(HandlerFailure::Storage(StorageError::Cancelled));
+        }
+        if let OperationInput::Router(ops::Input::Configure(input)) = command.input()
+            && super::embedding_spaces::EmbeddingSpaceService::owns(&input.action)
+        {
+            return match self.embedding_spaces.get() {
+                Some(service) => service.decide(ctx, command, tx),
+                None => decided(
+                    tx,
+                    Err(refuse(
+                        DomainErrorCode::UnsupportedCapability,
+                        "embedding_configuration",
+                        None,
+                    )),
+                ),
+            };
         }
         let outcome = match command.input() {
             OperationInput::Router(ops::Input::Configure(i)) => {

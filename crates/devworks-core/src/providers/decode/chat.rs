@@ -25,29 +25,66 @@ impl Decoder {
             self.error(DecodeErrorKind::InvalidContent, "missing_choices", out);
             return;
         };
-        for choice in choices {
+        // Retain the envelope once above. Every nested observation borrows only its own
+        // exact native bytes, so unsupported populations cannot multiply that envelope.
+        let Some(raw_choices) =
+            usage::raw_array_at(raw, &["choices"]).filter(|items| items.len() == choices.len())
+        else {
+            self.error(DecodeErrorKind::InvalidContent, "invalid_choices", out);
+            return;
+        };
+        for (choice, choice_raw) in choices.iter().zip(raw_choices) {
             let Some(i) = index(choice, "index") else {
                 self.error(DecodeErrorKind::InvalidContent, "missing_choice_index", out);
                 continue;
             };
             if i != 0 {
-                self.native(Some(i), "additional_chat_choice", choice, raw, false, out);
+                self.native(
+                    Some(i),
+                    "additional_chat_choice",
+                    choice,
+                    choice_raw.get(),
+                    false,
+                    out,
+                );
                 continue;
             }
-            let body = choice.get(if aggregate { "message" } else { "delta" });
+            let body_key = if aggregate { "message" } else { "delta" };
+            let body = choice.get(body_key);
             if let Some(body) = body {
+                let Some(body_raw) = usage::raw_at(choice_raw.get(), &[body_key]) else {
+                    self.error(DecodeErrorKind::InvalidContent, "invalid_chat_body", out);
+                    return;
+                };
                 self.chat_reasoning(body, aggregate, out);
                 if let Some(text) = body.get("content").filter(|v| !v.is_null()) {
                     if let Some(text) = text.as_str() {
                         self.chat_text(i, text, out);
                     } else if let Some(parts) = text.as_array() {
-                        for part in parts {
+                        let Some(raw_parts) = usage::raw_array_at(body_raw, &["content"])
+                            .filter(|items| items.len() == parts.len())
+                        else {
+                            self.error(
+                                DecodeErrorKind::InvalidContent,
+                                "invalid_chat_content",
+                                out,
+                            );
+                            return;
+                        };
+                        for (part, part_raw) in parts.iter().zip(raw_parts) {
                             if part.get("type").and_then(Value::as_str) == Some("text")
                                 && part.get("text").is_some_and(Value::is_string)
                             {
                                 self.chat_text(i, part["text"].as_str().unwrap(), out);
                             } else {
-                                self.native(Some(i), "chat_content", part, raw, false, out);
+                                self.native(
+                                    Some(i),
+                                    "chat_content",
+                                    part,
+                                    part_raw.get(),
+                                    false,
+                                    out,
+                                );
                             }
                         }
                     } else {
@@ -62,7 +99,14 @@ impl Decoder {
                 }
                 if let Some(calls) = body.get("tool_calls").filter(|v| !v.is_null()) {
                     if let Some(calls) = calls.as_array() {
-                        for (position, item) in calls.iter().enumerate() {
+                        let Some(raw_calls) = usage::raw_array_at(body_raw, &["tool_calls"])
+                            .filter(|items| items.len() == calls.len())
+                        else {
+                            self.error(DecodeErrorKind::InvalidToolCall, "invalid_tool_calls", out);
+                            return;
+                        };
+                        for (position, (item, item_raw)) in calls.iter().zip(raw_calls).enumerate()
+                        {
                             let ordinal = if aggregate {
                                 Some(position as u64)
                             } else {
@@ -85,7 +129,7 @@ impl Decoder {
                                     Some(ordinal),
                                     "nonfunction_chat_tool",
                                     item,
-                                    raw,
+                                    item_raw.get(),
                                     false,
                                     out,
                                 );

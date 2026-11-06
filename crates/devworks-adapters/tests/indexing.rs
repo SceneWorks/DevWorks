@@ -103,10 +103,33 @@ impl Drop for Temp {
 // Git fixtures
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let home = dir.join(".git-fixture-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = Command::new("git");
+    command.env_clear();
+    for name in [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let out = command
         .args([
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "tag.gpgsign=false",
+            "-c",
+            "push.gpgsign=false",
             "-c",
             "init.defaultBranch=main",
             "-c",
@@ -114,8 +137,13 @@ fn git(dir: &Path, args: &[&str]) -> String {
         ])
         .args(args)
         .current_dir(dir)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", null)
+        .env("GIT_CONFIG_GLOBAL", null)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
         .env("GIT_COMMITTER_NAME", "Test")

@@ -29,8 +29,10 @@ mod browser;
 mod configuration;
 mod conn;
 mod connections;
+mod conventions;
 mod decisions;
 mod diagnostics;
+mod embedding;
 mod evals;
 mod git;
 mod github;
@@ -65,7 +67,8 @@ pub use migrations::{
     MIGRATION_0017_SHA256, MIGRATION_0018_SHA256, MIGRATION_0019_SHA256, MIGRATION_0020_SHA256,
     MIGRATION_0021_SHA256, MIGRATION_0022_SHA256, MIGRATION_0023_SHA256, MIGRATION_0024_SHA256,
     MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATION_0027_SHA256, MIGRATION_0028_SHA256,
-    MIGRATION_0029_SHA256, MIGRATION_0030_SHA256, MIGRATION_0031_SHA256, MIGRATIONS, Migration,
+    MIGRATION_0029_SHA256, MIGRATION_0030_SHA256, MIGRATION_0031_SHA256, MIGRATION_0032_SHA256,
+    MIGRATION_0033_SHA256, MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};
@@ -522,7 +525,11 @@ impl ApplicationStore for SqliteStore {
             // The first read establishes the snapshot; every statement shares this snapshot
             // and the same VM progress bound. The lease unregisters before rollback/check-in.
             let stamp = repos::stamp(conn)?;
-            let snapshot = repos::Snapshot { conn, stamp };
+            let snapshot = repos::Snapshot {
+                conn,
+                stamp,
+                host_actor: &self.info.host_actor,
+            };
             work(&snapshot)?;
             if expired() {
                 return Err(StorageError::Cancelled);

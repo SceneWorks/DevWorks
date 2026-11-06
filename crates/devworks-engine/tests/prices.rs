@@ -1680,3 +1680,187 @@ fn a_stalled_price_source_does_not_keep_the_tokio_runtime_alive_after_app_shutdo
         before
     );
 }
+
+fn embedding_price_candidate(fx: &Fx) -> devworks_core::protocol::Id {
+    use devworks_core::fingerprint::sha256_hex;
+    let now = fx.h.now();
+    let owner = fx.user.principal().clone();
+    write(&*fx.store, move |tx| {
+        let mut connection = tx.router().connection(&id("openai-connection"))?.unwrap();
+        connection.id = id("embedding-price-connection");
+        connection.profile = "Embedding".into();
+        connection.lifecycle = "Connected".into();
+        connection.account_digest = Some(sha256_hex(b"embedding account"));
+        connection.discovered = Some(vec![DiscoveredModel { id: "text-embedding-3-small".into(), context_tokens: None }]);
+        tx.router().put_connection(&connection, None)?;
+        let model = json!({"version":1,"connectionId":connection.id,"endpointProfile":"Embedding","endpoint":connection.endpoint,"accountRevision":"1","accountDigest":connection.account_digest,"upstreamModelId":"text-embedding-3-small"});
+        let model_digest = sha256_hex(devworks_core::jcs::canonicalize(&model).unwrap().as_bytes());
+        let encoder_config = json!({"version":1,"modelDigest":model_digest,"dimensions":2,"dimensionMode":"Native","metric":"Cosine","elementType":"Float32","encodingFormat":"float"});
+        let configuration_digest = sha256_hex(devworks_core::jcs::canonicalize(&encoder_config).unwrap().as_bytes());
+        tx.router().insert_embedding_candidate(&StoredEmbeddingCandidate {
+            id:id("price-candidate"), name:"Paid embedding".into(),space_id:id(&format!("embspace-{configuration_digest}")),connection_id:connection.id,account_revision:1,account_digest:connection.account_digest,endpoint_digest:sha256_hex(connection.endpoint.as_bytes()),endpoint:connection.endpoint,upstream_model_id:"text-embedding-3-small".into(),dimension_mode:"Native".into(),dimensions:2,metric:"Cosine".into(),element_type:"Float32".into(),encoder_config,configuration_digest,model_digest,created_by:owner,created_at_ms:now,
+        },1)?;
+        Ok(())
+    }).unwrap();
+    read(&*fx.store, |s| {
+        s.router()
+            .embedding_price_subject_for_candidate(&id("price-candidate"))
+    })
+    .unwrap()
+    .model_id
+}
+fn embedding_price_query(model: devworks_core::protocol::Id) -> PriceQuery {
+    PriceQuery {
+        catalog_model_id: model,
+        provider_model_id: Some("text-embedding-3-small".into()),
+        connection_id: id("embedding-price-connection"),
+        endpoint_profile: "Embedding".into(),
+        access_mode: "not-authority".into(),
+        service_tier: None,
+        input_tokens: Some(7),
+        cache_write_ttl_ms: None,
+        processing_region: None,
+        required_modalities: vec!["Text".into()],
+    }
+}
+
+#[test]
+fn candidate_price_subject_uses_real_price_override_and_never_chat_registration() {
+    let fx = Fx::new();
+    let model = embedding_price_candidate(&fx);
+    let query = embedding_price_query(model.clone());
+    let before = read(&*fx.store, |s| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
+    });
+    assert_eq!(before.classification, CostClassification::Untracked);
+    let change = fx.frame("router.price_override",3,"Command",json!({"modelId":model,"expectedRevision":"1","change":{"kind":"Set","tariffs":[{"upstreamModelId":"text-embedding-3-small","endpointProfile":"Embedding","serviceTier":"Standard","modality":"Text","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"1"}]}}));
+    assert_eq!(
+        applied(fx.command(
+            &fx.user,
+            "router.price_override",
+            &change,
+            WriteOptions::default()
+        ))["revision"],
+        "2"
+    );
+    let quoted = read(&*fx.store, |s| {
+        devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
+    });
+    assert_eq!(
+        quoted.classification,
+        CostClassification::ConfiguredEstimate
+    );
+    assert_eq!(quoted.tariffs.len(), 1);
+    assert_eq!(quoted.tariffs[0].amount_usd, "1");
+    assert_eq!(quoted.override_revision, Some(2));
+    let view = fx.query(json!({"modelIds":[model],"page":{"limit":50}}));
+    assert_eq!(
+        view["result"]["value"]["models"][0]["upstreamModelId"], "text-embedding-3-small",
+        "{view}"
+    );
+    assert_eq!(
+        view["result"]["value"]["models"][0]["endpointProfile"],
+        "Embedding"
+    );
+    assert!(read(&*fx.store, |s| s.router().route_model(&model)).is_none());
+    assert!(read(&*fx.store, |s| s.router().decision_model(&model)).is_none());
+    write(&*fx.store, |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-price-connection"))?
+            .unwrap();
+        c.enabled = false;
+        c.lifecycle = "Disconnected".into();
+        c.name = "renamed".into();
+        c.revision = 2;
+        tx.router().put_connection(&c, Some(1))
+    })
+    .unwrap();
+    let clear = fx.frame(
+        "router.price_override",
+        3,
+        "Command",
+        json!({"modelId":model,"expectedRevision":"2","change":{"kind":"Clear"}}),
+    );
+    assert_eq!(
+        applied(fx.command(
+            &fx.user,
+            "router.price_override",
+            &clear,
+            WriteOptions::default()
+        ))["revision"],
+        "3"
+    );
+    write(&*fx.store, |tx| {
+        let mut c = tx
+            .router()
+            .connection(&id("embedding-price-connection"))?
+            .unwrap();
+        c.endpoint = "https://changed.invalid/v1".into();
+        c.revision = 3;
+        tx.router().put_connection(&c, Some(2))
+    })
+    .unwrap();
+    let stale = fx.frame(
+        "router.price_override",
+        3,
+        "Command",
+        json!({"modelId":model,"expectedRevision":"3","change":{"kind":"Clear"}}),
+    );
+    let refused = serde_json::to_value(fx.command(
+        &fx.user,
+        "router.price_override",
+        &stale,
+        WriteOptions::default(),
+    ))
+    .unwrap();
+    assert!(refused.to_string().contains("SourceChanged"), "{refused}");
+    assert_eq!(
+        read(&*fx.store, |s| s.usage().price_override_revision(&model)),
+        3
+    );
+}
+
+#[test]
+fn candidate_price_subject_participates_in_official_refresh_without_chat_catalog() {
+    struct EmbeddingSource;
+    impl PriceSource for EmbeddingSource {
+        fn fetch(
+            &self,
+            p: OfficialPriceProvider,
+            now: i64,
+        ) -> Result<FetchedPriceCatalog, PriceFetchError> {
+            let mut source = catalog(p, now, "0.02");
+            source.tariffs.truncate(1);
+            source.tariffs[0].upstream_model_id = "text-embedding-3-small".into();
+            source.tariffs[0].endpoint_profile = Some("Embedding".into());
+            Ok(source)
+        }
+    }
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let model = embedding_price_candidate(&fx);
+        let query = embedding_price_query(model.clone());
+        let (worker, dispatcher) = fx.dispatcher(Arc::new(EmbeddingSource));
+        fx.refresh(&["openai"]);
+        deliver(&dispatcher).await;
+        let quote = read(&*fx.store, |s| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(s, &query)
+        });
+        assert_eq!(quote.classification, CostClassification::OfficialEstimate);
+        assert_eq!(quote.tariffs.len(), 1);
+        assert_eq!(quote.tariffs[0].amount_usd, "0.02");
+        let view = fx.query(json!({"modelIds":[model],"page":{"limit":50}}));
+        assert_eq!(
+            view["result"]["value"]["models"][0]["priceKind"], "Estimated",
+            "{view}"
+        );
+        assert_eq!(
+            view["result"]["value"]["items"][0]["upstreamModelId"], "text-embedding-3-small",
+            "{view}"
+        );
+        assert!(read(&*fx.store, |s| s.router().route_model(&model)).is_none());
+        worker.drain().await;
+        dispatcher.stop();
+    });
+}

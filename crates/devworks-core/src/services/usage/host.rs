@@ -202,6 +202,18 @@ impl AttemptHost {
         category: crate::services::router::accounting::ReportCategory,
         request: accounting::AttemptRequest,
     ) -> Result<Admission, StorageError> {
+        self.admit_fenced(context, logical, category, request, Vec::new())
+    }
+    /// An auxiliary owner carries the actual authorization facts of its source operation.
+    /// These are rechecked atomically before even creating its native request intent.
+    pub fn admit_fenced(
+        &self,
+        context: crate::context::InvocationContext,
+        logical: crate::services::router::RequestAdmission,
+        category: crate::services::router::accounting::ReportCategory,
+        request: accounting::AttemptRequest,
+        source_fences: Vec<crate::ports::AuthorityFence>,
+    ) -> Result<Admission, StorageError> {
         if logical.request_id != request.request_id {
             return Err(StorageError::ScopeDenied);
         }
@@ -209,6 +221,9 @@ impl AttemptHost {
         let control = self.control.clone();
         let process = self.process.clone();
         self.fence.admit(self.store.as_ref(), move |tx| {
+            if !crate::authority::fences_hold(tx, &source_fences)? {
+                return Err(StorageError::ScopeDenied);
+            }
             if let Some(prior) = tx.router().route_request(&logical.request_id)? {
                 let op = tx
                     .operations()

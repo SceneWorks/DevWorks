@@ -403,8 +403,13 @@ macro_rules! project_reads {
                 .collect())
             }
             fn index_views(&self, repository: &Id) -> Result<Vec<StoredIndexView>, StorageError> {
+                // A timestamp can cover several publications. Their opaque IDs do not
+                // encode chronology; the immutable baseline captures its real pointer
+                // revision. Legacy metadata without that witness keeps the old fallback.
                 let mut s = db(self.conn.prepare_cached(&format!(
-                    "SELECT {VIEW_COLUMNS} FROM repository_index_views WHERE repository_id=?1 ORDER BY published_at DESC, view_id DESC LIMIT 500"
+                    "SELECT {VIEW_COLUMNS} FROM repository_index_views WHERE repository_id=?1 ORDER BY published_at DESC, \
+                     (SELECT CASE WHEN json_type(v.coverage_json,'$.sourceRevision')='integer' THEN json_extract(v.coverage_json,'$.sourceRevision') END \
+                      FROM index_views v WHERE v.id=repository_index_views.view_id) DESC, view_id DESC LIMIT 500"
                 )))?;
                 let rows = db(db(s.query_map([repository.as_str()], view_row))?
                     .collect::<rusqlite::Result<Vec<_>>>())?;

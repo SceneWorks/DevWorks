@@ -40,10 +40,12 @@
 //!
 //! # Auxiliary requests
 //!
-//! Titles, compaction, enrichment, embeddings and vision extraction use
+//! Titles, compaction, enrichment and vision extraction use
 //! [`InferenceRouter::route_auxiliary`]: the session's pin when it is eligible, otherwise the
 //! first eligible member of the requested pool, without taking a round-robin turn or writing
 //! the session's pin.
+//! Embeddings use the explicitly selected, persistently qualified space from
+//! [`embedding_spaces::EmbeddingSpaceService`]; they never select a conversation model or tier.
 //!
 //! # Retained CodeGraph behavior
 //!
@@ -52,6 +54,7 @@
 //! `router.configure` (the provider-connection item) and to the routing settings.
 pub mod accounting;
 pub mod connections;
+pub mod embedding_spaces;
 pub mod latest;
 pub mod select;
 

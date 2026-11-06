@@ -110,6 +110,19 @@ impl Shell {
         }
     }
     fn help_snapshot(&mut self, snapshot: HelpSnapshot) {
+        if self.help.snapshot.as_ref().is_some_and(|old| {
+            old.help_revision != snapshot.help_revision
+                || old.registry_revision != snapshot.registry_revision
+                || old.app_version.0 != snapshot.app_version.0
+        }) {
+            // Passage cursors belong to this catalog snapshot, not merely the topic version.
+            // Keep the exact selection, but start its reread with a fresh cursor. A late reply
+            // from the previous snapshot cannot overwrite the newly adopted one.
+            self.help.read_cursors = vec![None];
+            self.help.read_generation = self.help.read_generation.wrapping_add(1);
+            self.help.reading = false;
+            self.help.read_error = None;
+        }
         if let Some(operation) = &snapshot.generation_operation {
             let complete = matches!(operation.state, OperationState::ObservedComplete);
             let terminal = complete

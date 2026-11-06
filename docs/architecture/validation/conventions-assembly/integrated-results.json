@@ -1,0 +1,132 @@
+{
+  "date": "2026-11-06",
+  "sourceCommit": "373fa98702543de918af509693983ba1f39227c5",
+  "scope": "Integrated native Conventions, persistent embedding setup and auxiliary ownership; local qualification, not acceptance",
+  "confidence": "high for recorded local source checks; exact-head reviews, all-platform CI and prerequisite acceptance remain required",
+  "checks": [
+    {
+      "check": "Composed workspace strict all-target Clippy",
+      "result": "passed",
+      "seconds": 15.34
+    },
+    {
+      "check": "Formatting and deterministic core regeneration",
+      "result": "passed",
+      "operations": 360,
+      "inputBindings": 365,
+      "domainTypes": 462
+    },
+    {
+      "check": "Native convention admission",
+      "passed": 9,
+      "failed": 0,
+      "seconds": 0.01,
+      "log": "/tmp/dw33-final-contracts.log"
+    },
+    {
+      "check": "Composed native publication",
+      "passed": 14,
+      "failed": 0,
+      "seconds": 13.83,
+      "log": "/tmp/dw33-final-backend.log"
+    },
+    {
+      "check": "Composed native portable import and read selectors",
+      "passed": 17,
+      "failed": 0,
+      "seconds": 22.51,
+      "log": "/tmp/dw33-final-backend.log"
+    },
+    {
+      "check": "Composed native indexing ownership",
+      "passed": 3,
+      "failed": 0,
+      "seconds": 1.94,
+      "log": "/tmp/dw33-final-backend.log"
+    },
+    {
+      "check": "Complete native Conventions UI suite",
+      "passed": 16,
+      "failed": 0,
+      "seconds": 42.65,
+      "evidence": "../conventions-contracts/native-ui.md"
+    },
+    {
+      "check": "Final native paid-job and cancellation/reopen regressions",
+      "passed": 5,
+      "failed": 0,
+      "seconds": 26.11,
+      "source": "dbede54d + 064b6478"
+    },
+    {
+      "check": "Managed Agent actual-turn auxiliary producer",
+      "passed": 1,
+      "failed": 0,
+      "seconds": 1.12,
+      "source": "26f8c931"
+    },
+    {
+      "check": "Real selection fanout and authority lineage",
+      "passed": 2,
+      "failed": 0,
+      "seconds": 2.12,
+      "source": "d1b82f51"
+    },
+    {
+      "check": "Actual interrupted query custody/hybrid retrieval",
+      "passed": 6,
+      "failed": 0,
+      "seconds": 8.44,
+      "source": "7ca4610b + a9ebfde4"
+    },
+    {
+      "check": "Generator revision rules",
+      "passed": 13,
+      "failed": 0,
+      "seconds": 11.487
+    },
+    {
+      "check": "Legacy schema exact bytes",
+      "count": 56,
+      "result": "passed"
+    },
+    {
+      "check": "Existing migration exact bytes",
+      "count": 33,
+      "result": "passed"
+    },
+    {
+      "check": "Final source after exact Help/Conventions gate integration: workspace all-target Clippy, fmt, zero-drift regeneration",
+      "result": "passed",
+      "seconds": 9.99
+    },
+    {
+      "check": "Integrated Conventions native jobs with dedicated exact-source cancellation gate",
+      "passed": 5,
+      "failed": 0,
+      "seconds": 24.06,
+      "source": "47869da6"
+    },
+    {
+      "check": "Parent final exact-owned-publication Help suite",
+      "passed": 18,
+      "failed": 0,
+      "seconds": 48.6,
+      "source": "7be2bb1e + 7e9cf2b4"
+    }
+  ],
+  "fidelity": [
+    "All13 shared Conventions operations and native manager remain in scope.",
+    "The actual16,777,215-byte/NUL document and512-resource import are qualified; passage bounds do not truncate documents.",
+    "Literal hierarchical components are separate from root-exact/fuzzy slug lookup; historical source and heading paths retain exact provenance.",
+    "Body-only retrieval follows the retained model; attachment metadata/history/binary access remain available through their own surface.",
+    "Selection fanout preserves original actor/project/session/root controls; actual65-project recovery produces66 unique authorized children including Workspace.",
+    "Paid Unknown custody survives source/selection changes, job ineligibility and reopen without another send or a fabricated NotApplied result."
+  ],
+  "limits": [
+    "Recorded vectors and scripted transports only; no learned inference or real OS credential access in these native tests.",
+    "Live-provider or model performance is not established.",
+    "No merge or CodeGraph acceptance is claimed by this local evidence."
+  ],
+  "deliverySourceCommit": "bf3c22076cafa480ab6efc8d827bdc583959864b"
+}

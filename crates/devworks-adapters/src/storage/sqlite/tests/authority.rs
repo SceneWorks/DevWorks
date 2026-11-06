@@ -2258,6 +2258,9 @@ impl WriteTransaction for Lying<'_> {
     fn evals(&mut self) -> &mut dyn EvalRepository {
         self.inner.evals()
     }
+    fn conventions(&mut self) -> &mut dyn ConventionRepository {
+        self.inner.conventions()
+    }
     fn help(&mut self) -> &mut dyn HelpRepository {
         self.inner.help()
     }

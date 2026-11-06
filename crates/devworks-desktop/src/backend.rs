@@ -28,6 +28,20 @@ pub type Waker = Box<dyn Fn() + Send + Sync>;
 pub trait Backend: Send + Sync {
     /// Admits a query frame for `operation` with the host-bound user context.
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome;
+    /// Only a host that forwards the token to the real gateway may advertise this seam.
+    fn supports_query_cancellation(&self) -> bool {
+        false
+    }
+    fn query_cancellable(
+        &self,
+        _operation: &str,
+        _frame: &[u8],
+        _options: &devworks_core::ports::storage::ReadOptions,
+    ) -> QueryOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "cancellable query ingress".into(),
+        ))
+    }
     /// Admits a command frame for `operation` with the host-bound user context.
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome;
     /// Trusted native user interaction only. Generic commands never select this ingress.
@@ -270,6 +284,17 @@ pub enum Slot {
     /// A discovery scan.
     IndexDiscover,
     /// A Knowledge listing page (its request generation).
+    ConventionsList(String, u64, bool, bool),
+    ConventionRead(String, u64),
+    ConventionEditor(String, String, u64),
+    ConventionVersions(String, u64, bool),
+    ConventionResources(String, u64, bool),
+    ConventionParents(String, String, u64, bool),
+    ConventionCommand(String, String),
+    ConventionOperation(String, String),
+    ConventionPrepare(String, String),
+    ConventionArtifact(String, String),
+    ConventionTransfer(String, String),
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),
@@ -348,6 +373,8 @@ pub enum Slot {
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
     ConnectionCatalog(u64),
+    /// One bounded persistent embedding-space status page.
+    EmbeddingSpaces(u64),
     /// One `router.configure` submission from the connections panel (its sequence number).
     Configure(u64),
 }
@@ -380,6 +407,8 @@ pub enum TaskOutput {
     Preview { size: [usize; 2], rgba: Vec<u8> },
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
+    /// A bounded convention editor or transfer task.
+    Convention(crate::conventions_ops::TaskResult),
     /// Package runtimes and indexes were refreshed.
     Refreshed,
 }
@@ -762,6 +791,23 @@ impl Client {
             slot,
             label,
             Box::new(move |b| Reply::Query(b.query(operation, &frame))),
+            None,
+        )
+        .is_some()
+    }
+
+    pub fn query_cancellable(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+        options: devworks_core::ports::storage::ReadOptions,
+    ) -> bool {
+        self.submit(
+            slot,
+            label,
+            Box::new(move |b| Reply::Query(b.query_cancellable(operation, &frame, &options))),
             None,
         )
         .is_some()
