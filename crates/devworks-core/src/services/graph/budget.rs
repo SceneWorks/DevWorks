@@ -59,6 +59,17 @@ impl Budget {
         self.cancellation = cancellation;
     }
 
+    /// Carry prior query phases into this budget; neither work nor retained memory resets.
+    pub fn absorb_usage(&mut self, prior: &Self) {
+        self.started = self.started.min(prior.started);
+        self.visited = self.visited.saturating_add(prior.visited);
+        self.exhausted = self.exhausted.or(prior.exhausted);
+        self.retain(prior.retained_bytes);
+        if self.visited > self.max_visited {
+            self.exhausted = Some("graph_visited_limit");
+        }
+    }
+
     pub fn retain(&mut self, bytes: usize) -> bool {
         match self.retained_bytes.checked_add(bytes) {
             Some(total) if total <= MAX_RETAINED_BYTES => {

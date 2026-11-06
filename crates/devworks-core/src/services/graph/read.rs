@@ -176,6 +176,61 @@ impl<'a> Reader<'a> {
         super::languages::describe(self.indexing.map(|env| &*env.parser), path)
     }
 
+    pub fn readme_source(
+        &mut self,
+        repository: &Id,
+    ) -> Result<Option<crate::protocol::records::CodeSourceLocation>, Failure> {
+        let scope = self.scoped_repository(repository)?;
+        let mut selected: Option<GraphNode> = None;
+        super::scan::nodes(
+            self.read,
+            &scope,
+            &GraphNodeFilter {
+                pattern: Some("readme%".into()),
+                kinds: vec!["File".into()],
+                ..Default::default()
+            },
+            &mut self.budget,
+            |node, _| {
+                let path = &node.node.unit_key;
+                let lower = path.to_lowercase();
+                if path.contains('/') || !(lower == "readme" || lower.starts_with("readme.")) {
+                    return Ok(true);
+                }
+                let rank = (lower != "readme.md", path.as_str());
+                let better = selected.as_ref().is_none_or(|old| {
+                    rank < (
+                        old.node.unit_key.to_lowercase() != "readme.md",
+                        old.node.unit_key.as_str(),
+                    )
+                });
+                if better {
+                    selected = Some(node);
+                }
+                Ok(true)
+            },
+        )?;
+        if self.budget.exhausted.is_some() {
+            if !self.gaps.contains(&"readme_selection_incomplete") {
+                self.gaps.push("readme_selection_incomplete");
+            }
+            return Ok(None);
+        }
+        let Some(node) = selected else {
+            return Ok(None);
+        };
+        let view = self
+            .selected
+            .layers
+            .iter()
+            .find(|v| &v.view.repository_id == repository)
+            .expect("scoped repository view");
+        let Some((unit, capture)) = model::capture(self.read, view, &node.node.unit_key)? else {
+            return Ok(None);
+        };
+        model::location(&view.view, &unit, &capture, &Value::Null)
+    }
+
     pub fn scope(&self) -> &GraphScope {
         &self.selected.pin.scope
     }

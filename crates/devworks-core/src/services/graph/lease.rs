@@ -61,7 +61,7 @@ pub(super) fn select(
                 let pin = read.graph().graph_pin(pin_id)?.ok_or_else(|| scope::unavailable(Some(pin_id.clone())));
                 match pin {
                     Ok(pin) => {
-                        let selected = (|| {
+                        (|| {
                             check_pin(&pin, ctx, data_scope, now)?;
                             for missing in &pin.unavailable_repositories { scope::authorize(read, ctx, data_scope, &missing.repository_id)?; }
                             let mut layers = Vec::with_capacity(pin.scope.views.len());
@@ -73,8 +73,7 @@ pub(super) fn select(
                                 layers.push(view);
                             }
                             Ok(Selected { pin, layers })
-                        })();
-                        selected
+                        })()
                     }
                     Err(e) => Err(e),
                 }

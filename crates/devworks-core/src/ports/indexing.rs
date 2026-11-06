@@ -169,6 +169,15 @@ pub enum EdgeTarget {
         kind: String,
         qualified_name: String,
     },
+    /// An exact captured semantic reference to a different registered repository. The reader
+    /// may resolve it only inside its authorized selected view set; it never selects a target
+    /// repository's current branch implicitly. This does not infer cross-repository symbols.
+    RepositoryNode {
+        repository_id: crate::protocol::Id,
+        unit: String,
+        kind: String,
+        qualified_name: String,
+    },
 }
 
 /// A relationship found in one file.

@@ -33,7 +33,7 @@ fn matches_with(pattern: &str, text: &str, mut keep_going: impl FnMut() -> bool)
     let mut steps = 0usize;
     while j < t.len() {
         steps += 1;
-        if steps % 256 == 0 && !keep_going() {
+        if steps.is_multiple_of(256) && !keep_going() {
             return false;
         }
         if i < p.len() && (p[i] == '_' || p[i] == t[j]) {
