@@ -9,7 +9,7 @@ use devworks_core::protocol::{
 };
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
 pub struct Read {
@@ -46,8 +46,10 @@ pub struct GraphScreen {
     pub project: Option<String>,
     pub pin: Option<ResolvedViewSet>,
     pub view_mode: usize,
-    pub exact_view: String,
+    pub exact_views: BTreeSet<String>,
     pub exact_choices: Vec<(String, String)>,
+    pub published_repositories: BTreeSet<String>,
+    pub repository_choices: BTreeMap<String, String>,
     pub read: Option<Read>,
     pub history: Vec<Breadcrumb>,
     pub selected: Option<CodeNode>,
@@ -59,13 +61,17 @@ pub struct GraphScreen {
     pub trust_unknown: bool,
     pub trust_reference: Option<String>,
     pub filter: String,
+    pub search_mode: usize,
+    pub search_all: bool,
     pub node_kind: String,
     pub module: String,
     pub file: String,
     pub line_start: String,
     pub line_end: String,
+    pub file_node_line: String,
     pub target_name: String,
     pub depth: u16,
+    pub relationship_depth: u16,
     pub direction: usize,
     pub edge_kind: String,
     pub tab: usize,
@@ -119,8 +125,8 @@ impl GraphScreen {
             return Some(json!({"kind":"Pinned","pinId":pin.pin_id}));
         }
         match self.view_mode {
-            1 => Some(json!({"kind":"Published","repositoryIds":[self.repository]})),
-            2 => Some(json!({"kind":"Exact","viewIds":[self.exact_view]})),
+            1 => Some(json!({"kind":"Published","repositoryIds":self.published_repositories})),
+            2 => Some(json!({"kind":"Exact","viewIds":self.exact_views})),
             _ => None,
         }
     }
@@ -294,20 +300,42 @@ impl GraphScreen {
                 });
             if self.view_mode == 2 {
                 egui::ComboBox::from_label("Indexed capture")
-                    .selected_text(if self.exact_view.is_empty() {
-                        "Choose an indexed view"
-                    } else {
-                        &self.exact_view
-                    })
+                    .selected_text(format!("{} selected", self.exact_views.len()))
                     .show_ui(ui, |ui| {
                         for (id, label) in &self.exact_choices {
-                            ui.selectable_value(&mut self.exact_view, id.clone(), label);
+                            let mut checked = self.exact_views.contains(id);
+                            if ui.checkbox(&mut checked, label).changed() {
+                                if checked {
+                                    self.exact_views.insert(id.clone());
+                                } else {
+                                    self.exact_views.remove(id);
+                                }
+                            }
+                        }
+                    });
+            }
+            if self.view_mode == 1 {
+                egui::ComboBox::from_label("Published repositories")
+                    .selected_text(format!("{} selected", self.published_repositories.len()))
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &self.repository_choices {
+                            let mut checked = self.published_repositories.contains(id);
+                            if ui.checkbox(&mut checked, name).changed() {
+                                if checked {
+                                    self.published_repositories.insert(id.clone());
+                                } else {
+                                    self.published_repositories.remove(id);
+                                }
+                            }
                         }
                     });
             }
             if ui
                 .add_enabled(
-                    online && !self.loading && (self.view_mode != 2 || !self.exact_view.is_empty()),
+                    online
+                        && !self.loading
+                        && (self.view_mode != 2 || !self.exact_views.is_empty())
+                        && (self.view_mode != 1 || !self.published_repositories.is_empty()),
                     egui::Button::new("Refresh selected graph view"),
                 )
                 .clicked()
@@ -337,16 +365,29 @@ impl GraphScreen {
                         "Worktree",
                         view.snapshot.worktree_id.as_ref().map(|id| id.as_str()),
                     );
+                    optional(
+                        ui,
+                        "Local capture",
+                        view.snapshot
+                            .capture_digest
+                            .as_ref()
+                            .map(|digest| digest.as_str()),
+                    );
                     widgets::caption(ui, format!("Coverage: {:?}", view.coverage.state));
                 }
             });
         }
         ui.horizontal_wrapped(|ui|{
-            field(ui,"Find code",&mut self.filter,"Name, symbol or repository");
+            field(ui,"Find code",&mut self.filter,"Name or symbol");
+            egui::ComboBox::from_label("Search format").selected_text(["Ranked nodes","Node list","Repositories and nodes"][self.search_mode]).show_ui(ui,|ui|{
+                for(i,label)in["Ranked nodes","Node list","Repositories and nodes"].iter().enumerate(){ui.selectable_value(&mut self.search_mode,i,*label);}
+            });
+            ui.checkbox(&mut self.search_all,"Search the captured scope");
             field(ui,"Node kind",&mut self.node_kind,"All kinds");
             field(ui,"Internal module",&mut self.module,"All modules");
             if ui.add_enabled(online&&!self.loading,egui::Button::new("Search graph")).clicked(){
-                let mut selection=json!({"mode":"RankedNodes","text":if self.filter.trim().is_empty(){"*"}else{self.filter.trim()},"repositoryId":self.repository});
+                let mut selection=json!({"mode":(["RankedNodes","NodeList","Unified"][self.search_mode]),"text":if self.filter.trim().is_empty(){"*"}else{self.filter.trim()}});
+                if !self.search_all {selection["repositoryId"]=json!(self.repository);}
                 if !self.node_kind.trim().is_empty(){selection["nodeKind"]=json!(self.node_kind.trim());}
                 if !self.module.trim().is_empty(){selection["internalModule"]=json!(self.module.trim());}
                 actions.push(Action::Read(Read::new("code.search","Search results",json!({"kind":"Search","selection":selection}))));
@@ -420,7 +461,10 @@ impl GraphScreen {
         egui::CollapsingHeader::new("Explore calls, impact and data flow").show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
                 field(ui,"Target name",&mut self.target_name,"Use selected node when empty");
-                ui.add(egui::DragValue::new(&mut self.depth).range(1..=16).prefix("Depth "));
+                let depth_label=ui.label("Call and impact depth");
+                ui.add(egui::DragValue::new(&mut self.depth).range(0..=32)).labelled_by(depth_label.id);
+                let relationship_label=ui.label("Relationship depth");
+                ui.add(egui::DragValue::new(&mut self.relationship_depth).range(0..=128)).labelled_by(relationship_label.id);
                 egui::ComboBox::from_label("Call direction").selected_text(["Callers","Callees","Both directions"][self.direction]).show_ui(ui,|ui|{
                     for(i,label)in ["Callers","Callees","Both directions"].iter().enumerate(){ui.selectable_value(&mut self.direction,i,*label);}
                 });
@@ -439,7 +483,7 @@ impl GraphScreen {
                     if ui.add_enabled(online&&!self.loading&&self.selected.is_some(),egui::Button::new(label)).clicked(){
                         let node=self.selected.as_ref().expect("enabled selected node");
                         let kinds:Vec<&str>=self.edge_kind.split(',').map(str::trim).filter(|s|!s.is_empty()).collect();
-                        actions.push(Action::Read(Read::new(op,label,json!({"kind":"Traverse","startIds":[node.node_id],"direction":(["Reverse","Forward","Both"][self.direction]),"edgeKinds":kinds,"maxDepth":self.depth}))));
+                        actions.push(Action::Read(Read::new(op,label,json!({"kind":"Traverse","startIds":[node.node_id],"direction":(["Reverse","Forward","Both"][self.direction]),"edgeKinds":kinds,"maxDepth":self.relationship_depth}))));
                     }
                 }
             });
@@ -449,15 +493,22 @@ impl GraphScreen {
                 field(ui,"Source file",&mut self.file,"Repository-relative path");
                 field(ui,"First source line",&mut self.line_start,"1");
                 field(ui,"Last source line",&mut self.line_end,"200");
+                field(ui,"Node at line",&mut self.file_node_line,"Optional: all nodes when empty");
                 let start=self.line_start.parse::<u64>().ok();let end=self.line_end.parse::<u64>().ok();
                 let valid=matches!((start,end),(Some(a),Some(b))if a>0&&b>=a);
                 if !valid {widgets::caption(ui,"Enter a positive first line and a last line at or after it.");}
                 let(start,end)=(start.unwrap_or(0),end.unwrap_or(0));
-                for(label,op,query)in [
-                    ("Read line window","code.source",json!({"kind":"Source","selection":{"kind":"File","repositoryId":self.repository,"path":self.file,"startLine":start.to_string(),"endLine":end.to_string()}})),
-                    ("Nodes in file","code.nodes_by_file",json!({"kind":"NodesByFile","selection":{"repositoryId":self.repository,"path":self.file,"line":start.to_string()}})),
-                    ("File impact","code.file_impact",json!({"kind":"FileImpact","selection":{"repositoryId":self.repository,"path":self.file,"depth":self.depth}})),
-                ]{if ui.add_enabled(online&&!self.loading&&!self.file.trim().is_empty()&&start>0&&end>=start,egui::Button::new(label)).clicked(){actions.push(Action::Read(Read::new(op,label,query)));}}
+                let node_line=self.file_node_line.parse::<u64>().ok();
+                let mut file_selection=json!({"repositoryId":self.repository,"path":self.file});
+                if let Some(line)=node_line {file_selection["line"]=json!(line.to_string());}
+                let valid_node_line=self.file_node_line.trim().is_empty()||node_line.is_some_and(|line|line>0);
+                if !valid_node_line {widgets::caption(ui,"Enter a positive node line, or leave it empty to list the file's nodes.");}
+                for(label,op,query,valid)in [
+                    ("Read whole source file","code.source",json!({"kind":"Source","selection":{"kind":"File","repositoryId":self.repository,"path":self.file,"startLine":"0","endLine":"0"}}),true),
+                    ("Read line window","code.source",json!({"kind":"Source","selection":{"kind":"File","repositoryId":self.repository,"path":self.file,"startLine":start.to_string(),"endLine":end.to_string()}}),valid),
+                    ("Nodes in file","code.nodes_by_file",json!({"kind":"NodesByFile","selection":file_selection}),valid_node_line),
+                    ("File impact","code.file_impact",json!({"kind":"FileImpact","selection":{"repositoryId":self.repository,"path":self.file,"depth":self.depth}}),true),
+                ]{if ui.add_enabled(online&&!self.loading&&!self.file.trim().is_empty()&&valid,egui::Button::new(label)).clicked(){actions.push(Action::Read(Read::new(op,label,query)));}}
             });
         });
         ui.separator();
@@ -744,8 +795,40 @@ fn render(
     trust_busy: bool,
     actions: &mut Vec<Action>,
 ) {
+    let confidence = match &page.result {
+        GraphResult::CodeGraph { value } => Some((
+            &value.low_confidence_count,
+            value.unmapped_inbound_edges.as_ref(),
+        )),
+        GraphResult::CallTrace { value } => Some((
+            &value.low_confidence_count,
+            value.unmapped_inbound_edges.as_ref(),
+        )),
+        GraphResult::Lineage { value } => Some((
+            &value.low_confidence_count,
+            value.unmapped_inbound_edges.as_ref(),
+        )),
+        GraphResult::Related { value } => Some((
+            &value.low_confidence_count,
+            value.unmapped_inbound_edges.as_ref(),
+        )),
+        _ => None,
+    };
+    if let Some((low, unmapped)) = confidence {
+        widgets::caption(
+            ui,
+            format!(
+                "{} low-confidence observations · unmapped inbound links: {}",
+                low.as_str(),
+                unmapped.map_or("unknown", |count| count.as_str())
+            ),
+        );
+    }
     match &page.result {
         GraphResult::CodeSearch { value } => {
+            if value.items.0.is_empty() {
+                ui.label("No matching entries in this returned page.");
+            }
             widgets::caption(
                 ui,
                 format!(
@@ -769,6 +852,9 @@ fn render(
             }
         }
         GraphResult::CodeNodes { value } => {
+            if value.nodes.0.is_empty() {
+                ui.label("No nodes in this returned page.");
+            }
             widgets::caption(
                 ui,
                 format!(
@@ -1116,6 +1202,12 @@ fn render(
             }
         }
         GraphResult::SchemaDetails { value } => {
+            widgets::caption(ui, format!("Schema source: {:?}", value.origin));
+            optional(
+                ui,
+                "Unavailable",
+                value.unavailable_reason.as_ref().map(|v| v.0.as_str()),
+            );
             ui.heading("Node kinds");
             for kind in &value.node_kinds.0 {
                 ui.label(&kind.0);

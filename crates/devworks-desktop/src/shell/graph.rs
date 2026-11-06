@@ -19,9 +19,15 @@ impl Shell {
             opened: true,
             repository: repository.into(),
             name: name.into(),
+            repository_choices: std::collections::BTreeMap::from([(
+                repository.into(),
+                name.into(),
+            )]),
+            published_repositories: std::collections::BTreeSet::from([repository.into()]),
             project: self.selected_project.clone(),
             sequence,
             depth: 3,
+            relationship_depth: 3,
             line_start: "1".into(),
             line_end: "200".into(),
             ..Default::default()
@@ -40,7 +46,10 @@ impl Shell {
         );
     }
     fn open_graph_read(&mut self, read: Read, remember: bool) {
-        if remember && let Some(old) = self.graph.read.take() {
+        if remember && let Some(mut old) = self.graph.read.take() {
+            // Back navigation re-reads its cursor under the retained pin; do not retain every
+            // potentially large source or property page in the breadcrumb stack.
+            old.page = None;
             self.graph.history.push(graph_screen::Breadcrumb {
                 read: old,
                 repository: self.graph.repository.clone(),
@@ -101,6 +110,32 @@ impl Shell {
                         if self.graph.pin.is_none() {
                             self.graph.pin = page.view.clone();
                         }
+                        if let Some(view) = &page.view {
+                            for repository in &view.views {
+                                let id = repository.snapshot.repository_id.as_str().to_owned();
+                                self.graph
+                                    .repository_choices
+                                    .entry(id.clone())
+                                    .or_insert(id);
+                            }
+                        }
+                        if let Some(scope) = &page.scope_coverage {
+                            for gap in &scope.unavailable_repositories.0 {
+                                let id = gap.repository_id.as_str().to_owned();
+                                self.graph
+                                    .repository_choices
+                                    .entry(id.clone())
+                                    .or_insert(format!("{id} · {}", gap.reason.0));
+                            }
+                        }
+                        if let GraphResult::RepositoryOverview { value } = &page.result {
+                            for repository in &value.repositories.0 {
+                                self.graph.repository_choices.insert(
+                                    repository.repository_id.as_str().into(),
+                                    repository.name.0.clone(),
+                                );
+                            }
+                        }
                         if let GraphResult::NodeDetail { value } = &page.result {
                             self.graph.selected = Some(value.node.clone());
                             self.graph.repository = value.node.repository_id.as_str().into();
@@ -145,11 +180,12 @@ impl Shell {
                         self.graph.trust_unknown = false;
                         self.graph.notice =
                             Some((Tone::Good, format!("Trust change confirmed for {id}.")));
-                        if self
-                            .graph
-                            .selected
-                            .as_ref()
-                            .is_some_and(|node| node.node_id.as_str() == id)
+                        if self.graph.opened
+                            && self
+                                .graph
+                                .selected
+                                .as_ref()
+                                .is_some_and(|node| node.node_id.as_str() == id)
                         {
                             self.open_graph_read(
                                 Read::new(
@@ -211,6 +247,26 @@ impl Shell {
                 }
             }
             self.graph.exact_choices = choices;
+        }
+        if let Some(pin) = &self.graph.pin {
+            for view in &pin.views {
+                let id = view.view_id.as_str().to_owned();
+                if !self
+                    .graph
+                    .exact_choices
+                    .iter()
+                    .any(|(choice, _)| choice == &id)
+                {
+                    self.graph.exact_choices.push((
+                        id,
+                        format!(
+                            "{} · captured head {}",
+                            view.snapshot.repository_id.as_str(),
+                            view.snapshot.head.hex
+                        ),
+                    ));
+                }
+            }
         }
         self.graph.trust_busy = self.client.as_ref().is_some_and(|client| {
             client

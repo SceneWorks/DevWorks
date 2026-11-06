@@ -289,6 +289,9 @@ impl Shell {
             return;
         }
         self.selected_project = project;
+        self.graph.opened = false;
+        self.graph.sequence = self.graph.sequence.wrapping_add(1);
+        self.graph.loading = false;
         self.projects.members = ListState::default();
         self.projects.members_of = None;
         if self.route == Route::Repositories {

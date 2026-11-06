@@ -57,6 +57,17 @@ fn native_unavailable_graph_keeps_workspace_draft_and_never_invents_an_index() {
         h.query_by_role_and_label(Role::Button, "Mark untrusted")
             .is_none()
     );
+    click(
+        &mut h,
+        Role::DisclosureTriangle,
+        "Explore calls, impact and data flow",
+    );
+    click(&mut h, Role::DisclosureTriangle, "Explore a source file");
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Read whole source file")
+            .accesskit_node()
+            .is_disabled()
+    );
     click(&mut h, Role::Button, "Back to repositories");
     assert!(!h.state().graph.opened);
     click_nav(&mut h, "Chat");
