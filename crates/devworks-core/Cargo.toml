@@ -15,7 +15,7 @@ jiff = "=0.2.39"
 schemars.workspace = true
 semver.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 # WHATWG URL parsing for the web tools' egress policy (host forms, IPv4 numeric spellings, IDNA,
 # relative redirect resolution). A parser, not an HTTP client: requests are made by the adapters.

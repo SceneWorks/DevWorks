@@ -1,0 +1,59 @@
+//! Native provider preparation. Internal contracts, separate from public inference/package DTOs.
+//! Preparation resolves immutable material but never opens sockets or grants dispatch authority.
+pub mod capabilities;
+pub mod context;
+use crate::protocol::provider::{EndpointProfile, NativeBinding, QualifiedId, SchemaRef};
+use crate::protocol::{AttemptId, Id};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderError {
+    InvalidInput(&'static str),
+    Unsupported(&'static str),
+    MaterialUnavailable,
+    ForeignNative,
+    TooLarge,
+    Protocol(&'static str),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseMode {
+    Streaming,
+    Aggregate,
+}
+#[derive(Clone, Debug)]
+pub struct RequestIdentity {
+    pub request_id: Id,
+    pub attempt_id: AttemptId,
+    pub binding: NativeBinding,
+    /// Exact upstream ID; a catalog ID or alias is never sent in its place.
+    pub upstream_model: String,
+}
+#[derive(Clone, Debug)]
+pub struct PreparedTool {
+    pub wire_name: String,
+    pub capability_id: QualifiedId,
+    pub input_schema: SchemaRef,
+    pub schema: Value,
+    pub description: Option<String>,
+}
+/// Credential-free prepared bytes. The host obtains current Access and injects secrets at send.
+#[derive(Clone)]
+pub struct PreparedRequest {
+    pub identity: RequestIdentity,
+    pub profile: EndpointProfile,
+    pub path: &'static str,
+    pub body: Vec<u8>,
+    pub response_mode: ResponseMode,
+    pub tools: Vec<PreparedTool>,
+    pub embedding_dimensions: Option<u32>,
+}
+impl std::fmt::Debug for PreparedRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedRequest")
+            .field("profile", &self.profile)
+            .field("path", &self.path)
+            .field("body_bytes", &self.body.len())
+            .finish()
+    }
+}

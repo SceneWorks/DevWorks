@@ -13,6 +13,7 @@ pub mod indexing;
 pub mod os_notifications;
 pub mod packages;
 pub mod process;
+pub mod provider_http;
 pub mod retrieval;
 pub mod router;
 pub mod secrets;

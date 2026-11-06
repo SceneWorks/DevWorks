@@ -47,6 +47,7 @@ pub mod jcs;
 pub mod operations;
 pub mod ports;
 pub mod protocol;
+pub mod providers;
 pub mod registry;
 pub mod services;
 pub mod settings;
