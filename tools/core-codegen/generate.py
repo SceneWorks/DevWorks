@@ -217,6 +217,10 @@ def revisioned(name, fs, since, rc, union_variants=None, variant_since=None):
         if len(arms) == 1 and len(union_variants) > 1:
             # One revisioned alternative among several: an `if let`, not a single-arm match.
             pattern, calls = arms[0].strip().split(' => ', 1)
+            single_gate = re.fullmatch(r'\{ if revision < (\d+) \{ (\*\w+ = None;) \} \}', calls)
+            if single_gate:
+                revision, clear = single_gate.groups()
+                return '\n'.join([head, f'        if let {pattern} = self && revision < {revision} {{ {clear} }}', '    }', '}'])
             return '\n'.join([head, f'        if let {pattern} = self {calls}', '    }', '}'])
         if len(arms) < len(union_variants):
             arms.append('            _ => {}')

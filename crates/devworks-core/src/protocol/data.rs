@@ -239,7 +239,7 @@ pub enum Direction {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphQuery {
-    #[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "text", "nodeKinds"], "x-until": 3}, {"required": ["kind", "text", "nodeKinds"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["text"]}, {"required": ["nodeKinds"]}]}, "x-since": 3}]))]
     Search {
         #[serde(
             default,
@@ -276,7 +276,7 @@ pub enum GraphQuery {
     Node {
         node_id: Id,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId", "maxLines"], "x-until": 3}, {"required": ["kind", "nodeId", "maxLines"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}, {"required": ["maxLines"]}]}, "x-since": 3}]))]
     Source {
         #[serde(
             default,
@@ -309,7 +309,7 @@ pub enum GraphQuery {
         #[schemars(range(min = 0, max = 128))]
         max_depth: u16,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "fromId", "toId", "maxDepth"], "x-until": 3}, {"required": ["kind", "fromId", "toId", "maxDepth"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["fromId"]}, {"required": ["toId"]}, {"required": ["maxDepth"]}]}, "x-since": 3}]))]
     Path {
         #[serde(
             default,
@@ -340,7 +340,7 @@ pub enum GraphQuery {
         #[schemars(with = "CodeCallSelection", extend("x-since" = 3))]
         selection: Option<CodeCallSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
     NodeImpact {
         #[serde(
             default,
@@ -358,7 +358,7 @@ pub enum GraphQuery {
         selection: Option<CodeImpactSelection>,
     },
 
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
     FileImpact {
         #[serde(
             default,
@@ -382,7 +382,7 @@ pub enum GraphQuery {
         #[schemars(with = "CodeFileSelection", extend("x-since" = 3))]
         selection: Option<CodeFileSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "unitKey"], "x-until": 3}, {"required": ["kind", "repositoryId", "unitKey"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["repositoryId"]}, {"required": ["unitKey"]}]}, "x-since": 3}]))]
     NodesByFile {
         #[serde(
             default,
@@ -409,7 +409,7 @@ pub enum GraphQuery {
     RepositoryDependencies {
         repository_id: Id,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
     Consumers {
         #[serde(
             default,
@@ -426,7 +426,7 @@ pub enum GraphQuery {
         #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
         selection: Option<CodeNodeSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
     Publishers {
         #[serde(
             default,
@@ -443,7 +443,7 @@ pub enum GraphQuery {
         #[schemars(with = "CodeNodeSelection", extend("x-since" = 3))]
         selection: Option<CodeNodeSelection>,
     },
-    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"]}, {"required": ["kind", "selection"], "x-since": 3}]))]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "nodeId"], "x-until": 3}, {"required": ["kind", "nodeId"], "not": {"required": ["selection"]}, "x-since": 3}, {"required": ["kind", "selection"], "not": {"anyOf": [{"required": ["nodeId"]}]}, "x-since": 3}]))]
     DataLineage {
         #[serde(
             default,
@@ -1749,79 +1749,47 @@ pub struct EdgeView {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GraphResult {
-    Nodes {
-        nodes: Vec<NodeView>,
-    },
+    #[schemars(extend("x-until" = 3))]
+    Nodes { nodes: Vec<NodeView> },
+    #[schemars(extend("x-until" = 3))]
     Graph {
         nodes: Vec<NodeView>,
         edges: Vec<EdgeView>,
     },
-    Source {
-        citation: Citation,
-        text: String,
-    },
-    Schema {
-        schema: ArtifactRef,
-    },
-    ScopeStatus {
-        coverage: Coverage,
-    },
+    #[schemars(extend("x-until" = 3))]
+    Source { citation: Citation, text: String },
+    #[schemars(extend("x-until" = 3))]
+    Schema { schema: ArtifactRef },
+    #[schemars(extend("x-until" = 3))]
+    ScopeStatus { coverage: Coverage },
     #[schemars(extend("x-since" = 3))]
-    CodeSearch {
-        value: CodeSearchResult,
-    },
+    CodeSearch { value: CodeSearchResult },
     #[schemars(extend("x-since" = 3))]
-    CodeNodes {
-        value: CodeNodesResult,
-    },
+    CodeNodes { value: CodeNodesResult },
     #[schemars(extend("x-since" = 3))]
-    CodeGraph {
-        value: CodeGraphResult,
-    },
+    CodeGraph { value: CodeGraphResult },
     #[schemars(extend("x-since" = 3))]
-    NodeDetail {
-        value: CodeNodeDetail,
-    },
+    NodeDetail { value: CodeNodeDetail },
     #[schemars(extend("x-since" = 3))]
-    SourceText {
-        value: CodeSourceText,
-    },
+    SourceText { value: CodeSourceText },
     #[schemars(extend("x-since" = 3))]
-    RepositoryOverview {
-        value: CodeOverview,
-    },
+    RepositoryOverview { value: CodeOverview },
     #[schemars(extend("x-since" = 3))]
-    Architecture {
-        value: CodeArchitecture,
-    },
+    Architecture { value: CodeArchitecture },
     #[schemars(extend("x-since" = 3))]
-    Impact {
-        value: CodeImpact,
-    },
+    Impact { value: CodeImpact },
     #[schemars(extend("x-since" = 3))]
-    CallTrace {
-        value: CodeCallTrace,
-    },
+    CallTrace { value: CodeCallTrace },
     #[schemars(extend("x-since" = 3))]
-    Lineage {
-        value: CodeLineage,
-    },
+    Lineage { value: CodeLineage },
     #[schemars(extend("x-since" = 3))]
-    Related {
-        value: CodeRelated,
-    },
+    Related { value: CodeRelated },
     #[schemars(extend("x-since" = 3))]
-    Dependencies {
-        value: CodeDependencies,
-    },
+    Dependencies { value: CodeDependencies },
     #[schemars(extend("x-since" = 3))]
-    SchemaDetails {
-        value: CodeSchema,
-    },
+    SchemaDetails { value: CodeSchema },
     #[schemars(extend("x-since" = 3))]
-    ScopeDetails {
-        value: CodeScopeStatus,
-    },
+    ScopeDetails { value: CodeScopeStatus },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

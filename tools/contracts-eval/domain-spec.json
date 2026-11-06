@@ -5083,14 +5083,18 @@
       "fields": {
         "status": "Label",
         "manifest": "?Content",
-        "group_count": "Counter",
-        "semantic_groups": "Counter",
-        "fallback_groups": "Counter",
-        "skipped_groups": "Counter",
+        "group_count": "?Counter",
+        "semantic_groups": "?Counter",
+        "fallback_groups": "?Counter",
+        "skipped_groups": "?Counter",
         "tree_sitter_groups": "Rows<CodeSemanticGroup>"
       },
       "since": {
-        "manifest": 3
+        "manifest": 3,
+        "group_count": 3,
+        "semantic_groups": 3,
+        "fallback_groups": 3,
+        "skipped_groups": 3
       }
     },
     "CodeDependencies": {

@@ -110,18 +110,18 @@ fn code_record(name: &str, v: &Value) -> Result<(), String> {
     if name == "CodeNode" {
         require(unique(v, "properties"), "duplicate property fragment")?;
     }
-    if matches!(name, "CodeSearchResult" | "CodeNodesResult") {
-        if let Some(total) = number("total") {
-            let rows = if name == "CodeSearchResult" {
-                "items"
-            } else {
-                "nodes"
-            };
-            require(
-                v[rows].as_array().is_some_and(|a| a.len() as u64 <= total),
-                "graph page exceeds total",
-            )?;
-        }
+    if matches!(name, "CodeSearchResult" | "CodeNodesResult")
+        && let Some(total) = number("total")
+    {
+        let rows = if name == "CodeSearchResult" {
+            "items"
+        } else {
+            "nodes"
+        };
+        require(
+            v[rows].as_array().is_some_and(|a| a.len() as u64 <= total),
+            "graph page exceeds total",
+        )?;
     }
     if matches!(name, "CodeNode" | "CodeSourceLocation" | "CodeEdge") {
         for key in ["unitKey", "sourceUnitKey", "targetUnitKey", "producingUnit"] {
