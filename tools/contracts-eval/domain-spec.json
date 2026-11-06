@@ -4340,7 +4340,8 @@
         "cost": "UsageCostSnapshot",
         "cache_diagnostics": "Rows<UsageCacheDiagnostic>",
         "unknown_tail": "bool",
-        "reasoning_tokens": "?Counter"
+        "reasoning_tokens": "?Counter",
+        "unit_quantities": "Rows<UsageMeasuredQuantity>"
       }
     },
     "UsageTotals": {
@@ -4518,6 +4519,16 @@
         "Untracked",
         "Unknown"
       ]
+    },
+    "UsageMeasuredQuantity": {
+      "kind": "record",
+      "fields": {
+        "modality": "Label",
+        "charge_kind": "Label",
+        "unit": "Label",
+        "cache_write_ttl_ms": "?Counter",
+        "quantity": "Counter"
+      }
     }
   },
   "operations": {

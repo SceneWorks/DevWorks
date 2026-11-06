@@ -11515,6 +11515,7 @@ pub struct UsageAttemptRecord {
     pub unknown_tail: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<Counter>,
+    pub unit_quantities: Rows<UsageMeasuredQuantity>,
 }
 impl Check for UsageAttemptRecord {
     fn check(&self) -> Result<(), String> {
@@ -11553,6 +11554,7 @@ impl Check for UsageAttemptRecord {
         self.cache_diagnostics.check()?;
         self.unknown_tail.check()?;
         self.reasoning_tokens.check()?;
+        self.unit_quantities.check()?;
         super::domain_rules::record(
             "UsageAttemptRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -11945,6 +11947,31 @@ pub enum UsageCostKind {
 }
 impl Check for UsageCostKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageMeasuredQuantity {
+    pub modality: Label,
+    pub charge_kind: Label,
+    pub unit: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_ttl_ms: Option<Counter>,
+    pub quantity: Counter,
+}
+impl Check for UsageMeasuredQuantity {
+    fn check(&self) -> Result<(), String> {
+        self.modality.check()?;
+        self.charge_kind.check()?;
+        self.unit.check()?;
+        self.cache_write_ttl_ms.check()?;
+        self.quantity.check()?;
+        super::domain_rules::record(
+            "UsageMeasuredQuantity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
