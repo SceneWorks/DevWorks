@@ -10866,7 +10866,7 @@ pub enum ApprovalContent {
     },
     SavedOperation {
         schema_revision: PositiveCounter,
-        input: DynamicJson,
+        input: SavedCommandInput,
     },
 }
 impl Check for ApprovalContent {

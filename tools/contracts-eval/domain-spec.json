@@ -4076,7 +4076,7 @@
         },
         "SavedOperation": {
           "schema_revision": "PositiveCounter",
-          "input": "DynamicJson"
+          "input": "SavedCommandInput"
         }
       }
     },
