@@ -214,6 +214,7 @@ impl Decoder {
                     );
                     continue;
                 };
+                self.chat_native_slot();
                 self.explicit_reasoning |= !part.is_empty();
                 if aggregate {
                     self.chat_reasoning[field] = Value::String(part.into());
@@ -238,6 +239,7 @@ impl Decoder {
             );
             return;
         };
+        self.chat_native_slot();
         self.explicit_reasoning |= !details.is_empty();
         if aggregate {
             self.chat_reasoning["reasoning_details"] = Value::Array(details.clone());
@@ -297,9 +299,13 @@ impl Decoder {
     fn chat_text(&mut self, index: u64, text: &str, out: &mut Vec<DecodedFrame>) {
         let (thinking, text) = self.think_tags.feed(text);
         self.tagged_reasoning.push_str(&thinking);
+        if !thinking.is_empty() {
+            self.chat_native_slot();
+        }
         if !text.is_empty() {
             out.push(DecodedFrame::TextDelta {
                 block_index: index,
+                content_index: self.chat_text_slot(),
                 text,
             });
         }

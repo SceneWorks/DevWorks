@@ -633,7 +633,7 @@ fn http_library_parser_is_bounded_before_tighter_semantic_head_validation() {
     }
 }
 #[test]
-fn http_invalid_request_never_connects_and_refused_connection_is_not_sent() {
+fn http_invalid_request_never_connects_and_native_connect_failure_is_not_sent() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -647,13 +647,18 @@ fn http_invalid_request_never_connects_and_refused_connection_is_not_sent() {
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
-    drop(listener);
+    // Destination port zero cannot be allocated to a listening endpoint. Unlike dropping
+    // an ephemeral listener, this cannot race another fixture reusing the released port.
+    // It also avoids timing the OS's retries before reporting a closed-port refusal.
     assert_eq!(
         expect_open_error(
             &client,
-            &HttpRequest::get(format!("http://{address}/rpc")),
+            &HttpRequest::get("http://127.0.0.1:0/rpc"),
             &limits()
         ),
         before(TransportFailure::Unreachable)
     );
 }
+
+#[path = "tests/subscription_limits.rs"]
+mod subscription_limits;

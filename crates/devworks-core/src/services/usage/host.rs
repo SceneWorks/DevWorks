@@ -18,6 +18,11 @@ impl AccountingWriteFence {
     pub fn close(&self) {
         *self.closed.write().unwrap_or_else(|p| p.into_inner()) = true;
     }
+    /// Volatile host previews must disappear when shutdown fences the owned producer, even
+    /// when an unclosed transport still holds its sink alive.
+    pub fn is_closed(&self) -> bool {
+        *self.closed.read().unwrap_or_else(|p| p.into_inner())
+    }
     /// Registered before releasing the admission unit's fence, including the gap before a
     /// producer installs its cancellation token. Shutdown never scans settled history.
     pub fn admitted(&self) -> HashSet<Id> {
