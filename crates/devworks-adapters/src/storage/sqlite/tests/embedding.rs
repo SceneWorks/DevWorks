@@ -1124,7 +1124,7 @@ fn narrowed_original_authority_prevents_publication_but_retains_exact_negative_o
                 EmbeddingQualificationState::Unknown => OperationState::OutcomeUnknown,
                 EmbeddingQualificationState::Cancelled => {
                     tx.queue().cancel(&id("qualification-delivery"))?;
-                    OperationState::ObservedComplete
+                    OperationState::Failed
                 }
                 _ => unreachable!(),
             };

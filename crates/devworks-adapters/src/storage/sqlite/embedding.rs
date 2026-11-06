@@ -396,7 +396,10 @@ impl EmbeddingRepository for Unit<'_> {
             ),
             EmbeddingQualificationState::Cancelled => {
                 operation.state == OperationState::CancelledBeforeDispatch
-                    || (operation.state == OperationState::ObservedComplete && cancelled)
+                    || (matches!(
+                        operation.state,
+                        OperationState::ObservedComplete | OperationState::Failed
+                    ) && cancelled)
             }
             _ => false,
         };
