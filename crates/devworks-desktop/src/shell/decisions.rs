@@ -979,6 +979,7 @@ impl Shell {
         }
         let mut open = true;
         let mut actions = Vec::new();
+        let mut help_preferences = false;
         if let Some(b) = self.backend() {
             self.decisions.permission = Some(b.os_notification_permission());
         }
@@ -1043,6 +1044,7 @@ impl Shell {
                 }
             }
             ui.collapsing("Notification preferences",|ui|{
+                if widgets::secondary_button(ui,"Help for Notification preferences").clicked() { help_preferences = true; }
                 if let Some(config)=&mut d.config_draft {
                     ui.checkbox(&mut config.desktop_enabled,"Desktop notifications");
                     ui.label("Required-input desktop notifications are attempted only while the app is unfocused and permission allows them. In-app history remains available.");
@@ -1057,8 +1059,11 @@ impl Shell {
                 }
             });
         });
-        self.notifications_open = open;
+        self.notifications_open = open && !help_preferences;
         self.decision_actions(ctx, actions);
+        if help_preferences {
+            self.open_help_context("settings-Notifications");
+        }
     }
 }
 fn project_filter(

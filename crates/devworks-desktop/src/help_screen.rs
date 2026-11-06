@@ -189,8 +189,10 @@ impl HelpScreen {
                     "Searching local documentation…"
                 } else if self.reading {
                     "Reading the selected passage…"
+                } else if self.generation_unknown {
+                    "Generation outcome not confirmed"
                 } else if self.generating {
-                    "Updating capability documentation…"
+                    "Generation pending"
                 } else {
                     "Local content · no network required"
                 },
@@ -466,9 +468,8 @@ impl HelpScreen {
                                         capability.effect.0,
                                         capability.owner.0
                                     ));
-                                    if !capability.available {
-                                        widgets::chip(ui, "Unavailable", Tone::Attention);
-                                    }
+                                    widgets::chip(ui, if capability.available { "Registered" } else { "Unavailable" }, if capability.available { Tone::Neutral } else { Tone::Attention });
+                                    widgets::caption(ui, "Each request still checks its target, action, permissions and required approval.");
                                     if let Some(reason) = &capability.unavailable_reason {
                                         ui.label(&reason.0);
                                     }

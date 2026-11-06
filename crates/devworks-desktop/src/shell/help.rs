@@ -120,16 +120,11 @@ impl Shell {
                         | OperationState::CancelledBeforeDispatch
                 );
             let id = operation.operation_id.0.as_str();
-            let selected = self.help.generation_operation.as_deref();
-            if selected.is_none()
-                || selected == Some(id)
-                || !self.help.generating && !self.help.generation_unknown
-            {
-                self.help.generation_operation = Some(id.to_owned());
-                // An unknown submission is still receipt-bound, even if another status is known.
-                if !self.help.generation_unknown {
-                    self.help.generating = !terminal;
-                }
+            // This is the owner's current global status. Keep the original Accepted receipt
+            // reference in its separate notice; a different latest ID never proves its outcome.
+            self.help.generation_operation = Some(id.to_owned());
+            if !self.help.generation_unknown {
+                self.help.generating = !terminal;
             }
         }
         self.help.snapshot = Some(snapshot);
@@ -299,8 +294,16 @@ impl Shell {
                     self.load_help_topics(false);
                 }
                 HelpAction::MoreTopics => self.load_help_topics(true),
-                HelpAction::Select(topic, version) | HelpAction::OpenVersion(topic, version) => {
-                    self.select_help_topic(topic, version)
+                HelpAction::Select(topic, version) => self.select_help_topic(topic, version),
+                HelpAction::OpenVersion(topic, version) => {
+                    if let HelpScope::Package { id, .. } = self.help.scope.clone() {
+                        self.help.scope = HelpScope::Package {
+                            id,
+                            version: version.clone(),
+                        };
+                        self.load_help_topics(false);
+                    }
+                    self.select_help_topic(topic, version);
                 }
                 HelpAction::Guides(id, version) => {
                     self.help.scope = HelpScope::Package { id, version };
