@@ -179,6 +179,16 @@ fn declared_schema_and_metadata_overview_do_not_invent_empty_graph_measurements(
     assert!(value.get("graphTotals").is_none());
     assert_eq!(value["dependencies"], json!([]));
     assert_eq!(value["internalModules"], json!([]));
+    let unknown = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":"missing-metadata-repository","scope":{"kind":"Workspace"},"current":true,"query":{"kind":"Overview","repositoryId":"not-registered"},"limits":{"maxResults":100,"maxVisited":10000,"deadlineMs":30000}});
+    match app
+        .query(&ctx, "code.overview", unknown.to_string().as_bytes())
+        .unwrap()
+    {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(serde_json::to_value(fault).unwrap()["code"], "NotFound")
+        }
+        other => panic!("unknown repository should not become empty metadata: {other:?}"),
+    };
     executor.block_on(app.shutdown());
 }
 

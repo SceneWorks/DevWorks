@@ -82,6 +82,9 @@ pub(super) fn overview(
     mut reader: Option<&mut Reader<'_>>,
     repository: Option<&Id>,
 ) -> Result<GraphResult, Failure> {
+    if let Some(repository) = repository {
+        super::scope::authorize(metadata.read, metadata.context, metadata.scope, repository)?;
+    }
     let mut repositories = Vec::new();
     metadata.repositories(|row| {
         if repository.is_some_and(|id| id != &row.id) {
