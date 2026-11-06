@@ -77,6 +77,28 @@ impl ArtifactFiles for PublishGate {
     fn open(&self, d: &str, g: &str, n: u64) -> Result<Box<dyn Read + Send>, FileFault> {
         self.inner.open(d, g, n)
     }
+    fn open_controlled(
+        &self,
+        d: &str,
+        g: &str,
+        n: u64,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Box<dyn Read + Send>, FileFault> {
+        let reader = self.inner.open_controlled(d, g, n, stopped)?;
+        self.pause();
+        Ok(reader)
+    }
+    fn read_range_controlled(
+        &self,
+        d: &str,
+        g: &str,
+        n: u64,
+        o: u64,
+        m: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, FileFault> {
+        self.inner.read_range_controlled(d, g, n, o, m, stopped)
+    }
     fn unlink(&self, d: &str, g: &str) -> Result<(), FileFault> {
         self.inner.unlink(d, g)
     }

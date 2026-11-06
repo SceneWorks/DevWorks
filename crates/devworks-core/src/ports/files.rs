@@ -100,6 +100,34 @@ pub trait ArtifactFiles: Send + Sync {
         generation: &str,
         byte_count: u64,
     ) -> Result<Box<dyn Read + Send>, FileFault>;
+    /// Opens and verifies on the same handle, checking `stopped` before every bounded
+    /// verification chunk. An adapter that cannot honor this control refuses before I/O.
+    fn open_controlled(
+        &self,
+        _digest: &str,
+        _generation: &str,
+        _byte_count: u64,
+        _stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Box<dyn Read + Send>, FileFault> {
+        Err(FileFault::Unsupported(
+            "controlled blob verification is unavailable".into(),
+        ))
+    }
+    /// Verifies and reads a bounded range from that same handle, checking control during
+    /// the first full-file verification too. Unsupported adapters refuse before I/O.
+    fn read_range_controlled(
+        &self,
+        _digest: &str,
+        _generation: &str,
+        _byte_count: u64,
+        _offset: u64,
+        _max: usize,
+        _stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, FileFault> {
+        Err(FileFault::Unsupported(
+            "controlled blob ranges are unavailable".into(),
+        ))
+    }
     /// Removes exactly one generation's file; an already missing file is success.
     fn unlink(&self, digest: &str, generation: &str) -> Result<(), FileFault>;
     /// Moves a corrupt generation aside into quarantine (kept as evidence, never served).

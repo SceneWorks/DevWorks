@@ -3,7 +3,7 @@ use super::{
     APP_VERSION, EFFECT_CONSUMER, HelpService, JOB_KIND, bundle, commands::GenerationJob, metadata,
 };
 use crate::fingerprint::sha256_hex;
-use crate::ports::packages::{Inspection, MAX_BUNDLE_BYTES};
+use crate::ports::packages::Inspection;
 use crate::ports::storage::*;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{HelpProvenance, OperationRef};
@@ -49,13 +49,87 @@ struct Document<'a> {
     id: Id,
     title: String,
     version: String,
-    body: String,
+    body: Body,
     provenance: HelpProvenance,
     source_kind: &'a str,
     operations: Vec<String>,
     screens: Vec<String>,
     package: Option<Id>,
     manifest: Option<String>,
+}
+
+enum Body {
+    Inline(std::io::Cursor<String>),
+    Guide(crate::services::packages::VerifiedHelp),
+}
+impl From<String> for Body {
+    fn from(value: String) -> Self {
+        Self::Inline(std::io::Cursor::new(value))
+    }
+}
+impl Body {
+    fn identity(&self) -> (String, u64) {
+        match self {
+            Self::Inline(c) => (sha256_hex(c.get_ref().as_bytes()), c.get_ref().len() as u64),
+            Self::Guide(g) => (g.sha256.clone(), g.byte_length),
+        }
+    }
+    fn reader(&mut self) -> &mut dyn std::io::Read {
+        match self {
+            Self::Inline(c) => c,
+            Self::Guide(g) => g.reader.as_mut(),
+        }
+    }
+    fn rewind(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Inline(c) => {
+                c.set_position(0);
+                Ok(())
+            }
+            Self::Guide(g) => g.reader.rewind(),
+        }
+    }
+}
+struct PreparedDocument {
+    document: StoredHelpDocument,
+    body: Option<Body>,
+}
+struct Control<'a> {
+    service: &'a HelpService,
+    job: &'a GenerationJob,
+    calls: u32,
+    error: Option<StorageError>,
+}
+impl Control<'_> {
+    fn stopped(&mut self) -> bool {
+        if self.error.is_some() {
+            return true;
+        }
+        if self.service.is_stopped() {
+            self.error = Some(StorageError::Cancelled);
+            return true;
+        }
+        let check = self.calls.is_multiple_of(16);
+        self.calls = self.calls.wrapping_add(1);
+        if check {
+            let state = read_snapshot(self.service.store.as_ref(), &ReadOptions::default(), |r| {
+                r.queue().entry(&self.job.delivery_id)
+            });
+            match state {
+                Ok(Some(row)) if !row.cancel_requested => {}
+                Ok(Some(_)) => self.error = Some(StorageError::Cancelled),
+                Ok(None) => self.error = Some(invalid("Help source delivery disappeared")),
+                Err(error) => self.error = Some(error),
+            }
+        }
+        self.error.is_some()
+    }
+    fn finish<T>(&mut self, result: Result<T, StorageError>) -> Result<T, StorageError> {
+        match self.error.take() {
+            Some(error) => Err(error),
+            None => result,
+        }
+    }
 }
 
 impl HelpService {
@@ -132,39 +206,56 @@ impl HelpService {
     }
 
     fn old_body(&self, generation: &Id, id: &Id) -> Result<String, StorageError> {
-        read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+        let (topic, file) = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
             let topic = read
                 .help()
                 .help_topic(generation, id)?
                 .ok_or_else(|| invalid("previous Help topic disappeared"))?;
-            let mut body = String::new();
-            let mut offset = 0;
-            while offset < topic.character_count {
-                let part = read
-                    .help()
-                    .help_passage(generation, id, offset, 65536)?
-                    .ok_or_else(|| invalid("previous Help passage unavailable"))?;
-                if part.is_empty() {
-                    return Err(invalid("previous Help passage is incomplete"));
-                }
-                offset += part.chars().count() as i64;
-                if body.len().saturating_add(part.len()) as u64 > MAX_BUNDLE_BYTES {
-                    return Err(invalid("previous Help body exceeds its source bound"));
-                }
-                body.push_str(&part);
-            }
-            Ok(body)
-        })
+            let reference: ArtifactRef = serde_json::from_value(
+                topic
+                    .content_ref
+                    .clone()
+                    .ok_or(StorageError::ViewUnavailable)?,
+            )
+            .map_err(|_| invalid("Help reference"))?;
+            let file = self
+                .artifacts
+                .capture_help_file(read, &self.store.info(), &reference)?;
+            Ok((topic, file))
+        })?;
+        let mut stopped = || self.is_stopped();
+        let mut source = self.artifacts.open_help_file(&file, &mut stopped)?;
+        let mut body = String::new();
+        super::text::visit(source.as_mut(), &mut stopped, |text| {
+            body.push_str(text);
+            Ok(false)
+        })?;
+        if sha256_hex(body.as_bytes()) != topic.content_digest
+            || body.chars().count() as i64 != topic.character_count
+        {
+            return Err(invalid("previous Help source changed"));
+        }
+        Ok(body)
     }
 
     fn stage_document(
         &self,
         operation: &OperationRecord,
         job: &GenerationJob,
-        mut document: StoredHelpDocument,
+        input: PreparedDocument,
     ) -> Result<StoredHelpTopic, StorageError> {
-        if document.body.len() as u64 > MAX_BUNDLE_BYTES || document.body.contains('\0') {
-            return Err(invalid("invalid Help body"));
+        let PreparedDocument {
+            mut document,
+            mut body,
+        } = input;
+        let mut control = Control {
+            service: self,
+            job,
+            calls: 0,
+            error: None,
+        };
+        if control.stopped() {
+            return control.finish(Err(StorageError::Cancelled));
         }
         let service = self.clone();
         let op = operation.clone();
@@ -198,21 +289,28 @@ impl HelpService {
             old.topic_revision + i64::from(semantic(old) != semantic(&document.topic))
         });
         if document.topic.availability == "Available" {
-            document.topic.content_ref = old
-                .as_ref()
-                .filter(|old| old.content_digest == document.topic.content_digest)
-                .and_then(|old| old.content_ref.clone());
-            if let Some(reference) = document.topic.content_ref.as_ref() {
-                let reference: ArtifactRef = serde_json::from_value(reference.clone())
-                    .map_err(|_| invalid("invalid previous Help artifact"))?;
-                let valid = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                    Ok(crate::services::approvals::owner_preview::artifact_binding(
-                        read.artifacts(),
-                        &reference,
-                    )
-                    .is_ok())
+            document.topic.content_ref =
+                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    read.help()
+                        .help_content_reference(&document.topic.content_digest)
                 })?;
-                if !valid {
+            if let Some(reference) = document.topic.content_ref.clone() {
+                let reference: ArtifactRef = serde_json::from_value(reference)
+                    .map_err(|_| invalid("invalid previous Help artifact"))?;
+                let captured =
+                    read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                        self.artifacts
+                            .capture_help_file(read, &self.store.info(), &reference)
+                    });
+                let valid = match captured {
+                    Ok(file) => self
+                        .artifacts
+                        .open_help_file(&file, &mut || control.stopped())
+                        .map(|_| ()),
+                    Err(error) => Err(error),
+                };
+                if valid.is_err() {
+                    control.finish(Ok(()))?;
                     document.topic.content_ref = None;
                 }
             }
@@ -220,11 +318,28 @@ impl HelpService {
         let staged = if document.topic.availability == "Available"
             && document.topic.content_ref.is_none()
         {
-            Some(self.artifacts.stage_host_bytes(&*self.store,document.body.as_bytes(),json!({"kind":"HelpTopic","generationId":job.generation,"topicId":document.topic.id}))?
-                .map_err(|_|invalid("Help artifact bytes could not be published"))?)
+            let body = body
+                .as_mut()
+                .ok_or_else(|| invalid("Help source reader missing"))?;
+            body.rewind()
+                .map_err(|_| invalid("Help source could not rewind"))?;
+            let content = document
+                .content
+                .as_ref()
+                .ok_or_else(|| invalid("Help projection missing"))?;
+            let result=self.artifacts.stage_host_reader(self.store.as_ref(),crate::services::artifacts::host::HostStream {
+                reader:body.reader(),digest:&content.digest,byte_count:content.byte_count,
+                source:json!({"kind":"HelpTopic","generationId":job.generation,"topicId":document.topic.id,"helpIndexDigest":content.commitment().map_err(|_|invalid("Help index commitment"))?}),
+            },&mut||control.stopped());
+            Some(
+                control
+                    .finish(result)?
+                    .map_err(|_| invalid("Help artifact bytes could not be published"))?,
+            )
         } else {
             None
         };
+        drop(body); // No full source, even an inline host document, enters the writer mailbox.
         let service = self.clone();
         let op = operation.clone();
         let source = job.clone();
@@ -265,12 +380,12 @@ impl HelpService {
         &self,
         job: &GenerationJob,
         document: Document<'_>,
-    ) -> Result<StoredHelpDocument, StorageError> {
+    ) -> Result<PreparedDocument, StorageError> {
         let Document {
             id,
             title,
             version,
-            body,
+            mut body,
             provenance,
             source_kind,
             operations,
@@ -278,29 +393,40 @@ impl HelpService {
             package,
             manifest,
         } = document;
-        let digest = sha256_hex(body.as_bytes());
-        Ok(StoredHelpDocument {
-            topic: StoredHelpTopic {
-                generation_id: job.generation.clone(),
-                id,
-                version,
-                title: title.clone(),
-                content_digest: digest,
-                content_ref: None,
-                availability: "Available".into(),
-                reason: None,
-                provenance: serde_json::to_value(provenance)
-                    .map_err(|e| invalid(&e.to_string()))?,
-                related_operations: operations,
-                screen_ids: screens,
-                source_kind: source_kind.into(),
-                package_id: package,
-                manifest_digest: manifest,
-                character_count: body.chars().count() as i64,
-                topic_revision: 1,
+        let (digest, bytes) = body.identity();
+        let mut control = Control {
+            service: self,
+            job,
+            calls: 0,
+            error: None,
+        };
+        let projected =
+            super::text::index(body.reader(), &digest, bytes, &mut || control.stopped());
+        let content = control.finish(projected)?;
+        Ok(PreparedDocument {
+            document: StoredHelpDocument {
+                topic: StoredHelpTopic {
+                    generation_id: job.generation.clone(),
+                    id,
+                    version,
+                    title: title.clone(),
+                    content_digest: digest,
+                    content_ref: None,
+                    availability: "Available".into(),
+                    reason: None,
+                    provenance: serde_json::to_value(provenance)
+                        .map_err(|e| invalid(&e.to_string()))?,
+                    related_operations: operations,
+                    screen_ids: screens,
+                    source_kind: source_kind.into(),
+                    package_id: package,
+                    manifest_digest: manifest,
+                    character_count: content.character_count,
+                    topic_revision: 1,
+                },
+                content: Some(content),
             },
-            search_text: format!("{title}\n{body}").to_lowercase(),
-            body,
+            body: Some(body),
         })
     }
 
@@ -330,7 +456,7 @@ impl HelpService {
                     id: topic.id,
                     title: topic.title,
                     version: APP_VERSION.into(),
-                    body: topic.body,
+                    body: topic.body.into(),
                     provenance,
                     source_kind: "Bundled",
                     operations: topic.operations,
@@ -384,7 +510,7 @@ impl HelpService {
                     id,
                     title: format!("{operation_name} ({mode})"),
                     version: APP_VERSION.into(),
-                    body,
+                    body: body.into(),
                     provenance,
                     source_kind: "Generated",
                     operations: vec![operation_name],
@@ -423,6 +549,12 @@ impl HelpService {
                     &sha256_hex(package.package_id.as_bytes())[..40]
                 ))
                 .expect("owned guide ID");
+                let mut control = Control {
+                    service: self,
+                    job,
+                    calls: 0,
+                    error: None,
+                };
                 let body = self
                     .packages
                     .as_ref()
@@ -431,55 +563,52 @@ impl HelpService {
                             "package file owner unavailable".into(),
                         )
                     })
-                    .and_then(|service| service.verified_help(&version));
+                    .and_then(|service| {
+                        service.open_verified_help(&version, &mut || control.stopped())
+                    });
+                control.finish(Ok(()))?;
                 let inspection: Inspection = serde_json::from_value(version.inspection.clone())
                     .map_err(|_| invalid("invalid installed inspection"))?;
-                let operations = inspection
+                let operations: Vec<String> = inspection
                     .contributions
                     .iter()
                     .map(|contribution| contribution.id.clone())
                     .collect();
-                match body {
+                let prepared = match body {
                     Ok(body) => {
                         let provenance = HelpProvenance::Package {
                             package_id: package_id.clone(),
                             package_version: BoundedText(version.version.clone()),
                             manifest_digest: crate::protocol::provider::Digest(manifest.clone()),
-                            content_digest: crate::protocol::provider::Digest(sha256_hex(
-                                body.as_bytes(),
-                            )),
+                            content_digest: crate::protocol::provider::Digest(body.sha256.clone()),
                         };
-                        stage(self.document(
+                        match self.document(
                             job,
                             Document {
-                                id,
+                                id: id.clone(),
                                 title: format!("{} guide", package.package_id),
                                 version: version.version.clone(),
-                                body,
+                                body: Body::Guide(body),
                                 provenance,
                                 source_kind: "Package",
-                                operations,
+                                operations: operations.clone(),
                                 screens: Vec::new(),
                                 package: Some(package_id.clone()),
                                 manifest: Some(manifest.clone()),
                             },
-                        )?)?;
-                    }
-                    Err(error) => {
-                        let availability = if matches!(
-                            error,
-                            crate::ports::packages::PackageFileError::Missing(_)
                         ) {
-                            "Missing"
-                        } else {
-                            "Unavailable"
-                        };
-                        let title = format!("{} guide", package.package_id);
-                        stage(StoredHelpDocument{topic:StoredHelpTopic{generation_id:job.generation.clone(),id,version:version.version.clone(),title:title.clone(),content_digest:String::new(),
-                            content_ref:None,availability:availability.into(),reason:Some("The exact installed guide could not be verified. Repair or reinstall this package version, then regenerate Help.".into()),
-                            provenance:Value::Null,related_operations:operations,screen_ids:Vec::new(),source_kind:"Package".into(),package_id:Some(package_id.clone()),manifest_digest:Some(manifest.clone()),character_count:0,topic_revision:1},
-                            body:String::new(),search_text:title.to_lowercase()})?;
+                            Ok(document) => Ok(document),
+                            Err(StorageError::ViewUnavailable) => Err("Unavailable"),
+                            Err(error) => return Err(error),
+                        }
                     }
+                    Err(crate::ports::packages::PackageFileError::Missing(_)) => Err("Missing"),
+                    Err(_) => Err("Unavailable"),
+                };
+                match prepared {
+                    Ok(document)=>stage(document)?,
+                    Err(availability)=>stage(PreparedDocument {document:StoredHelpDocument {topic:StoredHelpTopic {
+                        generation_id:job.generation.clone(),id,version:version.version.clone(),title:format!("{} guide",package.package_id),content_digest:String::new(),content_ref:None,availability:availability.into(),reason:Some("The exact installed guide could not be verified. Repair or reinstall this package version, then regenerate Help.".into()),provenance:Value::Null,related_operations:operations,screen_ids:Vec::new(),source_kind:"Package".into(),package_id:Some(package_id.clone()),manifest_digest:Some(manifest.clone()),character_count:0,topic_revision:1},content:None},body:None})?,
                 }
                 for contribution in inspection.contributions {
                     let id = Id::new(format!(
@@ -508,7 +637,7 @@ impl HelpService {
                             id,
                             title: format!("{} contribution contract", package.package_id),
                             version: version.version.clone(),
-                            body,
+                            body: body.into(),
                             provenance,
                             source_kind: "Package",
                             operations: vec![contribution.id],

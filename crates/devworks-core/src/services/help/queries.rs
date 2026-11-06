@@ -21,6 +21,7 @@ struct ListRequest<'a> {
     limit: u16,
     cursor: Option<&'a str>,
     parts: Vec<String>,
+    matches: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl HelpService {
@@ -74,7 +75,7 @@ impl HelpService {
         })
     }
 
-    fn cursor_binding(
+    pub(super) fn cursor_binding(
         &self,
         read: &dyn ReadSnapshot,
         ctx: &InvocationContext,
@@ -92,7 +93,7 @@ impl HelpService {
         Ok(CursorBinding::new(ctx, operation, &[&basis], head.revision))
     }
 
-    fn state(
+    pub(super) fn state(
         &self,
         read: &dyn ReadSnapshot,
         row: &StoredHelpTopic,
@@ -236,6 +237,7 @@ impl HelpService {
             limit,
             cursor,
             parts,
+            matches,
         } = request;
         let snapshot = self.snapshot(read, ctx)?;
         let head = read.help().help_head()?;
@@ -265,11 +267,20 @@ impl HelpService {
         let mut last = None;
         let mut has_more = false;
         'pages: loop {
-            let rows = read
-                .help()
-                .help_topics(generation, &filter, after.as_ref(), 100)?;
+            let rows = read.help().help_topics(
+                generation,
+                &HelpFilter {
+                    query: None,
+                    ..filter.clone()
+                },
+                after.as_ref(),
+                100,
+            )?;
             let exhausted = rows.len() < 100;
             for row in &rows {
+                if matches.is_some_and(|ids| !ids.contains(row.id.as_str())) {
+                    continue;
+                }
                 if row.source_kind == "Package"
                     && let Some(id) = row.package_id.as_ref()
                     && read
@@ -327,6 +338,7 @@ impl HelpService {
         ctx: &InvocationContext,
         input: &ops::ReadInput,
         revision: u32,
+        prepared: Option<&super::prepared::PreparedHelp>,
     ) -> R<HelpReadView> {
         let snapshot = self.snapshot(read, ctx)?;
         let head = read.help().help_head()?;
@@ -372,53 +384,15 @@ impl HelpService {
                 Some(row.version),
             ));
         }
-        let requested = input
-            .max_chars
-            .as_ref()
-            .map_or("default", |value| value.0.as_str());
-        let chars = input
-            .max_chars
-            .as_ref()
-            .map(|value| {
-                value.0.parse::<u64>().map_err(|_| {
-                    Refusal::new(DomainErrorCode::InvalidArgument, "help_passage_limit", None)
-                })
-            })
-            .transpose()?
-            .unwrap_or(8192)
-            .min(65536) as u32;
-        let binding = self.cursor_binding(
-            read,
-            ctx,
-            "help.read",
-            &[
-                input.topic_id.as_str().into(),
-                input.version.0.clone(),
-                requested.into(),
-                revision.to_string(),
-            ],
-        )?;
-        let offset = input
-            .cursor
-            .as_ref()
-            .map(|cursor| binding.decode(&cursor.0))
-            .transpose()?
-            .map(|position| {
-                position
-                    .parse::<i64>()
-                    .map_err(|_| StorageError::CursorExpired)
-            })
-            .transpose()?
-            .unwrap_or(0);
-        if offset < 0 || offset > row.character_count {
-            return Err(StorageError::CursorExpired.into());
-        }
-        let text = read
-            .help()
-            .help_passage(&row.generation_id, &row.id, offset, chars)?
-            .ok_or_else(|| {
-                StorageError::InvalidRecord("published Help passage is missing".into())
-            })?;
+        let (offset, _chars, binding) = self.passage_position(read, ctx, input, revision)?;
+        let key = self
+            .read_key(read, ctx, input, revision)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        let text = prepared
+            .and_then(|p| p.read.as_ref())
+            .filter(|(captured, _)| captured == &key)
+            .map(|(_, text)| text.clone())
+            .ok_or(StorageError::CursorExpired)?;
         let next = offset + text.chars().count() as i64;
         let has_more = next < row.character_count;
         Ok(HelpReadView::Available {
@@ -485,6 +459,7 @@ impl HelpService {
                 },
                 limit: input.page.limit.get() as u16,
                 cursor: input.page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                matches: None,
                 parts: vec![
                     input.package_id.as_str().into(),
                     input.version.0.clone(),
@@ -496,12 +471,59 @@ impl HelpService {
 }
 
 impl QueryHandler for HelpService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &crate::ports::Preparation<'_>,
+    ) -> Result<Option<crate::ports::Prepared>, DomainFault> {
+        if let OperationInput::Help(ops::Input::Read(input)) = query.input() {
+            Self::passage_count(input).map_err(|e| {
+                query_fault(
+                    e.into(),
+                    "help",
+                    CorrelationId(self.ids.next_id(IdKind::Correlation)),
+                )
+            })?;
+        }
+        self.prepare_io(ctx, query, env).map_err(|e| {
+            query_fault(
+                e.into(),
+                "help",
+                CorrelationId(self.ids.next_id(IdKind::Correlation)),
+            )
+        })
+    }
     fn query(
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
         read: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
+        self.validate_prepared(read, ctx, query).map_err(|e| {
+            query_fault(
+                e.into(),
+                "help",
+                CorrelationId(self.ids.next_id(IdKind::Correlation)),
+            )
+        })?;
+        let full_text_matches = if matches!(query.input(), OperationInput::Help(ops::Input::Search(i)) if i.query.0.trim()!="*")
+        {
+            Some(
+                &query
+                    .prepared::<super::prepared::PreparedHelp>()
+                    .ok_or_else(|| {
+                        query_fault(
+                            StorageError::CursorExpired.into(),
+                            "help",
+                            CorrelationId(self.ids.next_id(IdKind::Correlation)),
+                        )
+                    })?
+                    .matches,
+            )
+        } else {
+            None
+        };
         let revision = query.schema_revision().0;
         let result: R<crate::protocol::results::OperationResult> = match query.input() {
             OperationInput::Help(ops::Input::Search(input)) => self
@@ -517,6 +539,7 @@ impl QueryHandler for HelpService {
                         },
                         limit: input.page.limit.get() as u16,
                         cursor: input.page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                        matches: full_text_matches,
                         parts: vec![input.query.0.clone(), revision.to_string()],
                     },
                 )
@@ -525,13 +548,19 @@ impl QueryHandler for HelpService {
                         value: HelpTopicPageResult::Current(value),
                     },
                 ),
-            OperationInput::Help(ops::Input::Read(input)) => {
-                self.read(read, ctx, input, revision).map(|value| {
-                    crate::protocol::results::OperationResult::HelpRead {
+            OperationInput::Help(ops::Input::Read(input)) => self
+                .read(
+                    read,
+                    ctx,
+                    input,
+                    revision,
+                    query.prepared::<super::prepared::PreparedHelp>(),
+                )
+                .map(
+                    |value| crate::protocol::results::OperationResult::HelpRead {
                         value: HelpReadResult::Current(value),
-                    }
-                })
-            }
+                    },
+                ),
             OperationInput::Help(ops::Input::TopicForScreen(input)) => {
                 let mut page = self.list(
                     read,
@@ -551,6 +580,7 @@ impl QueryHandler for HelpService {
                             .as_ref()
                             .and_then(|page| page.cursor.as_ref())
                             .map(|cursor| cursor.0.as_str()),
+                        matches: None,
                         parts: vec![
                             input.screen_id.as_str().into(),
                             revision.to_string(),
