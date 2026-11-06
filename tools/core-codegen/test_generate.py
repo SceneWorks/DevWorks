@@ -217,7 +217,7 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertIn(3, generate.type_since('RouterConfigAction'))
         records = generate.gen_records()
         self.assertIn('#[schemars(extend("x-since" = 3))]\n    CreateEmbeddingSpace', records)
-        self.assertIn('Self::CreateEmbeddingSpace{..} if revision<3=>return Err(', records)
+        self.assertIn('Self::CreateEmbeddingSpace{..} if revision<3=>{return Err(', records)
         self.assertNotIn('Self::CreateEmbeddingSpace{..} =', records)
         router, operations = next((fam, [o for f, o in generate.operations() if f['family'] == 'router'])
                                   for fam in generate.REGISTER['families'] if fam['family'] == 'router')
