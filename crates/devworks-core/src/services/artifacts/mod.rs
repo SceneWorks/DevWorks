@@ -121,6 +121,7 @@ pub mod evidence;
 pub mod host;
 mod index_source;
 mod convention_source;
+pub(crate) mod convention_import;
 pub(crate) use convention_source::{ConventionSourceLease, ConventionSourceSelection};
 pub mod lifecycle;
 pub mod observed;
