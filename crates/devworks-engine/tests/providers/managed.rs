@@ -80,6 +80,7 @@ impl StreamingHttp for CountHttp {
 #[test]
 fn managed_redirect_pause_principal_and_session_changes_before_send_defeat_unchanged_wire_generations()
  {
+    let _native_case = native_runtime_case();
     runtime().block_on(within("native managed send fences",async {
 for changed in ["baseline","redirect","pause","principal","session"] {
 let f=Arc::new(Fx::new());let _=router(&f);applied(&f.start(&f.user,"root-f",1,1));let activation=f.launch("native-provider-owner");
