@@ -755,10 +755,9 @@ mod revision {
                     .and_then(|d| d.get("$ref"))
                     .and_then(Value::as_str)
                     == Some(reference.as_str())
+                    && let Some(original) = defs.get(to).cloned()
                 {
-                    if let Some(original) = defs.get(to).cloned() {
-                        defs.insert(from.clone(), original);
-                    }
+                    defs.insert(from.clone(), original);
                 }
             }
         }
