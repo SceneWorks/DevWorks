@@ -1,6 +1,6 @@
 # Revision-3 graph field table
 
-Generated from canonical Code* authoring types. GraphUnitKey and GraphText are checked support scalars.
+Generated from canonical Code* authoring types. GraphUnitKey, GraphText and GraphCompletion are checked graph-only support types.
 
 ## CodeSearchMode
 
@@ -240,6 +240,7 @@ Values: NodeWindow, WholeFile.
 | `graph_coverage` | `Coverage` |
 | `unavailable_reason` | `?Label` |
 | `graph_totals` | `?CodeOverviewTotals` |
+| `internal_modules` | `Rows<CodeModuleAnalysis>` |
 
 ## CodeHotspot
 
@@ -284,6 +285,7 @@ Values: NodeWindow, WholeFile.
 | `package_count` | `Counter` |
 | `package_counts_by_ecosystem` | `Rows<CodeCount>` |
 | `supertypes` | `Rows<CodeSupertype>` |
+| `internal_modules` | `Rows<CodeModuleAnalysis>` |
 
 ## CodeRisk
 
@@ -458,4 +460,107 @@ Values: Declared, Observed.
 | --- | --- |
 | `node_count` | `Counter` |
 | `edge_count` | `Counter` |
+
+## CodeUnavailableRepository
+
+| Field | Type |
+| --- | --- |
+| `repository_id` | `Id` |
+| `reason` | `Label` |
+
+## CodeReadCoverage
+
+| Field | Type |
+| --- | --- |
+| `coverage` | `Coverage` |
+| `unavailable_repositories` | `Rows<CodeUnavailableRepository>` |
+
+## CodeNodeReference
+
+| Field | Type |
+| --- | --- |
+| `repository_id` | `Id` |
+| `view_id` | `Id` |
+| `unit_key` | `GraphUnitKey` |
+| `node_id` | `Id` |
+
+## CodeModuleIdentity
+
+| Field | Type |
+| --- | --- |
+| `repository_id` | `Id` |
+| `module_name` | `Content` |
+| `indexed_node` | `?CodeNodeReference` |
+
+## CodeModuleAnalysisState
+
+Values: Recorded, NotAnalyzed, Unavailable.
+
+## CodeModuleDrilldown
+
+| Field | Type |
+| --- | --- |
+| `node_kind` | `Label` |
+| `count` | `?Counter` |
+| `nodes` | `Rows<CodeNodeReference>` |
+| `has_more` | `bool` |
+| `next_cursor` | `?Cursor` |
+
+## CodeModuleEndpoint
+
+| Field | Type |
+| --- | --- |
+| `route` | `Content` |
+| `http_method` | `Label` |
+| `description` | `Content` |
+| `request_model` | `?Content` |
+| `response_model` | `?Content` |
+
+## CodeModuleService
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `description` | `Content` |
+| `interface_name` | `?Content` |
+| `lifetime` | `Label` |
+
+## CodeModuleProgramTotals
+
+| Field | Type |
+| --- | --- |
+| `endpoint_count` | `Counter` |
+| `service_count` | `Counter` |
+| `table_count` | `Counter` |
+
+## CodeRecordedModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `summary` | `Content` |
+| `confidence` | `Label` |
+| `endpoints` | `Rows<CodeModuleEndpoint>` |
+| `services` | `Rows<CodeModuleService>` |
+| `external_dependencies` | `Rows<Content>` |
+| `database_tables` | `Rows<Content>` |
+| `model_used` | `?Content` |
+| `updated_at_ms` | `Counter` |
+| `source_hash` | `?Content` |
+| `source_revision` | `?Content` |
+| `source_view_id` | `?Id` |
+| `program_totals` | `?CodeModuleProgramTotals` |
+
+## CodeModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `module` | `CodeModuleIdentity` |
+| `state` | `CodeModuleAnalysisState` |
+| `reason` | `?Label` |
+| `observed_node_counts` | `Rows<CodeCount>` |
+| `observed_coverage` | `Coverage` |
+| `endpoints` | `CodeModuleDrilldown` |
+| `services` | `CodeModuleDrilldown` |
+| `tables` | `CodeModuleDrilldown` |
+| `recorded` | `?CodeRecordedModuleAnalysis` |
 

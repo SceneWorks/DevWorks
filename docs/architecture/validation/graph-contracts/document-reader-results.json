@@ -1,6 +1,6 @@
 {
-  "sourceHead": "2b818a79f8ecdd90f2268f6dfdf301175f2fae94",
-  "typedRecords": 408,
+  "sourceHead": "ff1ed43d7353b32c9ef3029bd8b431529b5172c7",
+  "typedRecords": 419,
   "schemaFiles": 70,
   "ownedGraphOperations": [
     "code.search",
@@ -46,12 +46,12 @@
   },
   "legacySchemasUnchanged": 56,
   "readers": {
-    "docs/architecture/domain-operation-reference.md": "954e5744ae93d107e4f7e3fdc88fb84010d6072e06369ecf74cb776bb374b473",
-    "docs/architecture/domain-operation-reference.html": "de76cc5bad8cc94ceb2086ced1caa2d99c7fb52e1698598029bbdb219574f32b",
-    "docs/architecture/domain-operation-contracts.md": "9a68c5d9ec766e2b445f278cc5bad0dcf7940908bcaf3e1b34c0c03efdf499d8",
-    "docs/architecture/domain-operation-contracts.html": "56b1b20035711b852c616245cea2b4247304375e4a8d7561b6645d3976fc953f",
-    "docs/architecture/devworks-architecture.md": "9fff599aa71c4e7b48f7dfb188afdce8ccfdb97f1c66c43a7f81ad7363372551",
-    "docs/architecture/devworks-architecture.html": "2df970b2bc60a998e28b19fe6712b2a49c099295d80861c29962a223fca6d8dd"
+    "docs/architecture/domain-operation-reference.md": "8744aa4dd7306bb4a40c76b8aa4375ca9ac31d52ac6c9bcb23cadc35a617dcbe",
+    "docs/architecture/domain-operation-reference.html": "14732602b8ab5039ef4b05d06a89fa0fdd21eaec7e1536e3a71a3a8b33ea8a05",
+    "docs/architecture/domain-operation-contracts.md": "171f0563f92e728ff3aebbd72e2f28c86efa5790875fec84e9deded9457fda97",
+    "docs/architecture/domain-operation-contracts.html": "ae3fc1d637b2f7837dfd76cc1f3c9c8b147ebdfaf9169b8d894e7231c2f10e04",
+    "docs/architecture/devworks-architecture.md": "3b0d3479596138b0706057c1c74de78d3ee3e9bee8de164ebcf39f81aaa889c6",
+    "docs/architecture/devworks-architecture.html": "23ebdf12a25f2b026dcca8aab179e5f9264a695297417160ceca7d7bbcf9a2b5"
   },
   "wordDocumentsUnchanged": [
     "docs/planning/devworks-requirements.docx"

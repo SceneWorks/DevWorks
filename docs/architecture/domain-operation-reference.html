@@ -2143,7 +2143,7 @@
 </tr>
 <tr>
 <td><code>repositories.nodes</code></td>
-<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code><br><code>views</code>: <code>?ViewSelection</code><br><code>current</code>: <code>?bool</code><br><code>page</code>: <code>PageRequest</code><br><code>nodeKind</code>: <code>?Label</code><br><code>internalModule</code>: <code>?Content</code><br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
+<td><strong>Query</strong><br><code>repositoryId</code>: <code>Id</code><br><code>views</code>: <code>?ViewSelection</code><br><code>current</code>: <code>?bool</code><br><code>page</code>: <code>PageRequest</code><br><code>nodeKind</code>: <code>?Label</code><br><code>internalModule</code>: <code>?Content</code><br><code>scope</code>: <code>?DataScope</code><br><br><strong>Required when negotiated:</strong> <code>scope</code> at revision 3+<br><br><strong>Schema revisions</strong> 1, 3 (<a href="contracts/domain-request.r3.schema.json">revision 3 input</a>)</td>
 <td><code>GraphPage</code></td>
 </tr>
 <tr>
@@ -12405,6 +12405,10 @@
 <td><code>graphTotals</code></td>
 <td><code>?CodeOverviewTotals</code> · <em>revision 3+</em></td>
 </tr>
+<tr>
+<td><code>internalModules</code></td>
+<td><code>Rows&lt;CodeModuleAnalysis&gt;</code></td>
+</tr>
 </tbody></table>
 <h3 id="codehotspot">CodeHotspot</h3>
 <table>
@@ -12536,6 +12540,10 @@
 <tr>
 <td><code>supertypes</code></td>
 <td><code>Rows&lt;CodeSupertype&gt;</code></td>
+</tr>
+<tr>
+<td><code>internalModules</code></td>
+<td><code>Rows&lt;CodeModuleAnalysis&gt;</code></td>
 </tr>
 </tbody></table>
 <h3 id="coderisk">CodeRisk</h3>
@@ -13269,6 +13277,294 @@
 <tr>
 <td><code>edgeCount</code></td>
 <td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="codeunavailablerepository">CodeUnavailableRepository</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>Label</code></td>
+</tr>
+</tbody></table>
+<h3 id="codereadcoverage">CodeReadCoverage</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>coverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>unavailableRepositories</code></td>
+<td><code>Rows&lt;CodeUnavailableRepository&gt;</code></td>
+</tr>
+</tbody></table>
+<h3 id="codenodereference">CodeNodeReference</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>viewId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>unitKey</code></td>
+<td><code>GraphUnitKey</code></td>
+</tr>
+<tr>
+<td><code>nodeId</code></td>
+<td><code>Id</code></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleidentity">CodeModuleIdentity</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>repositoryId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>moduleName</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>indexedNode</code></td>
+<td><code>?CodeNodeReference</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleanalysisstate">CodeModuleAnalysisState</h3>
+<p><code>Recorded</code>, <code>NotAnalyzed</code>, <code>Unavailable</code>.</p>
+<h3 id="codemoduledrilldown">CodeModuleDrilldown</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>nodeKind</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>?Counter</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>nodes</code></td>
+<td><code>Rows&lt;CodeNodeReference&gt;</code></td>
+</tr>
+<tr>
+<td><code>hasMore</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>nextCursor</code></td>
+<td><code>?Cursor</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleendpoint">CodeModuleEndpoint</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>route</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>httpMethod</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>requestModel</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>responseModel</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleservice">CodeModuleService</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>name</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>interfaceName</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>lifetime</code></td>
+<td><code>Label</code></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleprogramtotals">CodeModuleProgramTotals</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>endpointCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>serviceCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>tableCount</code></td>
+<td><code>Counter</code></td>
+</tr>
+</tbody></table>
+<h3 id="coderecordedmoduleanalysis">CodeRecordedModuleAnalysis</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>summary</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>confidence</code></td>
+<td><code>Label</code></td>
+</tr>
+<tr>
+<td><code>endpoints</code></td>
+<td><code>Rows&lt;CodeModuleEndpoint&gt;</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td><code>Rows&lt;CodeModuleService&gt;</code></td>
+</tr>
+<tr>
+<td><code>externalDependencies</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>databaseTables</code></td>
+<td><code>Rows&lt;Content&gt;</code></td>
+</tr>
+<tr>
+<td><code>modelUsed</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>updatedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>sourceHash</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>sourceRevision</code></td>
+<td><code>?Content</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>sourceViewId</code></td>
+<td><code>?Id</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>programTotals</code></td>
+<td><code>?CodeModuleProgramTotals</code> · <em>revision 3+</em></td>
+</tr>
+</tbody></table>
+<h3 id="codemoduleanalysis">CodeModuleAnalysis</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>module</code></td>
+<td><code>CodeModuleIdentity</code></td>
+</tr>
+<tr>
+<td><code>state</code></td>
+<td><code>CodeModuleAnalysisState</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>?Label</code> · <em>revision 3+</em></td>
+</tr>
+<tr>
+<td><code>observedNodeCounts</code></td>
+<td><code>Rows&lt;CodeCount&gt;</code></td>
+</tr>
+<tr>
+<td><code>observedCoverage</code></td>
+<td><code>Coverage</code></td>
+</tr>
+<tr>
+<td><code>endpoints</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>tables</code></td>
+<td><code>CodeModuleDrilldown</code></td>
+</tr>
+<tr>
+<td><code>recorded</code></td>
+<td><code>?CodeRecordedModuleAnalysis</code> · <em>revision 3+</em></td>
 </tr>
 </tbody></table>
 <h2 id="machine-sources">Machine sources</h2>

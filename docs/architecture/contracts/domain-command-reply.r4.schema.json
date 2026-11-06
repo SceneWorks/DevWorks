@@ -1547,6 +1547,9 @@
         "inbound": {
           "$ref": "#/$defs/List_CodeRepositoryLink_0_500"
         },
+        "internalModules": {
+          "$ref": "#/$defs/List_CodeModuleAnalysis_0_500"
+        },
         "nodeCounts": {
           "$ref": "#/$defs/List_CodeCount_0_500"
         },
@@ -1582,7 +1585,8 @@
         "packages",
         "packageCount",
         "packageCountsByEcosystem",
-        "supertypes"
+        "supertypes",
+        "internalModules"
       ],
       "type": "object"
     },
@@ -1890,6 +1894,178 @@
       ],
       "type": "object"
     },
+    "CodeModuleAnalysis": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "$ref": "#/$defs/CodeModuleDrilldown"
+        },
+        "module": {
+          "$ref": "#/$defs/CodeModuleIdentity"
+        },
+        "observedCoverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "observedNodeCounts": {
+          "$ref": "#/$defs/List_CodeCount_0_500"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "recorded": {
+          "$ref": "#/$defs/CodeRecordedModuleAnalysis",
+          "x-since": 3
+        },
+        "services": {
+          "$ref": "#/$defs/CodeModuleDrilldown"
+        },
+        "state": {
+          "$ref": "#/$defs/CodeModuleAnalysisState"
+        },
+        "tables": {
+          "$ref": "#/$defs/CodeModuleDrilldown"
+        }
+      },
+      "required": [
+        "module",
+        "state",
+        "observedNodeCounts",
+        "observedCoverage",
+        "endpoints",
+        "services",
+        "tables"
+      ],
+      "type": "object"
+    },
+    "CodeModuleAnalysisState": {
+      "enum": [
+        "Recorded",
+        "NotAnalyzed",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "CodeModuleDrilldown": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 3
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 3
+        },
+        "nodeKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "nodes": {
+          "$ref": "#/$defs/List_CodeNodeReference_0_500"
+        }
+      },
+      "required": [
+        "nodeKind",
+        "nodes",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "CodeModuleEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "httpMethod": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "requestModel": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "responseModel": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "route": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "route",
+        "httpMethod",
+        "description"
+      ],
+      "type": "object"
+    },
+    "CodeModuleIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "indexedNode": {
+          "$ref": "#/$defs/CodeNodeReference",
+          "x-since": 3
+        },
+        "moduleName": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "moduleName"
+      ],
+      "type": "object"
+    },
+    "CodeModuleProgramTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "endpointCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "serviceCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "tableCount": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "endpointCount",
+        "serviceCount",
+        "tableCount"
+      ],
+      "type": "object"
+    },
+    "CodeModuleService": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "interfaceName": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "lifetime": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "name": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "lifetime"
+      ],
+      "type": "object"
+    },
     "CodeNode": {
       "additionalProperties": false,
       "properties": {
@@ -2022,6 +2198,30 @@
       ],
       "type": "object"
     },
+    "CodeNodeReference": {
+      "additionalProperties": false,
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "unitKey": {
+          "$ref": "#/$defs/GraphUnitKey"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "unitKey",
+        "nodeId"
+      ],
+      "type": "object"
+    },
     "CodeNodesResult": {
       "additionalProperties": false,
       "properties": {
@@ -2059,6 +2259,9 @@
           "$ref": "#/$defs/CodeOverviewTotals",
           "x-since": 3
         },
+        "internalModules": {
+          "$ref": "#/$defs/List_CodeModuleAnalysis_0_500"
+        },
         "repositories": {
           "$ref": "#/$defs/List_CodeOverviewRepository_0_500"
         },
@@ -2074,7 +2277,8 @@
         "repositories",
         "dependencies",
         "stamp",
-        "graphCoverage"
+        "graphCoverage",
+        "internalModules"
       ],
       "type": "object"
     },
@@ -2175,6 +2379,78 @@
         "jsonText",
         "offset",
         "totalBytes"
+      ],
+      "type": "object"
+    },
+    "CodeReadCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "unavailableRepositories": {
+          "$ref": "#/$defs/List_CodeUnavailableRepository_0_500"
+        }
+      },
+      "required": [
+        "coverage",
+        "unavailableRepositories"
+      ],
+      "type": "object"
+    },
+    "CodeRecordedModuleAnalysis": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "databaseTables": {
+          "$ref": "#/$defs/List_Text0To65536_0_500"
+        },
+        "endpoints": {
+          "$ref": "#/$defs/List_CodeModuleEndpoint_0_500"
+        },
+        "externalDependencies": {
+          "$ref": "#/$defs/List_Text0To65536_0_500"
+        },
+        "modelUsed": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "programTotals": {
+          "$ref": "#/$defs/CodeModuleProgramTotals",
+          "x-since": 3
+        },
+        "services": {
+          "$ref": "#/$defs/List_CodeModuleService_0_500"
+        },
+        "sourceHash": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text0To65536",
+          "x-since": 3
+        },
+        "sourceViewId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 3
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "updatedAtMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "summary",
+        "confidence",
+        "endpoints",
+        "services",
+        "externalDependencies",
+        "databaseTables",
+        "updatedAtMs"
       ],
       "type": "object"
     },
@@ -2694,6 +2970,22 @@
       "required": [
         "node",
         "depth"
+      ],
+      "type": "object"
+    },
+    "CodeUnavailableRepository": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "reason"
       ],
       "type": "object"
     },
@@ -5582,6 +5874,25 @@
       ],
       "type": "object"
     },
+    "GraphCompletion": {
+      "oneOf": [
+        {
+          "enum": [
+            "Complete",
+            "ResultLimit",
+            "WorkLimit",
+            "Deadline",
+            "Cancelled"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "Partial",
+          "type": "string",
+          "x-since": 3
+        }
+      ]
+    },
     "GraphPage": {
       "additionalProperties": false,
       "oneOf": [
@@ -5591,8 +5902,10 @@
             "queryId",
             "view",
             "completion",
-            "result"
-          ]
+            "result",
+            "scopeCoverage"
+          ],
+          "x-since": 3
         },
         {
           "not": {
@@ -5661,6 +5974,9 @@
                               "const": "Unavailable"
                             }
                           }
+                        },
+                        "internalModules": {
+                          "maxItems": 0
                         }
                       },
                       "required": [
@@ -5680,14 +5996,15 @@
             "protocol",
             "queryId",
             "completion",
-            "result"
+            "result",
+            "scopeCoverage"
           ],
           "x-since": 3
         }
       ],
       "properties": {
         "completion": {
-          "$ref": "#/$defs/QueryCompletion"
+          "$ref": "#/$defs/GraphCompletion"
         },
         "nextCursor": {
           "type": [
@@ -5703,6 +6020,10 @@
         },
         "result": {
           "$ref": "#/$defs/GraphResult"
+        },
+        "scopeCoverage": {
+          "$ref": "#/$defs/CodeReadCoverage",
+          "x-since": 3
         },
         "view": {
           "$ref": "#/$defs/ResolvedViewSet"
@@ -8167,6 +8488,38 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_CodeModuleAnalysis_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeModuleAnalysis"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeModuleEndpoint_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeModuleEndpoint"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeModuleService_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeModuleService"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeNodeReference_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeNodeReference"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_CodeNode_0_500": {
       "items": {
         "$ref": "#/$defs/CodeNode"
@@ -8258,6 +8611,14 @@
     "List_CodeTraversalEntry_0_500": {
       "items": {
         "$ref": "#/$defs/CodeTraversalEntry"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_CodeUnavailableRepository_0_500": {
+      "items": {
+        "$ref": "#/$defs/CodeUnavailableRepository"
       },
       "maxItems": 500,
       "minItems": 0,

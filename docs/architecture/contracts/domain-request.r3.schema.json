@@ -9989,15 +9989,18 @@
                 "kind",
                 "repositoryId",
                 "views",
-                "page"
-              ]
+                "page",
+                "scope"
+              ],
+              "x-since": 3
             },
             {
               "required": [
                 "kind",
                 "repositoryId",
                 "current",
-                "page"
+                "page",
+                "scope"
               ],
               "x-since": 3
             }
@@ -10025,6 +10028,10 @@
             },
             "repositoryId": {
               "$ref": "#/$defs/Id"
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 3
             },
             "views": {
               "$ref": "#/$defs/ViewSelection"

@@ -1,6 +1,40 @@
 {
   "$comment": "Architecture candidate only. Schema validation is followed by typed range, cross-field and authority validation. Not a public v1 SDK.",
   "$defs": {
+    "DataScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Workspace",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Project",
+              "type": "string"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Digest": {
       "pattern": "^[a-f0-9]{64}$",
       "type": "string"
@@ -104,7 +138,8 @@
                 "expectedContentDigest",
                 "trusted",
                 "unitKey",
-                "expectedViewDigest"
+                "expectedViewDigest",
+                "scope"
               ],
               "x-since": 3
             },
@@ -123,7 +158,8 @@
                 "trusted",
                 "unitKey",
                 "expectedViewDigest",
-                "expectedContentIdentity"
+                "expectedContentIdentity",
+                "scope"
               ],
               "x-since": 3
             }
@@ -150,8 +186,16 @@
             "nodeId": {
               "$ref": "#/$defs/Id"
             },
+            "pinId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "repositoryId": {
               "$ref": "#/$defs/Id"
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 3
             },
             "trusted": {
               "type": "boolean"

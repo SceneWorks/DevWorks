@@ -27,7 +27,7 @@ def append_graph_cases(case,sample,base):
   if ty=='CodeDependencies':value.update(repositoryId=repo);value['rustSemantic'].update(status='not_analyzed')
   if ty=='CodeSchema':value.update(origin='Declared',stamp=cp(view['stamp']),nodeKinds=['Function','Module'],edgeKinds=['CALLS'],properties=[{'ownerKind':'CALLS','name':'confidence','description':'Recorded relation confidence'}],notes=['No inference'])
   if ty=='CodeScopeStatus':value.update(stamp=cp(view['stamp']),current=True)
-  p=cp(page);p['result']={'kind':kind,'value':value};return {'kind':op,'value':p}
+  p=cp(page);p['scopeCoverage']={'coverage':cp(base['Coverage']),'unavailableRepositories':[]};p['result']={'kind':kind,'value':value};return {'kind':op,'value':p}
  queries={
   'code.search':{'kind':'Search','selection':{'mode':'RankedNodes','text':'Widget','repositoryId':repo,'internalModule':'core'}},
   'code.architecture':{'kind':'Overview','repositoryId':repo},'code.overview':{'kind':'Overview'},
@@ -50,9 +50,9 @@ def append_graph_cases(case,sample,base):
   frame={'protocol':'1.0-draft.1','schemaRevision':3,'queryId':'query-a','scope':{'kind':'Project','projectId':'project-a'},'current':True,'query':q,'limits':{'maxResults':100,'maxVisited':10000,'deadlineMs':2000}}
   inputs[op]=frame;case('dw28-input-'+op,'graph-read-request.r3',frame)
   case('dw28-result-'+op,'operation-result.r3',output(op))
- repo_input={'mode':'Query','protocol':'1.0-draft.1','schemaRevision':3,'queryId':'query-a','body':{'kind':'repositories.nodes','repositoryId':repo,'current':True,'page':{'limit':20},'nodeKind':'Function','internalModule':'core'}}
+ repo_input={'mode':'Query','protocol':'1.0-draft.1','schemaRevision':3,'queryId':'query-a','body':{'kind':'repositories.nodes','repositoryId':repo,'current':True,'page':{'limit':20},'nodeKind':'Function','internalModule':'core','scope':{'kind':'Project','projectId':'project-a'}}}
  case('dw28-input-repositories.nodes','domain-request.r3',repo_input);case('dw28-result-repositories.nodes','operation-result.r3',output('repositories.nodes'))
- trust={'protocol':'1.0-draft.1','schemaRevision':3,'requestKey':'trust-a','command':{'kind':'SetTrust','repositoryId':repo,'nodeId':'node-a','unitKey':unit,'viewId':vid,'expectedContentDigest':'a'*64,'expectedViewDigest':'b'*64,'expectedRevision':'1','trusted':False}}
+ trust={'protocol':'1.0-draft.1','schemaRevision':3,'requestKey':'trust-a','command':{'scope':{'kind':'Project','projectId':'project-a'},'kind':'SetTrust','repositoryId':repo,'nodeId':'node-a','unitKey':unit,'viewId':vid,'expectedContentDigest':'a'*64,'expectedViewDigest':'b'*64,'expectedRevision':'1','trusted':False}}
  case('dw28-input-code.set_trust','index-command-request.r3',trust)
  case('dw28-result-code.set_trust','operation-result.r3',{'kind':'code.set_trust','value':sample('MutationSummary')})
  def mutated(id,entry,value,fn,typed=False,schema=False):v=cp(value);fn(v);case('dw28-'+id,entry,v,typed,schema)
@@ -73,7 +73,7 @@ def append_graph_cases(case,sample,base):
  mutated('whole-file-source','graph-read-request.r3',inputs['code.source'],lambda v:v['query']['selection'].update(mode='WholeFile'),True,True)
  mutated('reject-null-repo-current','domain-request.r3',repo_input,lambda v:v['body'].update(current=None))
  mutated('reject-both-repo-views','domain-request.r3',repo_input,lambda v:v['body'].update(views={'kind':'Exact','viewIds':[vid]}))
- unavailable=output('code.graph_scope_status');unavailable['value'].pop('view');unavailable['value']['result']['value'].update(unavailableReason='own_worktree_not_indexed',coverage={'state':'Unavailable','gaps':['missing-view'],'moreGaps':False})
+ unavailable=output('code.graph_scope_status');unavailable['value'].pop('view');unavailable['value']['scopeCoverage']={'coverage':{'state':'Unavailable','gaps':['missing-view'],'moreGaps':False},'unavailableRepositories':[]};unavailable['value']['result']['value'].update(unavailableReason='own_worktree_not_indexed',coverage={'state':'Unavailable','gaps':['missing-view'],'moreGaps':False})
  case('dw28-unavailable-own-view-no-fake-pin','operation-result.r3',unavailable)
  mutated('reject-missing-view-reason','operation-result.r3',unavailable,lambda v:v['value']['result']['value'].pop('unavailableReason'),False,False)
  mutated('reject-viewless-real-nodes','operation-result.r3',output('repositories.nodes'),lambda v:v['value'].pop('view'),False,False)
@@ -99,11 +99,11 @@ def append_graph_cases(case,sample,base):
  mutated('reject-partial-mixed-search','graph-read-request.r3',inputs['code.search'],lambda v:v['query'].update(text='Widget'))
  mutated('reject-partial-mixed-file','graph-read-request.r3',inputs['code.nodes_by_file'],lambda v:v['query'].update(repositoryId=repo))
  # Public declared schema and registered-repository metadata do not fabricate an indexed view.
- schema_only=output('code.graph_schema');schema_only['value'].pop('view');schema_only['value']['result']['value']['unavailableReason']='no_indexed_view'
+ schema_only=output('code.graph_schema');schema_only['value'].pop('view');schema_only['value']['scopeCoverage']={'coverage':{'state':'Unavailable','gaps':['missing-view'],'moreGaps':False},'unavailableRepositories':[]};schema_only['value']['result']['value']['unavailableReason']='no_indexed_view'
  case('dw28-static-schema-empty-application','operation-result.r3',schema_only)
  mutated('reject-viewless-observed-schema','operation-result.r3',schema_only,lambda v:v['value']['result']['value'].update(origin='Observed'))
  mutated('reject-viewless-schema-without-reason','operation-result.r3',schema_only,lambda v:v['value']['result']['value'].pop('unavailableReason'))
- metadata=output('code.overview');metadata['value'].pop('view');v=metadata['value']['result']['value'];v.update(graphCoverage={'state':'Unavailable','gaps':['not-indexed'],'moreGaps':False},unavailableReason='not_indexed',repositories=[{'repositoryId':repo,'name':'Registered unindexed repository','foundational':False}])
+ metadata=output('code.overview');metadata['value'].pop('view');metadata['value']['scopeCoverage']={'coverage':{'state':'Unavailable','gaps':['missing-view'],'moreGaps':False},'unavailableRepositories':[]};v=metadata['value']['result']['value'];v.update(graphCoverage={'state':'Unavailable','gaps':['not-indexed'],'moreGaps':False},unavailableReason='not_indexed',repositories=[{'repositoryId':repo,'name':'Registered unindexed repository','foundational':False}])
  case('dw28-overview-metadata-with-unknown-graph-totals','operation-result.r3',metadata)
  mutated('reject-metadata-overview-complete-graph','operation-result.r3',metadata,lambda v:v['value']['result']['value'].update(graphCoverage=cp(base['Coverage'])))
  mutated('reject-metadata-overview-fake-zero-totals','operation-result.r3',metadata,lambda v:v['value']['result']['value'].update(graphTotals={'nodeCount':'0','edgeCount':'0'}))
@@ -127,6 +127,39 @@ def append_graph_cases(case,sample,base):
  case('dw28-risk-summary-not-page-local','operation-result.r3',impacts)
  old_at3={'kind':'code.search','value':cp(base['GraphPage'])}
  case('dw28-reject-legacy-result-at3','operation-result.r3',old_at3,False,False)
+ # Mixed Current scope is explicitly partial; successful available rows do not claim complete totals.
+ partial=output('code.search');partial['value']['completion']='Partial';partial['value']['scopeCoverage']={'coverage':{'state':'Partial','gaps':['repo-b'],'moreGaps':False},'unavailableRepositories':[{'repositoryId':'repo-b','reason':'not_indexed'}]};partial['value']['result']['value'].pop('total',None)
+ case('dw28-current-mixed-index-partial','operation-result.r3',partial)
+ mutated('reject-partial-as-complete','operation-result.r3',partial,lambda v:v['value'].update(completion='Complete'),False,True)
+ mutated('reject-partial-with-complete-coverage','operation-result.r3',partial,lambda v:v['value']['scopeCoverage'].update(coverage=cp(base['Coverage'])),False,True)
+ case('dw28-reject-partial-before3','operation-result',partial,False,False)
+ missing_scope=cp(repo_input);missing_scope['body'].pop('scope')
+ case('dw28-reject-missing-repository-scope3','domain-request.r3',missing_scope,False,False)
+ mutated('reject-null-repository-scope3','domain-request.r3',repo_input,lambda v:v['body'].update(scope=None))
+ legacy_scope=cp(repo_input);legacy_scope['schemaRevision']=1;legacy_scope['body']={'kind':'repositories.nodes','repositoryId':repo,'views':{'kind':'Exact','viewIds':[vid]},'page':{'limit':20}}
+ case('dw28-legacy-repository-scope-from-host','domain-request',legacy_scope)
+ ref={'repositoryId':repo,'viewId':vid,'unitKey':unit,'nodeId':'node-a'}
+ def drill(kind,count=None):
+  v={'nodeKind':kind,'nodes':[],'hasMore':False}
+  if count is not None:v['count']=str(count)
+  return v
+ module={'module':{'repositoryId':repo,'moduleName':'Core','indexedNode':ref},'state':'NotAnalyzed','reason':'no_recorded_analysis','observedNodeCounts':[{'name':'Function','count':'7'}],'observedCoverage':cp(base['Coverage']),'endpoints':drill('Route',0),'services':drill('Service',0),'tables':drill('Table',0)}
+ modules=output('code.architecture');modules['value']['result']['value']['internalModules']=[cp(module)]
+ case('dw28-module-not-analyzed-indexed-facts','operation-result.r3',modules)
+ mutated('reject-module-invented-recorded-state','operation-result.r3',modules,lambda v:v['value']['result']['value']['internalModules'][0].update(state='Recorded'),False,True)
+ recorded=cp(modules);v=recorded['value']['result']['value']['internalModules'][0];v.update(state='Recorded',recorded={'summary':'Exact persisted module summary','confidence':'high','updatedAtMs':'100','modelUsed':'recorded-model','endpoints':[{'route':'/orders','httpMethod':'GET','description':'Retained endpoint','responseModel':'Orders'}],'services':[{'name':'Orders','description':'Retained service','interfaceName':'IOrders','lifetime':'Scoped'}],'externalDependencies':['package-a'],'databaseTables':['Orders']});v.pop('reason')
+ case('dw28-recorded-module-full-source-fields','operation-result.r3',recorded)
+ unknown=cp(module);unknown.update(state='Unavailable',reason='index_unavailable',observedCoverage={'state':'Unavailable','gaps':['module-index'],'moreGaps':False},observedNodeCounts=[],endpoints=drill('Route'),services=drill('Service'),tables=drill('Table'))
+ unavailable_modules=output('code.architecture');unavailable_modules['value']['result']['value']['internalModules']=[unknown]
+ case('dw28-unavailable-module-counts-unknown','operation-result.r3',unavailable_modules)
+ mutated('reject-unavailable-module-fake-zero','operation-result.r3',unavailable_modules,lambda v:v['value']['result']['value']['internalModules'][0]['endpoints'].update(count='0'),False,True)
+ mutated('reject-module-cross-scope-drilldown','operation-result.r3',modules,lambda v:v['value']['result']['value']['internalModules'][0]['module']['indexedNode'].update(viewId='foreign'),False,True)
+ mutated('reject-metadata-only-module-fallback','operation-result.r3',metadata,lambda v:v['value']['result']['value'].update(internalModules=[module]))
+ with_pin=cp(trust);with_pin['command']['pinId']='pin-a'
+ case('dw28-trust-explicit-retained-pin','index-command-request.r3',with_pin)
+ mutated('reject-trust-null-pin','index-command-request.r3',with_pin,lambda v:v['command'].update(pinId=None))
+ mutated('reject-trust-missing-scope3','index-command-request.r3',trust,lambda v:v['command'].pop('scope'))
+ mutated('reject-trust-null-scope3','index-command-request.r3',trust,lambda v:v['command'].update(scope=None))
  # A real legacy-representable unit/citation projects; native tests also exercise the adapter.
  legacy=output('repositories.nodes');n=legacy['value']['result']['value']['nodes'][0];n['unitKey']='unit-a';n['source'].update(unitKey='unit-a',path='unit-a',legacyCitation=citation)
  case('dw28-real-legacy-citation-current','operation-result.r3',legacy)

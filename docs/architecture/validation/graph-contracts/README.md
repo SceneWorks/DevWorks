@@ -80,12 +80,50 @@ native graph service, Graph SQL implementation, source-capture adapter, UI,
 MCP exposure, or platform acceptance.
 
 
-The composed qualification passes 33 native core tests (8 graph, 5 Help, 7
+The composed qualification passes 37 native core tests (12 graph, 5 Help, 7
 recorded-fixture, 5 registry and 8 schema-revision), 11 generator tests, 70 schema
-documents, 2,066 message fixtures and 12 scenarios/26 steps. The register admits
+documents, 2,084 message fixtures and 12 scenarios/26 steps. The register admits
 570 operation/mode/revision bindings. All 56 legacy schema bytes remain exact;
-125 generated artifacts regenerate without drift. The current source has 408
+125 generated artifacts regenerate without drift. The current source has 419
 generated domain types, 359 operations, 78 slices and 377 requirements, with no
 unowned operations, requirements or retained source entries. Strict scoped Clippy,
 formatting and whitespace checks pass. The approved requirements Word document
 is unchanged; no new Word layout or native runtime acceptance is inferred.
+
+
+## Partial scope and internal-module reads
+
+Current broad reads pin the available authorized repository views and report each
+missing repository with a reason in required revision-3 `scopeCoverage`. The
+graph-only `GraphCompletion.Partial` marks finished available work with incomplete
+logical scope; bounded work still reports its actual limit/deadline/cancellation.
+The existing retrieval completion enum is unchanged. Explicit views and targeted
+unavailable repositories do not silently substitute another graph. An incomplete
+current result cannot project to a fictitious complete legacy result.
+
+Revision-3 `repositories.nodes` requires the caller's actual selected `scope`;
+legacy omission resolves through the host context. Current and explicit pins must
+be compared with that scope and fresh project membership. Repository membership
+does not select a project on the caller's behalf.
+
+Architecture and overview expose typed internal-module records. Repository plus
+actual module name identifies the retained analysis key, with an indexed composite
+node reference when available. Observed node-kind counts and endpoint/service/table
+drill-down references describe the selected index, not whole-program semantic
+totals. Missing recorded analysis is NotAnalyzed/Unavailable with no fabricated
+summary, confidence, model, source revision or zero semantic totals. Existing
+recorded endpoint/service/table/external-dependency descriptions and their actual
+model/time/source provenance remain typed. Program totals appear only when
+explicitly recorded. Metadata-only overview contains no module/graph fallback facts.
+
+These read shapes support the existing repository/module exploration requirements;
+DW-29's later analysis producer is not impersonated. The existing primary ownership
+of `repositories.get` is preserved while its frozen project-analysis response is
+supporting evidence for these module read fields.
+
+
+Current trust changes likewise require the selected scope and may carry an actual
+retained caller pin ID. An explicitly invalid pin never selects another view.
+Legacy old-view execution needs its retained caller witness; a new current view
+can validate its actual immutable lifecycle without a pin. These are references
+for current scope/membership validation, not caller-minted authority.

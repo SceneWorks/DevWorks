@@ -348,7 +348,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1737), 1737);
+    assert_eq!(run("domain-fixtures.json", 1755), 1755);
 }
 
 #[test]
@@ -576,7 +576,9 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "graph-read-request/selection",
             "index-command-request/expectedContentIdentity",
             "index-command-request/expectedViewDigest",
+            "index-command-request/pinId",
             "index-command-request/ref",
+            "index-command-request/scope",
             "index-command-request/unitKey",
             "query-request/projectId"
         ]

@@ -189,3 +189,110 @@ fn declared_schema_and_metadata_overview_bootstrap_without_fabricated_views() {
         assert!(result(fixture(id)).is_err(), "{id}");
     }
 }
+
+#[test]
+fn missing_current_indexes_have_explicit_partial_scope_and_no_fake_legacy_completion() {
+    let raw = fixture("dw28-current-mixed-index-partial");
+    let mut value = result(raw.clone()).unwrap();
+    assert_eq!(raw["value"]["completion"], "Partial");
+    assert_eq!(
+        raw["value"]["scopeCoverage"]["unavailableRepositories"][0]["repositoryId"],
+        "repo-b"
+    );
+    assert!(raw["value"]["result"]["value"].get("total").is_none());
+    value.retain_revision(1);
+    assert!(value.check_revision(1).is_err());
+    assert!(result(fixture("dw28-reject-partial-as-complete")).is_err());
+    assert!(result(fixture("dw28-reject-partial-with-complete-coverage")).is_err());
+    assert!(
+        serde_json::from_value::<devworks_core::protocol::data::QueryCompletion>(json!("Partial"))
+            .is_err(),
+        "unqualified retrieval completion stays unchanged"
+    );
+}
+#[test]
+fn module_analysis_preserves_actual_records_and_separates_indexed_counts() {
+    let raw = fixture("dw28-module-not-analyzed-indexed-facts");
+    result(raw.clone()).unwrap();
+    let module = &raw["value"]["result"]["value"]["internalModules"][0];
+    assert_eq!(module["state"], "NotAnalyzed");
+    assert!(module.get("recorded").is_none());
+    assert_eq!(module["observedNodeCounts"][0]["count"], "7");
+    let recorded = fixture("dw28-recorded-module-full-source-fields");
+    result(recorded.clone()).unwrap();
+    let record = &recorded["value"]["result"]["value"]["internalModules"][0]["recorded"];
+    assert_eq!(record["modelUsed"], "recorded-model");
+    assert!(record.get("sourceHash").is_none());
+    assert!(record.get("programTotals").is_none());
+    assert_eq!(record["endpoints"][0]["route"], "/orders");
+    result(fixture("dw28-unavailable-module-counts-unknown")).unwrap();
+    for id in [
+        "dw28-reject-module-invented-recorded-state",
+        "dw28-reject-unavailable-module-fake-zero",
+        "dw28-reject-module-cross-scope-drilldown",
+        "dw28-reject-metadata-only-module-fallback",
+    ] {
+        assert!(result(fixture(id)).is_err(), "{id}");
+    }
+}
+#[test]
+fn repository_node_scope_is_required_only_for_the_qualified_current_revision() {
+    assert!(admit(
+        "repositories.nodes",
+        Mode::Query,
+        &fixture("dw28-input-repositories.nodes")
+    ));
+    for id in [
+        "dw28-reject-missing-repository-scope3",
+        "dw28-reject-null-repository-scope3",
+    ] {
+        assert!(
+            !admit("repositories.nodes", Mode::Query, &fixture(id)),
+            "{id}"
+        );
+    }
+    assert!(admit(
+        "repositories.nodes",
+        Mode::Query,
+        &fixture("dw28-legacy-repository-scope-from-host")
+    ));
+    let mut legacy = fixture("dw28-legacy-repository-scope-from-host");
+    legacy["schemaRevision"] = json!(3);
+    assert!(
+        !admit("repositories.nodes", Mode::Query, &legacy),
+        "old-style views do not bypass mandatory current scope"
+    );
+}
+
+#[test]
+fn trust_current_scope_and_optional_retained_pin_are_strict_revision_fields() {
+    assert!(admit(
+        "code.set_trust",
+        Mode::Command,
+        &fixture("dw28-trust-explicit-retained-pin")
+    ));
+    for id in [
+        "dw28-reject-trust-null-pin",
+        "dw28-reject-trust-missing-scope3",
+        "dw28-reject-trust-null-scope3",
+    ] {
+        assert!(
+            !admit("code.set_trust", Mode::Command, &fixture(id)),
+            "{id}"
+        );
+    }
+    let mut legacy = fixture("dw28-input-code.set_trust");
+    legacy["schemaRevision"] = json!(1);
+    for key in [
+        "scope",
+        "pinId",
+        "unitKey",
+        "expectedViewDigest",
+        "expectedContentIdentity",
+    ] {
+        legacy["command"].as_object_mut().unwrap().remove(key);
+    }
+    assert!(admit("code.set_trust", Mode::Command, &legacy));
+    legacy["schemaRevision"] = json!(3);
+    assert!(!admit("code.set_trust", Mode::Command, &legacy));
+}

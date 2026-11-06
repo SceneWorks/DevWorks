@@ -17,6 +17,7 @@ for family in reg['families']:
     fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
     parts.append('**'+mode+'**<br>'+fields(fs))
    payload='<br><br>'.join(parts)
+   if d.get('requiredSince'):payload+='<br><br>**Required when negotiated:** '+', '.join('`'+re.sub(r'_([a-z])',lambda m:m[1].upper(),field)+'` at revision '+str(revision)+'+' for field,revision in d['requiredSince'].items())
   else:payload='**'+o['requestModes'][0]+'**<br>[Existing input schema](contracts/'+o['inputSchema']+')<br>'+str(o['selectionConstraint'])
   revs=[r['revision'] for r in o['schemaRevisions']]
   if len(revs)>1 or revs[0]!=1:payload+='<br><br>**Schema revisions** '+', '.join(map(str,revs))+' ([revision '+str(revs[-1])+' input](contracts/'+o['schemaRevisions'][-1]['inputSchema']+'))'

@@ -199,3 +199,15 @@ The native reader and schemas reject partial mixed selector groups and present-n
 Legacy projection uses actual representable source/artifact references, otherwise refuses.
 [Field table and qualification](validation/graph-contracts/README.md) distinguish contract proof
 from GraphService, storage, UI and platform acceptance.
+
+Current graph output also carries required scope coverage with explicit unavailable
+repository rows and graph-specific Partial completion; retrieval completion stays
+unchanged. Repository-node revision3 input requires explicit selected DataScope.
+Architecture/overview internal-module analysis records distinguish observed index
+counts/drill-downs from recorded semantic descriptions/program totals, preserving
+NotAnalyzed/Unavailable and historical provenance rather than inventing analysis.
+
+Trust revision3 requires the selected scope and accepts an optional retained pin ID;
+invalid explicit pins never fall back. Legacy/current lifecycle witnesses are
+validated by the owner against current membership, without deriving a project from
+arbitrary repository membership.

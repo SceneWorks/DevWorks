@@ -639,7 +639,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `repositories.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`text`: `?Text` | `Page<RepositoryRecord>` |
 | `repositories.get` | **Query**<br>`repositoryId`: `Id` | `RepositoryRecord` |
-| `repositories.nodes` | **Query**<br>`repositoryId`: `Id`<br>`views`: `?ViewSelection`<br>`current`: `?bool`<br>`page`: `PageRequest`<br>`nodeKind`: `?Label`<br>`internalModule`: `?Content`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `GraphPage` |
+| `repositories.nodes` | **Query**<br>`repositoryId`: `Id`<br>`views`: `?ViewSelection`<br>`current`: `?bool`<br>`page`: `PageRequest`<br>`nodeKind`: `?Label`<br>`internalModule`: `?Content`<br>`scope`: `?DataScope`<br><br>**Required when negotiated:** `scope` at revision 3+<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `GraphPage` |
 | `repositories.remove_index` | **Command**<br>`repositoryId`: `Id`<br>`expectedRevision`: `Revision` | `MutationSummary` |
 | `repositories.readme` | **Query**<br>`repositoryId`: `Id`<br>`views`: `ViewSelection` | `RepositoryText` |
 | `repositories.summary` | **Query**<br>`repositoryId`: `Id`<br>`views`: `ViewSelection` | `RepositoryText` |
@@ -4341,6 +4341,7 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `graphCoverage` | `Coverage` |
 | `unavailableReason` | `?Label` · *revision 3+* |
 | `graphTotals` | `?CodeOverviewTotals` · *revision 3+* |
+| `internalModules` | `Rows<CodeModuleAnalysis>` |
 
 ### CodeHotspot
 
@@ -4385,6 +4386,7 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `packageCount` | `Counter` |
 | `packageCountsByEcosystem` | `Rows<CodeCount>` |
 | `supertypes` | `Rows<CodeSupertype>` |
+| `internalModules` | `Rows<CodeModuleAnalysis>` |
 
 ### CodeRisk
 
@@ -4649,6 +4651,109 @@ Before revision 3: exact legacy `Page<HelpTopic>`. Revision 3 and later: `HelpTo
 | --- | --- |
 | `nodeCount` | `Counter` |
 | `edgeCount` | `Counter` |
+
+### CodeUnavailableRepository
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `reason` | `Label` |
+
+### CodeReadCoverage
+
+| Field | Type |
+| --- | --- |
+| `coverage` | `Coverage` |
+| `unavailableRepositories` | `Rows<CodeUnavailableRepository>` |
+
+### CodeNodeReference
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `unitKey` | `GraphUnitKey` |
+| `nodeId` | `Id` |
+
+### CodeModuleIdentity
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `moduleName` | `Content` |
+| `indexedNode` | `?CodeNodeReference` · *revision 3+* |
+
+### CodeModuleAnalysisState
+
+`Recorded`, `NotAnalyzed`, `Unavailable`.
+
+### CodeModuleDrilldown
+
+| Field | Type |
+| --- | --- |
+| `nodeKind` | `Label` |
+| `count` | `?Counter` · *revision 3+* |
+| `nodes` | `Rows<CodeNodeReference>` |
+| `hasMore` | `bool` |
+| `nextCursor` | `?Cursor` · *revision 3+* |
+
+### CodeModuleEndpoint
+
+| Field | Type |
+| --- | --- |
+| `route` | `Content` |
+| `httpMethod` | `Label` |
+| `description` | `Content` |
+| `requestModel` | `?Content` · *revision 3+* |
+| `responseModel` | `?Content` · *revision 3+* |
+
+### CodeModuleService
+
+| Field | Type |
+| --- | --- |
+| `name` | `Content` |
+| `description` | `Content` |
+| `interfaceName` | `?Content` · *revision 3+* |
+| `lifetime` | `Label` |
+
+### CodeModuleProgramTotals
+
+| Field | Type |
+| --- | --- |
+| `endpointCount` | `Counter` |
+| `serviceCount` | `Counter` |
+| `tableCount` | `Counter` |
+
+### CodeRecordedModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `summary` | `Content` |
+| `confidence` | `Label` |
+| `endpoints` | `Rows<CodeModuleEndpoint>` |
+| `services` | `Rows<CodeModuleService>` |
+| `externalDependencies` | `Rows<Content>` |
+| `databaseTables` | `Rows<Content>` |
+| `modelUsed` | `?Content` · *revision 3+* |
+| `updatedAtMs` | `Counter` |
+| `sourceHash` | `?Content` · *revision 3+* |
+| `sourceRevision` | `?Content` · *revision 3+* |
+| `sourceViewId` | `?Id` · *revision 3+* |
+| `programTotals` | `?CodeModuleProgramTotals` · *revision 3+* |
+
+### CodeModuleAnalysis
+
+| Field | Type |
+| --- | --- |
+| `module` | `CodeModuleIdentity` |
+| `state` | `CodeModuleAnalysisState` |
+| `reason` | `?Label` · *revision 3+* |
+| `observedNodeCounts` | `Rows<CodeCount>` |
+| `observedCoverage` | `Coverage` |
+| `endpoints` | `CodeModuleDrilldown` |
+| `services` | `CodeModuleDrilldown` |
+| `tables` | `CodeModuleDrilldown` |
+| `recorded` | `?CodeRecordedModuleAnalysis` · *revision 3+* |
 
 ## Machine sources
 

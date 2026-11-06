@@ -119,7 +119,7 @@
     },
     {
       "operation": "code.architecture",
-      "retainedBehavior": "Full selected-repository node/package counts are independent of listed rows: 10 hotspots, 10 supertypes, 25 packages; preserve summary/confidence, cross-repository dependencies and per-ecosystem counts.",
+      "retainedBehavior": "Full selected-repository node/package counts are independent of listed rows: 10 hotspots, 10 supertypes, 25 packages; preserve summary/confidence, cross-repository dependencies and per-ecosystem counts. Internal-module reads preserve RepositoryDetailResponse.ProjectAnalysisResponse/StoredProjectAnalysis typed endpoint/service/external-dependency/table descriptions and actual model/time; absent source hash/revision is unknown. Indexed counts remain distinct from recorded semantic totals. Existing repositories.get primary ownership stays unchanged.",
       "sourceEntries": [
         {
           "id": "mcp:src/CodeGraph.Services/Assistant/CodeGraphMcpServer.cs:get_architecture",
@@ -312,7 +312,7 @@
     },
     {
       "operation": "code.overview",
-      "retainedBehavior": "Repository metadata nodes and cross-repository relationships aggregated per repository pair/type. Source overview is global; native scope filters precede aggregation.",
+      "retainedBehavior": "Repository metadata nodes and cross-repository relationships aggregated per repository pair/type. Source overview is global; native scope filters precede aggregation. Internal-module reads preserve RepositoryDetailResponse.ProjectAnalysisResponse/StoredProjectAnalysis typed endpoint/service/external-dependency/table descriptions and actual model/time; absent source hash/revision is unknown. Indexed counts remain distinct from recorded semantic totals. Existing repositories.get primary ownership stays unchanged.",
       "sourceEntries": [
         {
           "id": "http:src/CodeGraph.Api/Controllers/GraphController.cs:GraphController.Overview:HttpGet(\"overview\")",
@@ -645,8 +645,12 @@
     "src/CodeGraph.Models/GraphNode.cs": "59182f8e6c23fd385dbe7e5e8a3f8c439e12fc9246202b7ab14c3f3f4bc27adc",
     "src/CodeGraph.Models/Responses/NodeDetailResponse.cs": "b4df2e2ad5ff6a2832c94885f8870dc945bc500ac4ab2b72934abe440343e045",
     "src/CodeGraph.Models/Responses/ImpactResponses.cs": "7fdc4d38f6ed5c0f25a2246d4fcaa5b36b7f52527c180d7bcb2d1319725b10f0",
-    "src/CodeGraph.Services/Pipeline/RustSemanticOutcomes.cs": "2d08cee17317eb45535a772a5020e3faafd1d97159d136967e2e7c09871fcfa9"
+    "src/CodeGraph.Services/Pipeline/RustSemanticOutcomes.cs": "2d08cee17317eb45535a772a5020e3faafd1d97159d136967e2e7c09871fcfa9",
+    "src/CodeGraph.Models/Responses/RepositoryDetailResponse.cs": "46910ae6cf4ab8eb1c7c4965622d27a115cae78198d96f4d8c0139499117238b",
+    "src/CodeGraph.Services/Query/RepositoryQueryService.cs": "4f6e0895ec5bc4835b93a02eacb2f5a88b5fb7c328fe576d0eb3ec1c5dea1092",
+    "src/CodeGraph.Data/DataTypes.cs": "ee0a6178883d56c13fa7d6566dc7d2ae9b740c4658fcb93ea311617be8c39ce7"
   },
   "confidence": "high for exact frozen source signatures/records and typed representability; native service parity not established",
-  "noInference": true
+  "noInference": true,
+  "currentScopeAdaptation": "Current broad reads disclose per-repository missing-index Partial coverage. Explicit/targeted views remain strict; no silent main or sibling fallback."
 }
