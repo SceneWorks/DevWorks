@@ -1,15 +1,17 @@
 //! Native GitHub facts and paced intake. Remote payloads are evidence, never authority.
 //! External effect truth remains in OperationJournal; this facet stores exact source bindings.
 use super::{OperationRecord, StorageError};
-use crate::protocol::{Id, OperationId, ProjectId, RootId};
+use crate::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `repository_id` is the canonical observed GitHub entity, independent of native checkouts.
 pub struct GithubIssueKey {
     pub repository_id: Id,
     pub number: i64,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubAccount {
     pub id: Id,
     pub revision: i64,
@@ -23,10 +25,9 @@ pub struct StoredGithubAccount {
     pub last_error: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubRepository {
     pub id: Id,
-    /// Absent until explicit registration/association; discovery itself creates no local checkout.
-    pub repository_id: Option<Id>,
     pub account_id: Id,
     pub revision: i64,
     pub remote_repository_id: String,
@@ -39,7 +40,22 @@ pub struct StoredGithubRepository {
     pub permission_revision: i64,
     pub observed_at_ms: i64,
 }
+/// One current native checkout association with an actual immutable server-identity observation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredGithubRepositoryBinding {
+    pub repository_id: Id,
+    pub github_repository_id: Id,
+    pub revision: i64,
+    pub repository_revision: i64,
+    /// Exact native registration remote captured at qualification; changed remotes revoke reads.
+    pub registered_remote: String,
+    pub observation_id: Id,
+    /// Active or Detached. This association is data, never a grant.
+    pub state: String,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubObservation {
     pub id: Id,
     pub repository_id: Id,
@@ -56,6 +72,7 @@ pub struct StoredGithubObservation {
 /// registered membership before paging. Project-owned work links have a separate restriction.
 #[derive(Clone, Debug, Default)]
 pub struct GithubScope {
+    /// Authorized REAL native registration IDs; canonical remote identities are resolved through current bindings.
     pub repositories: Vec<Id>,
     pub project_id: Option<ProjectId>,
 }
@@ -67,6 +84,7 @@ pub struct GithubObservationFilter {
     pub head: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubPollCursor {
     pub repository_id: Id,
     pub endpoint: String,
@@ -82,6 +100,7 @@ pub struct StoredGithubPollCursor {
     pub last_error: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubIssueIntake {
     pub key: GithubIssueKey,
     pub revision: i64,
@@ -120,6 +139,7 @@ pub struct GithubWorkLink {
 /// Immutable accepted-completion binding. Draft/Sealed describe snapshot completeness only;
 /// comment and close outcomes are read from the actual two journal operations.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubResolution {
     pub id: Id,
     pub key: GithubIssueKey,
@@ -132,6 +152,7 @@ pub struct StoredGithubResolution {
     pub close_operation_id: OperationId,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredGithubResolutionWitness {
     pub resolution_id: Id,
     pub work_id: RootId,
@@ -139,7 +160,66 @@ pub struct StoredGithubResolutionWitness {
     pub work_revision: i64,
     pub evidence: Value,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GithubObligationRetirementReason {
+    UnstartedUnreproducible,
+    Misrouted,
+}
+/// An actual service adjudication, not permission to adjudicate. The core rechecks work,
+/// controls, verification and authority in the same UoW before calling the repository.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredGithubObligationRetirement {
+    pub id: Id,
+    pub key: GithubIssueKey,
+    pub work_id: RootId,
+    pub project_id: ProjectId,
+    pub work_revision: i64,
+    pub obligation_revision: i64,
+    pub reason: GithubObligationRetirementReason,
+    pub operation_id: OperationId,
+    pub actor_id: ActorId,
+    pub observation_id: Id,
+    pub adjudication_ref: Value,
+    pub created_at_ms: i64,
+}
 pub trait GithubRead {
+    /// Actual retained source association for the core artifact lifecycle guard, never a grant.
+    fn github_adjudication_owner(
+        &self,
+        artifact: &Id,
+        version: Option<&Id>,
+    ) -> Result<Option<StoredGithubObligationRetirement>, StorageError>;
+    fn github_related_work(
+        &self,
+        key: &GithubIssueKey,
+        project: Option<&ProjectId>,
+        after: Option<&RootId>,
+        limit: u16,
+    ) -> Result<Vec<GithubWorkLink>, StorageError>;
+    fn github_obligation_retirements(
+        &self,
+        key: &GithubIssueKey,
+        project: Option<&ProjectId>,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredGithubObligationRetirement>, StorageError>;
+    fn github_repository_by_remote_id(
+        &self,
+        remote_id: &str,
+    ) -> Result<Option<StoredGithubRepository>, StorageError>;
+    /// Active is projected Stale when its native registration is missing, deleted or changed.
+    /// The immutable binding-history snapshots retain their original recorded state.
+    fn github_repository_binding(
+        &self,
+        repository: &Id,
+    ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError>;
+    fn github_repository_binding_history(
+        &self,
+        repository: &Id,
+        after_revision: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<StoredGithubRepositoryBinding>, StorageError>;
     fn github_discovered_repository(
         &self,
         id: &Id,
@@ -216,6 +296,15 @@ pub trait GithubRead {
     ) -> Result<Vec<StoredGithubResolutionWitness>, StorageError>;
 }
 pub trait GithubRepository: GithubRead {
+    fn retire_github_work_link(
+        &mut self,
+        witness: &StoredGithubObligationRetirement,
+    ) -> Result<(), StorageError>;
+    fn put_github_repository_binding(
+        &mut self,
+        row: &StoredGithubRepositoryBinding,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError>;
     fn put_github_account(
         &mut self,
         row: &StoredGithubAccount,

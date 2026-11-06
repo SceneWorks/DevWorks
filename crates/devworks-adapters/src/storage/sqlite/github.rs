@@ -53,19 +53,36 @@ fn source_id(k: &GithubIssueKey) -> Result<String, StorageError> {
     ))
 }
 fn conflict(id: &str, expected: i64, actual: i64) -> StorageError {
-    StorageError::conflict(
-        devworks_core::protocol::RevisionDimension::Scope,
-        "github",
-        Id::new(id).unwrap_or_else(|_| Id::new("github-record").expect("static id")),
-        devworks_core::protocol::Revision::new(expected)
-            .unwrap_or_else(|_| devworks_core::protocol::Revision::new(1).expect("positive")),
-        devworks_core::protocol::Revision::new(actual)
-            .unwrap_or_else(|_| devworks_core::protocol::Revision::new(1).expect("positive")),
-    )
+    match (
+        Id::new(id),
+        devworks_core::protocol::Revision::new(expected),
+        devworks_core::protocol::Revision::new(actual),
+    ) {
+        (Ok(id), Ok(e), Ok(a)) => StorageError::conflict(
+            devworks_core::protocol::RevisionDimension::Scope,
+            "github",
+            id,
+            e,
+            a,
+        ),
+        _ => invalid("invalid GitHub conflict identity/revision"),
+    }
 }
+
 fn cas(row: i64, expected: Option<i64>, actual: Option<i64>, id: &str) -> Result<(), StorageError> {
     if actual != expected {
-        return Err(conflict(id, expected.unwrap_or(1), actual.unwrap_or(1)));
+        return Err(match (expected, actual) {
+            (None, Some(_)) => StorageError::Duplicate {
+                kind: "github",
+                id: id.into(),
+            },
+            (Some(_), None) => StorageError::NotFound {
+                kind: "github",
+                id: id.into(),
+            },
+            (Some(e), Some(a)) => conflict(id, e, a),
+            _ => invalid("GitHub revision mismatch"),
+        });
     }
     if row
         != actual
@@ -152,31 +169,57 @@ fn update(
     Ok(())
 }
 fn require_repository(c: &Connection, id: &Id) -> Result<(), StorageError> {
-    let exists: bool = db(c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM repositories WHERE id=?1 AND lifecycle!='Deleted')",
-        [id.as_str()],
-        |r| r.get(0),
-    ))?;
-    if exists {
+    if record::<StoredGithubRepository>(c, "GithubRepository", id.as_str())?.is_some() {
         Ok(())
     } else {
-        Err(invalid("GitHub registered repository missing/deleted"))
+        Err(invalid("canonical observed GitHub repository missing"))
     }
 }
+fn binding(c: &Connection, id: &Id) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
+    by_external(c, "GithubRepositoryBinding", id.as_str())
+}
+fn binding_projection(
+    c: &Connection,
+    id: &Id,
+) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
+    let Some(mut r) = binding(c, id)? else {
+        return Ok(None);
+    };
+    if r.state == "Active" {
+        let live:bool=db(c.query_row("SELECT EXISTS(SELECT 1 FROM repositories n LEFT JOIN repository_details d ON d.repository_id=n.id WHERE n.id=?1 AND coalesce(d.lifecycle,'Active')!='Deleted' AND d.remote_url=?2)",params![id.as_str(),r.registered_remote],|r|r.get(0)))?;
+        if !live {
+            r.state = "Stale".into();
+        }
+    }
+    Ok(Some(r))
+}
+
+const BINDING_NATIVE: &str = "FROM integration_records binding JOIN repositories native ON native.id=binding.repository_id LEFT JOIN repository_details details ON details.repository_id=native.id";
+fn canonical_scope(alias: &str) -> String {
+    format!(
+        "EXISTS(SELECT 1 {BINDING_NATIVE} WHERE binding.kind='GithubRepositoryBinding' AND binding.state='Active' AND coalesce(details.lifecycle,'Active')!='Deleted' AND details.remote_url=json_extract(binding.body_json,'$.registered_remote') AND json_extract(binding.body_json,'$.github_repository_id')={alias} AND binding.repository_id IN(SELECT value FROM json_each(?1)) AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_repositories m JOIN projects p ON p.id=m.project_id WHERE m.repository_id=binding.repository_id AND m.project_id=?2 AND p.lifecycle!='Deleted')))"
+    )
+}
+
 fn scope(s: &GithubScope) -> Result<String, StorageError> {
     if s.repositories.len() > usize::from(MAX_PAGE) {
         return Err(invalid("GitHub repository scope batch exceeds500"));
     }
     encode(&s.repositories)
 }
-const RECORD_SCOPE: &str = "r.repository_id IN(SELECT value FROM json_each(?1)) AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_repositories m JOIN projects p ON p.id=m.project_id WHERE m.repository_id=r.repository_id AND m.project_id=?2 AND p.lifecycle!='Deleted'))";
-const INTAKE_SCOPE: &str = "i.repository_id IN(SELECT value FROM json_each(?1)) AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_repositories m JOIN projects p ON p.id=m.project_id WHERE m.repository_id=i.repository_id AND m.project_id=?2 AND p.lifecycle!='Deleted')) AND (?2 IS NULL OR i.project_id IS NULL OR i.project_id=?2)";
+
 fn account(c: &Connection) -> Result<Option<StoredGithubAccount>, StorageError> {
     by_external(c, "GithubAccount", "github.com")
 }
 fn repository(c: &Connection, id: &Id) -> Result<Option<StoredGithubRepository>, StorageError> {
-    let v:Option<String>=db(c.query_row("SELECT body_json FROM integration_records WHERE kind='GithubRepository' AND repository_id=?1",[id.as_str()],|r|r.get(0)).optional())?;
-    v.map(decode).transpose()
+    let Some(b) = binding(c, id)? else {
+        return Ok(None);
+    };
+    let live:bool=db(c.query_row("SELECT EXISTS(SELECT 1 FROM repositories r LEFT JOIN repository_details d ON d.repository_id=r.id WHERE r.id=?1 AND coalesce(d.lifecycle,'Active')!='Deleted' AND d.remote_url=?2)",params![id.as_str(),b.registered_remote],|r|r.get(0)))?;
+    if b.state != "Active" || !live {
+        return Ok(None);
+    }
+    record(c, "GithubRepository", b.github_repository_id.as_str())
 }
 
 fn observation(c: &Connection, id: &Id) -> Result<Option<StoredGithubObservation>, StorageError> {
@@ -186,10 +229,9 @@ fn issue(
     c: &Connection,
     k: &GithubIssueKey,
 ) -> Result<Option<StoredGithubIssueIntake>, StorageError> {
-    key(k)?;
-    let v:Option<String>=db(c.query_row("SELECT remote_json FROM github_issue_intake WHERE repository_id=?1 AND issue_number=?2",params![k.repository_id.as_str(),k.number],|r|r.get(0)).optional())?;
-    v.map(decode).transpose()
+    by_external(c, "GithubIssueIntake", &key(k)?)
 }
+
 fn clock(c: &Connection) -> Result<GithubIntakeClock, StorageError> {
     Ok(db(c.query_row("SELECT revision,interval_seconds,last_admitted_at,next_admission_at FROM github_intake_clock WHERE singleton=1",[],|r|Ok(GithubIntakeClock{revision:r.get(0)?,interval_seconds:r.get(1)?,last_admitted_at_ms:r.get(2)?,next_admission_at_ms:r.get(3)?})).optional())?.unwrap_or(GithubIntakeClock{revision:1,interval_seconds:1800,last_admitted_at_ms:None,next_admission_at_ms:0}))
 }
@@ -235,15 +277,16 @@ fn work(c: &Connection, id: &RootId) -> Result<(String, i64), StorageError> {
     ))
 }
 fn member(c: &Connection, project: &str, repo: &Id) -> Result<(), StorageError> {
-    let ok:bool=db(c.query_row("SELECT EXISTS(SELECT 1 FROM project_repositories m JOIN projects p ON p.id=m.project_id WHERE m.project_id=?1 AND m.repository_id=?2 AND p.lifecycle!='Deleted')",params![project,repo.as_str()],|r|r.get(0)))?;
+    let ok:bool=db(c.query_row(&format!("SELECT EXISTS(SELECT 1 {BINDING_NATIVE} JOIN project_repositories m ON m.repository_id=binding.repository_id JOIN projects p ON p.id=m.project_id WHERE binding.kind='GithubRepositoryBinding' AND binding.state='Active' AND coalesce(details.lifecycle,'Active')!='Deleted' AND details.remote_url=json_extract(binding.body_json,'$.registered_remote') AND json_extract(binding.body_json,'$.github_repository_id')=?2 AND m.project_id=?1 AND p.lifecycle!='Deleted')"),params![project,repo.as_str()],|r|r.get(0)))?;
     if ok {
         Ok(())
     } else {
         Err(invalid(
-            "GitHub work project does not own registered repository context",
+            "GitHub work project lacks a current registered source binding",
         ))
     }
 }
+
 fn resolution(c: &Connection, id: &Id) -> Result<Option<StoredGithubResolution>, StorageError> {
     record(c, "GithubResolution", id.as_str())
 }
@@ -262,7 +305,8 @@ fn observation_key(r: &StoredGithubObservation) -> Result<String, StorageError> 
 fn validate_observation(r: &StoredGithubObservation) -> Result<(), StorageError> {
     if !matches!(
         r.kind.as_str(),
-        "Issue"
+        "Repository"
+            | "Issue"
             | "IssueComment"
             | "Push"
             | "PullRequest"
@@ -288,7 +332,7 @@ fn validate_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), Sto
     if !matches!(
         r.state.as_str(),
         "Queued" | "Triaging" | "AwaitingDecision" | "Working" | "Resolved" | "Closed"
-    ) || r.project_id.is_some() != r.work_id.is_some()
+    ) || (r.work_id.is_some() && r.project_id.is_none())
     {
         return Err(invalid("invalid GitHub intake state/routing"));
     }
@@ -300,6 +344,9 @@ fn validate_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), Sto
         || source.id.as_str() != r.remote_revision
     {
         return Err(invalid("GitHub intake differs from exact observed issue"));
+    }
+    if let Some(project) = &r.project_id {
+        member(c, project.0.as_str(), &r.key.repository_id)?;
     }
     if let (Some(project), Some(id)) = (&r.project_id, &r.work_id) {
         let (p, _) = work(c, id)?;
@@ -321,31 +368,249 @@ fn validate_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), Sto
     Ok(())
 }
 fn save_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), StorageError> {
-    db(c.execute("INSERT INTO github_issue_intake(repository_id,issue_number,revision,state,project_id,work_id,remote_json,operation_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(repository_id,issue_number) DO UPDATE SET revision=excluded.revision,state=excluded.state,project_id=excluded.project_id,work_id=excluded.work_id,remote_json=excluded.remote_json,operation_id=excluded.operation_id",params![r.key.repository_id.as_str(),r.key.number,r.revision,r.state,r.project_id.as_ref().map(|p|p.0.as_str()),r.work_id.as_ref().map(|w|w.0.as_str()),encode(r)?,r.operation_id.as_ref().map(|o|o.0.as_str())]))?;
-    Ok(())
+    let id = format!("github-intake-{}", hash(&key(&r.key)?)?);
+    let exists: bool = db(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM integration_records WHERE id=?1)",
+        [&id],
+        |r| r.get(0),
+    ))?;
+    if exists {
+        db(c.execute("UPDATE integration_records SET revision=?2,state=?3,project_id=?4,root_id=?5,body_json=?6 WHERE id=?1 AND kind='GithubIssueIntake'",params![id,r.revision,r.state,r.project_id.as_ref().map(|p|p.0.as_str()),r.work_id.as_ref().map(|w|w.0.as_str()),encode(r)?]))?;
+        Ok(())
+    } else {
+        insert(
+            c,
+            &id,
+            "GithubIssueIntake",
+            &key(&r.key)?,
+            None,
+            r.project_id.as_ref(),
+            r.work_id.as_ref(),
+            r.revision,
+            &r.state,
+            r,
+        )
+    }
 }
+
 macro_rules! reads{($t:ty)=>{impl GithubRead for $t{
+ fn github_adjudication_owner(&self,artifact:&Id,version:Option<&Id>)->Result<Option<StoredGithubObligationRetirement>,StorageError>{let v:Option<String>=db(self.conn.query_row("SELECT body_json FROM integration_records WHERE kind='GithubObligationRetirement' AND json_extract(body_json,'$.adjudication_ref.artifactId')=?1 AND (?2 IS NULL OR json_extract(body_json,'$.adjudication_ref.versionId')=?2) ORDER BY id LIMIT 1",params![artifact.as_str(),version.map(Id::as_str)],|r|r.get(0)).optional())?;v.map(decode).transpose()}
+
+ fn github_related_work(&self,k:&GithubIssueKey,project:Option<&ProjectId>,after:Option<&RootId>,limit:u16)->Result<Vec<GithubWorkLink>,StorageError>{related_work(self.conn,k,project,after,limit)}
+ fn github_obligation_retirements(&self,k:&GithubIssueKey,project:Option<&ProjectId>,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubObligationRetirement>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubObligationRetirement' AND json_extract(body_json,'$.key.repository_id')=?1 AND json_extract(body_json,'$.key.number')=?2 AND (?3 IS NULL OR project_id=?3) AND (?4 IS NULL OR id>?4) ORDER BY id LIMIT ?5"))?;let rows=db(db(q.query_map(params![k.repository_id.as_str(),k.number,project.map(|p|p.0.as_str()),after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
+
+ fn github_repository_by_remote_id(&self,remote:&str)->Result<Option<StoredGithubRepository>,StorageError>{by_external(self.conn,"GithubRepository",remote)}
+ fn github_repository_binding(&self,id:&Id)->Result<Option<StoredGithubRepositoryBinding>,StorageError>{binding_projection(self.conn,id)}
+ fn github_repository_binding_history(&self,id:&Id,after:Option<i64>,limit:u16)->Result<Vec<StoredGithubRepositoryBinding>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubRepositoryBindingHistory' AND repository_id=?1 AND revision>coalesce(?2,0) ORDER BY revision LIMIT ?3"))?;let rows=db(db(q.query_map(params![id.as_str(),after,n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
  fn github_discovered_repository(&self,id:&Id)->Result<Option<StoredGithubRepository>,StorageError>{record(self.conn,"GithubRepository",id.as_str())}
  fn github_account_repositories(&self,account:&Id,owner:Option<&str>,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubRepository>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubRepository' AND json_extract(body_json,'$.account_id')=?1 AND (?2 IS NULL OR json_extract(body_json,'$.owner')=?2 COLLATE NOCASE) AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT ?4"))?;let rows=db(db(q.query_map(params![account.as_str(),owner,after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
-
  fn github_account(&self)->Result<Option<StoredGithubAccount>,StorageError>{account(self.conn)}
  fn github_repository(&self,id:&Id)->Result<Option<StoredGithubRepository>,StorageError>{repository(self.conn,id)}
- fn github_repositories(&self,s:&GithubScope,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubRepository>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached(&format!("SELECT r.body_json FROM integration_records r WHERE r.kind='GithubRepository' AND {RECORD_SCOPE} AND (?3 IS NULL OR r.id>?3) ORDER BY r.id LIMIT ?4")))?;let rows=db(db(q.query_map(params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
- fn github_observation(&self,id:&Id,s:&GithubScope)->Result<Option<StoredGithubObservation>,StorageError>{let v:Option<String>=db(self.conn.query_row(&format!("SELECT r.body_json FROM integration_records r WHERE r.id=?3 AND r.kind='GithubObservation' AND {RECORD_SCOPE}"),params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),id.as_str()],|r|r.get(0)).optional())?;v.map(decode).transpose()}
- fn github_observations(&self,f:&GithubObservationFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubObservation>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached(&format!("SELECT r.body_json FROM integration_records r WHERE r.kind='GithubObservation' AND {RECORD_SCOPE} AND (?3 IS NULL OR r.id>?3) AND (json_array_length(?4)=0 OR json_extract(r.body_json,'$.kind') IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR json_extract(r.body_json,'$.subject_id')=?5) AND (?6 IS NULL OR json_extract(r.body_json,'$.head')=?6) ORDER BY r.id LIMIT ?7")))?;let rows=db(db(q.query_map(params![scope(&f.scope)?,f.scope.project_id.as_ref().map(|p|p.0.as_str()),after.map(Id::as_str),encode(&f.kinds)?,f.subject_id,f.head,n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
+ fn github_repositories(&self,s:&GithubScope,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubRepository>,StorageError>{let n=page(limit)?;let allowed=canonical_scope("r.id");let mut q=db(self.conn.prepare_cached(&format!("SELECT r.body_json FROM integration_records r WHERE r.kind='GithubRepository' AND {allowed} AND (?3 IS NULL OR r.id>?3) ORDER BY r.id LIMIT ?4")))?;let rows=db(db(q.query_map(params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
+ fn github_observation(&self,id:&Id,s:&GithubScope)->Result<Option<StoredGithubObservation>,StorageError>{let allowed=canonical_scope("json_extract(r.body_json,'$.repository_id')");let v:Option<String>=db(self.conn.query_row(&format!("SELECT r.body_json FROM integration_records r WHERE r.id=?3 AND r.kind='GithubObservation' AND {allowed}"),params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),id.as_str()],|r|r.get(0)).optional())?;v.map(decode).transpose()}
+ fn github_observations(&self,f:&GithubObservationFilter,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubObservation>,StorageError>{let n=page(limit)?;let allowed=canonical_scope("json_extract(r.body_json,'$.repository_id')");let mut q=db(self.conn.prepare_cached(&format!("SELECT r.body_json FROM integration_records r WHERE r.kind='GithubObservation' AND {allowed} AND (?3 IS NULL OR r.id>?3) AND (json_array_length(?4)=0 OR json_extract(r.body_json,'$.kind') IN(SELECT value FROM json_each(?4))) AND (?5 IS NULL OR json_extract(r.body_json,'$.subject_id')=?5) AND (?6 IS NULL OR json_extract(r.body_json,'$.head')=?6) ORDER BY r.id LIMIT ?7")))?;let rows=db(db(q.query_map(params![scope(&f.scope)?,f.scope.project_id.as_ref().map(|p|p.0.as_str()),after.map(Id::as_str),encode(&f.kinds)?,f.subject_id,f.head,n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
  fn github_poll_cursor(&self,r:&Id,e:&str)->Result<Option<StoredGithubPollCursor>,StorageError>{poll(self.conn,r,e)}
- fn github_issue(&self,k:&GithubIssueKey,s:&GithubScope)->Result<Option<StoredGithubIssueIntake>,StorageError>{key(k)?;let v:Option<String>=db(self.conn.query_row(&format!("SELECT i.remote_json FROM github_issue_intake i WHERE i.repository_id=?3 AND i.issue_number=?4 AND {INTAKE_SCOPE}"),params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),k.repository_id.as_str(),k.number],|r|r.get(0)).optional())?;v.map(decode).transpose()}
- fn github_issues(&self,f:&GithubIntakeFilter,after:Option<&GithubIssueKey>,limit:u16)->Result<Vec<StoredGithubIssueIntake>,StorageError>{let n=page(limit)?;if let Some(k)=after{key(k)?;}let mut q=db(self.conn.prepare_cached(&format!("SELECT i.remote_json FROM github_issue_intake i WHERE {INTAKE_SCOPE} AND (?3 IS NULL OR (i.repository_id,i.issue_number)>(?3,?4)) AND (json_array_length(?5)=0 OR i.state IN(SELECT value FROM json_each(?5))) ORDER BY i.repository_id,i.issue_number LIMIT ?6")))?;let rows=db(db(q.query_map(params![scope(&f.scope)?,f.scope.project_id.as_ref().map(|p|p.0.as_str()),after.map(|k|k.repository_id.as_str()),after.map(|k|k.number),encode(&f.states)?,n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
+ fn github_issue(&self,k:&GithubIssueKey,s:&GithubScope)->Result<Option<StoredGithubIssueIntake>,StorageError>{key(k)?;let allowed=canonical_scope("json_extract(r.body_json,'$.key.repository_id')");let v:Option<String>=db(self.conn.query_row(&format!("SELECT r.body_json FROM integration_records r WHERE r.external_key=?3 AND r.kind='GithubIssueIntake' AND {allowed} AND (?2 IS NULL OR r.project_id IS NULL OR r.project_id=?2)"),params![scope(s)?,s.project_id.as_ref().map(|p|p.0.as_str()),key(k)?],|r|r.get(0)).optional())?;v.map(decode).transpose()}
+ fn github_issues(&self,f:&GithubIntakeFilter,after:Option<&GithubIssueKey>,limit:u16)->Result<Vec<StoredGithubIssueIntake>,StorageError>{let n=page(limit)?;if let Some(k)=after{key(k)?;}let allowed=canonical_scope("json_extract(r.body_json,'$.key.repository_id')");let mut q=db(self.conn.prepare_cached(&format!("SELECT r.body_json FROM integration_records r WHERE r.kind='GithubIssueIntake' AND {allowed} AND (?2 IS NULL OR r.project_id IS NULL OR r.project_id=?2) AND (?3 IS NULL OR (json_extract(r.body_json,'$.key.repository_id'),json_extract(r.body_json,'$.key.number'))>(?3,?4)) AND (json_array_length(?5)=0 OR r.state IN(SELECT value FROM json_each(?5))) ORDER BY json_extract(r.body_json,'$.key.repository_id'),json_extract(r.body_json,'$.key.number') LIMIT ?6")))?;let rows=db(db(q.query_map(params![scope(&f.scope)?,f.scope.project_id.as_ref().map(|p|p.0.as_str()),after.map(|k|k.repository_id.as_str()),after.map(|k|k.number),encode(&f.states)?,n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
  fn github_intake_clock(&self)->Result<GithubIntakeClock,StorageError>{clock(self.conn)}
  fn github_obligation_revision(&self,k:&GithubIssueKey)->Result<i64,StorageError>{obligation_revision(self.conn,k)}
  fn github_work_links(&self,k:&GithubIssueKey,project:Option<&ProjectId>,after:Option<&RootId>,limit:u16)->Result<Vec<GithubWorkLink>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT w.id,w.project_id FROM integration_links l JOIN work_items w ON w.id=l.work_id WHERE l.record_id=?1 AND l.purpose='GithubIssue' AND (?2 IS NULL OR w.project_id=?2) AND (?3 IS NULL OR w.id>?3) ORDER BY w.id LIMIT ?4"))?;let rows=db(db(q.query_map(params![source_id(k)?,project.map(|p|p.0.as_str()),after.map(|w|w.0.as_str()),n],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(|(w,p)|Ok(GithubWorkLink{work_id:RootId(Id::new(w).map_err(|_|invalid("work identity"))?),project_id:ProjectId(Id::new(p).map_err(|_|invalid("project identity"))?)})).collect()}
  fn github_resolution(&self,id:&Id)->Result<Option<StoredGithubResolution>,StorageError>{resolution(self.conn,id)}
- fn github_resolutions(&self,k:&GithubIssueKey,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubResolution>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubResolution' AND repository_id=?1 AND json_extract(body_json,'$.key.number')=?2 AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT ?4"))?;let rows=db(db(q.query_map(params![k.repository_id.as_str(),k.number,after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
+ fn github_resolutions(&self,k:&GithubIssueKey,after:Option<&Id>,limit:u16)->Result<Vec<StoredGithubResolution>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubResolution' AND json_extract(body_json,'$.key.repository_id')=?1 AND json_extract(body_json,'$.key.number')=?2 AND (?3 IS NULL OR id>?3) ORDER BY id LIMIT ?4"))?;let rows=db(db(q.query_map(params![k.repository_id.as_str(),k.number,after.map(Id::as_str),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
  fn github_resolution_witnesses(&self,id:&Id,project:Option<&ProjectId>,after:Option<&RootId>,limit:u16)->Result<Vec<StoredGithubResolutionWitness>,StorageError>{let n=page(limit)?;let mut q=db(self.conn.prepare_cached("SELECT body_json FROM integration_records WHERE kind='GithubResolutionWitness' AND json_extract(body_json,'$.resolution_id')=?1 AND (?2 IS NULL OR project_id=?2) AND (?3 IS NULL OR root_id>?3) ORDER BY root_id LIMIT ?4"))?;let rows=db(db(q.query_map(params![id.as_str(),project.map(|p|p.0.as_str()),after.map(|w|w.0.as_str()),n],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;rows.into_iter().map(decode).collect()}
 }};}
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl GithubRepository for Unit<'_> {
+    fn retire_github_work_link(
+        &mut self,
+        r: &StoredGithubObligationRetirement,
+    ) -> Result<(), StorageError> {
+        let external = format!(
+            "{}:{}:{}",
+            key(&r.key)?,
+            r.work_id.0.as_str(),
+            r.obligation_revision
+        );
+        if let Some(old) = by_external::<StoredGithubObligationRetirement>(
+            self.conn,
+            "GithubObligationRetirement",
+            &external,
+        )? {
+            return if old == *r {
+                Ok(())
+            } else {
+                Err(invalid("immutable GitHub adjudication changed"))
+            };
+        }
+        if issue(self.conn, &r.key)?.is_none_or(|source| source.observation_id != r.observation_id)
+        {
+            return Err(invalid("GitHub adjudication remote snapshot changed"));
+        }
+        let (project, revision) = work(self.conn, &r.work_id)?;
+        if project != r.project_id.0.as_str() || revision != r.work_revision {
+            return Err(invalid("GitHub adjudication work scope/revision changed"));
+        }
+        let current = obligation_revision(self.conn, &r.key)?;
+        if current != r.obligation_revision {
+            return Err(conflict(
+                &source_id(&r.key)?,
+                r.obligation_revision,
+                current,
+            ));
+        }
+        let linked:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM integration_links WHERE record_id=?1 AND work_id=?2 AND purpose='GithubIssue')",params![source_id(&r.key)?,r.work_id.0.as_str()],|r|r.get(0)))?;
+        if !linked {
+            return Err(invalid("GitHub current obligation missing"));
+        }
+        let op = self
+            .operation(&r.operation_id)?
+            .ok_or_else(|| invalid("GitHub adjudication operation missing"))?;
+        if !matches!(
+            op.capability.as_str(),
+            "github.issue_sync" | "github.triage"
+        ) || op.state != OperationState::ObservedComplete
+            || op.payload["repositoryId"].as_str() != Some(r.key.repository_id.as_str())
+            || op.payload["issueNumber"].as_i64() != Some(r.key.number)
+            || op.payload["actorId"].as_str() != Some(r.actor_id.0.as_str())
+            || r.created_at_ms < 0
+        {
+            return Err(invalid(
+                "GitHub adjudication lacks its actual completed service operation",
+            ));
+        }
+        adjudication_backing(self.conn, r, &self.info.host_actor)?;
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| invalid("GitHub obligation revision overflow"))?;
+        atomic(self.conn, || {
+            insert(
+                self.conn,
+                r.id.as_str(),
+                "GithubObligationRetirement",
+                &external,
+                None,
+                Some(&r.project_id),
+                Some(&r.work_id),
+                1,
+                "Recorded",
+                r,
+            )?;
+            db(self.conn.execute("INSERT INTO integration_links(record_id,work_id,purpose) VALUES(?1,?2,'GithubIssueHistory') ON CONFLICT DO NOTHING",params![source_id(&r.key)?,r.work_id.0.as_str()]))?;
+            db(self.conn.execute("DELETE FROM integration_links WHERE record_id=?1 AND work_id=?2 AND purpose='GithubIssue'",params![source_id(&r.key)?,r.work_id.0.as_str()]))?;
+            db(self.conn.execute(
+                "UPDATE integration_records SET revision=?2 WHERE id=?1",
+                params![source_id(&r.key)?, next],
+            ))?;
+            Ok(())
+        })
+    }
+
+    fn put_github_repository_binding(
+        &mut self,
+        r: &StoredGithubRepositoryBinding,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        let old = binding(self.conn, &r.repository_id)?;
+        cas(
+            r.revision,
+            expected,
+            old.as_ref().map(|r| r.revision),
+            r.repository_id.as_str(),
+        )?;
+        let (revision,lifecycle,remote):(i64,String,Option<String>)=db(self.conn.query_row("SELECT n.revision,coalesce(d.lifecycle,'Active'),d.remote_url FROM repositories n LEFT JOIN repository_details d ON d.repository_id=n.id WHERE n.id=?1",[r.repository_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))))?;
+        if !matches!(r.state.as_str(), "Active" | "Detached")
+            || r.repository_revision != revision
+            || remote.as_deref() != Some(r.registered_remote.as_str())
+        {
+            return Err(invalid(
+                "GitHub checkout binding differs from actual current registration",
+            ));
+        }
+        if r.state == "Active" {
+            if lifecycle == "Deleted" {
+                return Err(invalid("deleted checkout cannot grant GitHub scope"));
+            }
+            let canonical: StoredGithubRepository = record(
+                self.conn,
+                "GithubRepository",
+                r.github_repository_id.as_str(),
+            )?
+            .ok_or_else(|| invalid("GitHub observed identity missing"))?;
+            let observation = observation(self.conn, &r.observation_id)?
+                .ok_or_else(|| invalid("GitHub server identity observation missing"))?;
+            let actual =
+                devworks_core::services::git::github::Repository::from_remote(&r.registered_remote)
+                    .ok_or_else(|| invalid("registered remote is not qualified GitHub.com"))?;
+            let requested = observation.payload["requestedRemote"]
+                .as_str()
+                .and_then(devworks_core::services::git::github::Repository::from_remote)
+                .ok_or_else(|| invalid("identity observation has no actual requested remote"))?;
+            let response = &observation.payload["repository"];
+            let remote_id = response["node_id"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| response["id"].as_i64().map(|id| id.to_string()));
+            if observation.kind != "Repository"
+                || observation.repository_id != r.github_repository_id
+                || observation.subject_id != canonical.remote_repository_id
+                || remote_id.as_deref() != Some(canonical.remote_repository_id.as_str())
+                || !actual.owner.eq_ignore_ascii_case(&requested.owner)
+                || !actual.name.eq_ignore_ascii_case(&requested.name)
+                || response["owner"]["login"].as_str() != Some(canonical.owner.as_str())
+                || response["name"].as_str() != Some(canonical.name.as_str())
+            {
+                return Err(invalid(
+                    "GitHub binding lacks exact observed server identity/current source association",
+                ));
+            }
+        } else if old.as_ref().is_none_or(|o| {
+            o.github_repository_id != r.github_repository_id || o.observation_id != r.observation_id
+        }) {
+            return Err(invalid("detaching a source cannot invent a new identity"));
+        }
+        let external = r.repository_id.as_str();
+        let current_id = format!("github-binding-{}", hash(&r.repository_id)?);
+        atomic(self.conn, || {
+            let history = format!("{}:{}", external, r.revision);
+            insert(
+                self.conn,
+                &format!("github-binding-history-{}", hash(&history)?),
+                "GithubRepositoryBindingHistory",
+                &history,
+                Some(&r.repository_id),
+                None,
+                None,
+                r.revision,
+                &r.state,
+                r,
+            )?;
+            if old.is_some() {
+                update(
+                    self.conn,
+                    &current_id,
+                    "GithubRepositoryBinding",
+                    r.revision,
+                    &r.state,
+                    r,
+                )
+            } else {
+                insert(
+                    self.conn,
+                    &current_id,
+                    "GithubRepositoryBinding",
+                    external,
+                    Some(&r.repository_id),
+                    None,
+                    None,
+                    r.revision,
+                    &r.state,
+                    r,
+                )
+            }
+        })
+    }
+
     fn put_github_account(
         &mut self,
         r: &StoredGithubAccount,
@@ -407,9 +672,6 @@ impl GithubRepository for Unit<'_> {
         r: &StoredGithubRepository,
         expected: Option<i64>,
     ) -> Result<(), StorageError> {
-        if let Some(id) = &r.repository_id {
-            require_repository(self.conn, id)?;
-        }
         let a = account(self.conn)?.ok_or_else(|| invalid("GitHub account missing"))?;
         let old: Option<StoredGithubRepository> =
             record(self.conn, "GithubRepository", r.id.as_str())?;
@@ -432,26 +694,24 @@ impl GithubRepository for Unit<'_> {
                     || o.permission_revision > r.permission_revision
             })
         {
-            return Err(invalid("GitHub repository binding mismatch"));
-        }
-        if let Some(reg) = &r.repository_id {
-            let other:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM integration_records WHERE kind='GithubRepository' AND repository_id=?1 AND id!=?2)",params![reg.as_str(),r.id.as_str()],|r|r.get(0)))?;
-            if other {
-                return Err(invalid(
-                    "registered repository already has a GitHub identity",
-                ));
-            }
+            return Err(invalid("GitHub repository identity mismatch"));
         }
         if old.is_some() {
-            db(self.conn.execute("UPDATE integration_records SET repository_id=?2,revision=?3,body_json=?4 WHERE id=?1 AND kind='GithubRepository'",params![r.id.as_str(),r.repository_id.as_ref().map(Id::as_str),r.revision,encode(r)?]))?;
-            Ok(())
+            update(
+                self.conn,
+                r.id.as_str(),
+                "GithubRepository",
+                r.revision,
+                "Observed",
+                r,
+            )
         } else {
             insert(
                 self.conn,
                 r.id.as_str(),
                 "GithubRepository",
                 &r.remote_repository_id,
-                r.repository_id.as_ref(),
+                None,
                 None,
                 None,
                 r.revision,
@@ -478,7 +738,7 @@ impl GithubRepository for Unit<'_> {
             r.id.as_str(),
             "GithubObservation",
             &external,
-            Some(&r.repository_id),
+            None,
             None,
             None,
             1,
@@ -525,7 +785,7 @@ impl GithubRepository for Unit<'_> {
         if (old.is_none()
             && (r.state != "Queued"
                 || r.operation_id.is_some()
-                || r.project_id.is_some()
+                || r.work_id.is_some()
                 || r.last_triaged_revision.is_some()))
             || (r.state == "Triaging"
                 && old
@@ -546,7 +806,7 @@ impl GithubRepository for Unit<'_> {
                     &source_id(&r.key)?,
                     "GithubIssue",
                     &key(&r.key)?,
-                    Some(&r.key.repository_id),
+                    None,
                     None,
                     None,
                     1,
@@ -568,6 +828,9 @@ impl GithubRepository for Unit<'_> {
         }
         if seconds <= 0 {
             return Err(invalid("GitHub interval must be positive"));
+        }
+        if seconds == c.interval_seconds {
+            return Ok(c);
         }
         let ms = seconds
             .checked_mul(1000)
@@ -613,13 +876,12 @@ impl GithubRepository for Unit<'_> {
                 operation,
             }));
         }
-        if let Some(previous) = &r.operation_id {
-            if self
+        if let Some(previous) = &r.operation_id
+            && self
                 .operation(previous)?
                 .is_none_or(|o| !is_terminal(o.state))
-            {
-                return Err(StorageError::Busy);
-            }
+        {
+            return Err(StorageError::Busy);
         }
         if operation.state != OperationState::IntentRecorded
             || operation.payload["sourceRevision"].as_str() != Some(r.remote_revision.as_str())
@@ -640,7 +902,7 @@ impl GithubRepository for Unit<'_> {
             return Ok(None);
         }
         let used: bool = db(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM github_issue_intake WHERE operation_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM integration_records WHERE kind='GithubIssueIntake' AND json_extract(body_json,'$.operation_id')=?1)",
             [op.0.as_str()],
             |r| r.get(0),
         ))?;
@@ -695,6 +957,7 @@ impl GithubRepository for Unit<'_> {
         atomic(self.conn, || {
             let changed=db(self.conn.execute("INSERT INTO integration_links(record_id,work_id,purpose) VALUES(?1,?2,'GithubIssue') ON CONFLICT DO NOTHING",params![sid,w.0.as_str()]))?;
             if changed > 0 {
+                db(self.conn.execute("INSERT INTO integration_links(record_id,work_id,purpose) VALUES(?1,?2,'GithubIssueHistory') ON CONFLICT DO NOTHING",params![sid,w.0.as_str()]))?;
                 let revision = obligation_revision(self.conn, k)?
                     .checked_add(1)
                     .ok_or_else(|| invalid("Github obligation revision overflow"))?;
@@ -720,8 +983,21 @@ impl GithubRepository for Unit<'_> {
             return Err(invalid("invalid GitHub completion source binding"));
         }
         let external = format!("{}:{}", key(&r.key)?, r.completion_digest);
-        if let Some(old) = by_external(self.conn, "GithubResolution", &external)? {
+        if let Some(old) =
+            by_external::<StoredGithubResolution>(self.conn, "GithubResolution", &external)?
+        {
+            if old.key != r.key
+                || old.source_revision != r.source_revision
+                || old.obligation_revision != r.obligation_revision
+                || old.summary_digest != r.summary_digest
+            {
+                return Err(invalid("immutable GitHub completion binding changed"));
+            }
             return Ok(old);
+        }
+        let active:bool=db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM integration_records r JOIN operations comment ON comment.id=json_extract(r.body_json,'$.comment_operation_id') JOIN operations close ON close.id=json_extract(r.body_json,'$.close_operation_id') WHERE r.kind='GithubResolution' AND json_extract(r.body_json,'$.key.repository_id')=?1 AND json_extract(r.body_json,'$.key.number')=?2 AND (comment.state NOT IN('ObservedComplete','Failed','CancelledBeforeDispatch') OR close.state NOT IN('ObservedComplete','Failed','CancelledBeforeDispatch')))",params![r.key.repository_id.as_str(),r.key.number],|r|r.get(0)))?;
+        if active {
+            return Err(StorageError::Busy);
         }
         let current = issue(self.conn, &r.key)?.ok_or_else(|| invalid("GitHub source missing"))?;
         if current.remote_revision != r.source_revision {
@@ -748,7 +1024,7 @@ impl GithubRepository for Unit<'_> {
             r.id.as_str(),
             "GithubResolution",
             &external,
-            Some(&r.key.repository_id),
+            None,
             None,
             None,
             1,
@@ -794,7 +1070,7 @@ impl GithubRepository for Unit<'_> {
             &format!("github-witness-{}", hash(&external)?),
             "GithubResolutionWitness",
             &external,
-            Some(&binding.key.repository_id),
+            None,
             Some(&r.project_id),
             Some(&r.work_id),
             1,
@@ -831,4 +1107,82 @@ impl GithubRepository for Unit<'_> {
         update(self.conn, id.as_str(), "GithubResolution", 2, "Sealed", &r)?;
         Ok(r)
     }
+}
+
+fn related_work(
+    c: &Connection,
+    k: &GithubIssueKey,
+    project: Option<&ProjectId>,
+    after: Option<&RootId>,
+    limit: u16,
+) -> Result<Vec<GithubWorkLink>, StorageError> {
+    let n = page(limit)?;
+    let mut q=db(c.prepare_cached("SELECT w.id,w.project_id FROM integration_links l JOIN work_items w ON w.id=l.work_id WHERE l.record_id=?1 AND l.purpose='GithubIssueHistory' AND (?2 IS NULL OR w.project_id=?2) AND (?3 IS NULL OR w.id>?3) ORDER BY w.id LIMIT ?4"))?;
+    let rows = db(db(q.query_map(
+        params![
+            source_id(k)?,
+            project.map(|p| p.0.as_str()),
+            after.map(|w| w.0.as_str()),
+            n
+        ],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ))?
+    .collect::<rusqlite::Result<Vec<_>>>())?;
+    rows.into_iter()
+        .map(|(w, p)| {
+            Ok(GithubWorkLink {
+                work_id: RootId(Id::new(w).map_err(|_| invalid("work identity"))?),
+                project_id: ProjectId(Id::new(p).map_err(|_| invalid("project identity"))?),
+            })
+        })
+        .collect()
+}
+fn adjudication_backing(
+    c: &Connection,
+    r: &StoredGithubObligationRetirement,
+    host: &devworks_core::protocol::ActorId,
+) -> Result<(), StorageError> {
+    use devworks_core::protocol::{Check, provider::ArtifactRef};
+    let reference: ArtifactRef = serde_json::from_value(r.adjudication_ref.clone())
+        .map_err(|_| invalid("invalid GitHub adjudication source ref"))?;
+    reference
+        .check()
+        .map_err(|_| invalid("invalid adjudication ref"))?;
+    type AdjudicationBacking = (String, Option<String>, String, i64, String, String, String);
+    let row:Option<AdjudicationBacking>=db(c.query_row("SELECT a.provenance_json,a.owner_actor_id,v.blob_digest,b.byte_count,v.media_type,v.artifact_id,v.source_json FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.deleted_at IS NULL AND a.state='Live' AND b.state='Present' AND (a.current_project_id IS NULL OR a.current_project_id=?2)",params![reference.version_id.as_str(),r.project_id.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional())?;
+    let Some((provenance, owner, sha, bytes, media, artifact, version_source)) = row else {
+        return Err(invalid("GitHub adjudication backing missing/outside scope"));
+    };
+    let provenance: serde_json::Value = decode(provenance)?;
+    let derived = &provenance["derived"];
+    let version_source: serde_json::Value = decode(version_source)?;
+    if artifact != reference.artifact_id.as_str()
+        || sha != reference.sha256.as_str()
+        || bytes != reference.byte_length.get()
+        || media != reference.media_type
+        || owner.as_deref() != Some(host.0.as_str())
+        || derived["actorId"].as_str() != Some(r.actor_id.0.as_str())
+        || version_source["producedBy"].as_str() != Some(host.0.as_str())
+        || version_source["principalKind"] != "Host"
+        || version_source["source"]["actorId"].as_str() != Some(r.actor_id.0.as_str())
+        || version_source["source"]["operationId"].as_str() != Some(r.operation_id.0.as_str())
+        || version_source["source"]["observationId"].as_str() != Some(r.observation_id.as_str())
+        || provenance["principalKind"] != "Host"
+        || provenance["producedBy"].as_str() != Some(host.0.as_str())
+        || derived["kind"] != "GithubObligationAdjudication"
+        || derived["repositoryId"].as_str() != Some(r.key.repository_id.as_str())
+        || derived["issueNumber"].as_i64() != Some(r.key.number)
+        || derived["workId"].as_str() != Some(r.work_id.0.as_str())
+        || derived["workRevision"].as_i64() != Some(r.work_revision)
+        || derived["obligationRevision"].as_i64() != Some(r.obligation_revision)
+        || derived["operationId"].as_str() != Some(r.operation_id.0.as_str())
+        || derived["observationId"].as_str() != Some(r.observation_id.as_str())
+        || derived["reason"]
+            != serde_json::to_value(&r.reason).map_err(|_| invalid("GitHub adjudication reason"))?
+    {
+        return Err(invalid(
+            "GitHub adjudication source does not bind actual work/obligation/operation",
+        ));
+    }
+    Ok(())
 }

@@ -3348,6 +3348,51 @@ impl GraphRepository for Unsupported {
 }
 
 impl GithubRead for Unsupported {
+    fn github_adjudication_owner(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+    ) -> Result<Option<StoredGithubObligationRetirement>, StorageError> {
+        nope()
+    }
+    fn github_related_work(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&ProjectId>,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<GithubWorkLink>, StorageError> {
+        nope()
+    }
+    fn github_obligation_retirements(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&ProjectId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObligationRetirement>, StorageError> {
+        nope()
+    }
+    fn github_repository_by_remote_id(
+        &self,
+        _: &str,
+    ) -> Result<Option<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_repository_binding(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
+        nope()
+    }
+    fn github_repository_binding_history(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubRepositoryBinding>, StorageError> {
+        nope()
+    }
     fn github_discovered_repository(
         &self,
         _: &Id,
@@ -3452,6 +3497,19 @@ impl GithubRead for Unsupported {
 }
 
 impl GithubRepository for Unsupported {
+    fn retire_github_work_link(
+        &mut self,
+        _: &StoredGithubObligationRetirement,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_github_repository_binding(
+        &mut self,
+        _: &StoredGithubRepositoryBinding,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
     fn put_github_account(
         &mut self,
         _: &StoredGithubAccount,
