@@ -143,29 +143,25 @@ impl UsageRuntime {
             }
         }
         let runtime = self.clone();
+        struct Remove {
+            runtime: Arc<UsageRuntime>,
+            id: Id,
+        }
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                self.runtime.retired(&self.id);
+            }
+        }
+        let remove = Remove {
+            runtime: runtime.clone(),
+            id: attempt_id.clone(),
+        };
         owned_thread(move || {
-            struct Remove {
-                runtime: Arc<UsageRuntime>,
-                id: Id,
-            }
-            impl Drop for Remove {
-                fn drop(&mut self) {
-                    self.runtime.retired(&self.id);
-                }
-            }
-            let _remove = Remove {
-                runtime: runtime.clone(),
-                id: attempt_id.clone(),
-            };
+            let _remove = remove;
             host.drive(attempt_id, source, cancellation)
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(StorageError::unavailable(
-                Unavailable::HandlerPanicked,
-                "owned inference source panicked; accounting remains unclosed",
-            ))
-        })
+        .unwrap_or_else(|e| Err(e.storage()))
     }
     /// Full native producer path. Caller cancellation cannot strand an acknowledged
     /// reservation between admission and source ownership: both run in one owned worker.
@@ -239,12 +235,7 @@ impl UsageRuntime {
             host.drive(attempt.attempt_id, source, cancellation)
         })
         .await
-        .unwrap_or_else(|_| {
-            Err(StorageError::unavailable(
-                Unavailable::HandlerPanicked,
-                "owned inference producer panicked; accounting remains recoverable",
-            ))
-        })
+        .unwrap_or_else(|e| Err(e.storage()))
     }
 
     fn retired(&self, id: &Id) {
@@ -491,7 +482,7 @@ impl UsageRuntime {
 // Registry guards and the publication fence retain exact custody until actual closure.
 async fn owned_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, ()> {
+) -> Result<T, OwnedThreadFailure> {
     let (send, receive) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
         .name("devworks-inference".into())
@@ -499,6 +490,25 @@ async fn owned_thread<T: Send + 'static>(
             let result = work();
             let _ = send.send(result);
         })
-        .map_err(|_| ())?;
-    receive.await.map_err(|_| ())
+        .map_err(OwnedThreadFailure::Spawn)?;
+    receive.await.map_err(|_| OwnedThreadFailure::Lost)
+}
+
+enum OwnedThreadFailure {
+    Spawn(std::io::Error),
+    Lost,
+}
+impl OwnedThreadFailure {
+    fn storage(self) -> StorageError {
+        match self {
+            Self::Spawn(error) => StorageError::unavailable(
+                Unavailable::UnsupportedRuntime,
+                format!("native inference worker could not start: {error}"),
+            ),
+            Self::Lost => StorageError::unavailable(
+                Unavailable::HandlerPanicked,
+                "owned inference worker ended without acknowledgement; accounting remains recoverable",
+            ),
+        }
+    }
 }
