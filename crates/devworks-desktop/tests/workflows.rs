@@ -218,6 +218,11 @@ fn empty_queue_is_truthful_and_a_manual_claim_never_starts_execution() {
             .is_disabled()
     );
     input(&mut h, "Claim lease (ms)", "300000");
+    h.query_by_label("Selection options")
+        .unwrap()
+        .click_accesskit();
+    settle(&mut h);
+    input(&mut h, "Selection retry key (optional)", "empty-snapshot");
     press(&mut h, "Next work");
     assert!(has_text(&h, "No eligible work"));
     assert!(h.state().work.allocation_claims.is_empty());
@@ -228,6 +233,14 @@ fn empty_queue_is_truthful_and_a_manual_claim_never_starts_execution() {
     let issue = create_issue(&*b, &p, "Pick this issue", ready.id.as_str());
     press(&mut h, "Refresh");
     press(&mut h, "Next work");
+    assert!(has_text(&h, "The earlier selection found no eligible work"));
+    assert!(
+        h.state().work.allocation_claims.is_empty(),
+        "a reused empty result is not a fresh claim"
+    );
+    input(&mut h, "Selection retry key (optional)", "fresh-selection");
+    press(&mut h, "Next work");
+
     let claim = h
         .state()
         .work

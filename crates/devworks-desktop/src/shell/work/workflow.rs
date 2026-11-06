@@ -366,8 +366,11 @@ impl Shell {
                     Ok(AllocationSelection::Current(AllocationOutcome::NoEligible {
                         reason,
                         evidence,
+                        reused,
                     })) => {
-                        let mut text = if reason.0 == "no_ready_work" {
+                        let mut text = if reused {
+                            "The earlier selection found no eligible work; that result was reused. Change the selection retry key for a fresh selection.".to_owned()
+                        } else if reason.0 == "no_ready_work" {
                             "No eligible work is ready.".to_owned()
                         } else {
                             format!("No eligible work: {}", reason.0)
