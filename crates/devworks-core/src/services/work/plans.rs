@@ -255,9 +255,13 @@ fn save_pending(
     tx: &mut dyn WriteTransaction,
     f: &StoredWork,
     draft: &PlanDraft,
+    budget: Option<&crate::protocol::records::FeatureBudgetInput>,
 ) -> R<(StoredFeaturePlan, Option<Id>)> {
     let before = slot(tx, &f.id)?;
-    let digest = super::model::plan_digest(draft);
+    let budget = budget
+        .cloned()
+        .or_else(|| pending_of(before.pending.as_ref()).and_then(|pending| pending.budget));
+    let digest = super::model::pending_digest(draft, budget.as_ref());
     if pending_of(before.pending.as_ref()).is_some_and(|p| p.digest == digest) {
         return Ok((before, None));
     }
@@ -267,6 +271,7 @@ fn save_pending(
         serde_json::to_value(PendingPlan {
             draft: draft.clone(),
             digest,
+            budget,
         })
         .map_err(|e| invalid_record(&e.to_string()))?,
     );
@@ -304,8 +309,17 @@ impl WorkService {
         caller_ref: Option<Id>,
         plan: Option<&PlanDraft>,
         labels: Option<&[Label]>,
+        budget: Option<&crate::protocol::records::FeatureBudgetInput>,
+        budget_requires_approval: bool,
     ) -> R<StoredWork> {
         require_title(title)?;
+        if budget.is_some()
+            && !budget_requires_approval
+            && (ctx.principal_kind() != PrincipalKind::Human
+                || tx.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human))
+        {
+            return Err(crate::ports::storage::StorageError::ScopeDenied.into());
+        }
         if i32::try_from(priority).is_err() {
             return Err(invalid("priority", None));
         }
@@ -347,7 +361,20 @@ impl WorkService {
         tx.work().set_work_repositories(&w.id, &repos)?;
         slot(tx, &w.id)?;
         if let Some(d) = plan {
-            save_pending(tx, &w, d)?;
+            save_pending(
+                tx,
+                &w,
+                d,
+                if budget_requires_approval {
+                    budget
+                } else {
+                    None
+                },
+            )?;
+        }
+        if !budget_requires_approval && let Some(budget) = budget {
+            crate::services::usage::budget::configure(tx, &w, ctx.principal(), budget)?;
+            crate::services::usage::budget::reconcile(tx, &self.runs, &w)?;
         }
         bump(tx, project, &[PROJECT_QUEUE.to_owned()])?;
         event(
@@ -384,6 +411,7 @@ impl WorkService {
                 priority,
                 plan,
                 labels,
+                budget,
             } => vec![self.insert_feature(
                 tx,
                 ctx,
@@ -396,6 +424,8 @@ impl WorkService {
                 None,
                 plan.as_ref(),
                 labels.as_ref().map(|l| l.0.as_slice()),
+                budget.as_ref(),
+                false,
             )?],
             FeatureCreation::AtomicPlan { plan } => {
                 self.apply_atomic(tx, ctx, &i.project_id, plan, false)?
@@ -584,7 +614,7 @@ impl WorkService {
                 let draft = keep_plan_state(tx, &f.id, &fd.plan)?;
                 check_draft(tx, ctx, project, Some(&f), &draft)?;
                 // Saving a draft never touches the active plan or its approval.
-                let (_, superseded) = save_pending(tx, &f, &draft)?;
+                let (_, superseded) = save_pending(tx, &f, &draft, fd.budget.as_ref())?;
                 let mut next = f.clone();
                 let mut brief = WorkBrief::of(&f)?;
                 let metadata_changed = apply_metadata(
@@ -625,6 +655,8 @@ impl WorkService {
                     Some(fd.caller_ref.clone()),
                     Some(&fd.plan),
                     fd.labels.as_ref().map(|l| l.0.as_slice()),
+                    fd.budget.as_ref(),
+                    true,
                 )
             }
         }
@@ -967,7 +999,7 @@ impl WorkService {
         let draft = keep_plan_state(tx, &f.id, &i.plan)?;
         check_draft(tx, ctx, &f.project_id, Some(&f), &draft)?;
         let before = slot(tx, &f.id)?;
-        let (after_slot, superseded) = save_pending(tx, &f, &draft)?;
+        let (after_slot, superseded) = save_pending(tx, &f, &draft, None)?;
         if after_slot.revision == before.revision {
             return Ok(DomainDecision::NoChange {
                 result: OperationResult::FeaturesEditPlan {
@@ -1122,6 +1154,10 @@ pub fn decide_plan_approval(
     let mut after = touch(tx, ctx, &f)?;
     if approve {
         let previous = active_of(s.approved.as_ref());
+        if let Some(budget) = &pending.budget {
+            crate::services::usage::budget::configure(tx, &f, ctx.principal(), budget)?;
+        }
+
         let active = ActivePlan {
             draft: pending.draft.clone(),
             digest: pending.digest.clone(),

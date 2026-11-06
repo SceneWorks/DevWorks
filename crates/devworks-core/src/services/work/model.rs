@@ -94,6 +94,8 @@ pub struct ActivePlan {
 pub struct PendingPlan {
     pub draft: PlanDraft,
     pub digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::protocol::records::FeatureBudgetInput>,
 }
 pub fn active_of(v: Option<&Value>) -> Option<ActivePlan> {
     v.and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -113,6 +115,17 @@ fn digest_of(v: &Value) -> String {
 pub fn plan_digest(d: &PlanDraft) -> String {
     digest_of(&serde_json::to_value(d).unwrap_or(Value::Null))
 }
+/// A cap proposal is part of the exact reviewed binding, although it is not plan content.
+pub fn pending_digest(
+    draft: &PlanDraft,
+    budget: Option<&crate::protocol::records::FeatureBudgetInput>,
+) -> String {
+    match budget {
+        None => plan_digest(draft),
+        Some(budget) => digest_of(&json!({"plan":draft,"budget":budget})),
+    }
+}
+
 /// The key of the feature-wide scope unit in unit maps (named units are requirement IDs).
 pub const FEATURE_UNIT: &str = "";
 /// The approved scope units of a plan and the digest of each: the feature-wide unit (content,
@@ -198,6 +211,7 @@ pub fn verified(criteria: &[AcceptanceCriterion]) -> bool {
 
 /// What a record projection reads besides the stored item.
 pub struct Extras {
+    pub budget: Option<crate::protocol::records::FeatureBudgetView>,
     /// The root's live activation (its execution ID), if it has one.
     pub live_execution: Option<Id>,
     /// The assessment of the active plan (the readiness that gates work).
@@ -358,6 +372,7 @@ pub fn record(
         acceptance: BoundedList(acceptance.into_iter().take(128).collect()),
         inherits_requirement_ids: BoundedList(brief.inherits.iter().take(128).cloned().collect()),
         previous_inheritance: brief.previous_inheritance.clone(),
+        budget: if feature { extras.budget } else { None },
         touches: BoundedList(brief.touches.iter().take(128).cloned().collect()),
         links: BoundedList(brief.links.iter().take(128).cloned().collect()),
         comments: BoundedList(comments.into_iter().map(|c| c.item).collect()),

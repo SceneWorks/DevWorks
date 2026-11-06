@@ -141,6 +141,20 @@ impl CostAccumulator {
         self.units(1, amount)
     }
 
+    /// Compare before rounding: two fractional charges may round to the same micro-USD.
+    pub fn compare(&self, other: &Self) -> Result<std::cmp::Ordering, MoneyError> {
+        let shared = gcd(self.denominator, other.denominator);
+        let left = self
+            .numerator
+            .checked_mul(other.denominator / shared)
+            .ok_or(MoneyError::Overflow)?;
+        let right = other
+            .numerator
+            .checked_mul(self.denominator / shared)
+            .ok_or(MoneyError::Overflow)?;
+        Ok(left.cmp(&right))
+    }
+
     pub fn micro_usd(&self, rounding: Rounding) -> Result<i64, MoneyError> {
         let whole = self.numerator / self.denominator;
         let fraction = self.numerator % self.denominator;

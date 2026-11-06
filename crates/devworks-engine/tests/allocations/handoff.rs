@@ -256,6 +256,7 @@ fn a_feature_transfer_preserves_worker_session_and_checkpoint_and_fences_old_epo
             s.work(),
             &s.work().work(&id("moving"))?.unwrap(),
             devworks_core::services::work::model::Extras {
+                budget: None,
                 live_execution: None,
                 readiness: None,
                 pending_readiness: None,

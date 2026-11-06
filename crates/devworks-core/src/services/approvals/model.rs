@@ -58,6 +58,9 @@ pub(crate) fn plan(
             json!({"binding":binding,"snapshotAvailable":p.reviewed_snapshot.is_some()});
         if let Some(s) = &p.reviewed_snapshot {
             v["reviewedSource"] = json!({"kind":"FeaturePlan","plan":s["draft"]});
+            if let Some(budget) = s.get("budget") {
+                v["reviewedSource"]["budget"] = budget.clone();
+            }
         }
     }
     wire(v)

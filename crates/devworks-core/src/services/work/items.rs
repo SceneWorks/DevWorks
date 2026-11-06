@@ -140,6 +140,11 @@ pub(crate) fn snapshot_record(
         read.work(),
         w,
         Extras {
+            budget: if w.is_feature() {
+                Some(crate::services::usage::budget::view(read, &w.id)?)
+            } else {
+                None
+            },
             live_execution: live,
             readiness,
             pending_readiness,
@@ -161,10 +166,16 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
     } else {
         (None, None)
     };
+    let budget = if w.is_feature() {
+        Some(crate::services::usage::budget::tx_view(tx, &w.id)?)
+    } else {
+        None
+    };
     Ok(model::record(
         tx.work(),
         w,
         Extras {
+            budget,
             live_execution: live,
             readiness,
             pending_readiness,
@@ -989,6 +1000,24 @@ impl WorkService {
         let mut after = before.clone();
         let mut brief = WorkBrief::of(&before)?;
         let mut changed: Vec<&str> = Vec::new();
+        let budget_changed = if let Some(budget) = &c.budget {
+            if ctx.principal_kind() != crate::context::PrincipalKind::Human
+                || tx.actors().actor_kind(ctx.principal())?
+                    != Some(crate::context::PrincipalKind::Human)
+            {
+                return Err(crate::ports::storage::StorageError::ScopeDenied.into());
+            }
+            let changed_budget =
+                crate::services::usage::budget::configure(tx, &before, ctx.principal(), budget)?;
+            if changed_budget {
+                changed.push("budget");
+            }
+            crate::services::usage::budget::reconcile(tx, &self.runs, &before)?;
+            changed_budget
+        } else {
+            false
+        };
+
         let metadata_changed = apply_metadata(
             &mut brief,
             None,
@@ -1109,6 +1138,8 @@ impl WorkService {
         crate::services::notifications::verified_transition(tx, &before, &after)?;
         if metadata_changed || status_changed {
             super::allocation::invalidate_work(tx, ctx, &before.id)?;
+        }
+        if metadata_changed || status_changed || budget_changed {
             bump(tx, &before.project_id, &[before.queue()])?;
         }
         if readiness_changed {

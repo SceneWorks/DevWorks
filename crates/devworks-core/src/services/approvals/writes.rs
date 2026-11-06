@@ -187,6 +187,10 @@ impl ApprovalService {
                 return Err(invalid("legacy_snapshot_unavailable"));
             }
             crate::services::work::plans::decide_plan_approval(tx, ctx, id, expected, approve)?;
+            if approve {
+                crate::services::usage::budget::reconcile(tx, &self.control, &f)?;
+            }
+
             let changed = tx
                 .work()
                 .proposal(id)?
