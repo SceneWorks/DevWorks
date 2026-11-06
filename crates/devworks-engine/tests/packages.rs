@@ -2550,8 +2550,11 @@ fn a_helper_that_dies_after_every_activation_exhausts_its_restart_budget() {
         },
     ));
     let announced = host.publications();
-    let rec = a.until("dying-pack", "the failure is recorded", |r| {
+    // The committed failure is visible before the host announces its publication.
+    // Observe both within the existing durable-state wait before asserting the epoch.
+    let rec = a.until("dying-pack", "the failure is recorded and published", |r| {
         matches!(r.availability, Some(PackageAvailability::Failed))
+            && host.publications() > announced
     });
     assert_eq!(rec.failure_code.unwrap().0, "HelperExited");
     // Recording the failure is a registry change admissions re-read.
