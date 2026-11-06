@@ -18,14 +18,13 @@ pub(super) struct Metadata<'a> {
     pub read: &'a dyn ReadSnapshot,
     pub context: &'a InvocationContext,
     pub scope: &'a DataScope,
-    pub now_ms: i64,
     pub stamp: ReadStamp,
+    pub selection: Option<&'a StoredGraphReadPin>,
     pub position: Position,
     pub limit: usize,
     pub next: RefCell<Option<Position>>,
     pub budget: RefCell<Budget>,
     pub encoded_bytes: Cell<usize>,
-    pub cursors: Option<&'a super::cursor::Cursors>,
 }
 
 impl Metadata<'_> {
@@ -35,6 +34,35 @@ impl Metadata<'_> {
         &self,
         mut visit: impl FnMut(StoredRepository) -> Result<bool, Failure>,
     ) -> Result<(), Failure> {
+        if let Some(pin) = self.selection {
+            let mut members: Vec<_> = pin
+                .scope
+                .views
+                .iter()
+                .map(|view| &view.repository_id)
+                .chain(
+                    pin.unavailable_repositories
+                        .iter()
+                        .map(|missing| &missing.repository_id),
+                )
+                .collect();
+            members.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            for id in members {
+                if !self.budget.borrow_mut().visit() {
+                    return Ok(());
+                }
+                super::scope::authorize(self.read, self.context, self.scope, id)?;
+                let repository = self
+                    .read
+                    .projects()
+                    .repository(id)?
+                    .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
+                if !visit(repository)? {
+                    break;
+                }
+            }
+            return Ok(());
+        }
         let project = match self.scope {
             DataScope::Project { project_id } => {
                 crate::services::projects::visible_project(
@@ -95,11 +123,6 @@ impl Metadata<'_> {
             .set(self.encoded_bytes.get().saturating_add(size));
         Ok(true)
     }
-    pub fn cursor(&self, position: &Position) -> Result<String, Failure> {
-        self.cursors
-            .ok_or(StorageError::CursorExpired)?
-            .encode(position)
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -107,6 +130,7 @@ impl Metadata<'_> {
 pub(super) struct Position {
     pub offset: usize,
     pub property: Option<properties::Position>,
+    pub edge_property: Option<properties::Position>,
     pub source_byte: Option<usize>,
     pub drilldown: Option<DrilldownPosition>,
 }
@@ -323,9 +347,8 @@ impl<'a> Reader<'a> {
             )
             .into());
         }
-        if rows.is_empty()
-            && (self.budget.exhausted.is_some()
-                || !self.selected.pin.unavailable_repositories.is_empty())
+        if self.budget.exhausted.is_some()
+            || (rows.is_empty() && !self.selected.pin.unavailable_repositories.is_empty())
         {
             return Err(Refusal::new(
                 DomainErrorCode::ViewUnavailable,
@@ -408,8 +431,4 @@ impl<'a> Reader<'a> {
         }
         Ok(out)
     }
-}
-
-pub(super) fn optional_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
 }

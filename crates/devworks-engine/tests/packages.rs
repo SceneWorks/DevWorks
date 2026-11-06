@@ -220,6 +220,7 @@ struct Spec {
     signer: Option<u8>,
     publisher: String,
     extra: Option<(String, Vec<u8>)>,
+    help_source: Option<std::path::PathBuf>,
     /// A configuration schema document the package ships as a schema asset.
     config_schema: Option<Value>,
     /// Invocations the helper multiplexes (`requestedLimits.maxConcurrent`).
@@ -245,6 +246,7 @@ impl Spec {
             signer: Some(1),
             publisher: "acme".into(),
             extra: None,
+            help_source: None,
             config_schema: None,
             max_concurrent: 4,
         }
@@ -273,7 +275,10 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
     let fixture = json!({"mode": spec.mode, "inventory": spec.ids()})
         .to_string()
         .into_bytes();
-    let help = format!("# {}\n", spec.package).into_bytes();
+    let help = spec.help_source.as_ref().map_or_else(
+        || format!("# {}\n", spec.package).into_bytes(),
+        |path| std::fs::read(path).unwrap(),
+    );
     let entry = if cfg!(windows) {
         "bin/helper.exe"
     } else {
@@ -2473,12 +2478,13 @@ fn a_quiescent_retry_announces_its_publication_before_admission_reopens() {
     a.until("retry-pack", "the staged update activates", |r| {
         r.version.0 == "1.1.0"
     });
-    // The host's own activation advanced the admission epoch like a command's settlement.
-    assert!(host.publications() > announced);
     a.ready("retry-pack");
     let h = a
         .invoke("retry-pack", "state", InvocationKind::Ordinary)
         .unwrap();
+    // A committed registry can be read while its admission barrier is still held. The
+    // publication epoch must have advanced before this new-generation admission succeeds.
+    assert!(host.publications() > announced);
     assert!(matches!(
         finished(h.wait(Duration::from_secs(10))),
         InvocationOutcome::Completed { .. }
@@ -4476,3 +4482,6 @@ mod approvals;
 mod help_guides;
 #[path = "providers/packages.rs"]
 mod provider_schema;
+
+#[path = "packages/help_allocations.rs"]
+mod help_allocations;

@@ -25,6 +25,11 @@
 //!   it — the only empty assistant entry ever written. After a crash mid-stream the runtime
 //!   appends that marker itself, since the turn will never end.
 //!
+//! Native transports can use [`TurnAssembler::positioned`] after restoring the provider's
+//! private item/sub-block ordering. That mode retains tool positions and withholds the whole
+//! canonical batch until the terminal; a separate host-only volatile text preview streams to
+//! the UI and never advances a checkpoint or changes already committed transcript entries.
+//!
 //! Endpoint wire decoding, broker admission and result assembly are the transport and tool-turn
 //! owners'; this assembler only decides what of a normalized turn is durable.
 use crate::protocol::provider::{
@@ -58,6 +63,7 @@ enum Item {
     /// An ended text run (or a full chunk of the open run).
     Text(String),
     Native(ArtifactRef),
+    Call(CompleteToolCall),
 }
 
 /// The text run still being streamed: its block and the text not yet taken.
@@ -82,11 +88,21 @@ pub struct TurnAssembler {
     cut_off: bool,
     calls_taken: bool,
     finished: bool,
+    positioned: bool,
 }
 
 impl TurnAssembler {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Host-owned ordered turns retain tool positions rather than moving calls to the tail.
+    /// Content stays private until the terminal establishes readiness.
+    pub fn positioned() -> Self {
+        Self {
+            positioned: true,
+            ..Self::default()
+        }
     }
 
     fn end_run(&mut self) {
@@ -169,7 +185,13 @@ impl TurnAssembler {
                     }
                 }
             }
-            ProviderBody::ToolCallComplete { tool_call } => self.calls.push(tool_call.clone()),
+            ProviderBody::ToolCallComplete { tool_call } => {
+                self.calls.push(tool_call.clone());
+                if self.positioned {
+                    self.end_run();
+                    self.pending.push(Item::Call(tool_call.clone()));
+                }
+            }
             ProviderBody::NativeContinuation { artifact, .. } => {
                 self.end_run();
                 self.pending.push(Item::Native(artifact.clone()));
@@ -215,7 +237,7 @@ impl TurnAssembler {
         ) else {
             return Vec::new();
         };
-        if self.finished {
+        if self.finished || (self.positioned && self.terminal.is_none() && !self.cut_off) {
             return Vec::new();
         }
         let interrupted = match &self.terminal {
@@ -231,6 +253,9 @@ impl TurnAssembler {
         }
         let mut out = Vec::new();
         for item in std::mem::take(&mut self.pending) {
+            if matches!(item, Item::Call(_)) && !self.tools_ready() {
+                continue;
+            }
             out.push(match item {
                 Item::Text(text) => TranscriptBody::AssistantAttempt {
                     request_id: request.clone(),
@@ -238,6 +263,7 @@ impl TurnAssembler {
                     visible_text: text,
                     interrupted: false,
                 },
+                Item::Call(tool_call) => TranscriptBody::ToolCallRecorded { tool_call },
                 Item::Native(artifact) => TranscriptBody::NativeItem {
                     binding: binding.clone(),
                     artifact,
@@ -252,7 +278,7 @@ impl TurnAssembler {
                 _ => out.push(interruption_marker(request.clone(), attempt.clone())),
             }
         }
-        if self.tools_ready() && !self.calls_taken {
+        if self.tools_ready() && !self.calls_taken && !self.positioned {
             let mut calls = self.calls.clone();
             calls.sort_by_key(|c| c.call.ordinal.get());
             out.extend(

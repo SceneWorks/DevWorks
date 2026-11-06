@@ -182,6 +182,7 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
             quote: PriceQuote {
                 classification: CostClassification::LocalFree,
                 connection_revision: Some(1),
+                publication_provider: None,
                 snapshot_id: None,
                 price_revision: None,
                 override_revision: None,

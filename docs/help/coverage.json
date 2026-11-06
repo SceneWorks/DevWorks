@@ -5,6 +5,8 @@
   "settings": {"owner": "crates/devworks-core/src/settings/catalog.rs", "rule": "Every Category::help_id plus every real setting/default/scope/adoption/policy is documented", "referenceTopic": "settings-reference"},
   "runtimeOperations": {"owner": "crates/devworks-core/src/services/mod.rs", "registry": "crates/devworks-core/src/registry/catalog.rs", "referenceTopic": "capability-reference", "rule": "Generated references use actual registered modes/permissions/availability; descriptor existence alone is not availability"},
   "workflowOwners": [
+    {"path":"crates/devworks-core/src/services/graph","topics":["code-exploration","repositories","indexing"]},
+    {"path":"crates/devworks-core/src/services/prices","topics":["usage","routing-context"]},
     {"path":"crates/devworks-core/src/services/work","topics":["features","issues","workflow","work-controls"]},
     {"path":"crates/devworks-core/src/services/runs","topics":["work-controls","agents","recovery"]},
     {"path":"crates/devworks-core/src/services/sessions","topics":["chat","routing-context","artifacts"]},

@@ -758,3 +758,73 @@ fn retained_openrouter_null_fragment_identity_can_be_completed_without_duplicate
         );
     }
 }
+
+#[test]
+fn responses_item_and_unknown_part_evidence_keeps_exact_native_lexemes() {
+    let unknown =
+        r#"{ "type":"future_native", "amount":1.2300e+004, "huge":1e9999, "escaped":"\u0061" }"#;
+    // Escaped structural keys must resolve to the same field as the parsed convenience view.
+    let item = format!(
+        r#"{{ "type":"message", "con\u0074ent":[{unknown},{unknown}], "future":9007199254740993 }}"#
+    );
+    let body = format!(r#"{{"status":"completed","out\u0070ut":[{item}],"opaque":1.2000e-009}}"#);
+    for profile in [
+        EndpointProfile::OpenAiResponses,
+        EndpointProfile::CodexSubscriptionResponses,
+    ] {
+        for form in 0..3 {
+            let mut decoder = Decoder::new(profile.clone());
+            let wire = match form {
+                0 => body.clone(),
+                1 => format!(
+                    r#"{{"type":"response.completed","response":{body},"opaque-event":1.2300e+04}}"#
+                ),
+                _ => format!(
+                    r#"{{"type":"response.output_item.done","output_index":3,"item":{item},"opaque-event":1.2300e+04}}"#
+                ),
+            };
+            let frames = if form == 0 {
+                decoder.consume_aggregate(wire.as_bytes())
+            } else {
+                decoder.consume_data_event(None, &wire)
+            };
+            let observations: Vec<_> = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    DecodedFrame::Native { observation } => Some(observation),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                observations.iter().filter(|o| o.raw_json == wire).count(),
+                1,
+                "one exact enclosing observation"
+            );
+            assert_eq!(
+                observations
+                    .iter()
+                    .filter(|o| o.kind == "message"
+                        && o.raw_json.as_str()
+                            == if form == 2 {
+                                wire.as_str()
+                            } else {
+                                item.as_str()
+                            })
+                    .count(),
+                1
+            );
+            let parts: Vec<_> = observations
+                .iter()
+                .filter(|o| o.kind == "unknown_response_content")
+                .collect();
+            assert_eq!(parts.len(), 2);
+            assert!(
+                parts.iter().all(
+                    |part| part.raw_json == unknown && part.replay == NativeReplay::Unsupported
+                )
+            );
+            assert!(frames.iter().any(|frame|matches!(frame,DecodedFrame::Error{error} if error.kind==DecodeErrorKind::UnsupportedReplay)));
+            assert!(calls(&frames).is_empty());
+        }
+    }
+}

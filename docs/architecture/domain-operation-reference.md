@@ -4241,7 +4241,7 @@ Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQuery
 | `description` | `?Content` · *revision 3+* |
 | `language` | `?Label` · *revision 3+* |
 | `framework` | `?Label` · *revision 3+* |
-| `foundational` | `bool` |
+| `foundational` | `?bool` · *revision 3+* |
 
 ### CodeSearchHit
 

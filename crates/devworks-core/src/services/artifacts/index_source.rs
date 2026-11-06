@@ -1,6 +1,5 @@
 //! Private captured index bytes. These are not public artifacts or artifact versions.
 use super::{ArtifactService, StagedFile, put_staged_blob};
-use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{
     ReadSnapshot, StorageError, StoredGraphSourceCapture, WriteTransaction,
 };
@@ -38,54 +37,6 @@ impl ArtifactService {
         )?;
         Ok(capture)
     }
-
-    /// Opens only the private capture already resolved and authorized by the graph service.
-    /// The caller must revalidate its exact view/unit binding when publishing the response.
-    /// No public artifact command or arbitrary external reference reaches this seam.
-    pub(crate) fn read_index_source(
-        &self,
-        read: &dyn ReadSnapshot,
-        expected: &StoredGraphSourceCapture,
-        max: u64,
-    ) -> Result<Vec<u8>, super::lifecycle::ExactReadRefusal> {
-        use super::lifecycle::ExactReadRefusal;
-        let length =
-            u64::try_from(expected.byte_count).map_err(|_| ExactReadRefusal::Unreadable)?;
-        if length > max {
-            return Err(ExactReadRefusal::TooLarge { bytes: length, max });
-        }
-        let _hold = self.readers.acquire(&expected.blob_digest);
-        let current = read
-            .graph()
-            .graph_source_capture(&expected.id)
-            .map_err(ExactReadRefusal::Storage)?;
-        if current.as_ref() != Some(expected) {
-            return Err(ExactReadRefusal::NotFound);
-        }
-        let blob = read
-            .artifacts()
-            .blob(&expected.blob_digest)
-            .map_err(ExactReadRefusal::Storage)?;
-        if !blob.is_some_and(|b| {
-            b.generation == expected.blob_generation && b.byte_count == expected.byte_count
-        }) {
-            return Err(ExactReadRefusal::Unreadable);
-        }
-        let mut stream = self
-            .files
-            .open(&expected.blob_digest, &expected.blob_generation, length)
-            .map_err(|_| ExactReadRefusal::Unreadable)?;
-        let mut bytes = Vec::with_capacity(length as usize);
-        stream
-            .by_ref()
-            .take(max.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|_| ExactReadRefusal::Unreadable)?;
-        if bytes.len() as u64 != length || sha256_hex(&bytes) != expected.blob_digest {
-            return Err(ExactReadRefusal::Unreadable);
-        }
-        Ok(bytes)
-    }
 }
 
 impl ArtifactService {
@@ -99,13 +50,68 @@ impl ArtifactService {
     ) -> Result<(), super::lifecycle::ExactReadRefusal> {
         use super::lifecycle::ExactReadRefusal;
         use sha2::{Digest, Sha256};
-        let length=u64::try_from(expected.byte_count).map_err(|_|ExactReadRefusal::Unreadable)?;
-        let _hold=self.readers.acquire(&expected.blob_digest);
-        if read.graph().graph_source_capture(&expected.id).map_err(ExactReadRefusal::Storage)?.as_ref()!=Some(expected){return Err(ExactReadRefusal::NotFound);}
-        if !read.artifacts().blob(&expected.blob_digest).map_err(ExactReadRefusal::Storage)?.is_some_and(|b|b.generation==expected.blob_generation&&b.byte_count==expected.byte_count){return Err(ExactReadRefusal::Unreadable);}
-        let mut stream=self.files.open(&expected.blob_digest,&expected.blob_generation,length).map_err(|_|ExactReadRefusal::Unreadable)?;
-        let mut buffer=[0;8192];let mut hash=Sha256::new();let mut total=0u64;
-        loop{let count=stream.read(&mut buffer).map_err(|_|ExactReadRefusal::Unreadable)?;if count==0{break;}total=total.checked_add(count as u64).ok_or(ExactReadRefusal::Unreadable)?;if total>length{return Err(ExactReadRefusal::Unreadable);}hash.update(&buffer[..count]);if !visit(&buffer[..count]){return Err(ExactReadRefusal::Unreadable);}}
-        if total!=length||hash.finalize().iter().map(|b|format!("{b:02x}")).collect::<String>()!=expected.blob_digest{return Err(ExactReadRefusal::Unreadable);}Ok(())
+        let length =
+            u64::try_from(expected.byte_count).map_err(|_| ExactReadRefusal::Unreadable)?;
+        let _hold = self.readers.acquire(&expected.blob_digest);
+        if read
+            .graph()
+            .graph_source_capture(&expected.id)
+            .map_err(ExactReadRefusal::Storage)?
+            .as_ref()
+            != Some(expected)
+        {
+            return Err(ExactReadRefusal::NotFound);
+        }
+        if !read
+            .artifacts()
+            .blob(&expected.blob_digest)
+            .map_err(ExactReadRefusal::Storage)?
+            .is_some_and(|b| {
+                b.generation == expected.blob_generation && b.byte_count == expected.byte_count
+            })
+        {
+            return Err(ExactReadRefusal::Unreadable);
+        }
+        let mut stream = self
+            .files
+            .open_controlled(
+                &expected.blob_digest,
+                &expected.blob_generation,
+                length,
+                &mut || !visit(&[]),
+            )
+            .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut buffer = [0; 8192];
+        let mut hash = Sha256::new();
+        let mut total = 0u64;
+        loop {
+            let count = stream
+                .read(&mut buffer)
+                .map_err(|_| ExactReadRefusal::Unreadable)?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or(ExactReadRefusal::Unreadable)?;
+            if total > length {
+                return Err(ExactReadRefusal::Unreadable);
+            }
+            hash.update(&buffer[..count]);
+            if !visit(&buffer[..count]) {
+                return Err(ExactReadRefusal::Unreadable);
+            }
+        }
+        if total != length
+            || hash
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+                != expected.blob_digest
+        {
+            return Err(ExactReadRefusal::Unreadable);
+        }
+        Ok(())
     }
 }

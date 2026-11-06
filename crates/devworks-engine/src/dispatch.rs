@@ -69,7 +69,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
@@ -390,6 +390,18 @@ pub struct Dispatcher {
     inner: Arc<Inner>,
 }
 
+/// Read-only diagnostics must not keep consumers (and their services) alive.
+pub(crate) struct DispatcherObserver(Weak<Inner>);
+
+impl DispatcherObserver {
+    pub(crate) fn metrics(&self) -> Option<(usize, u64)> {
+        let dispatcher = Dispatcher {
+            inner: self.0.upgrade()?,
+        };
+        Some((dispatcher.in_flight(), dispatcher.passes()))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
     /// The claim is no longer ours (recovered, reassigned or settled elsewhere).
@@ -478,6 +490,10 @@ impl Dispatcher {
     /// "Queue state may have changed" hints for UI; repair a missed hint with a durable query.
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.inner.status.subscribe()
+    }
+
+    pub(crate) fn observer(&self) -> DispatcherObserver {
+        DispatcherObserver(Arc::downgrade(&self.inner))
     }
 
     /// Deliveries currently being handled by this dispatcher.

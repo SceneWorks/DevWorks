@@ -21,6 +21,19 @@ CREATE TABLE help_head (
  updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
 ) STRICT;
 INSERT INTO help_head VALUES(1,1,'',1,'',NULL,NULL,0);
+-- One small search projection/checkpoint map per content digest, not per generation.
+CREATE TABLE help_contents (
+ digest TEXT PRIMARY KEY,
+ byte_count INTEGER NOT NULL CHECK(byte_count BETWEEN 0 AND 268435456),
+ character_count INTEGER NOT NULL CHECK(character_count >= 0 AND character_count <= byte_count),
+ indexed_bytes INTEGER NOT NULL CHECK(indexed_bytes >= 0 AND indexed_bytes <= byte_count AND indexed_bytes <= 65536),
+ index_complete INTEGER NOT NULL CHECK(index_complete IN (0,1)),
+ search_text TEXT NOT NULL CHECK(length(CAST(search_text AS BLOB)) <= 65536),
+ offsets_json TEXT NOT NULL CHECK(json_valid(offsets_json) AND json_type(offsets_json)='array' AND json_array_length(offsets_json) BETWEEN 1 AND 258 AND length(CAST(offsets_json AS BLOB)) <= 32768)
+) STRICT;
+CREATE TRIGGER help_content_immutable_update BEFORE UPDATE ON help_contents BEGIN
+ SELECT RAISE(ABORT,'help content projections are immutable');
+END;
 CREATE TABLE help_topics (
  generation_id TEXT NOT NULL REFERENCES help_generations,
  id TEXT NOT NULL,
@@ -40,16 +53,19 @@ CREATE TABLE help_topics (
  reason TEXT,
  character_count INTEGER NOT NULL CHECK(character_count >= 0),
  topic_revision INTEGER NOT NULL CHECK(topic_revision > 0),
- body TEXT NOT NULL,
- search_text TEXT NOT NULL,
+ content_key TEXT REFERENCES help_contents,
+ title_search TEXT NOT NULL CHECK(length(CAST(title_search AS BLOB)) <= 4096),
  PRIMARY KEY(generation_id,id),
  CHECK((content_ref_json IS NULL)=(artifact_id IS NULL)),
  CHECK((content_ref_json IS NULL)=(version_id IS NULL)),
  CHECK((availability='Available')=(content_ref_json IS NOT NULL)),
- CHECK(availability='Available' OR (body='' AND character_count=0 AND provenance_json='null')),
+ CHECK((availability='Available')=(content_key IS NOT NULL)),
+ CHECK(content_key IS NULL OR content_key=content_digest),
+ CHECK(availability='Available' OR (character_count=0 AND provenance_json='null')),
  CHECK((source_kind='Package')=(package_id IS NOT NULL)),
  CHECK((source_kind='Package')=(manifest_digest IS NOT NULL))
 ) STRICT;
+CREATE INDEX help_topic_content_references ON help_topics(content_key,generation_id,id);
 CREATE INDEX help_topic_package_page ON help_topics(generation_id,package_id,id);
 CREATE TABLE help_topic_screens (
  generation_id TEXT NOT NULL,

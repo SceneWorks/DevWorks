@@ -1,7 +1,6 @@
 //! Offline Help: metadata-only pages, bounded Unicode passages and atomic generation publication.
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
-use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::packages::MAX_BUNDLE_BYTES;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::provider::ArtifactRef;
@@ -204,6 +203,74 @@ fn staged_topics(
         ],
     )
 }
+fn validate_content(c: &StoredHelpContent) -> Result<(), StorageError> {
+    if !digest(&c.digest)
+        || c.byte_count > MAX_BUNDLE_BYTES
+        || c.character_count < 0
+        || c.character_count as u64 > c.byte_count
+        || c.byte_count > (c.character_count as u64).saturating_mul(4)
+        || c.indexed_bytes > c.byte_count
+        || c.indexed_bytes > MAX_HELP_INDEX_BYTES as u64
+        || (c.index_complete && c.indexed_bytes != c.byte_count)
+        || c.search_text.len() > MAX_HELP_INDEX_BYTES
+        || c.search_text.contains('\0')
+        || c.search_text != c.search_text.to_lowercase()
+        || c.offsets.is_empty()
+        || c.offsets.len() > MAX_HELP_CHECKPOINTS
+        || c.offsets.first()
+            != Some(&HelpOffset {
+                byte_offset: 0,
+                character_offset: 0,
+            })
+        || c.offsets.last()
+            != Some(&HelpOffset {
+                byte_offset: c.byte_count,
+                character_offset: c.character_count,
+            })
+    {
+        return Err(invalid("invalid bounded Help content projection"));
+    }
+    for pair in c.offsets.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if b.byte_offset <= a.byte_offset
+            || b.character_offset <= a.character_offset
+            || b.byte_offset - a.byte_offset > HELP_CHECKPOINT_BYTES + 4
+            || (b.character_offset - a.character_offset) as u64 > b.byte_offset - a.byte_offset
+            || b.byte_offset - a.byte_offset
+                > ((b.character_offset - a.character_offset) as u64).saturating_mul(4)
+        {
+            return Err(invalid("invalid Help Unicode checkpoint"));
+        }
+    }
+    if serde_json::to_vec(&c.offsets)
+        .map_err(|_| invalid("invalid Help offsets"))?
+        .len()
+        > 32768
+    {
+        return Err(invalid("Help checkpoint map exceeds bound"));
+    }
+    Ok(())
+}
+fn load_content(
+    conn: &Connection,
+    digest: &str,
+) -> Result<Option<StoredHelpContent>, StorageError> {
+    let row=db(conn.query_row("SELECT byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json FROM help_contents WHERE digest=?1",[digest],|r|Ok((r.get::<_,i64>(0)?,r.get(1)?,r.get::<_,i64>(2)?,r.get(3)?,r.get(4)?,r.get::<_,String>(5)?))).optional())?;
+    row.map(|r| {
+        let c = StoredHelpContent {
+            digest: digest.into(),
+            byte_count: u64::try_from(r.0).map_err(|_| corrupt("negative Help content size"))?,
+            character_count: r.1,
+            indexed_bytes: u64::try_from(r.2).map_err(|_| corrupt("negative Help indexed size"))?,
+            index_complete: r.3,
+            search_text: r.4,
+            offsets: serde_json::from_str(&r.5).map_err(|_| corrupt("invalid Help offsets"))?,
+        };
+        validate_content(&c)?;
+        Ok(c)
+    })
+    .transpose()
+}
 macro_rules! help_reads {
     ($ty:ty) => {
         impl HelpRead for $ty {
@@ -242,21 +309,24 @@ macro_rules! help_reads {
                     return Err(invalid("invalid Help filter"));
                 }
                 let mut tail = String::from("g.state='Published' AND t.generation_id=?1 AND t.id>?2");
-                if filter.query.is_some() { tail.push_str(" AND instr(t.search_text,?3)>0"); }
+                if filter.query.is_some() { tail.push_str(" AND instr(t.title_search||char(10)||coalesce((SELECT c.search_text FROM help_contents c WHERE c.digest=t.content_key),''),?3)>0"); }
                 if filter.screen_id.is_some() { tail.push_str(" AND EXISTS(SELECT 1 FROM help_topic_screens s WHERE s.generation_id=t.generation_id AND s.topic_id=t.id AND s.screen_id=?4)"); }
                 if filter.package_id.is_some() { tail.push_str(" AND t.package_id=?5"); }
                 tail.push_str(" ORDER BY t.id LIMIT ?6");
                 topics(self.conn, &tail, params![generation.as_str(), after.map_or("",Id::as_str), filter.query, filter.screen_id, filter.package_id.as_ref().map(Id::as_str), i64::from(limit)])
             }
-            fn help_passage(&self, generation: &Id, id: &Id, offset: i64, chars: u32) -> Result<Option<String>, StorageError> {
-                if offset < 0 || chars == 0 || chars > MAX_HELP_PASSAGE_CHARS {
-                    return Err(invalid("Help passage bounds invalid"));
-                }
-                let start = offset.checked_add(1).ok_or_else(|| invalid("Help passage offset overflow"))?;
-                db(self.conn.query_row(
-                    "SELECT substr(t.body,?3,?4) FROM help_topics t JOIN help_generations g ON g.id=t.generation_id WHERE g.state='Published' AND t.generation_id=?1 AND t.id=?2 AND t.availability='Available'",
-                    params![generation.as_str(), id.as_str(), start, i64::from(chars)], |r| r.get(0)
-                ).optional())
+            fn help_content(&self,digest:&str)->Result<Option<StoredHelpContent>,StorageError>{load_content(self.conn,digest)}
+            fn help_content_reference(&self,digest:&str)->Result<Option<Value>,StorageError>{
+                let reference:Option<String>=db(self.conn.query_row("SELECT t.content_ref_json FROM help_topics t JOIN help_generations g ON g.id=t.generation_id JOIN artifact_versions v ON v.id=t.version_id JOIN artifacts a ON a.id=t.artifact_id JOIN blobs b ON b.digest=t.content_digest WHERE t.content_digest=?1 AND t.availability='Available' AND g.state='Published' AND a.state='Live' AND v.deleted_at IS NULL AND b.state='Present' ORDER BY t.generation_id,t.id LIMIT 1",[digest],|r|r.get(0)).optional())?;
+                reference.as_deref().map(json).transpose()
+            }
+            fn help_passage_source(&self,generation:&Id,id:&Id,offset:i64,chars:u32)->Result<Option<StoredHelpPassage>,StorageError>{
+                if offset<0||chars==0||chars>MAX_HELP_PASSAGE_CHARS {return Err(invalid("Help passage bounds invalid"));}
+                let Some(topic)=self.help_topic(generation,id)?.filter(|t|t.availability=="Available") else{return Ok(None);};
+                let c=load_content(self.conn,&topic.content_digest)?.ok_or_else(||corrupt("Help content projection missing"))?;
+                if offset>c.character_count {return Err(invalid("Help passage offset exceeds content"));}
+                let checkpoint=c.offsets.iter().rev().find(|p|p.character_offset<=offset).expect("initial offset").clone();
+                Ok(Some(StoredHelpPassage {content_ref:topic.content_ref.ok_or_else(||corrupt("Help reference missing"))?,content_digest:c.digest,byte_count:c.byte_count,character_count:c.character_count,checkpoint}))
             }
         }
     };
@@ -280,9 +350,6 @@ fn validate_document(
         || !text(&t.title, 1, 256)
         || t.topic_revision < 1
         || t.character_count < 0
-        || document.body.contains('\0')
-        || document.search_text.contains('\0')
-        || document.body.len() as u64 > MAX_BUNDLE_BYTES
         || t.reason.as_ref().is_some_and(|r| !text(r, 0, 65536))
     {
         return Err(invalid("invalid Help document bounds"));
@@ -304,13 +371,13 @@ fn validate_document(
         }
     }
     let reference = if t.availability == "Available" {
-        if !digest(&t.content_digest)
-            || sha256_hex(document.body.as_bytes()) != t.content_digest
-            || i64::try_from(document.body.chars().count()).ok() != Some(t.character_count)
-        {
-            return Err(invalid(
-                "Help body differs from its captured digest or Unicode length",
-            ));
+        let c = document
+            .content
+            .as_ref()
+            .ok_or_else(|| invalid("available Help requires content metadata"))?;
+        validate_content(c)?;
+        if c.digest != t.content_digest || c.character_count != t.character_count {
+            return Err(invalid("Help projection differs from captured source"));
         }
         let reference: ArtifactRef = serde_json::from_value(
             t.content_ref
@@ -320,11 +387,11 @@ fn validate_document(
         .map_err(|_| invalid("invalid Help artifact reference"))?;
         reference.validate().map_err(invalid)?;
         if reference.sha256.as_str() != t.content_digest
-            || reference.byte_length.get() != document.body.len() as i64
+            || reference.byte_length.get() != c.byte_count as i64
         {
             return Err(invalid("Help artifact reference differs from its body"));
         }
-        let real:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=?5 AND b.state='Present')",params![reference.version_id.as_str(),reference.artifact_id.as_str(),reference.sha256.as_str(),reference.media_type,reference.byte_length.get()],|r|r.get(0)))?;
+        let real:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id JOIN blobs b ON b.digest=v.blob_digest WHERE v.id=?1 AND v.artifact_id=?2 AND v.blob_digest=?3 AND v.media_type=?4 AND v.deleted_at IS NULL AND a.state='Live' AND b.byte_count=?5 AND b.state='Present' AND json_extract(v.source_json,'$.source.helpIndexDigest')=?6)",params![reference.version_id.as_str(),reference.artifact_id.as_str(),reference.sha256.as_str(),reference.media_type,reference.byte_length.get(),c.commitment().map_err(|_|invalid("Help index commitment"))?],|r|r.get(0)))?;
         if !real {
             return Err(invalid(
                 "Help artifact reference is not a committed live version",
@@ -347,7 +414,7 @@ fn validate_document(
     } else {
         if t.content_ref.is_some()
             || !t.provenance.is_null()
-            || !document.body.is_empty()
+            || document.content.is_some()
             || t.character_count != 0
             || (!t.content_digest.is_empty() && !digest(&t.content_digest))
         {
@@ -458,8 +525,11 @@ impl HelpRepository for Unit<'_> {
             ));
         }
         if let Some(old) = self.staged_help_topic(&t.generation_id, &t.id)? {
-            let identical:bool=db(self.conn.query_row("SELECT body=?3 AND search_text=?4 FROM help_topics WHERE generation_id=?1 AND id=?2",params![t.generation_id.as_str(),t.id.as_str(),document.body,document.search_text],|r|r.get(0)))?;
-            return if old == *t && identical {
+            let same_content = match &document.content {
+                Some(c) => load_content(self.conn, &c.digest)?.as_ref() == Some(c),
+                None => true,
+            };
+            return if old == *t && same_content {
                 Ok(old)
             } else {
                 Err(StorageError::Duplicate {
@@ -469,7 +539,16 @@ impl HelpRepository for Unit<'_> {
             };
         }
         db(self.conn.execute("INSERT INTO help_generations(id,operation_id,state) VALUES(?1,?2,'Draft') ON CONFLICT(id) DO NOTHING",params![t.generation_id.as_str(),op.0.as_str()]))?;
-        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,body,search_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,content,reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.body,document.search_text]))?;
+        if let Some(c) = &document.content {
+            if let Some(old) = load_content(self.conn, &c.digest)? {
+                if old != *c {
+                    return Err(invalid("same Help content digest has different projection"));
+                }
+            } else {
+                db(self.conn.execute("INSERT INTO help_contents(digest,byte_count,character_count,indexed_bytes,index_complete,search_text,offsets_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![c.digest,c.byte_count as i64,c.character_count,c.indexed_bytes as i64,c.index_complete,c.search_text,serde_json::to_string(&c.offsets).map_err(|_|invalid("Help offsets JSON"))?]))?;
+            }
+        }
+        db(self.conn.execute("INSERT INTO help_topics(generation_id,id,version,title,content_digest,content_ref_json,artifact_id,version_id,provenance_json,related_operations_json,screen_ids_json,source_kind,package_id,manifest_digest,availability,reason,character_count,topic_revision,content_key,title_search) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",params![t.generation_id.as_str(),t.id.as_str(),t.version,t.title,t.content_digest,content,reference.as_ref().map(|r|r.artifact_id.as_str()),reference.as_ref().map(|r|r.version_id.as_str()),provenance,operations,screens,t.source_kind,t.package_id.as_ref().map(Id::as_str),t.manifest_digest,t.availability,t.reason,t.character_count,t.topic_revision,document.content.as_ref().map(|c|c.digest.as_str()),t.title.to_lowercase()]))?;
         for screen in &t.screen_ids {
             db(self.conn.execute(
                 "INSERT INTO help_topic_screens(generation_id,topic_id,screen_id) VALUES(?1,?2,?3)",
@@ -576,7 +655,14 @@ impl HelpRepository for Unit<'_> {
         {
             return Err(StorageError::Busy);
         }
+        let retired = staged_topics(self.conn, gen_id, None, limit)?
+            .into_iter()
+            .map(|t| t.content_digest)
+            .collect::<Vec<_>>();
         db(self.conn.execute("DELETE FROM help_topics WHERE generation_id=?1 AND id IN (SELECT id FROM help_topics WHERE generation_id=?1 ORDER BY id LIMIT ?2)",params![gen_id.as_str(),i64::from(limit)]))?;
+        for digest in retired {
+            db(self.conn.execute("DELETE FROM help_contents WHERE digest=?1 AND NOT EXISTS(SELECT 1 FROM help_topics WHERE content_key=?1)",[digest]))?;
+        }
         let remains: bool = db(self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM help_topics WHERE generation_id=?1)",
             [gen_id.as_str()],

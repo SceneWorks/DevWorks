@@ -2749,7 +2749,8 @@
           "x-since": 3
         },
         "foundational": {
-          "type": "boolean"
+          "type": "boolean",
+          "x-since": 3
         },
         "framework": {
           "$ref": "#/$defs/Text1To256",
@@ -2768,8 +2769,7 @@
       },
       "required": [
         "repositoryId",
-        "name",
-        "foundational"
+        "name"
       ],
       "type": "object"
     },

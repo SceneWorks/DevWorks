@@ -492,20 +492,15 @@ impl Git<'_> {
         Ok(serde_json::json!({"gitVersion":version,"gitProgram":program,"hookNames":names}))
     }
 
-    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
-    /// The current hook-name/version witness is checked on either side of every index write.
-    pub(crate) fn reviewed_mutation(
+    /// Fixed helper-free launch profile shared by reviewed writes and their patch evidence.
+    /// The policy carries the already-qualified actual Git executable, including Windows.
+    fn reviewed_spec(
         &self,
         dir: &Path,
         args: &[&str],
         stdin: Option<Vec<u8>>,
-        operation: &OperationId,
-        expected: &serde_json::Value,
-    ) -> Result<Vec<u8>, GitFault> {
-        let policy = self.reviewed_commit_policy(dir)?;
-        if &policy != expected {
-            return Err(GitFault::SourceChanged);
-        }
+        policy: &serde_json::Value,
+    ) -> Result<ProcessSpec, GitFault> {
         let mut spec = self.spec(dir, args, stdin);
         spec.program = policy["gitProgram"]
             .as_str()
@@ -541,6 +536,42 @@ impl Git<'_> {
             .find(|(key, _)| key == "GIT_CONFIG_COUNT")
             .expect("fixed helper configuration")
             .1 = count.to_string();
+        Ok(spec)
+    }
+
+    fn reviewed_read(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        max: usize,
+        policy: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        Ok(self.runner.run(
+            self.ctx,
+            self.reviewed_spec(dir, args, None, policy)?,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: max,
+            },
+            self.stop,
+        )?)
+    }
+
+    /// Exact reviewed commits authorize contents, never repository hooks or signer programs.
+    /// The current hook-name/version witness is checked on either side of every index write.
+    pub(crate) fn reviewed_mutation(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        stdin: Option<Vec<u8>>,
+        operation: &OperationId,
+        expected: &serde_json::Value,
+    ) -> Result<Vec<u8>, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        if &policy != expected {
+            return Err(GitFault::SourceChanged);
+        }
+        let spec = self.reviewed_spec(dir, args, stdin, &policy)?;
         let result = self.runner.run_recorded(
             self.ctx,
             spec,
@@ -564,6 +595,22 @@ impl Git<'_> {
             return Err(GitFault::Malformed("invalid branch ref".into()));
         }
         self.line(dir, &["show-ref", "--verify", "--hash", reference])
+    }
+
+    /// Local-only configuration inventory for the host-owned transport boundary. Values may
+    /// contain credentials: callers must never publish them as approval or journal evidence.
+    pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {
+        self.run(
+            dir,
+            &[
+                "config",
+                "--null",
+                "--show-scope",
+                "--show-origin",
+                "--list",
+            ],
+            1024 * 1024,
+        )
     }
 
     /// All push destinations of the named remote. The Git service requires exactly one and
@@ -782,8 +829,24 @@ impl Git<'_> {
     /// attribution if HEAD changes during observation; never substitute a repository's
     /// primary checkout for the host-resolved invocation worktree.
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
+        self.revision_with_policy(dir, None)
+    }
+    /// Reviewed preparation/status can hash tracked contents. A late new filter name must
+    /// be constrained by the same kernel policy as the eventual reviewed index write.
+    pub fn reviewed_revision_observation(
+        &self,
+        dir: &Path,
+    ) -> Result<RevisionObservation, GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.revision_with_policy(dir, Some(&policy))
+    }
+    fn revision_with_policy(
+        &self,
+        dir: &Path,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<RevisionObservation, GitFault> {
         let before = self.head(dir)?.ok_or(GitFault::Unborn)?;
-        let dirty = self.safe_dirty(dir, 0)?;
+        let dirty = self.safe_dirty(dir, 0, policy)?;
         let branch = self.branch(dir)?;
         let after = self.head(dir)?;
         if after.as_deref() != Some(before.as_str()) {
@@ -814,7 +877,12 @@ impl Git<'_> {
     /// tracked or untracked paths need them before hashing; never invent a dirty bit using raw
     /// bytes in place of a configured canonical transformation. Submodules are read separately so
     /// each repository's local filter configuration receives the same checks.
-    fn safe_dirty(&self, dir: &Path, depth: usize) -> Result<bool, GitFault> {
+    fn safe_dirty(
+        &self,
+        dir: &Path,
+        depth: usize,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<bool, GitFault> {
         if depth > 32 {
             return Err(GitFault::Unqualified);
         }
@@ -913,20 +981,26 @@ impl Git<'_> {
                 }
             }
         }
-        let mut spec = self.spec(
-            dir,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=normal",
-                "--ignore-submodules=dirty",
-            ],
-            None,
-        );
-        // Even an attribute change between the check and status cannot select an executable
-        // from the observed configuration. Configuration itself is host-controlled state.
-        let mut count = 2;
+        let args = [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=dirty",
+        ];
+        let mut spec = match policy {
+            Some(policy) => self.reviewed_spec(dir, &args, None, policy)?,
+            None => self.spec(dir, &args, None),
+        };
+        // Disable the observed filter names if attributes change after qualification. On
+        // reviewed reads the kernel launch policy also blocks a newly configured name;
+        // re-reading configuration afterward cannot undo a helper's prior execution.
+        let mut count = spec
+            .env
+            .iter()
+            .find(|(key, _)| key == "GIT_CONFIG_COUNT")
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .ok_or(GitFault::Unqualified)?;
         for name in overrides {
             for (suffix, value) in [("clean", ""), ("process", ""), ("required", "false")] {
                 spec.env.push((
@@ -986,7 +1060,7 @@ impl Git<'_> {
                 return Err(GitFault::SourceChanged);
             }
             dirty |= self.head(&child)?.as_deref() != Some(&expected);
-            dirty |= self.safe_dirty(&child, depth + 1)?;
+            dirty |= self.safe_dirty(&child, depth + 1, policy)?;
         }
         Ok(dirty)
     }
@@ -1213,13 +1287,22 @@ impl Git<'_> {
             if committed.is_some() {
                 self.head_observation(dir)
             } else {
-                self.revision_observation(dir)
+                self.revision_with_policy(dir, Some(&execution_policy))
             }
         };
         let before = observe()?;
         if committed.is_some_and(|head| head != before.head) {
             return Err(GitFault::SourceChanged);
         }
+        // A worktree diff with `none` launches status inside each initialized submodule.
+        // `dirty` still includes every changed gitlink HEAD, overriding user `all`, while
+        // excluding child-worktree dirt that an outer `add --all` cannot commit. Object/index
+        // diffs do not inspect child worktrees and use `none` for their exact stored gitlinks.
+        let submodules = if staged || committed.is_some() {
+            "--ignore-submodules=none"
+        } else {
+            "--ignore-submodules=dirty"
+        };
         let mut args = vec!["diff"];
         if staged {
             args.push("--cached");
@@ -1228,6 +1311,8 @@ impl Git<'_> {
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
+            submodules,
+            "--submodule=short",
             "--no-renames",
             "--name-only",
             "-z",
@@ -1235,7 +1320,7 @@ impl Git<'_> {
         ]);
         args.extend(committed);
         args.push("--");
-        let changed = self.run(dir, &args, MAX_LISTING_BYTES)?;
+        let changed = self.reviewed_read(dir, &args, MAX_LISTING_BYTES, &execution_policy)?;
         let mut paths = std::collections::BTreeMap::new();
         for raw in changed.split(|b| *b == 0).filter(|p| !p.is_empty()) {
             let path =
@@ -1272,7 +1357,7 @@ impl Git<'_> {
             let mut bytes = if untracked {
                 self.runner.run_difference(
                     self.ctx,
-                    self.spec(
+                    self.reviewed_spec(
                         dir,
                         &[
                             "diff",
@@ -1280,6 +1365,8 @@ impl Git<'_> {
                             "--no-color",
                             "--no-ext-diff",
                             "--no-textconv",
+                            submodules,
+                            "--submodule=short",
                             "--binary",
                             "--no-renames",
                             "--src-prefix=a/",
@@ -1289,7 +1376,8 @@ impl Git<'_> {
                             &path,
                         ],
                         None,
-                    ),
+                        &execution_policy,
+                    )?,
                     HelperLimits {
                         deadline: self.deadline,
                         max_stdout: BOUND,
@@ -1305,6 +1393,8 @@ impl Git<'_> {
                     "--no-color",
                     "--no-ext-diff",
                     "--no-textconv",
+                    submodules,
+                    "--submodule=short",
                     "--binary",
                     "--no-renames",
                     "--src-prefix=a/",
@@ -1313,7 +1403,7 @@ impl Git<'_> {
                 ]);
                 args.extend(committed);
                 args.extend(["--", &path]);
-                self.run(dir, &args, BOUND)?
+                self.reviewed_read(dir, &args, BOUND, &execution_policy)?
             };
             // No-index diff uses raw filesystem modes. Git add ignores a new regular file's
             // executable bit when core.fileMode=false; match its mode without altering patch

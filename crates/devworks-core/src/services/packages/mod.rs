@@ -161,6 +161,8 @@ pub mod index;
 pub mod policy;
 mod review_evidence;
 pub mod view;
+/// A manifest-bound verified guide stream; no package activation or caller authority is added.
+pub use crate::ports::packages::VerifiedPackageFile as VerifiedHelp;
 
 /// The operations [`PackageService`] is registered for.
 pub const OPERATIONS: [&str; 10] = [
@@ -1812,13 +1814,20 @@ impl PackageService {
         ))
     }
 
-    /// Reads the guide of this exact installed inspection through the package file owner.
-    /// It never activates or launches the package and never consults a remote documentation URL.
-    pub fn verified_help(
+    /// Opens this exact installed guide without materializing its body. Compatibility and
+    /// enablement do not prevent reading documentation; no package process is activated.
+    /// The consumer validates UTF-8/NUL and re-hashes each consumed pass before publication.
+    pub fn open_verified_help(
         &self,
         version: &StoredPackageVersion,
-    ) -> Result<String, crate::ports::packages::PackageFileError> {
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<VerifiedHelp, crate::ports::packages::PackageFileError> {
         use crate::ports::packages::{Inspection, MAX_BUNDLE_BYTES, PackageFileError};
+        if stopped() {
+            return Err(PackageFileError::Io(
+                "package verification interrupted".into(),
+            ));
+        }
         let inspection: Inspection =
             serde_json::from_value(version.inspection.clone()).map_err(|_| {
                 PackageFileError::Mismatch("installed package inspection is invalid".into())
@@ -1833,33 +1842,26 @@ impl PackageService {
                 "installed package identity changed".into(),
             ));
         }
-        let file = inspection
+        let guide = inspection
             .files
             .iter()
             .find(|file| file.path == inspection.help_file)
             .ok_or_else(|| {
                 PackageFileError::Missing("the installed manifest declares no guide file".into())
             })?;
-        self.files.verify(
-            &version.package_id,
-            &version.manifest_digest,
-            &inspection.files,
-        )?;
-        let bytes = self.files.read_verified(
-            &version.package_id,
-            &version.manifest_digest,
-            file,
-            MAX_BUNDLE_BYTES,
-        )?;
-        let text = String::from_utf8(bytes).map_err(|_| {
-            PackageFileError::Mismatch("the package guide is not UTF-8 text".into())
-        })?;
-        if text.is_empty() || text.contains('\0') {
+        if guide.byte_length == 0 || guide.byte_length > MAX_BUNDLE_BYTES {
             return Err(PackageFileError::Mismatch(
-                "the package guide is empty or contains NUL".into(),
+                "package guide is empty or exceeds the bundle bound".into(),
             ));
         }
-        Ok(text)
+        self.files.open_verified(
+            &version.package_id,
+            &version.manifest_digest,
+            guide,
+            &inspection.files,
+            MAX_BUNDLE_BYTES,
+            stopped,
+        )
     }
 
     // -----------------------------------------------------------------------------------------

@@ -3,11 +3,16 @@
 use super::*;
 use crate::ports::storage::{AttemptBinding, AttemptFence, NewOperation, OperationRecord};
 use crate::protocol::{OperationId, OperationState};
-use std::sync::RwLock;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 #[derive(Default)]
 pub(super) struct Lifecycle {
-    closed: RwLock<bool>,
-    owners: Mutex<BTreeMap<String, RefreshOwner>>,
+    closed: Arc<AtomicBool>,
+    // Only close callers acquire this mutex; the database writer never does.
+    closing: Mutex<()>,
+    owners: Arc<Mutex<BTreeMap<String, RefreshOwner>>>,
 }
 #[derive(Clone)]
 pub(super) struct RefreshOwner {
@@ -29,28 +34,22 @@ pub struct RefreshCloseReport {
 }
 impl ConnectionService {
     pub fn is_closed(&self) -> bool {
-        *self
-            .lifecycle
-            .closed
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
+        self.lifecycle.closed.load(Ordering::SeqCst)
     }
     pub(super) fn publication<T, F>(&self, work: F) -> Result<T, StorageError>
     where
         T: Send + 'static,
         F: FnOnce(&mut dyn WriteTransaction) -> Result<T, StorageError> + Send + 'static,
     {
-        let closed = self
-            .lifecycle
-            .closed
-            .read()
-            .unwrap_or_else(|p| p.into_inner());
-        if *closed {
-            return Err(StorageError::Cancelled);
-        }
-        let result = run_write(self.store.as_ref(), WriteOptions::default(), work);
-        drop(closed);
-        result
+        let closed = self.lifecycle.closed.clone();
+        // The queue is the publication barrier. Never wait for its writer while holding a
+        // product lock: configure handlers run on that writer and also inspect lifecycle.
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            if closed.load(Ordering::SeqCst) {
+                return Err(StorageError::Cancelled);
+            }
+            work(tx)
+        })
     }
     pub(super) fn register_stage(
         &self,
@@ -58,17 +57,13 @@ impl ConnectionService {
         principal: &ActorId,
         api_key: bool,
     ) -> Result<(), SecretError> {
-        let closed = self
-            .lifecycle
-            .closed
-            .read()
-            .unwrap_or_else(|p| p.into_inner());
-        if *closed {
+        let mut live = self.live();
+        if self.is_closed() {
             return Err(SecretError::Failed(
                 "provider connection owner closed".into(),
             ));
         }
-        self.live().staged.insert(
+        live.staged.insert(
             handle.as_str().into(),
             Staged {
                 principal: principal.clone(),
@@ -82,18 +77,15 @@ impl ConnectionService {
         &self,
         seen: &StoredConnection,
     ) -> Result<RefreshOwner, StorageError> {
-        let closed = self
-            .lifecycle
-            .closed
-            .read()
-            .unwrap_or_else(|p| p.into_inner());
-        if *closed {
-            return Err(StorageError::Cancelled);
-        }
+        let closed = self.lifecycle.closed.clone();
+        let owners = self.lifecycle.owners.clone();
         let handle = self.ids.next_id(IdKind::Credential);
         let candidate = handle.clone();
         let before = seen.clone();
-        let owner = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            if closed.load(Ordering::SeqCst) {
+                return Err(StorageError::Cancelled);
+            }
             let mut current = tx
                 .router()
                 .connection(&before.id)?
@@ -137,7 +129,7 @@ impl ConnectionService {
             current.refresh_operation_id = Some(id.clone());
             current.updated_at_ms = tx.now_ms();
             tx.router().put_connection(&current, Some(expected))?;
-            Ok(RefreshOwner {
+            let owner = RefreshOwner {
                 operation: id,
                 handle: candidate,
                 fence: attempt.fence(),
@@ -146,15 +138,15 @@ impl ConnectionService {
                 account_revision: current.account_revision,
                 profile: current.profile,
                 endpoint_digest: crate::fingerprint::sha256_hex(current.endpoint.as_bytes()),
-            })
-        })?;
-        self.lifecycle
-            .owners
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(owner.operation.0.as_str().into(), owner.clone());
-        drop(closed);
-        Ok(owner)
+            };
+            // Register before this writer callback retires. A close queued behind it must
+            // see every accepted refresh, even if the caller has not received its result.
+            owners
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(owner.operation.0.as_str().into(), owner.clone());
+            Ok(owner)
+        })
     }
     pub(super) fn finish_refresh(
         &self,
@@ -253,15 +245,17 @@ impl ConnectionService {
     /// Drains accepted credential units, closes publication and marks every possibly spent
     /// refresh token unknown. It never waits for HTTP or an already-started OS secret write.
     pub fn close(&self) -> Result<RefreshCloseReport, StorageError> {
-        let mut closed = self
+        let _closing = self
             .lifecycle
-            .closed
-            .write()
+            .closing
+            .lock()
             .unwrap_or_else(|p| p.into_inner());
-        if *closed {
+        if self.lifecycle.closed.swap(true, Ordering::SeqCst) {
             return Ok(RefreshCloseReport::default());
         }
-        *closed = true;
+        // A writer barrier drains previously accepted publications. Later callbacks see
+        // closed before touching durable state; no lifecycle lock is needed on the writer.
+        run_write(self.store.as_ref(), WriteOptions::default(), |_| Ok(()))?;
         let owners = self
             .lifecycle
             .owners
@@ -282,12 +276,12 @@ impl ConnectionService {
         };
         for owner in owners {
             let owned = owner.clone();
-            run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            let unknown = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
                 let Some(op) = tx.operations().operation(&owned.operation)? else {
-                    return Ok(());
+                    return Ok(false);
                 };
                 if !crate::ports::storage::possibly_dispatched(op.state) {
-                    return Ok(());
+                    return Ok(false);
                 }
                 finish_in(
                     tx,
@@ -311,11 +305,12 @@ impl ConnectionService {
                     current.updated_at_ms = tx.now_ms();
                     tx.router().put_connection(&current, Some(expected))?;
                 }
-                Ok(())
+                Ok(true)
             })?;
-            report.unknown_operations.push(owner.operation);
+            if unknown {
+                report.unknown_operations.push(owner.operation);
+            }
         }
-        drop(closed);
         Ok(report)
     }
 }

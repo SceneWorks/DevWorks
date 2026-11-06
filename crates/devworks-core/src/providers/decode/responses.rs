@@ -1,4 +1,23 @@
 use super::*;
+use serde_json::value::RawValue;
+
+// Borrow native lexemes rather than serializing the convenience Value projection, which can
+// normalize escaped strings, decimal notation and opaque out-of-range numbers. Parse each
+// enclosing object/array once, not once per item in a many-item response.
+fn raw_member<'a>(raw: &'a str, key: &str) -> Option<&'a str> {
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw).ok()?;
+    fields.get(key).map(|value| value.get())
+}
+fn raw_items(raw: &str) -> Option<Vec<&RawValue>> {
+    serde_json::from_str(raw).ok()
+}
+
+struct ItemJson<'a> {
+    // A standalone item event retains its whole envelope once, as before. A folded response
+    // retains that envelope separately and uses only this item's bytes for its observation.
+    evidence: &'a str,
+    item: &'a str,
+}
 
 impl Decoder {
     pub(super) fn responses_event(
@@ -38,6 +57,7 @@ impl Decoder {
                         self.seen_text.insert((i, c));
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
+                            content_index: c,
                             text: text.into(),
                         });
                     }
@@ -53,8 +73,20 @@ impl Decoder {
                 self.error(DecodeErrorKind::Refusal, "provider_refusal", out);
             }
             "response.output_item.added" | "response.output_item.done" => {
-                if let (Some(i), Some(item)) = (ordinal, v.get("item")) {
-                    self.response_item(i, item, kind.ends_with(".done"), raw, out);
+                if let (Some(i), Some(item), Some(item_raw)) =
+                    (ordinal, v.get("item"), raw_member(raw, "item"))
+                {
+                    self.response_item(
+                        i,
+                        item,
+                        kind.ends_with(".done"),
+                        kind.ends_with(".done"),
+                        ItemJson {
+                            evidence: raw,
+                            item: item_raw,
+                        },
+                        out,
+                    );
                 } else {
                     self.error(DecodeErrorKind::InvalidContent, "missing_output_item", out);
                 }
@@ -95,8 +127,10 @@ impl Decoder {
             "response.completed" | "response.incomplete" | "response.failed" => {
                 self.usage(raw, &["response", "usage"], out);
                 self.native(None, kind, v, raw, true, out);
-                if let Some(body) = v.get("response") {
-                    self.fold_response(body, raw, kind == "response.completed", out);
+                if let (Some(body), Some(body_raw)) =
+                    (v.get("response"), raw_member(raw, "response"))
+                {
+                    self.fold_response(body, body_raw, kind == "response.completed", out);
                     self.response_status(body, Some(kind), out);
                 } else {
                     self.error(
@@ -136,7 +170,8 @@ impl Decoder {
         i: u64,
         item: &Value,
         complete: bool,
-        raw: &str,
+        observe_text: bool,
+        raw: ItemJson<'_>,
         out: &mut Vec<DecodedFrame>,
     ) {
         let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
@@ -144,7 +179,7 @@ impl Decoder {
             kind,
             "message" | "function_call" | "reasoning" | "compaction"
         );
-        self.native(Some(i), kind, item, raw, supported, out);
+        self.native(Some(i), kind, item, raw.evidence, supported, out);
         if complete && matches!(kind, "reasoning" | "compaction") {
             self.continuation(Some(i), kind, item, out);
         }
@@ -173,15 +208,33 @@ impl Decoder {
                             .is_none_or(|s| s == "completed");
                 }
             }
-            "message" if complete => {
+            "message" if observe_text => {
                 if let Some(content) = item.get("content").and_then(Value::as_array) {
-                    for (c, block) in content.iter().enumerate() {
+                    let Some(raw_content) = raw_member(raw.item, "content").and_then(raw_items)
+                    else {
+                        self.error(
+                            DecodeErrorKind::InvalidContent,
+                            "invalid_message_content",
+                            out,
+                        );
+                        return;
+                    };
+                    if raw_content.len() != content.len() {
+                        self.error(
+                            DecodeErrorKind::InvalidContent,
+                            "invalid_message_content",
+                            out,
+                        );
+                        return;
+                    }
+                    for (c, (block, block_raw)) in content.iter().zip(raw_content).enumerate() {
                         match block.get("type").and_then(Value::as_str) {
                             Some("output_text") => {
                                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                                     if self.seen_text.insert((i, c as u64)) {
                                         out.push(DecodedFrame::TextDelta {
                                             block_index: i,
+                                            content_index: c as u64,
                                             text: text.into(),
                                         });
                                     }
@@ -200,7 +253,7 @@ impl Decoder {
                                 Some(i),
                                 "unknown_response_content",
                                 block,
-                                raw,
+                                block_raw.get(),
                                 false,
                                 out,
                             ),
@@ -218,9 +271,30 @@ impl Decoder {
         }
     }
     fn fold_response(&mut self, v: &Value, raw: &str, complete: bool, out: &mut Vec<DecodedFrame>) {
-        if let Some(output) = v.get("output").and_then(Value::as_array) {
-            for (i, item) in output.iter().enumerate() {
-                self.response_item(i as u64, item, complete, raw, out);
+        if let (Some(output), Some(raw_output)) = (
+            v.get("output").and_then(Value::as_array),
+            raw_member(raw, "output").and_then(raw_items),
+        ) {
+            if output.len() != raw_output.len() {
+                self.error(
+                    DecodeErrorKind::InvalidContent,
+                    "invalid_response_output",
+                    out,
+                );
+                return;
+            }
+            for (i, (item, item_raw)) in output.iter().zip(raw_output).enumerate() {
+                self.response_item(
+                    i as u64,
+                    item,
+                    complete,
+                    true,
+                    ItemJson {
+                        evidence: item_raw.get(),
+                        item: item_raw.get(),
+                    },
+                    out,
+                );
             }
         } else {
             self.error(

@@ -37,6 +37,9 @@ pub struct ProviderResult {
 }
 pub type ResultChannel = Arc<Mutex<ProviderResult>>;
 
+const MAX_CONTENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CONTENT_ITEMS: usize = 65536;
+
 enum ArtifactKind {
     Evidence,
     NativeContinuation,
@@ -47,6 +50,14 @@ pub struct ProviderSink {
     context: InvocationContext,
     prepared: PreparedRequest,
     assembler: TurnAssembler,
+    /// Private content slots use provider item/sub-block positions, independently of when
+    /// completion evidence becomes releasable. No placeholder enters the transcript.
+    content: BTreeMap<(u64, u64), Vec<ProviderBody>>,
+    content_bytes: usize,
+    content_items: usize,
+    live: Option<Arc<super::live::LiveTurns>>,
+    live_session: Option<devworks_core::protocol::Id>,
+    last_sequence: Option<i64>,
     sequence: i64,
     embedding: Option<(
         devworks_core::protocol::data::EmbeddingSpace,
@@ -80,7 +91,13 @@ impl ProviderSink {
             artifacts,
             context,
             prepared,
-            assembler: TurnAssembler::new(),
+            assembler: TurnAssembler::positioned(),
+            content: BTreeMap::new(),
+            content_bytes: 0,
+            content_items: 0,
+            live: None,
+            live_session: None,
+            last_sequence: None,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -94,6 +111,10 @@ impl ProviderSink {
             evidence: Vec::new(),
             evidence_bytes: 0,
         }
+    }
+    pub(crate) fn with_live(mut self, live: Arc<super::live::LiveTurns>) -> Self {
+        self.live = Some(live);
+        self
     }
     fn evidence(
         &mut self,
@@ -129,15 +150,48 @@ impl ProviderSink {
         self.evidence_bytes = 0;
         Ok(())
     }
+    fn stage_content(
+        &mut self,
+        position: (u64, u64),
+        body: ProviderBody,
+    ) -> Result<(), StorageError> {
+        // The decoder independently bounds the complete raw response to 32 MiB and 65536
+        // observations. Bound this private representation too, including generated refs.
+        let bytes = serde_json::to_vec(&body)
+            .map_err(|_| invalid("provider content JSON"))?
+            .len();
+        if self.content_items >= MAX_CONTENT_ITEMS
+            || self.content_bytes.saturating_add(bytes) > MAX_CONTENT_BYTES
+        {
+            return Err(invalid("private provider turn exceeds content bound"));
+        }
+        self.content_bytes += bytes;
+        self.content_items += 1;
+        self.content.entry(position).or_default().push(body);
+        Ok(())
+    }
+
+    fn position(&self, ordinal: u64, part: u64, kind: u64) -> (u64, u64) {
+        if matches!(
+            self.prepared.profile,
+            EndpointProfile::CompatibleChat | EndpointProfile::OpenRouterChat
+        ) {
+            // Chat's single native reasoning unit/call group reserves its first observed
+            // position. Native call ordinals remain independent within the call group.
+            (part, if kind == 2 { ordinal } else { 0 })
+        } else {
+            (ordinal, part)
+        }
+    }
+
     fn event(
         &mut self,
         attempt: &StoredInferenceAttempt,
         body: ProviderBody,
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
-        let mut assembler = self.assembler.clone();
         let sequence = self.sequence + 1;
-        assembler
+        self.assembler
             .accept(&ProviderEvent {
                 protocol: Protocol::Draft1,
                 request_id: self.prepared.identity.request_id.clone(),
@@ -147,9 +201,10 @@ impl ProviderSink {
                 event: body,
             })
             .map_err(|_| invalid("invalid normalized provider turn"))?;
-        let bodies = assembler.take();
-        self.append(attempt, bodies, fence)?;
-        self.assembler = assembler;
+        let bodies = self.assembler.take();
+        if let Some(sequence) = self.append(attempt, bodies, fence)? {
+            self.last_sequence = Some(sequence);
+        }
         self.sequence = sequence;
         Ok(())
     }
@@ -158,9 +213,9 @@ impl ProviderSink {
         attempt: &StoredInferenceAttempt,
         bodies: Vec<TranscriptBody>,
         fence: &AccountingWriteFence,
-    ) -> Result<(), StorageError> {
+    ) -> Result<Option<i64>, StorageError> {
         if bodies.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let store = self.store.clone();
         let context = self.context.clone();
@@ -193,7 +248,12 @@ impl ProviderSink {
                     BatchOutcome::Refused(_) => return Err(StorageError::ScopeDenied),
                 }
             }
-            Ok(())
+            Ok(Some(
+                tx.sessions()
+                    .session(session)?
+                    .ok_or(StorageError::ScopeDenied)?
+                    .last_durable_sequence(),
+            ))
         })
     }
     fn artifact(
@@ -268,8 +328,9 @@ impl ProviderSink {
             ArtifactKind::Evidence,
             fence,
         )?;
-        self.event(
-            attempt,
+        let position = self.position(call.ordinal, call.content_position.unwrap_or(0), 2);
+        self.stage_content(
+            position,
             ProviderBody::ToolCallComplete {
                 tool_call: CompleteToolCall {
                     call: ToolCallKey {
@@ -286,7 +347,6 @@ impl ProviderSink {
                     native_item,
                 },
             },
-            fence,
         )
     }
 }
@@ -443,13 +503,18 @@ impl OwnedInferenceSink for ProviderSink {
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
         match frame {
-            DecodedFrame::TextDelta { block_index, text } => {
+            DecodedFrame::TextDelta {
+                block_index,
+                content_index,
+                text,
+            } => {
                 if self.embedding.is_some() {
                     return Err(invalid("embedding response contains generation text"));
                 }
+                let position = self.position(block_index, content_index, 1);
                 for chunk in turn::chunks(&text) {
-                    self.event(
-                        attempt,
+                    self.stage_content(
+                        position,
                         ProviderBody::TextDelta {
                             block_index: Counter::new(
                                 i64::try_from(block_index).map_err(|_| invalid("block index"))?,
@@ -457,8 +522,31 @@ impl OwnedInferenceSink for ProviderSink {
                             .map_err(invalid)?,
                             text: chunk.into(),
                         },
-                        fence,
                     )?;
+                }
+                if let (Some(live), Some(session)) = (&self.live, &attempt.session_id) {
+                    let store = self.store.clone();
+                    let context = self.context.clone();
+                    let current = attempt.clone();
+                    let live = live.clone();
+                    let session = session.clone();
+                    let preview = text.clone();
+                    let binding = self.prepared.identity.binding.clone();
+                    let epoch = binding.context_epoch.get();
+                    fence.publication(|| {
+                        run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+                            validate(tx, &context, &current)?;
+                            validate_binding(tx, &binding)?;
+                            Ok(())
+                        })?;
+                        live.text(
+                            &session,
+                            &self.prepared.identity.attempt_id,
+                            epoch,
+                            &preview,
+                        )
+                    })?;
+                    self.live_session = attempt.session_id.clone();
                 }
             }
             DecodedFrame::ToolCallComplete { call } => self.call(attempt, call, fence)?,
@@ -489,13 +577,19 @@ impl OwnedInferenceSink for ProviderSink {
                         ArtifactKind::NativeContinuation,
                         fence,
                     )?;
-                    self.event(
-                        attempt,
+                    let position = self.position(
+                        observation
+                            .ordinal
+                            .ok_or_else(|| invalid("native content position"))?,
+                        observation.content_position.unwrap_or(0),
+                        0,
+                    );
+                    self.stage_content(
+                        position,
                         ProviderBody::NativeContinuation {
                             binding: self.prepared.identity.binding.clone(),
                             artifact,
                         },
-                        fence,
                     )?;
                 }
             }
@@ -586,7 +680,9 @@ impl ProviderSink {
         fence: &AccountingWriteFence,
     ) -> Result<(), StorageError> {
         if let Some(access) = self.access.as_ref().filter(|a| {
-            matches!(self.http_status, 401..=403) && !(self.http_status == 401 && a.oauth)
+            !self.entitlement_refused
+                && matches!(self.http_status, 401..=403)
+                && !(self.http_status == 401 && a.oauth)
         }) {
             let store = self.store.clone();
             let current = attempt.clone();
@@ -706,6 +802,21 @@ impl ProviderSink {
             AttemptEnd::Cancelled => TurnOutcome::Cancelled,
             AttemptEnd::UnknownTail => TurnOutcome::OutcomeUnknown,
         };
+        let successful = matches!(outcome, AttemptEnd::Completed | AttemptEnd::ToolCallsReady);
+        for (block, (_, bodies)) in std::mem::take(&mut self.content).into_iter().enumerate() {
+            for mut body in bodies {
+                if !successful && !matches!(body, ProviderBody::TextDelta { .. }) {
+                    continue;
+                }
+                if let ProviderBody::TextDelta { block_index, .. } = &mut body {
+                    *block_index = Counter::new(
+                        i64::try_from(block).map_err(|_| invalid("content position"))?,
+                    )
+                    .map_err(invalid)?;
+                }
+                self.event(attempt, body, fence)?;
+            }
+        }
         self.event(
             attempt,
             ProviderBody::Terminal {
@@ -714,10 +825,26 @@ impl ProviderSink {
             },
             fence,
         )?;
+        if let (Some(live), Some(session), Some(sequence)) =
+            (&self.live, &self.live_session, self.last_sequence)
+        {
+            fence.publication(|| {
+                live.finalize(session, &self.prepared.identity.attempt_id, sequence);
+                Ok(())
+            })?;
+        }
         self.result
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .outcome = Some(outcome);
         Ok(())
+    }
+}
+
+impl Drop for ProviderSink {
+    fn drop(&mut self) {
+        if let (Some(live), Some(session)) = (&self.live, &self.live_session) {
+            live.discard(session, &self.prepared.identity.attempt_id);
+        }
     }
 }

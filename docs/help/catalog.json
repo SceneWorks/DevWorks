@@ -728,14 +728,33 @@
   },
   {
     "id": "code-exploration",
-    "title": "Source, nodes, graph, and schema exploration",
+    "title": "Explore repository code",
     "file": "topics/code-exploration.md",
-    "screenIds": [],
+    "screenIds": [
+      "code-exploration"
+    ],
     "settingsSections": [],
     "relatedCapabilityIds": [
-      "repositories.readme",
-      "repositories.summary",
-      "repositories.search"
+      "repositories.nodes",
+      "code.overview",
+      "code.architecture",
+      "code.search",
+      "code.node_detail",
+      "code.source",
+      "code.snippet",
+      "code.call_path",
+      "code.impact",
+      "code.file_impact",
+      "code.nodes_by_file",
+      "code.traverse",
+      "code.dependency",
+      "code.repository_dependencies",
+      "code.data_lineage",
+      "code.consumers",
+      "code.publishers",
+      "code.graph_schema",
+      "code.graph_scope_status",
+      "code.set_trust"
     ]
   },
   {

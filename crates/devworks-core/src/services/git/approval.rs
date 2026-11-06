@@ -166,7 +166,7 @@ impl GitService {
         self.verify_target(&git, &target)
             .map_err(|e| read_failure(e, &repository.id))?;
         let physical = git
-            .revision_observation(target.path())
+            .reviewed_revision_observation(target.path())
             .map_err(|e| read_failure(e, &repository.id))?;
         let (native, artifact, contents) = match &request.input {
             OperationInput::Git(ops::Input::Push(i)) => (
@@ -200,11 +200,13 @@ impl GitService {
             }
             OperationInput::Git(ops::Input::Worktree(i)) => {
                 let root = self.approval_root_witness(&i.registered_root_id)?;
-                (
-                    json!({"registeredRootId":i.registered_root_id,"rootWitness":root,"base":i.base,"action":i.action}),
-                    None,
-                    Value::Null,
-                )
+                let mut native = json!({"registeredRootId":i.registered_root_id,"rootWitness":root,"base":i.base,"action":i.action});
+                if matches!(i.action, GitActionKind::Create) {
+                    native["executionPolicy"] = git
+                        .reviewed_commit_policy(target.path())
+                        .map_err(|e| read_failure(e, &repository.id))?;
+                }
+                (native, None, Value::Null)
             }
             _ => {
                 return Err(Refusal::new(
@@ -237,7 +239,14 @@ impl GitService {
             scope: ConfigScope::Project(work.project_id),
             target_id,
             target_revision,
-            summary: format!("Review {} for {}", request.descriptor.name, repository.name),
+            summary: if native["destinationServer"]["kind"] == "LocalGitServer" {
+                format!(
+                    "Review {} for {}: trust this exact local destination server; its hooks may run. The source client uses isolated host authentication.",
+                    request.descriptor.name, repository.name
+                )
+            } else {
+                format!("Review {} for {}", request.descriptor.name, repository.name)
+            },
             reviewed: json!({"input":request.normalized,"repository":repository_value(&repository),"worktree":tree,
                 "currentHead":physical.head,"currentBranch":physical.branch,"dirty":physical.dirty,"native":native,"commitManifest":contents,"artifact":commit_evidence,"commitEvidence":commit_evidence}),
             binding,

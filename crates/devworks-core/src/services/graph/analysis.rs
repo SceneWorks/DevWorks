@@ -15,6 +15,15 @@ use crate::protocol::{Id, data::GraphResult};
 use crate::services::sessions::Failure;
 use serde_json::{Value, json};
 
+/// Only actual captured metadata from the selected repository view is returned.
+pub(super) fn repository_metadata(
+    reader: &mut Reader<'_>,
+    repository: &Id,
+) -> Result<Option<Value>, Failure> {
+    let scope = reader.scoped_repository(repository)?;
+    aggregate::repository_properties(reader, &scope)
+}
+
 pub(super) fn architecture(
     reader: &mut Reader<'_>,
     repository: &Id,

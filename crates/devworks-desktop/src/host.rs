@@ -374,6 +374,9 @@ async fn compose(
             let root = Id::new(format!("git-root-{}", &digest[..24])).ok()?;
             Some(devworks_engine::git::GitComposition {
                 config: devworks_core::services::git::GitConfig {
+                    transport: Some(Arc::new(
+                        devworks_adapters::git_transport::NativeGitTransportFiles,
+                    )),
                     roots: vec![devworks_core::services::git::RegisteredGitRoot { id: root, path }],
                     filesystem: Some(Arc::new(NativeFilesystem::new())),
                     github: Some(Arc::new(
@@ -735,6 +738,21 @@ impl Backend for DesktopBackend {
             .runtime
             .record_human_decision(&self.host.ctx, frame)
     }
+    fn text_preview(
+        &self,
+        session: &Id,
+    ) -> Result<Option<devworks_engine::providers::live::LiveTurn>, String> {
+        let record = crate::ops::session_record(self.query(
+            "sessions.get",
+            &crate::ops::session_get(self, session.as_str()),
+        ))
+        .map_err(|e| e.describe())?;
+        Ok(self.host.runtime.providers().and_then(|providers| {
+            providers.text_preview(session).filter(|turn| {
+                turn.session_id == record.id && turn.context_epoch == record.context_epoch.get()
+            })
+        }))
+    }
     fn set_application_focus(&self, focused: Option<bool>) {
         self.host.runtime.set_notification_focus(focused);
     }
@@ -906,3 +924,7 @@ mod provider_refresh_shutdown_tests;
 #[cfg(test)]
 #[path = "host/usage_shutdown_tests.rs"]
 mod usage_shutdown_tests;
+
+#[cfg(test)]
+#[path = "host/provider_refresh_lock_tests.rs"]
+mod provider_refresh_lock_tests;

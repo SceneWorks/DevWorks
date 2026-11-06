@@ -95,8 +95,74 @@ pub(super) fn assert_reviewed_commit(
             git(path, &["config", "commit.gpgSign", "true"]);
             git(path, &["config", "gpg.program", signer.to_str().unwrap()]);
         }
+        ReviewedCommitCase::LateStatusFilter => {
+            std::fs::write(path.join("a.txt"), "late\n").unwrap();
+            std::fs::write(path.join(".manifest-race-armed"), []).unwrap();
+        }
+        ReviewedCommitCase::IgnoredSubmodule => {
+            git(
+                path,
+                &[
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                ],
+            );
+            let nested = path.join("nested");
+            std::fs::write(nested.join("item.txt"), "second\n").unwrap();
+            git(&nested, &["add", "."]);
+            git(&nested, &["commit", "-m", "second"]);
+            std::fs::write(nested.join("item.txt"), "uncommitted child-only content\n").unwrap();
+            git(path, &["config", "diff.ignoreSubmodules", "all"]);
+        }
+        ReviewedCommitCase::LateTrackedFilter | ReviewedCommitCase::LateUntrackedFilter => {
+            if matches!(case, ReviewedCommitCase::LateTrackedFilter) {
+                std::fs::write(path.join("a.txt"), "reviewed tracked change\n").unwrap();
+            }
+            git(
+                path,
+                &[
+                    "config",
+                    "filter.probe.clean",
+                    "printf ran > review-hook-marker; cat",
+                ],
+            );
+            std::fs::write(path.join(".manifest-race-armed"), []).unwrap();
+        }
         _ => {}
     }
+    let captured_gitlink = if matches!(case, ReviewedCommitCase::IgnoredSubmodule) {
+        let helpers = SupervisedHelpers {
+            supervisor: Arc::new(ProcessSupervisor::new(
+                store.clone(),
+                Arc::new(NativeProcessHost),
+                Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+            )),
+            store: store.clone(),
+            fs: Arc::new(NativeFilesystem::new()),
+        };
+        let capture = devworks_core::services::indexing::git::Git {
+            runner: &helpers,
+            ctx: &agent,
+            program: "git",
+            deadline: std::time::Duration::from_secs(30),
+            stop: &|| false,
+        };
+        let manifest = capture.commit_manifest(path, &tree.head.hex).unwrap();
+        Some(manifest["files"].as_array().unwrap().iter().any(|row| {
+            row["path"] == "nested"
+                && row["patch"].as_str().unwrap().contains("Subproject commit")
+                && !row["patch"].as_str().unwrap().contains("-dirty")
+                && !row["patch"]
+                    .as_str()
+                    .unwrap()
+                    .contains("uncommitted child-only content")
+        }))
+    } else {
+        None
+    };
     let message = "\nExact reviewed message   \n\nBody   \n";
     let reference = artifacts
         .publish_evidence(
@@ -127,11 +193,64 @@ pub(super) fn assert_reviewed_commit(
         gateway,
         &agent,
         &frame,
-        matches!(case, ReviewedCommitCase::UnavailablePolicy),
+        if matches!(case, ReviewedCommitCase::UnavailablePolicy) {
+            Some(PreviewRefusal::PolicyUnavailable)
+        } else if matches!(
+            case,
+            ReviewedCommitCase::LateTrackedFilter
+                | ReviewedCommitCase::LateUntrackedFilter
+                | ReviewedCommitCase::LateStatusFilter
+        ) {
+            Some(PreviewRefusal::Source)
+        } else {
+            None
+        },
     );
     let Some(operation) = operation else {
         assert!(!marker.exists());
         assert_eq!(git(path, &["rev-parse", "HEAD"]), tree.head.hex);
+        if matches!(
+            case,
+            ReviewedCommitCase::LateTrackedFilter
+                | ReviewedCommitCase::LateUntrackedFilter
+                | ReviewedCommitCase::LateStatusFilter
+        ) {
+            let args = if matches!(
+                case,
+                ReviewedCommitCase::LateTrackedFilter | ReviewedCommitCase::LateStatusFilter
+            ) {
+                vec![
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--binary",
+                    "HEAD",
+                    "--",
+                    "a.txt",
+                ]
+            } else {
+                vec![
+                    "diff",
+                    "--no-index",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--binary",
+                    "--",
+                    "/dev/null",
+                    "reviewed.txt",
+                ]
+            };
+            let control = Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(control.status.success() || control.status.code() == Some(1));
+            assert!(
+                marker.exists(),
+                "same real Git did not execute the unconfined filter control: {case:?}"
+            );
+        }
         return;
     };
     assert!(!marker.exists(), "preparation executed a helper: {case:?}");
@@ -225,10 +344,39 @@ pub(super) fn assert_reviewed_commit(
         assert_eq!(
             git(
                 path,
-                &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+                &[
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "--ignore-submodules=none",
+                    "HEAD"
+                ]
             ),
-            "reviewed.txt"
+            if matches!(case, ReviewedCommitCase::IgnoredSubmodule) {
+                "nested\nreviewed.txt"
+            } else {
+                "reviewed.txt"
+            }
         );
+        if let Some(included) = captured_gitlink {
+            assert_eq!(
+                git(path, &["rev-parse", "HEAD:nested"]),
+                git(&path.join("nested"), &["rev-parse", "HEAD"])
+            );
+            assert!(
+                included,
+                "actual approved commit included a gitlink omitted from its reviewed manifest"
+            );
+            assert_eq!(
+                git(&path.join("nested"), &["show", "HEAD:item.txt"]),
+                "second"
+            );
+            assert_eq!(
+                std::fs::read_to_string(path.join("nested/item.txt")).unwrap(),
+                "uncommitted child-only content\n"
+            );
+        }
         assert!(!path.join("injected.txt").exists());
         assert_eq!(
             git(
@@ -435,8 +583,13 @@ pub(super) fn approve_owned_force(
     agent: &devworks_core::context::InvocationContext,
     force: &serde_json::Value,
 ) -> devworks_core::protocol::OperationId {
-    approve_owned_force_result(h, store, service, gateway, agent, force, false)
+    approve_owned_force_result(h, store, service, gateway, agent, force, None)
         .expect("accepted reviewed operation")
+}
+
+enum PreviewRefusal {
+    PolicyUnavailable,
+    Source,
 }
 
 fn approve_owned_force_result(
@@ -446,7 +599,7 @@ fn approve_owned_force_result(
     gateway: &Gateway<'_>,
     agent: &devworks_core::context::InvocationContext,
     force: &serde_json::Value,
-    expect_unavailable: bool,
+    expected_refusal: Option<PreviewRefusal>,
 ) -> Option<devworks_core::protocol::OperationId> {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{ActorId, CommandReply};
@@ -466,6 +619,10 @@ fn approve_owned_force_result(
     let outsider = principal(&*store, "unowned-force-worker", PrincipalKind::Agent);
     let binder = human.clone();
     write(&*store, move |tx| {
+        let previous = tx
+            .authority()
+            .principal(&ActorId(id("unowned-force-worker")))?
+            .map(|binding| binding.revision);
         devworks_core::authority::service::bind_principal(
             tx,
             &binder,
@@ -477,7 +634,7 @@ fn approve_owned_force_result(
                 tool_families: None,
                 bound_by: binder.principal().clone(),
             },
-            None,
+            previous,
         )
         .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
     })
@@ -507,7 +664,10 @@ fn approve_owned_force_result(
                 code: devworks_core::protocol::Rejection::PermissionDenied,
                 ..
             })
-        ),
+        ) || (force["command"]["mode"] == "Normal"
+            && matches!(&denied,
+            Some(CommandReply::Recorded{receipt:devworks_core::protocol::Receipt{
+                decision:DomainDecision::Refused{fault},..},..}) if fault.code==devworks_core::protocol::DomainErrorCode::PermissionDenied)),
         "unowned Full force must require separate operation consent: {denied:?}"
     );
     let cases = UseCases::new().with_git(service.clone());
@@ -533,21 +693,23 @@ fn approve_owned_force_result(
     let tree_id: devworks_core::protocol::Id =
         serde_json::from_value(input["command"]["worktreeId"].clone()).unwrap();
     let tree = read(&*store, |s| s.git().git_worktree(&tree_id)).unwrap();
-    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"saved-owned-force-proposal","schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":operation,"target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact reviewed Git operation","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
+    let propose=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":format!("saved-owned-force-proposal-{}",request.fingerprint.as_str()),"schemaRevision":3,"body":{"kind":"approvals.propose","scope":{"kind":"Project","projectId":"project"},"operationKind":operation,"target":{"id":tree.id,"revision":tree.revision.to_string()},"contentDigest":request.fingerprint.as_str(),"summary":"Exact reviewed Git operation","payload":{"kind":"SavedOperation","schemaRevision":"1","input":input}}})).unwrap();
     let reply = cases
         .command(gateway, agent, "approvals.propose", &propose)
         .unwrap();
-    if expect_unavailable {
+    if expected_refusal.is_some() {
         let wire = serde_json::to_value(&reply).unwrap();
         assert_eq!(wire["receipt"]["decision"]["kind"], "Refused");
-        assert_eq!(
-            wire["receipt"]["decision"]["fault"]["code"],
-            "UnsupportedCapability"
-        );
-        assert_eq!(
-            wire["receipt"]["decision"]["fault"]["targetKind"],
-            "git_reviewed_process_policy"
-        );
+        if matches!(expected_refusal, Some(PreviewRefusal::PolicyUnavailable)) {
+            assert_eq!(
+                wire["receipt"]["decision"]["fault"]["code"],
+                "UnsupportedCapability"
+            );
+            assert_eq!(
+                wire["receipt"]["decision"]["fault"]["targetKind"],
+                "git_reviewed_process_policy"
+            );
+        }
         let query = serde_json::to_vec(&serde_json::json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"no-false-proposal","body":{"kind":"approvals.list","scope":{"kind":"Project","projectId":"project"},"page":{"limit":20}}})).unwrap();
         let visible = cases
             .query(gateway, agent, "approvals.list", &query)
@@ -576,7 +738,7 @@ fn approve_owned_force_result(
         .unwrap();
     let mut body = decision;
     body["kind"] = serde_json::json!("approvals.record_human_decision");
-    let decision_frame=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"approve-owned-force","body":body})).unwrap();
+    let decision_frame=serde_json::to_vec(&serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":format!("approve-owned-force-{}",p["id"].as_str().unwrap()),"body":body})).unwrap();
     let reply = cases
         .command(
             gateway,

@@ -1,6 +1,7 @@
 //! Offline Help metadata and Unicode passages from atomically published, immutable generations.
 use super::StorageError;
 use crate::protocol::{Id, OperationId};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A passage fits the protocol's `Content` bound, counted as Unicode scalar values.
@@ -46,13 +47,48 @@ pub struct StoredHelpTopic {
     pub topic_revision: i64,
 }
 
+/// Per-content budgets, independent of the legal 256 MiB package source bound.
+pub const MAX_HELP_INDEX_BYTES: usize = 64 * 1024;
+pub const HELP_CHECKPOINT_BYTES: u64 = 1024 * 1024;
+pub const MAX_HELP_CHECKPOINTS: usize = 258;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpOffset {
+    pub byte_offset: u64,
+    pub character_offset: i64,
+}
+/// Small immutable projection shared by every generation of the same exact full content.
+/// Full bodies live only in their content-addressed artifact, never as duplicated SQL text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoredHelpContent {
+    pub digest: String,
+    pub byte_count: u64,
+    pub character_count: i64,
+    pub indexed_bytes: u64,
+    pub index_complete: bool,
+    pub search_text: String,
+    pub offsets: Vec<HelpOffset>,
+}
+impl StoredHelpContent {
+    pub fn commitment(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_vec(self).map(|bytes| crate::fingerprint::sha256_hex(&bytes))
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredHelpDocument {
     pub topic: StoredHelpTopic,
-    /// At most the existing package bundle byte bound; no narrower guide size is invented.
-    pub body: String,
-    /// Lowercase title and body, used for literal substring search without returning the body.
-    pub search_text: String,
+    pub content: Option<StoredHelpContent>,
+}
+/// Exact immutable source and the nearest preceding Unicode checkpoint; no file I/O in SQL.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredHelpPassage {
+    pub content_ref: Value,
+    pub content_digest: String,
+    pub byte_count: u64,
+    pub character_count: i64,
+    pub checkpoint: HelpOffset,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -85,7 +121,9 @@ pub trait HelpRead {
     fn help_topic(&self, generation: &Id, id: &Id)
     -> Result<Option<StoredHelpTopic>, StorageError>;
     /// Ascending ID keyset page, exclusive cursor; limit is `1..=MAX_PAGE`.
-    /// Query is a literal lowercase substring. No query means every topic.
+    /// Query is a literal lowercase substring of the bounded projection. The public Help
+    /// owner scans unindexed source text before reporting a complete negative. No query
+    /// means every topic.
     fn help_topics(
         &self,
         generation: &Id,
@@ -93,14 +131,19 @@ pub trait HelpRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredHelpTopic>, StorageError>;
-    /// A bounded Unicode scalar slice from a published guide. Offset is zero-based.
-    fn help_passage(
+    /// Bounded shared projection; available historical generations continue to name it.
+    fn help_content(&self, digest: &str) -> Result<Option<StoredHelpContent>, StorageError>;
+    /// A real live published content reference suitable for verified host reuse, if any.
+    fn help_content_reference(&self, digest: &str) -> Result<Option<Value>, StorageError>;
+    /// Published source metadata for a bounded Unicode passage. The Help owner verifies and
+    /// reads the artifact outside its database snapshot; unavailable guides return None.
+    fn help_passage_source(
         &self,
         generation: &Id,
         id: &Id,
         offset: i64,
         chars: u32,
-    ) -> Result<Option<String>, StorageError>;
+    ) -> Result<Option<StoredHelpPassage>, StorageError>;
 }
 
 pub trait HelpRepository: HelpRead {

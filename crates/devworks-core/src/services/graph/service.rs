@@ -90,6 +90,7 @@ struct ReadPrepared {
     deadline: i64,
     cancellation: Option<Cancellation>,
     source: Option<source::Source>,
+    source_budget: Option<Budget>,
 }
 fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRequest, Failure> {
     use operations::code::Input::*;
@@ -200,68 +201,166 @@ impl QueryHandler for GraphService {
                 return Err(StorageError::Cancelled.into());
             }
             let mut requested = request.view.clone();
-            if let Some(cursor) = &request.cursor {
-                if let Some(pin_id) = Cursors::pin(cursor)? {
-                    if let Some(ViewSelection::Pinned { pin_id: provided }) = &requested
-                        && provided != &pin_id
-                    {
-                        return Err(StorageError::CursorExpired.into());
-                    }
-                    requested = Some(ViewSelection::Pinned { pin_id });
+            if let Some(cursor) = &request.cursor
+                && let Some(pin_id) = Cursors::pin(cursor)?
+            {
+                if let Some(ViewSelection::Pinned { pin_id: provided }) = &requested
+                    && provided != &pin_id
+                {
+                    return Err(StorageError::CursorExpired.into());
                 }
+                requested = Some(ViewSelection::Pinned { pin_id });
             }
+            let current_worktree = if requested.is_none() {
+                match self.current_worktree(ctx, deadline, env.cancellation) {
+                    Err(Failure::Refused(reason))
+                        if reason.code == DomainErrorCode::ViewUnavailable
+                            && matches!(request.query, GraphQuery::ScopeStatus) =>
+                    {
+                        None
+                    }
+                    other => other?,
+                }
+            } else {
+                None
+            };
             let selected = match lease::select(
-                &self.store,
-                &*self.clock,
-                &*self.ids,
+                lease::Host {
+                    store: &self.store,
+                    clock: &*self.clock,
+                    ids: &*self.ids,
+                },
                 ctx,
                 query,
                 &request.scope,
                 requested.as_ref(),
+                &ReadOptions {
+                    deadline_ms: Some(deadline),
+                    cancellation: env.cancellation.cloned(),
+                },
+                current_worktree.as_ref(),
             ) {
-                Ok(selected) => Some(selected),
+                Ok(selected) => {
+                    if request.cursor.is_some() {
+                        match &request.view {
+                            Some(ViewSelection::Published { repository_ids }) => {
+                                let expected: std::collections::BTreeSet<_> =
+                                    repository_ids.iter().map(|id| id.as_str()).collect();
+                                let actual: std::collections::BTreeSet<_> = selected
+                                    .pin
+                                    .scope
+                                    .views
+                                    .iter()
+                                    .map(|v| v.repository_id.as_str())
+                                    .collect();
+                                if expected != actual
+                                    || !selected.pin.unavailable_repositories.is_empty()
+                                {
+                                    return Err(StorageError::CursorExpired.into());
+                                }
+                            }
+                            Some(ViewSelection::Exact { view_ids }) => {
+                                let expected: std::collections::BTreeSet<_> =
+                                    view_ids.iter().map(|id| id.as_str()).collect();
+                                let actual: std::collections::BTreeSet<_> = selected
+                                    .pin
+                                    .scope
+                                    .views
+                                    .iter()
+                                    .map(|v| v.view_id.as_str())
+                                    .collect();
+                                if expected != actual {
+                                    return Err(StorageError::CursorExpired.into());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(selected)
+                }
                 Err(Failure::Refused(r))
                     if r.code == DomainErrorCode::ViewUnavailable
                         && request.current == Some(true)
                         && metadata_query(&request.query)
-                        && ctx.worktree().is_none() =>
+                        && (ctx.worktree().is_none()
+                            || matches!(request.query, GraphQuery::ScopeStatus)) =>
                 {
                     None
                 }
                 Err(e) => return Err(e),
             };
-            let source = if let (Some(selected), Some(selection)) =
+            let source_and_budget = if let (Some(selected), Some(selection)) =
                 (&selected, source_selection(&request.query))
             {
-                read_snapshot(
+                let mut source_bound = None;
+                let scanned = read_snapshot(
                     &*self.store,
                     &ReadOptions {
                         deadline_ms: Some(deadline),
                         cancellation: env.cancellation.cloned(),
-                        ..Default::default()
                     },
                     |read| {
                         let mut budget = Budget::new(&request.limits);
                         budget.start_at(started, env.cancellation.cloned());
-                        let prepared_source=(|| {
-                        let cursors=bound_cursors(ctx,query,&request,Some(selected),read)?;
-                        let position=request.cursor.as_ref().map(|c|cursors.decode(c)).transpose()?.unwrap_or_default();
-                        let mut reader = Reader::new(
-                            read,
-                            selected,
-                            budget,
-                            position,
-                            request.limits.max_results as usize,
-                        )
-                        .with_indexing(self.indexing.as_deref());
-                        source::prepare(&mut reader, &self.artifacts, &selection)
+                        let prepared_source = (|| {
+                            let cursors =
+                                bound_cursors(ctx, query, &request, Some(selected), read)?;
+                            let position = request
+                                .cursor
+                                .as_ref()
+                                .map(|c| cursors.decode(c))
+                                .transpose()?
+                                .unwrap_or_default();
+                            let mut reader = Reader::new(
+                                read,
+                                selected,
+                                budget,
+                                position,
+                                request.limits.max_results as usize,
+                            )
+                            .with_indexing(self.indexing.as_deref());
+                            let source = source::prepare(
+                                &mut reader,
+                                &self.artifacts,
+                                &selection,
+                                match &request.query {
+                                    GraphQuery::Source {
+                                        selection: None,
+                                        max_lines,
+                                        ..
+                                    } => *max_lines,
+                                    _ => None,
+                                },
+                            )?;
+                            Ok::<_, Failure>((source, reader.budget))
                         })();
+                        if let Err(Failure::Refused(refusal)) = &prepared_source
+                            && matches!(
+                                refusal.target_kind,
+                                "graph_deadline" | "graph_visited_limit" | "graph_memory_limit"
+                            )
+                        {
+                            source_bound = Some(refusal.clone());
+                        }
                         Ok(prepared_source)
                     },
-                )??
-                .into()
+                );
+                let scanned = match scanned {
+                    Err(StorageError::Cancelled)
+                        if !env.cancellation.is_some_and(Cancellation::is_cancelled)
+                            && source_bound.is_some() =>
+                    {
+                        return Err(source_bound.expect("known source bound").into());
+                    }
+                    other => other,
+                };
+                Some(scanned??)
             } else {
                 None
+            };
+            let (source, source_budget) = match source_and_budget {
+                Some((source, budget)) => (Some(source), Some(budget)),
+                None => (None, None),
             };
             Ok(Some(Prepared::new(ReadPrepared {
                 request,
@@ -270,6 +369,7 @@ impl QueryHandler for GraphService {
                 deadline,
                 cancellation: env.cancellation.cloned(),
                 source,
+                source_budget,
             })))
         })();
         result.map_err(|e| self.fault(e))
@@ -284,12 +384,51 @@ impl QueryHandler for GraphService {
     }
 }
 impl GraphService {
+    fn current_worktree(
+        &self,
+        ctx: &InvocationContext,
+        deadline: i64,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Option<Id>, Failure> {
+        let Some(bound) = ctx.worktree() else {
+            return Ok(None);
+        };
+        let env = self
+            .indexing
+            .as_ref()
+            .ok_or_else(|| scope::unavailable(Some(bound.id().clone())))?;
+        let record = read_snapshot(
+            &*self.store,
+            &ReadOptions {
+                deadline_ms: Some(deadline),
+                cancellation: cancellation.cloned(),
+            },
+            |read| Ok(scope::owned(read, ctx)),
+        )??
+        .ok_or_else(|| scope::unavailable(Some(bound.id().clone())))?;
+        // The two ID namespaces differ. Resolve only this host-owned path, outside any SQL
+        // snapshot; never use a caller-supplied path or guess the published baseline.
+        let canonical = env
+            .source
+            .canonical_dir(std::path::Path::new(&record.path))
+            .map_err(|_| scope::unavailable(Some(bound.id().clone())))?;
+        let location = crate::services::indexing::paths::native_location(
+            &canonical.display().to_string(),
+            cfg!(windows),
+        );
+        Ok(Some(crate::services::indexing::discover::worktree_id(
+            &record.repository_id,
+            &location,
+        )))
+    }
+
     fn answer(
         &self,
         ctx: &InvocationContext,
         query: &AdmittedQuery,
         read: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, Failure> {
+        scope::owned(read, ctx)?;
         let prepared = query
             .prepared::<ReadPrepared>()
             .ok_or_else(|| scope::unavailable(None))?;
@@ -341,18 +480,20 @@ impl GraphService {
             read,
             context: ctx,
             scope: &request.scope,
-            now_ms: now,
             stamp: stamp.clone(),
+            selection: selected.map(|selection| &selection.pin),
             position: position.clone(),
             limit: request.limits.max_results as usize,
             next: RefCell::new(None),
             budget: RefCell::new(budget),
             encoded_bytes: Cell::new(0),
-            cursors: Some(&cursors),
         };
         let mut reader = selected.map(|s| {
             let mut b = Budget::new(&request.limits);
             b.start_at(prepared.started, prepared.cancellation.clone());
+            if let Some(prior) = &prepared.source_budget {
+                b.absorb_usage(prior);
+            }
             Reader::new(read, s, b, position, request.limits.max_results as usize)
                 .with_indexing(self.indexing.as_deref())
                 .with_cursors(&cursors)
@@ -395,12 +536,29 @@ impl GraphService {
         if let Some(reason) = exhausted {
             gaps.push(reason);
         }
+        if let Some(selected) = selected {
+            for layer in &selected.layers {
+                for id in &layer.layers {
+                    let generation = read
+                        .indexing()
+                        .generation(id)?
+                        .ok_or_else(|| scope::unavailable(Some(id.clone())))?;
+                    let (state, _) =
+                        crate::services::indexing::status::manifest_coverage(&generation.manifest);
+                    if !matches!(state, CoverageState::Complete)
+                        && !gaps.contains(&"index_coverage_partial")
+                    {
+                        gaps.push("index_coverage_partial");
+                    }
+                }
+            }
+        }
         let missing = selected
             .map(|s| s.pin.unavailable_repositories.clone())
             .unwrap_or_default();
         let partial = !gaps.is_empty() || !missing.is_empty();
         let unavailable = selected.is_none();
-        let coverage = coverage(
+        let mut coverage = coverage(
             &gaps,
             if unavailable {
                 CoverageState::Unavailable
@@ -410,6 +568,12 @@ impl GraphService {
                 CoverageState::Complete
             },
         );
+        if missing
+            .iter()
+            .any(|missing| missing.reason == "ScopeEnumerationIncomplete")
+        {
+            coverage.more_gaps = true;
+        }
         let unavailable_repositories = missing
             .iter()
             .map(|m| model::wire(json!({"repositoryId":m.repository_id,"reason":m.reason})))
@@ -450,7 +614,7 @@ impl GraphService {
             },
             next_cursor,
         };
-        value.validate().map_err(|_|scope::unavailable(None))?;
+        value.validate().map_err(|_| scope::unavailable(None))?;
         Ok(QueryAnswer {
             stamp,
             result: operation_result(query.descriptor().name, value)?,
@@ -586,15 +750,51 @@ impl GraphService {
         current: bool,
     ) -> Result<GraphResult, Failure> {
         let mut repositories = Vec::new();
-        metadata.repositories(|row|{if let Some(env)=&self.indexing{let status=crate::services::indexing::status::status(env,metadata.read,metadata.context,&row.id,3,None)?;let value=serde_json::to_value(status).map_err(|_|scope::unavailable(None))?;let record:CodeRepositoryStatus=model::wire(json!({"repositoryId":row.id,"freshness":value["freshness"],"languages":value["languages"],"semanticPacks":value["semanticPacks"],"overlays":value["overlays"]}))?;if repositories.len()>=metadata.limit||!metadata.retain_wire(&record)?{*metadata.next.borrow_mut()=Some(Position{offset:repositories.len(),..Default::default()});return Ok(false);}repositories.push(record);}Ok(true)})?;
+        let mut position = 0;
+        metadata.repositories(|row| {
+            let index = position;
+            position += 1;
+            if index < metadata.position.offset {
+                return Ok(true);
+            }
+            if let Some(env) = &self.indexing {
+                let status = crate::services::indexing::status::status(
+                    env,
+                    metadata.read,
+                    metadata.context,
+                    &row.id,
+                    3,
+                    None,
+                )?;
+                let value = serde_json::to_value(status).map_err(|_| scope::unavailable(None))?;
+                let record: CodeRepositoryStatus = model::wire(json!({
+                    "repositoryId":row.id,"freshness":value["freshness"],
+                    "languages":value["languages"],"semanticPacks":value["semanticPacks"],
+                    "overlays":value["overlays"]
+                }))?;
+                if repositories.len() >= metadata.limit || !metadata.retain_wire(&record)? {
+                    *metadata.next.borrow_mut() = Some(Position {
+                        offset: index,
+                        ..Default::default()
+                    });
+                    return Ok(false);
+                }
+                repositories.push(record);
+            }
+            Ok(true)
+        })?;
         if let Some(reader) = &mut reader {
             reader.budget.absorb_usage(&metadata.budget.borrow());
             reader.next = metadata.next.borrow().clone();
         }
-        let available = reader.is_some();
-        let mut value = json!({"stamp":metadata.stamp,"coverage":coverage(&[],if available{CoverageState::Complete}else{CoverageState::Unavailable}),"current":current,"repositories":repositories});
+        let available = reader.is_some() && self.indexing.is_some();
+        let mut value = json!({"stamp":metadata.stamp,"coverage":coverage(&[],if available{CoverageState::Complete}else{CoverageState::Unavailable}),"current":current&&available,"repositories":repositories});
         if !available {
-            value["unavailableReason"] = json!("NotIndexed");
+            value["unavailableReason"] = json!(if self.indexing.is_none() {
+                "IndexerUnavailable"
+            } else {
+                "GraphViewUnavailable"
+            });
         }
         Ok(GraphResult::ScopeDetails {
             value: model::wire(value)?,
@@ -606,7 +806,13 @@ fn coverage(gaps: &[&str], state: CoverageState) -> Coverage {
     let mut ids = Vec::new();
     for gap in gaps {
         if unique.insert(*gap) && ids.len() < 128 {
-            ids.push(Id::new(*gap).expect("static graph gap"));
+            ids.push(Id::new(*gap).unwrap_or_else(|_| {
+                Id::new(format!(
+                    "graph_gap_{}",
+                    crate::fingerprint::sha256_hex(gap.as_bytes())
+                ))
+                .expect("digest identifier")
+            }));
         }
     }
     Coverage {
@@ -948,7 +1154,8 @@ impl CommandHandler for GraphService {
                     target,
                     &node.node.unit_key,
                 )?
-                .ok_or_else(|| scope::unavailable(Some(node_id.clone())))?.1;
+                .ok_or_else(|| scope::unavailable(Some(node_id.clone())))?
+                .1;
                 let capture_id: Id = model::wire(unit.payload["sourceCapture"]["id"].clone())?;
                 let captured = tx
                     .graph()
@@ -1020,12 +1227,50 @@ fn dataset_identity(node: &GraphNode) -> GraphNodeIdentity {
     super::dataset::identity(node)
 }
 
-fn bound_cursors(ctx:&InvocationContext,query:&AdmittedQuery,request:&GraphReadRequest,selected:Option<&lease::Selected>,read:&dyn ReadSnapshot)->Result<Cursors,Failure>{
- let revision=if let Some(selected)=selected{read.graph().graph_trust_revision(&selected.pin.scope)?}else{read.stamp().committed_sequence.max(1)};
- let mut canonical=json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
- if let Some(selected)=selected{
- canonical["selection"]=json!(selected.pin.intent_digest);
- let mut registrations=Vec::new();for view in &selected.pin.scope.views {let repository=read.projects().repository(&view.repository_id)?.ok_or_else(||scope::unavailable(Some(view.repository_id.clone())))?;registrations.push(json!({"id":repository.id,"revision":repository.revision,"name":repository.name,"remote":repository.remote_url}));}canonical["registrations"]=json!(registrations);
- }
- let binding=crate::services::cursor::CursorBinding::new(ctx,query.descriptor().name,&[&canonical.to_string()],revision);Ok(Cursors::new(binding,selected.map(|s|s.pin.id.clone())))
+fn bound_cursors(
+    ctx: &InvocationContext,
+    query: &AdmittedQuery,
+    request: &GraphReadRequest,
+    selected: Option<&lease::Selected>,
+    read: &dyn ReadSnapshot,
+) -> Result<Cursors, Failure> {
+    let revision = if let Some(selected) = selected {
+        read.graph().graph_trust_revision(&selected.pin.scope)?
+    } else {
+        read.stamp().committed_sequence.max(1)
+    };
+    let mut canonical =
+        json!({"scope":request.scope,"query":request.query,"limit":request.limits.max_results});
+    if let Some(selected) = selected {
+        canonical["selection"] = json!(selected.pin.intent_digest);
+        let mut registrations = Vec::new();
+        for repository_id in selected
+            .pin
+            .scope
+            .views
+            .iter()
+            .map(|view| &view.repository_id)
+            .chain(
+                selected
+                    .pin
+                    .unavailable_repositories
+                    .iter()
+                    .map(|missing| &missing.repository_id),
+            )
+        {
+            let repository = read
+                .projects()
+                .repository(repository_id)?
+                .ok_or_else(|| scope::unavailable(Some(repository_id.clone())))?;
+            registrations.push(json!({"id":repository.id,"revision":repository.revision,"name":repository.name,"remote":repository.remote_url}));
+        }
+        canonical["registrations"] = json!(registrations);
+    }
+    let binding = crate::services::cursor::CursorBinding::new(
+        ctx,
+        query.descriptor().name,
+        &[&canonical.to_string()],
+        revision,
+    );
+    Ok(Cursors::new(binding, selected.map(|s| s.pin.id.clone())))
 }

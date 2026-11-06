@@ -5,6 +5,7 @@ mod commands;
 pub mod context;
 pub mod github;
 mod location;
+mod transport;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedQuery;
 use crate::operations::{OperationInput, git as ops};
@@ -27,6 +28,7 @@ use std::time::Duration;
 
 #[derive(Clone)]
 pub struct GitConfig {
+    pub transport: Option<Arc<dyn crate::ports::git_transport::GitTransportFiles>>,
     pub program: String,
     pub deadline: Duration,
     pub roots: Vec<RegisteredGitRoot>,
@@ -36,6 +38,7 @@ pub struct GitConfig {
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
+            transport: None,
             program: "git".into(),
             deadline: Duration::from_secs(30),
             roots: Vec::new(),

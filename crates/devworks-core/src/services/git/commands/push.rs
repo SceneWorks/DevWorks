@@ -8,6 +8,7 @@ struct Destination {
     repository_revision: i64,
     url: String,
     observed: crate::services::indexing::git::RevisionObservation,
+    transport_digest: String,
 }
 
 /// A Git remote transport may execute a helper. Accept only explicit supported transports
@@ -34,12 +35,29 @@ fn transport(url: &str) -> bool {
         && url.query().is_none()
         && url.fragment().is_none()
 }
+fn local_server(url: &str) -> bool {
+    Path::new(url).is_absolute()
+        || matches!(url::Url::parse(url),Ok(parsed) if parsed.scheme()=="file")
+}
+fn server_review(url: &str) -> Value {
+    let local = local_server(url);
+    json!({"kind":if local{"LocalGitServer"}else{"RemoteGitServer"},"authority":"TrustedByThisExactPushApproval","processing":"Destination server may run its own hooks and receive-pack configuration","serverHooksConfined":false,"clientPolicy":"IsolatedGitDirectoryWithTrustedHostAuthenticationOnly"})
+}
 impl GitService {
     pub(super) fn prepare_push(
         &self,
         ctx: &InvocationContext,
         input: &GitCommand,
         env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, StorageError> {
+        self.prepare_push_inner(ctx, input, env, false)
+    }
+    fn prepare_push_inner(
+        &self,
+        ctx: &InvocationContext,
+        input: &GitCommand,
+        env: &Preparation<'_>,
+        preview: bool,
     ) -> Result<Option<Prepared>, StorageError> {
         let GitCommand::Push {
             worktree_id,
@@ -123,7 +141,26 @@ impl GitService {
                     remote_id,
                 ));
             }
+            if !preview
+                && local_server(url)
+                && ctx.principal_kind() != crate::context::PrincipalKind::Human
+                && ctx.reviewed_operation().is_none()
+            {
+                return Err(Refusal::new(
+                    DomainErrorCode::ApprovalRequired,
+                    "git_local_server_review",
+                    Some(remote_id.clone()),
+                )
+                .into());
+            }
+            let transport = self.push_transport(
+                &git,
+                Path::new(&tree.path),
+                &tree.head.format,
+                &repository.id,
+            )?;
             Ok(Destination {
+                transport_digest: transport.digest.clone(),
                 tree,
                 repository_revision: repository.revision,
                 url: url.clone(),
@@ -152,6 +189,17 @@ impl GitService {
             unreachable!("selected push")
         };
         let (mut tree, repository, work) = self.owned_command(tx, ctx, worktree_id)?;
+        if ctx.principal_kind() != crate::context::PrincipalKind::Human
+            && ctx.reviewed_operation().is_none()
+            && repository.remote_url.as_deref().is_some_and(local_server)
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::ApprovalRequired,
+                "git_local_server_review",
+                Some(remote_id.clone()),
+            )
+            .into());
+        }
         let staged = command
             .prepared::<StagedPush>()
             .ok_or_else(|| refuse(DomainErrorCode::Conflict, "git_push_destination", remote_id))?;
@@ -168,7 +216,7 @@ impl GitService {
         };
         if let Some(evidence) = ctx.reviewed_operation() {
             let current = json!({"tree":destination.tree,"repositoryRevision":destination.repository_revision,
-                "url":destination.url,"head":destination.observed.head,"branch":destination.observed.branch});
+                "url":destination.url,"head":destination.observed.head,"branch":destination.observed.branch,"transportDigest":destination.transport_digest,"destinationServer":server_review(&destination.url)});
             if evidence.owner_binding()["native"] != current {
                 return Err(refuse(
                     DomainErrorCode::SourceChanged,
@@ -208,6 +256,7 @@ impl GitService {
             repository,
             work,
             Action::Push {
+                transport_digest: Some(destination.transport_digest.clone()),
                 remote: remote_id.as_str().into(),
                 url: destination.url.clone(),
                 target: target_ref.clone(),
@@ -232,6 +281,7 @@ impl GitService {
             expected,
             remote_head,
             force,
+            transport_digest,
         } = &job.action
         else {
             unreachable!("push effect")
@@ -246,18 +296,34 @@ impl GitService {
         if git.literal_push_url(path, url).as_ref() != Ok(url) {
             return denied("literal push URL is rewritten or cannot be bound");
         }
-        match git.remote_symbolic_target(path, url, target) {
+        let transport =
+            match self.push_transport(git, path, &expected.format, &job.tree.repository_id) {
+                Ok(transport) if transport_digest.as_ref() == Some(&transport.digest) => transport,
+                _ => {
+                    return denied(
+                        "trusted push transport configuration changed or is unavailable",
+                    );
+                }
+            };
+        let network = Git {
+            runner: &transport,
+            ctx: git.ctx,
+            program: git.program,
+            deadline: git.deadline,
+            stop: git.stop,
+        };
+        match network.remote_symbolic_target(path, url, target) {
             Ok(None) => {}
             Ok(Some(_)) => {
                 return denied("push destination is a symbolic ref, not the owned branch");
             }
             Err(_) => return changed("remote symbolic-ref state cannot be established"),
         }
-        let observation = match git.revision_observation(path) {
+        let observation = match git.reviewed_revision_observation(path) {
             Ok(o) if o.head == expected.hex && o.branch.as_deref() == Some(target) => o,
             _ => return changed("local push source changed"),
         };
-        match git.remote_default(path, url) {
+        match network.remote_default(path, url) {
             Ok(Some(default)) if &default == target => {
                 return denied("the remote default branch is protected");
             }
@@ -267,7 +333,7 @@ impl GitService {
             Err(_) => return denied("remote default branch is unavailable"),
             _ => {}
         }
-        let observed = match git.remote_head(path, url, target) {
+        let observed = match network.remote_head(path, url, target) {
             Ok(head) => head,
             Err(_) => return denied("remote head is unavailable"),
         };
@@ -287,7 +353,7 @@ impl GitService {
             observed.as_deref().unwrap_or("")
         );
         let refspec = format!("{}:{target}", expected.hex);
-        let sent = git.mutation(
+        let sent = network.mutation(
             path,
             &[
                 "push",
@@ -305,7 +371,7 @@ impl GitService {
         );
         // A timeout/nonzero status does not establish failure. Observe the remote ref even
         // after transport loss; never repeat the guarded write as recovery.
-        match git.remote_head(path, url, target) {
+        match network.remote_head(path, url, target) {
             Ok(Some(head)) if head == expected.hex => {
                 self.finish_git(job, &operation.id, observation)
             }
@@ -327,7 +393,7 @@ impl GitService {
         env: &Preparation<'_>,
     ) -> Result<Value, Failure> {
         let prepared = self
-            .prepare_push(ctx, input, env)?
+            .prepare_push_inner(ctx, input, env, true)?
             .ok_or_else(|| Refusal::new(DomainErrorCode::InvalidArgument, "git_push", None))?;
         let staged = prepared
             .get::<StagedPush>()
@@ -335,7 +401,7 @@ impl GitService {
         match &staged.0 {
             Ok(d) => Ok(
                 json!({"tree":d.tree,"repositoryRevision":d.repository_revision,"url":d.url,
-                "head":d.observed.head,"branch":d.observed.branch}),
+                "head":d.observed.head,"branch":d.observed.branch,"transportDigest":d.transport_digest,"destinationServer":server_review(&d.url)}),
             ),
             Err(Failure::Refused(r)) => Err(r.clone().into()),
             Err(_) => {

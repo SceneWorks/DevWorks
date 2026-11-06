@@ -255,6 +255,8 @@ pub struct Chat {
     pub history_query: String,
     pub drafts: BTreeMap<String, Draft>,
     pub transcripts: HashMap<String, Transcript>,
+    /// Volatile text, never persisted as part of the transcript or draft.
+    pub text_preview: Option<devworks_engine::providers::live::LiveTurn>,
     pub starting: Option<StartReason>,
     /// Send once the started session exists.
     pub send_after_start: bool,
@@ -296,6 +298,7 @@ impl Chat {
             history_query: String::new(),
             drafts: BTreeMap::new(),
             transcripts: HashMap::new(),
+            text_preview: None,
             starting: None,
             send_after_start: false,
             sending: None,
@@ -311,6 +314,66 @@ impl Chat {
             routing: Routing::default(),
             next_local: 0,
         }
+    }
+    /// A finalized preview remains visible until the canonical transcript catches up.
+    pub fn reconcile_text_preview(&mut self) {
+        let Some(turn) = &self.text_preview else {
+            return;
+        };
+        let t = self.transcripts.get(turn.session_id.as_str());
+        let epoch = self
+            .sessions
+            .iter()
+            .find(|s| s.id == turn.session_id)
+            .map_or(turn.context_epoch, |s| s.context_epoch.get());
+        let changed_epoch = t.is_some_and(|t| {
+            t.entries.iter().any(|e| match &e.body {
+                TranscriptBody::ContextEpochChanged { next_epoch, .. } => {
+                    next_epoch.get() > turn.context_epoch
+                }
+                TranscriptBody::NativeItem { binding, .. } => {
+                    binding.context_epoch.get() > turn.context_epoch
+                }
+                _ => false,
+            })
+        });
+        let caught_up = turn.finalized_through.is_some_and(|through| {
+            t.and_then(|t| t.entries.last())
+                .is_some_and(|e| e.sequence.get() >= through)
+        });
+        if self.selected.as_deref() != Some(turn.session_id.as_str())
+            || epoch > turn.context_epoch
+            || changed_epoch
+            || caught_up
+        {
+            self.text_preview = None;
+        }
+    }
+    pub fn apply_text_preview(
+        &mut self,
+        incoming: Option<devworks_engine::providers::live::LiveTurn>,
+    ) {
+        match incoming {
+            Some(turn) if self.selected.as_deref() == Some(turn.session_id.as_str()) => {
+                let older = self.text_preview.as_ref().is_some_and(|old| {
+                    old.session_id == turn.session_id
+                        && (turn.context_epoch < old.context_epoch
+                            || (turn.attempt_id == old.attempt_id && turn.revision < old.revision))
+                });
+                if !older {
+                    self.text_preview = Some(turn);
+                }
+            }
+            None if self
+                .text_preview
+                .as_ref()
+                .is_some_and(|t| t.finalized_through.is_none()) =>
+            {
+                self.text_preview = None;
+            }
+            _ => {}
+        }
+        self.reconcile_text_preview();
     }
     pub fn next_local(&mut self) -> u64 {
         self.next_local += 1;
@@ -618,6 +681,10 @@ fn transcript_state(
         empty_invitation(ui, surface);
         return;
     };
+    let preview = chat
+        .text_preview
+        .as_ref()
+        .filter(|p| p.session_id.as_str() == id);
     let Some(t) = chat.transcripts.get_mut(&id) else {
         widgets::state_block(
             ui,
@@ -645,7 +712,7 @@ fn transcript_state(
             return;
         }
     }
-    if !t.loaded {
+    if !t.loaded && preview.is_none() {
         widgets::state_block(
             ui,
             &ViewState::Loading {
@@ -654,11 +721,16 @@ fn transcript_state(
         );
         return;
     }
-    if t.entries.is_empty() {
+    if t.entries.is_empty() && preview.is_none() {
         empty_invitation(ui, surface);
         return;
     }
-    let entries = &t.entries;
+    // The atomic transcript commit can precede the registry's final sequence marker.
+    // Keep one copy of this attempt's text throughout that handover.
+    let entries: Vec<_> = t.entries.iter().filter(|entry| !matches!(
+        (&entry.body, preview),
+        (TranscriptBody::AssistantAttempt { attempt_id, .. }, Some(p)) if *attempt_id == p.attempt_id
+    )).collect();
     let width = ui.available_width();
     t.blocks.show(
         ui,
@@ -670,10 +742,20 @@ fn transcript_state(
             ui.set_width(width - 8.0);
             if i == entries.len() {
                 // The honest coordinator status sits after the latest message.
-                widgets::caption(ui, NO_COORDINATOR);
+                if let Some(preview) = preview {
+                    egui::Frame::new()
+                        .fill(theme::PANEL)
+                        .inner_margin(12.0)
+                        .show(ui, |ui| {
+                            widgets::caption(ui, "Streaming response");
+                            ui.label(&preview.text);
+                        });
+                } else {
+                    widgets::caption(ui, NO_COORDINATOR);
+                }
                 return;
             }
-            entry_block(ui, &entries[i]);
+            entry_block(ui, entries[i]);
         },
     );
 }

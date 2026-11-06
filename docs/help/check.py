@@ -175,7 +175,8 @@ def main():
         'connections':'settings-connections', 'knowledge':'knowledge', 'diagnostics':'diagnostics',
         'browser':'browser', 'packages':'addons', 'web':'integrations', 'projects':'projects',
         'repositories':'repositories', 'indexing':'indexing', 'work':'workflow',
-        'notifications':'approvals', 'help':'help', 'usage':'usage'
+        'notifications':'approvals', 'help':'help', 'usage':'usage',
+        'prices':'usage', 'graph':'code-exploration'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):
         if owner not in owners or owners[owner] not in ids:

@@ -142,6 +142,46 @@ pub(super) fn retained(
     Ok(selected)
 }
 
+/// Current durable custody is checked even for metadata-only status and retained pins.
+pub(super) fn owned(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<Option<StoredGitWorktree>, Failure> {
+    let Some(bound) = ctx.worktree() else {
+        return Ok(None);
+    };
+    let denied = || {
+        Refusal::new(
+            DomainErrorCode::PermissionDenied,
+            "graph_owned_context",
+            Some(bound.id().clone()),
+        )
+    };
+    let tree = read.git().git_worktree(bound.id())?.ok_or_else(denied)?;
+    let work = read.work().work(bound.work_id())?.ok_or_else(denied)?;
+    if tree.removed
+        || tree.id != *bound.id()
+        || tree.repository_id != *bound.repository_id()
+        || tree.work_id != *bound.work_id()
+        || tree.ownership_revision != bound.ownership_revision()
+        || ctx.project_id() != Some(&work.project_id)
+        || !ctx.root_id().is_some_and(|root| {
+            root.0 == work.id || work.parent_feature_id.as_ref() == Some(&root.0)
+        })
+        || !read
+            .work()
+            .work_repositories(&work.id)?
+            .contains(bound.repository_id())
+        || !read
+            .projects()
+            .members(&work.project_id)?
+            .contains(bound.repository_id())
+    {
+        return Err(denied().into());
+    }
+    Ok(Some(tree))
+}
+
 pub(super) fn authorize(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -243,6 +283,7 @@ pub(super) fn resolve(
     scope: &DataScope,
     selection: Option<&ViewSelection>,
     now_ms: i64,
+    current_worktree: Option<&Id>,
 ) -> Result<Resolved, Failure> {
     if matches!(scope, DataScope::Workspace) && ctx.project_id().is_some() {
         return Err(
@@ -270,36 +311,13 @@ pub(super) fn resolve(
         None => {
             // The ingress-bound worktree is positive host custody, never a tool-supplied path.
             if let Some(worktree) = ctx.worktree() {
-                let tree = read
-                    .git()
-                    .git_worktree(worktree.id())?
-                    .ok_or_else(|| unavailable(Some(worktree.id().clone())))?;
-                let work = read
-                    .work()
-                    .work(worktree.work_id())?
-                    .ok_or_else(|| unavailable(Some(worktree.id().clone())))?;
-                if tree.removed
-                    || tree.id != *worktree.id()
-                    || tree.repository_id != *worktree.repository_id()
-                    || tree.work_id != *worktree.work_id()
-                    || tree.ownership_revision != worktree.ownership_revision()
-                    || ctx.project_id() != Some(&work.project_id)
-                    || !ctx.root_id().is_some_and(|root| {
-                        root.0 == work.id || work.parent_feature_id.as_ref() == Some(&root.0)
-                    })
-                    || !read
-                        .work()
-                        .work_repositories(&work.id)?
-                        .contains(worktree.repository_id())
-                {
-                    return Err(unavailable(Some(worktree.id().clone())));
-                }
+                owned(read, ctx)?;
                 authorize(read, ctx, scope, worktree.repository_id())?;
                 out.push(views::worktree_view(
                     read,
                     ctx,
                     worktree.repository_id(),
-                    worktree.id(),
+                    current_worktree.ok_or_else(|| unavailable(Some(worktree.id().clone())))?,
                     now_ms,
                 )?);
             } else {
@@ -498,16 +516,24 @@ pub(super) fn validate_in(
         }
     }
     if let Some(bound) = ctx.worktree() {
-        let tree = tx
-            .git()
-            .git_worktree(bound.id())?
-            .ok_or_else(|| unavailable(Some(bound.id().clone())))?;
+        let tree = tx.git().git_worktree(bound.id())?.ok_or_else(|| {
+            Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "graph_owned_context",
+                Some(bound.id().clone()),
+            )
+        })?;
         if tree.removed
             || tree.ownership_revision != bound.ownership_revision()
             || tree.work_id != *bound.work_id()
             || tree.repository_id != *bound.repository_id()
         {
-            return Err(unavailable(Some(bound.id().clone())));
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "graph_owned_context",
+                Some(bound.id().clone()),
+            )
+            .into());
         }
     }
     Ok(())

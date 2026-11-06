@@ -186,7 +186,25 @@ fn quote_current(
             "price override changed; refresh the quote before admission".into(),
         ));
     }
-    if let Some(id) = &request.quote.snapshot_id {
+    if let Some(provider) = request.quote.publication_provider {
+        let current = tx.usage().current_price_snapshot(provider.id())?;
+        let same = match (
+            &request.quote.snapshot_id,
+            request.quote.price_revision,
+            current.as_ref(),
+        ) {
+            (None, None, None) => true,
+            (Some(id), Some(revision), Some(current)) => {
+                id == &current.id && revision == current.revision
+            }
+            _ => false,
+        };
+        if !same {
+            return Ok(Some(
+                "price publication changed; refresh the quote before admission".into(),
+            ));
+        }
+    } else if let Some(id) = &request.quote.snapshot_id {
         let Some(source) = tx.usage().price_snapshot(id)? else {
             return Ok(Some("admitted price source is unavailable".into()));
         };
