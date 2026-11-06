@@ -71,6 +71,36 @@ pub fn estimate(
     let mut known = false;
     let mut unknown = Vec::new();
     let mut input = quantities.clone();
+    let ambiguous_audio_cache = quantities.additional.iter().any(|q| {
+        q.modality == "Audio" && q.charge_kind == "Input" && q.unit == "Token" && q.quantity > 0
+    }) && ((context.cache_read_possible
+        && quantities.cached_read_tokens != Some(0))
+        || (context.cache_write_possible && quantities.cache_write_tokens != Some(0)));
+    if ambiguous_audio_cache {
+        unknown.push("input_modality_cache_breakdown".into());
+    }
+    // Provider audio counters are subsets of aggregate token counts, not a second complete
+    // input/output. Preserve the aggregate in the meter while pricing disjoint components.
+    for (kind, aggregate) in [
+        ("Input", &mut input.input_tokens),
+        ("Output", &mut input.output_tokens),
+    ] {
+        let audio = quantities
+            .additional
+            .iter()
+            .find(|q| q.modality == "Audio" && q.charge_kind == kind && q.unit == "Token");
+        if let Some(audio) = audio {
+            *aggregate = aggregate
+                .and_then(|total| total.checked_sub(audio.quantity))
+                .filter(|n| *n >= 0);
+            if aggregate.is_none() {
+                unknown.push(format!("{kind}_modality_breakdown"));
+            }
+        }
+    }
+    if ambiguous_audio_cache {
+        input.input_tokens = None;
+    }
     // A missing category on a profile that cannot use it is inapplicable. A positive
     // contradictory observation remains unknown; it cannot disappear into a cheap estimate.
     let unexpected_read =
@@ -125,7 +155,7 @@ pub fn estimate(
         (
             "output",
             "Output",
-            quantities.output_tokens,
+            input.output_tokens,
             rates.and_then(|r| r.output_usd_per_million.as_deref()),
             true,
         ),
@@ -134,14 +164,14 @@ pub fn estimate(
             "CacheRead",
             quantities.cached_read_tokens,
             rates.and_then(|r| r.cache_read_usd_per_million.as_deref()),
-            context.cache_read_possible,
+            context.cache_read_possible && !ambiguous_audio_cache,
         ),
         (
             "cache write",
             "CacheWrite",
             quantities.cache_write_tokens,
             write,
-            context.cache_write_possible,
+            context.cache_write_possible && !ambiguous_audio_cache,
         ),
     ] {
         if !applicable {
@@ -150,7 +180,11 @@ pub fn estimate(
         let explicit = quantities
             .additional
             .iter()
-            .filter(|q| q.unit == "Token" && q.charge_kind == kind)
+            .filter(|q| {
+                q.unit == "Token"
+                    && q.charge_kind == kind
+                    && !(q.modality == "Audio" && matches!(kind, "Input" | "Output"))
+            })
             .collect::<Vec<_>>();
         if explicit.is_empty() {
             add_component(&mut cost, &mut known, &mut unknown, name, quantity, rate)?;
@@ -168,6 +202,14 @@ pub fn estimate(
         }
     }
     for quantity in &quantities.additional {
+        if ambiguous_audio_cache
+            && quantity.modality == "Audio"
+            && quantity.charge_kind == "Input"
+            && quantity.unit == "Token"
+        {
+            continue;
+        }
+
         if (quantity.charge_kind == "CacheRead" && !context.cache_read_possible)
             || (quantity.charge_kind == "CacheWrite" && !context.cache_write_possible)
         {
