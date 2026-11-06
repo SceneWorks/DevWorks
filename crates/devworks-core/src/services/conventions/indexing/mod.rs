@@ -2,6 +2,7 @@
 //! cancellable embedding execution; chunking and ranking remain pure shared source rules.
 pub mod chunker;
 pub mod embedding;
+pub mod preparation;
 pub mod rank;
 
 use crate::{

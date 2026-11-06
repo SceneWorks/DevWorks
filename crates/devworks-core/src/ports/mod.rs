@@ -236,8 +236,9 @@ pub struct QueryAnswer {
     pub stamp: ReadStamp,
     pub result: OperationResult,
 }
-/// Read use cases run against one read snapshot. Queries never mint grants, clear blockers,
-/// claim work or consume budget.
+/// Read use cases publish against one read snapshot. Queries never mint grants, clear blockers
+/// or claim work. Owner-admitted auxiliary inference may reserve and account its actual
+/// configured budget during external preparation; it cannot mutate the queried business state.
 pub trait QueryHandler: Send + Sync {
     /// An optional absolute store-clock deadline established by bounded preparation. The
     /// gateway can only tighten the host's read deadline with this hint; it never replaces
@@ -249,7 +250,7 @@ pub trait QueryHandler: Send + Sync {
     /// snapshot and write transaction: for example a host-native external read (the web tools)
     /// and the evidence it records. It never mints a receipt, grant or blocker change; what it
     /// writes (journaled staging, evidence artifacts, host diagnostics, internal retention
-    /// leases) must be complete and
+    /// leases, or actual routed auxiliary-inference accounting) must be complete and
     /// recoverable on its own, because the query's publication can still be denied. `env`
     /// carries the caller's cancellation and deadline. An `Err` is the query's typed fault. The
     /// default prepares nothing.

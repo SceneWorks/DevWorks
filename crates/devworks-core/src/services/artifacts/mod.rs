@@ -478,6 +478,7 @@ pub(crate) fn share_named_in(
     if artifact.state != ArtifactState::Live
         || artifact.retention != ArtifactRetention::Explicit
         || retained_help(&artifact, &tx.store().host_actor)
+        || retained_convention(&artifact, &tx.store().host_actor)
         || artifact.scope.project() == Some(project)
         || !visible_in(tx.artifacts(), &viewer, &artifact, None)?
         || !tx.artifacts().add_share(&artifact.id, project)?
@@ -562,10 +563,60 @@ fn retained_help(artifact: &StoredArtifact, host: &crate::protocol::ActorId) -> 
         && artifact.provenance["derived"]["kind"] == "HelpTopic"
 }
 
+/// Only actual trusted-Host convention derivatives are immutable through public artifact
+/// mutations. Original uploads named by conventions retain their ordinary caller ownership.
+pub(crate) fn retained_convention(
+    artifact: &StoredArtifact,
+    host: &crate::protocol::ActorId,
+) -> bool {
+    if artifact.provenance["principalKind"] != "Host"
+        || artifact.provenance["producedBy"].as_str() != Some(host.0.as_str())
+    {
+        return false;
+    }
+    let derived = &artifact.provenance["derived"];
+    let id = |key: &str| {
+        derived[key]
+            .as_str()
+            .is_some_and(|s| crate::protocol::Id::new(s).is_ok())
+    };
+    let digest = |key: &str| {
+        derived[key]
+            .as_str()
+            .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    match derived["kind"].as_str() {
+        Some("ConventionContent") => id("conventionId") && digest("sourceDigest"),
+        Some("ConventionResource") => {
+            id("conventionId") && id("resourceId") && digest("sourceDigest")
+        }
+        Some("EmbeddingProbeInput") => {
+            id("candidateId") && id("operationId") && id("requestId") && id("admissionKey")
+        }
+        Some("ConventionEmbeddingInput") => {
+            id("requestId")
+                && digest("contextDigest")
+                && digest("inputDigest")
+                && derived["embeddingSpace"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+                && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        _ => false,
+    }
+}
+
 fn require_explicit(
     artifact: &StoredArtifact,
     host: &crate::protocol::ActorId,
 ) -> Result<(), Refusal> {
+    if retained_convention(artifact, host) {
+        return Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            "convention_retained",
+            Some(artifact.id.clone()),
+        ));
+    }
     if retained_help(artifact, host) {
         return Err(Refusal::new(
             DomainErrorCode::Conflict,
