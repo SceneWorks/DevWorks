@@ -12,6 +12,9 @@
 //! Instruction text is exactly the scoped context artifact; this module makes no independent
 //! claim that its caller assembled all currently active instructions.
 pub mod driver;
+pub mod live;
 pub mod schemas;
 pub mod sink;
 pub mod source;
+
+mod wire_model;

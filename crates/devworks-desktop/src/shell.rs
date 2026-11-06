@@ -34,6 +34,7 @@ pub mod decisions;
 pub mod help;
 pub mod indexing;
 pub mod jobs;
+mod live_text;
 pub mod projects;
 pub mod usage;
 pub mod work;
@@ -187,6 +188,9 @@ pub struct Shell {
     saved: Option<Memory>,
     last_save: Instant,
     last_poll: Instant,
+    last_preview_poll: Option<Instant>,
+    preview_target: Option<String>,
+    preview_generation: u64,
     restored_selection: Option<String>,
     /// Applied session mutations (start, message) and artifact mutations (save, delete). A
     /// list query started before the latest mutation may miss it: its reply is dropped and
@@ -332,6 +336,9 @@ impl Shell {
             saved: Some(memory.clone()),
             last_save: Instant::now(),
             last_poll: Instant::now(),
+            last_preview_poll: None,
+            preview_target: None,
+            preview_generation: 0,
             restored_selection: memory.selected_session,
             session_mutations: 0,
             artifact_mutations: 0,
@@ -1920,6 +1927,7 @@ impl Shell {
                         .entry(id.clone())
                         .or_default()
                         .apply(page);
+                    self.chat.reconcile_text_preview();
                     if more {
                         self.load_transcript(&id);
                     }
@@ -1930,6 +1938,9 @@ impl Shell {
                     t.error = Some(e.describe());
                 }
             },
+            (Slot::TextPreview(id, generation), Reply::Task(result)) => {
+                self.apply_live_text(&id, generation, result);
+            }
             (Slot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
                 let outcome = ops::appended(c);
@@ -2014,7 +2025,8 @@ impl Shell {
                         TaskOutput::Preview { .. }
                         | TaskOutput::Prepared { .. }
                         | TaskOutput::PackagePrepared { .. }
-                        | TaskOutput::Refreshed,
+                        | TaskOutput::Refreshed
+                        | TaskOutput::TextPreview(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -2075,7 +2087,8 @@ impl Shell {
                             TaskOutput::Stored { .. }
                             | TaskOutput::Prepared { .. }
                             | TaskOutput::PackagePrepared { .. }
-                            | TaskOutput::Refreshed,
+                            | TaskOutput::Refreshed
+                            | TaskOutput::TextPreview(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
@@ -3490,6 +3503,7 @@ impl Shell {
         if self.lifecycle == Lifecycle::Open {
             self.poll_hints();
             self.input(&ctx);
+            self.poll_live_text(&ctx);
         }
         if self.lifecycle == Lifecycle::Open {
             self.route_status_due(&ctx);

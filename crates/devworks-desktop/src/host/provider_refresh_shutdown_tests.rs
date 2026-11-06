@@ -112,9 +112,12 @@ impl StreamingHttp for NoInference {
 }
 #[test]
 fn actual_engine_drop_is_bounded_during_owned_oauth_http_and_started_secret_write() {
+    run_case(false);
+}
+pub(super) fn run_case(writer_race: bool) {
     for external_secret in [false, true] {
         let root = std::env::temp_dir().join(format!(
-            "dw19-refresh-drop-{}-{external_secret}",
+            "dw19-refresh-drop-{}-{external_secret}-{writer_race}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -394,11 +397,35 @@ fn actual_engine_drop_is_bounded_during_owned_oauth_http_and_started_secret_writ
             .unwrap()
             .is_empty()
         );
+        let configured =
+            writer_race.then(|| super::provider_refresh_lock_tests::block_configure(&engine.host));
+        let connections = engine.host.connections.clone();
         let (finished, done) = mpsc::channel();
         std::thread::spawn(move || {
             drop(engine);
             let _ = finished.send(());
         });
+        if let Some(configured) = configured {
+            // Wait on the real close flag, without occupying the test thread if an old
+            // lifecycle read lock deadlocks behind the queued database writer.
+            let (closed, observed) = mpsc::channel();
+            std::thread::spawn(move || {
+                while !connections.is_closed() {
+                    std::thread::yield_now();
+                }
+                let _ = closed.send(());
+            });
+            let closing = observed.recv_timeout(Duration::from_secs(2));
+            configured.release();
+            assert!(
+                closing.is_ok(),
+                "connection close must not wait for a writer-held configure lifecycle read"
+            );
+            configured
+                .finished
+                .recv_timeout(Duration::from_secs(2))
+                .expect("actual configure must retire after writer gate opens");
+        }
         let closed = done.recv_timeout(Duration::from_secs(3));
         let current = read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
             s.router().connection(&id("usage-connection"))

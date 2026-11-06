@@ -38,6 +38,7 @@ impl Decoder {
                         self.seen_text.insert((i, c));
                         out.push(DecodedFrame::TextDelta {
                             block_index: i,
+                            content_index: c,
                             text: text.into(),
                         });
                     }
@@ -54,7 +55,14 @@ impl Decoder {
             }
             "response.output_item.added" | "response.output_item.done" => {
                 if let (Some(i), Some(item)) = (ordinal, v.get("item")) {
-                    self.response_item(i, item, kind.ends_with(".done"), raw, out);
+                    self.response_item(
+                        i,
+                        item,
+                        kind.ends_with(".done"),
+                        kind.ends_with(".done"),
+                        raw,
+                        out,
+                    );
                 } else {
                     self.error(DecodeErrorKind::InvalidContent, "missing_output_item", out);
                 }
@@ -136,6 +144,7 @@ impl Decoder {
         i: u64,
         item: &Value,
         complete: bool,
+        observe_text: bool,
         raw: &str,
         out: &mut Vec<DecodedFrame>,
     ) {
@@ -173,7 +182,7 @@ impl Decoder {
                             .is_none_or(|s| s == "completed");
                 }
             }
-            "message" if complete => {
+            "message" if observe_text => {
                 if let Some(content) = item.get("content").and_then(Value::as_array) {
                     for (c, block) in content.iter().enumerate() {
                         match block.get("type").and_then(Value::as_str) {
@@ -182,6 +191,7 @@ impl Decoder {
                                     if self.seen_text.insert((i, c as u64)) {
                                         out.push(DecodedFrame::TextDelta {
                                             block_index: i,
+                                            content_index: c as u64,
                                             text: text.into(),
                                         });
                                     }
@@ -220,7 +230,7 @@ impl Decoder {
     fn fold_response(&mut self, v: &Value, raw: &str, complete: bool, out: &mut Vec<DecodedFrame>) {
         if let Some(output) = v.get("output").and_then(Value::as_array) {
             for (i, item) in output.iter().enumerate() {
-                self.response_item(i as u64, item, complete, raw, out);
+                self.response_item(i as u64, item, complete, true, raw, out);
             }
         } else {
             self.error(

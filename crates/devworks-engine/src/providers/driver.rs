@@ -82,6 +82,7 @@ pub struct NativeProviders {
     usage: Arc<UsageRuntime>,
     schemas: Arc<RegisteredSchemas>,
     composition: ProviderComposition,
+    live: Arc<super::live::LiveTurns>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -226,16 +227,18 @@ impl NativePreparation {
                     model_id: request.query.catalog_model_id.clone(),
                     context_epoch,
                 };
+                let model = s.router().route_model(&request.query.catalog_model_id)?;
+                let upstream = super::wire_model::registered_upstream(
+                    &current,
+                    model.as_ref(),
+                    &request.query,
+                )?;
                 let caps = self.owner.capabilities(
                     &self.request,
                     &binding,
                     &current,
-                    s.router().route_model(&request.query.catalog_model_id)?,
-                    request
-                        .query
-                        .provider_model_id
-                        .as_deref()
-                        .ok_or(StorageError::ScopeDenied)?,
+                    model,
+                    &upstream,
                     &request.selection,
                 )?;
                 Some(
@@ -279,6 +282,7 @@ impl NativeProviders {
             usage,
             schemas,
             composition,
+            live: Arc::new(super::live::LiveTurns::default()),
         })
     }
     /// Explicit host-qualified declarations, including Unknown support. Every request still
@@ -288,6 +292,46 @@ impl NativeProviders {
     }
     pub fn embedding_registrations(&self) -> &[EmbeddingRegistration] {
         &self.composition.embedding_spaces
+    }
+    /// Trusted native UI read only. The host must authorize the session under its current
+    /// user context before serving this preview; generic gateway/tools cannot publish it.
+    pub fn text_preview(&self, session: &Id) -> Option<super::live::LiveTurn> {
+        if self.usage.accounting_fence().is_closed() {
+            self.live.clear();
+            return None;
+        }
+        self.usage
+            .accounting_fence()
+            .publication(|| {
+                let Some(preview) = self.live.snapshot(session) else {
+                    return Ok(None);
+                };
+                let current = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    let Some(current) = read.sessions().session(session)? else {
+                        return Ok(false);
+                    };
+                    let Some(attempt) = read.usage().inference_attempt(&preview.attempt_id.0)?
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(!current.closed()
+                        && current.context_epoch == preview.context_epoch
+                        && attempt.session_id.as_ref() == Some(session)
+                        && if preview.finalized_through.is_some() {
+                            matches!(attempt.state.as_str(), "Dispatched" | "Settled")
+                        } else {
+                            attempt.state == "Dispatched"
+                        })
+                })
+                .unwrap_or(false);
+                if !current {
+                    self.live.discard(session, &preview.attempt_id);
+                    return Ok(None);
+                }
+                Ok(Some(preview))
+            })
+            .ok()
+            .flatten()
     }
     pub fn schemas(&self) -> &Arc<RegisteredSchemas> {
         &self.schemas
@@ -657,11 +701,8 @@ impl NativeProviders {
             model_id: attempt.catalog_model_id.clone(),
             context_epoch,
         };
-        let upstream = bound
-            .query
-            .provider_model_id
-            .clone()
-            .ok_or(StorageError::ScopeDenied)?;
+        let upstream =
+            super::wire_model::registered_upstream(&connection, model.as_ref(), &bound.query)?;
         let capabilities = self.capabilities(
             request,
             &binding,
@@ -852,14 +893,17 @@ impl LazySink {
                 }
                 _ => None,
             };
-            self.inner = Some(ProviderSink::new(
-                self.owner.store.clone(),
-                self.owner.artifacts.clone(),
-                self.context.clone(),
-                prepared,
-                embedding,
-                self.result.clone(),
-            ));
+            self.inner = Some(
+                ProviderSink::new(
+                    self.owner.store.clone(),
+                    self.owner.artifacts.clone(),
+                    self.context.clone(),
+                    prepared,
+                    embedding,
+                    self.result.clone(),
+                )
+                .with_live(self.owner.live.clone()),
+            );
         }
         Ok(self.inner.as_mut())
     }
