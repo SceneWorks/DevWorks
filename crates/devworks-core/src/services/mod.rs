@@ -16,6 +16,7 @@ pub mod history;
 pub mod indexing;
 pub mod jobs;
 pub mod knowledge;
+pub mod notifications;
 pub mod packages;
 pub mod power;
 pub mod process;
@@ -271,6 +272,13 @@ impl UseCases {
 
     pub fn with_work(mut self, service: Arc<work::WorkService>) -> Self {
         for op in work::OPERATIONS {
+            self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_notifications(mut self, service: Arc<notifications::NotificationService>) -> Self {
+        for op in notifications::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
         self
