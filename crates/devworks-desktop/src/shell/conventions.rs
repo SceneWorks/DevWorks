@@ -40,6 +40,7 @@ impl Shell {
                 body["page"]["cursor"] = serde_json::json!(state.next);
             }
             let operation = if search {
+                body.as_object_mut().expect("query").remove("lifecycles");
                 if !append {
                     body["text"] = serde_json::json!(state.text);
                     if !state.top_k.is_empty() {
@@ -187,7 +188,7 @@ impl Shell {
             }
             s.resource_loading = true;
             s.resource_generation = s.resource_generation.wrapping_add(1);
-            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":s.applicability});
+            let mut body = serde_json::json!({"scope":scope.wire(),"page":{"limit":cop::PAGE},"applicability":if s.resource_mode==1 {s.applicability.clone()}else{Vec::new()}});
             body["selection"] = match s.resource_mode {
                 1 => serde_json::json!({"kind":"Catalog"}),
                 2 => {
@@ -1016,6 +1017,9 @@ impl Shell {
                 {
                     target.revision = None;
                     target.section = None;
+                    if target.format == 3 {
+                        target.format = 0;
+                    }
                     self.read_convention(target, false);
                 }
             }
@@ -1415,6 +1419,7 @@ impl Shell {
                         .into();
                     self.conventions.state_mut().upload = Some(cv::UploadDraft {
                         base: record,
+                        media_type: crate::attachments::media_type(&path).into(),
                         path,
                         name,
                         generation: 0,
@@ -1494,7 +1499,7 @@ impl Shell {
             let placeholder = d.base.content.clone();
             (
                 d.base.clone(),
-                serde_json::json!({"kind":"Attach","name":d.name,"content":placeholder}),
+                serde_json::json!({"kind":"Attach","name":d.name,"mediaType":d.media_type,"content":placeholder}),
                 Some((d.path.clone(), d.name.clone())),
             )
         } else {
@@ -1510,7 +1515,7 @@ impl Shell {
             };
             (
                 base.clone(),
-                serde_json::json!({"kind":"Update","resourceId":d.resource.id,"expectedRevision":d.resource.revision,"name":d.name,"content":d.resource.content,"lifecycle":if d.retired{"Retired"}else{"Active"}}),
+                serde_json::json!({"kind":"Update","resourceId":d.resource.id,"expectedRevision":d.resource.revision,"name":d.name,"mediaType":d.media_type,"content":d.resource.content,"lifecycle":if d.retired{"Retired"}else{"Active"}}),
                 d.replacement.as_ref().map(|p| (p.clone(), d.name.clone())),
             )
         };

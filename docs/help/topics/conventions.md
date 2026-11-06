@@ -4,9 +4,9 @@ Open **Knowledge / Conventions** to manage reusable guidance. This manager is se
 
 ## Find and read
 
-Browse by title or organization, filter applicability and lifecycle, or search body content. Search shows its actual retrieval mode and any missing coverage. A missing embedding setup is not a successful empty semantic search. **Embedding setup** opens provider settings without changing the convention scope. Search results open their exact served version; **Read section path** reads the ranked section's captured path.
+Browse by title or organization, filter applicability and lifecycle, or search active body content. Search always uses active guidance; lifecycle filters apply to browsing. Search shows its actual retrieval mode and any missing coverage. A missing embedding setup is not a successful empty semantic search. **Embedding setup** opens provider settings without changing the convention scope. Search results open their exact served version; **Read section path** reads the ranked section's captured path.
 
-**Open a convention by slug** uses the owner's exact-then-unique lookup. Under **Resources**, the document catalog and **Exact root document** are distinct views; root-document lookup requires the exact root slug. Attachments have their own identity, revision, lifecycle and original media description. They are not additional searchable body sections.
+**Open a convention by slug** uses the owner's exact-then-unique lookup. Slugs are literal: an empty value and whitespace are preserved when explicitly selected. Under **Resources**, the document catalog and **Exact root document** are distinct views; root-document lookup requires the exact root slug. Attachments have their own identity, revision, lifecycle and original media description. They are not additional searchable body sections.
 
 Read Markdown or raw source in bounded passages. **Versions** shows attributable saved versions. Provenance identifies actual authors and import sources; an earlier approval marker is historical information, not permission to make a new change. Export the portable convention or download complete Markdown, raw source or an attachment. Downloads publish only after the full transfer succeeds and source integrity checks pass.
 

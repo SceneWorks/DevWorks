@@ -18,7 +18,7 @@ This is an implementation checkpoint, not completed DW33 acceptance. The manager
 | conventions.move | Independent move draft, explicit destination scope/parent/order, authoritative parent pages |
 | conventions.resources | Document catalog, exact root document, revision-bound attachments |
 | conventions.delete_resource | Explicit confirmation bound to the opening document/resource identity |
-| conventions.search | Literal query/applicability/lifecycle, server-owned top-K, retrieval mode/gaps, exact ranked section identity |
+| conventions.search | Literal query/applicability over active guidance, server-owned top-K, retrieval mode/gaps, exact ranked section identity |
 
 Full source editing first collects all owner pages and checks the opening artifact length and SHA-256. Only a bounded editing passage is shaped by egui; edits replace that passage in the complete source buffer. A source page is never a document-size limit. The shared portable writer streams manifests and verifies captured source bytes. Actual artifact quotas apply to their serialized bytes.
 

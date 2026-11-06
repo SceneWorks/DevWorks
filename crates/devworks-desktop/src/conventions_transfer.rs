@@ -156,7 +156,8 @@ fn prepare_edit_inner(
         let raw_hash = hash(d.raw.as_bytes());
         let mut markdown = d.markdown.as_bytes();
         let mut raw = d.raw.as_bytes();
-        let (path, mut file) = scratch(b, "json")?;
+        let (path, file) = scratch(b, "json")?;
+        let mut file = std::io::BufWriter::with_capacity(65536, file);
         owned.push(path.clone());
         let result = write_editor_manifest(
             &mut file,
@@ -188,7 +189,9 @@ fn prepare_edit_inner(
             crate::attachments::remove_owned(&path, &b.scratch_dir());
             return Err(error.to_string());
         }
-        file.sync_all().map_err(|e| e.to_string())?;
+        file.flush()
+            .and_then(|()| file.get_ref().sync_all())
+            .map_err(|e| e.to_string())?;
         Ok(Pipeline {
             scope: scope.clone(),
             operation: "conventions.import".into(),

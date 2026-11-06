@@ -140,12 +140,14 @@ pub struct UploadDraft {
     pub base: ConventionRecord,
     pub path: std::path::PathBuf,
     pub name: String,
+    pub media_type: String,
     pub generation: u64,
 }
 pub struct ResourceDraft {
     pub resource: ConventionResourceRecord,
     pub base: Option<ConventionRecord>,
     pub name: String,
+    pub media_type: String,
     pub retired: bool,
     pub replacement: Option<std::path::PathBuf>,
     pub generation: u64,
@@ -157,6 +159,7 @@ impl ResourceDraft {
             resource: resource.clone(),
             base: None,
             name: resource.name.0.clone(),
+            media_type: resource.media_type.0.clone(),
             retired: matches!(resource.lifecycle, ConventionLifecycle::Retired),
             replacement: None,
             generation: 0,
@@ -533,10 +536,7 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
     egui::CollapsingHeader::new("Open a convention by slug").show(ui, |ui| {
         field(ui, "Convention slug lookup", &mut s.slug_input);
         if ui
-            .add_enabled(
-                online && !s.slug_input.is_empty(),
-                egui::Button::new("Open convention slug"),
-            )
+            .add_enabled(online, egui::Button::new("Open convention slug"))
             .clicked()
         {
             a.push(Action::OpenSlug);
@@ -564,7 +564,7 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
         }
     });
     egui::CollapsingHeader::new("Convention filters").show(ui, |ui| {
-        egui::ComboBox::from_label("Lifecycle filter")
+        egui::ComboBox::from_label("Browsing lifecycle")
             .selected_text(["Active", "Retired", "Active and retired", "Deleted"][s.lifecycle])
             .show_ui(ui, |ui| {
                 for (i, name) in ["Active", "Retired", "Active and retired", "Deleted"]
@@ -580,6 +580,10 @@ fn browse(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>) {
                 ui.selectable_value(&mut s.order, 0, "Title");
                 ui.selectable_value(&mut s.order, 1, "Organization");
             });
+        widgets::caption(
+            ui,
+            "Search ranks active guidance. Ordering and lifecycle filters apply to browsing.",
+        );
         field(ui, "Search result limit", &mut s.top_k);
         labels(ui, &mut s.applicability, "Applicability filter");
     });
@@ -1424,7 +1428,9 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
                 upload.path.display()
             ),
         );
-        if field(ui, "New resource name", &mut upload.name) {
+        if field(ui, "New resource name", &mut upload.name)
+            | field(ui, "New resource media description", &mut upload.media_type)
+        {
             upload.generation = upload.generation.wrapping_add(1);
         }
         if ui
@@ -1451,6 +1457,7 @@ fn resources(ui: &mut Ui, s: &mut ScopeState, online: bool, a: &mut Vec<Action>)
             ),
         );
         let changed = field(ui, "Resource name", &mut draft.name)
+            | field(ui, "Resource media description", &mut draft.media_type)
             | ui.checkbox(&mut draft.retired, "Retired resource")
                 .changed();
         if changed {
