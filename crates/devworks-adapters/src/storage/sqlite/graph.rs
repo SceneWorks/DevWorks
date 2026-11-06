@@ -9,6 +9,33 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+/// SQLite's built-in lower/LIKE fold ASCII only. Preserve the core target predicate's
+/// Unicode lowercase and literal semantics before LIMIT/materialization consume a budget.
+pub(super) fn register_name_match(conn: &Connection) -> Result<(), StorageError> {
+    use rusqlite::functions::FunctionFlags;
+    db(conn.create_scalar_function(
+        "devworks_graph_name_matches",
+        4,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let Some(query) = ctx.get::<Option<String>>(2)? else {
+                return Ok(true);
+            };
+            let name = ctx.get::<String>(0)?.to_lowercase();
+            let qualified = ctx.get::<Option<String>>(1)?;
+            let folded = query.to_lowercase();
+            let matches = if ctx.get::<bool>(3)? {
+                name.contains(&folded)
+            } else {
+                name == folded
+            };
+            Ok(matches || qualified.as_deref() == Some(query.as_str()))
+        },
+    ))
+}
+
 fn invalid(message: &str) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
@@ -98,9 +125,9 @@ fn nodes(
 ) -> Result<GraphPage<GraphNode>, StorageError> {
     let scope = scope_json(conn, scope)?;
     let (limit, after) = bounded(limit, after)?;
-    let filter=json!({"pattern":filter.pattern,"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
+    let filter=json!({"pattern":filter.pattern,"name":filter.name.as_ref().map(|n| json!({"query":n.name,"contains":n.contains})),"kinds":filter.kinds,"unit":filter.unit_key,"node":filter.node_id,"excludeUntrusted":filter.exclude_untrusted}).to_string();
     let sql = format!(
-        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?2,'$.node') IS NULL OR n.node_id=json_extract(?2,'$.node')) AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY v.repo,n.unit_key,n.node_id LIMIT ?4"
+        "{COMPOSED}SELECT v.repo,v.view_id,v.generation_id,v.content_digest,n.unit_key,n.node_id,n.kind,n.name,n.payload_json FROM visible v JOIN graph_nodes n ON n.generation_id=v.generation_id AND n.unit_key=v.unit_key WHERE (json_extract(?2,'$.name.query') IS NULL OR devworks_graph_name_matches(n.name,CASE WHEN json_type(n.payload_json,'$.qualifiedName')='text' THEN json_extract(n.payload_json,'$.qualifiedName') END,json_extract(?2,'$.name.query'),json_extract(?2,'$.name.contains'))) AND (json_extract(?2,'$.pattern') IS NULL OR n.name LIKE json_extract(?2,'$.pattern') OR json_extract(n.payload_json,'$.qualifiedName') LIKE json_extract(?2,'$.pattern')) AND (json_array_length(?2,'$.kinds')=0 OR n.kind IN(SELECT value FROM json_each(?2,'$.kinds'))) AND (json_extract(?2,'$.unit') IS NULL OR n.unit_key=json_extract(?2,'$.unit')) AND (json_extract(?2,'$.node') IS NULL OR n.node_id=json_extract(?2,'$.node')) AND (NOT json_extract(?2,'$.excludeUntrusted') OR NOT EXISTS(SELECT 1 FROM graph_trust t JOIN index_views iv ON iv.id=v.view_id WHERE t.repository_id=v.repo AND t.unit_key=n.unit_key AND t.node_id=n.node_id AND t.view_digest=iv.view_digest AND t.content_digest=v.content_digest AND t.trusted=0)) AND (json_extract(?3,'$.repository_id') IS NULL OR (v.repo,n.unit_key,n.node_id)>(json_extract(?3,'$.repository_id'),json_extract(?3,'$.unit_key'),json_extract(?3,'$.item_id'))) ORDER BY v.repo,n.unit_key,n.node_id LIMIT ?4"
     );
     let mut statement = db(conn.prepare_cached(&sql))?;
     let rows = db(

@@ -58,11 +58,12 @@ pub(super) fn edges(
     read: &dyn ReadSnapshot,
     scope: &GraphScope,
     layers: &[ViewLayers],
+    kinds: &[&str],
     budget: &mut Budget,
 ) -> Result<Edges, Failure> {
     let mut linked = Vec::new();
     let mut unmapped = Vec::new();
-    scan::edges(read, scope, layers, budget, |edge, budget| {
+    scan::edges(read, scope, layers, kinds, budget, |edge, budget| {
         let raw = match &edge {
             Ok(edge) => &edge.raw,
             Err(unmapped) => &unmapped.raw,

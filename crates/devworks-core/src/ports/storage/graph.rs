@@ -63,11 +63,18 @@ pub struct GraphEdge {
 pub struct GraphNodeFilter {
     /// SQL LIKE pattern over name/qualified name (% and _ wildcards); no interpolated SQL.
     pub pattern: Option<String>,
+    /// Literal target lookup: Unicode lowercase name equality/containment, or exact qualified name.
+    pub name: Option<GraphNameFilter>,
     pub kinds: Vec<String>,
     pub unit_key: Option<String>,
     pub node_id: Option<String>,
     /// Only explicit false annotations matching this exact content AND view are excluded.
     pub exclude_untrusted: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphNameFilter {
+    pub name: String,
+    pub contains: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphEdgeFilter {

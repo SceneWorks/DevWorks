@@ -287,10 +287,15 @@ impl<'a> Reader<'a> {
     }
 
     pub fn raw_edges(&mut self) -> Result<dataset::Edges, Failure> {
+        self.filtered_edges(&[])
+    }
+
+    pub fn filtered_edges(&mut self, kinds: &[&str]) -> Result<dataset::Edges, Failure> {
         dataset::edges(
             self.read,
             &self.selected.pin.scope,
             &self.selected.layers,
+            kinds,
             &mut self.budget,
         )
     }
@@ -371,16 +376,16 @@ impl<'a> Reader<'a> {
                     Some(id) => self.scoped_repository(id)?,
                     None => self.selected.pin.scope.clone(),
                 };
-                let mut rows = self.raw_nodes(&scope, &GraphNodeFilter::default())?;
-                rows.retain(|n| {
-                    if repository_id.is_some() {
-                        n.node.name.to_lowercase() == name.0.to_lowercase()
-                            || n.node.payload["qualifiedName"].as_str() == Some(&name.0)
-                    } else {
-                        n.node.name.to_lowercase().contains(&name.0.to_lowercase())
-                            || n.node.payload["qualifiedName"].as_str() == Some(&name.0)
-                    }
-                });
+                let mut rows = self.raw_nodes(
+                    &scope,
+                    &GraphNodeFilter {
+                        name: Some(GraphNameFilter {
+                            name: name.0.clone(),
+                            contains: repository_id.is_none(),
+                        }),
+                        ..Default::default()
+                    },
+                )?;
                 rows.sort_by(|a, b| {
                     a.node
                         .name

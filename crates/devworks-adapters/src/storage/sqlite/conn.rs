@@ -92,6 +92,7 @@ pub(crate) fn open(path: &Path, role: Role, busy: Duration) -> Result<Connection
     let conn = db(Connection::open_with_flags(path, flags))?;
     register_vec(&conn)?;
     super::conventions::register_functions(&conn)?;
+    super::graph::register_name_match(&conn)?;
     db(conn.busy_timeout(busy))?;
     db(conn.pragma_update(None, "foreign_keys", true))?;
     match role {

@@ -184,11 +184,8 @@ impl Decoder {
                                             }
                                         }
                                     }
-                                    if let Some(name) = &call.name {
-                                        call.item["function"]["name"] = Value::String(name.clone());
-                                    }
-                                    call.item["function"]["arguments"] =
-                                        Value::String(call.arguments.clone());
+                                    // The assembled name/arguments already have owned buffers.
+                                    // Populate the final native item once at completion.
                                 }
                                 call.complete = aggregate;
                             }
@@ -263,12 +260,10 @@ impl Decoder {
                 if aggregate {
                     self.chat_reasoning[field] = Value::String(part.into());
                 } else {
-                    let old = self
-                        .chat_reasoning
-                        .get(field)
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    self.chat_reasoning[field] = Value::String(format!("{old}{part}"));
+                    match &mut self.chat_reasoning[field] {
+                        Value::String(text) => text.push_str(part),
+                        value => *value = Value::String(part.into()),
+                    }
                 }
             }
         }
@@ -325,10 +320,10 @@ impl Decoder {
             if let Some(entry) = existing {
                 for (name, value) in fields {
                     if matches!(name.as_str(), "text" | "summary" | "data" | "signature")
-                        && let (Some(old), Some(part)) =
-                            (entry.get(name).and_then(Value::as_str), value.as_str())
+                        && let (Some(Value::String(old)), Some(part)) =
+                            (entry.get_mut(name), value.as_str())
                     {
-                        entry[name] = Value::String(format!("{old}{part}"));
+                        old.push_str(part);
                         continue;
                     }
                     if !value.is_null() {

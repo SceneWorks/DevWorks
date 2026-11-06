@@ -201,7 +201,7 @@ struct Step {
     edge: scan::Edge,
 }
 fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset::Edges), Failure> {
-    let edges = reader.raw_edges()?;
+    let edges = reader.filtered_edges(config.kinds)?;
     let mut queue = VecDeque::new();
     let mut visited = BTreeSet::new();
     let mut steps = Vec::new();
@@ -489,12 +489,12 @@ pub(super) fn related(
 ) -> Result<GraphResult, Failure> {
     let starts = reader.targets(selection)?;
     let keys: BTreeSet<_> = starts.iter().map(dataset::node_key).collect();
-    let edges = reader.raw_edges()?;
     let kinds = if publishers {
         &["PUBLISHES", "CALLS"][..]
     } else {
         &["CONSUMES", "CALLS", "HTTP_CALLS", "USES_TYPE", "HANDLES"][..]
     };
+    let edges = reader.filtered_edges(kinds)?;
     let unmapped = super::unmapped::count(
         reader,
         &edges.unmapped,
