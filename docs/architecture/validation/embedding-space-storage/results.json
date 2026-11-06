@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-06",
+  "sourceCommit": "f2cac30f0929936b96de25661ed322be21a826c4",
+  "scope": "DW-119 SQLite persistence and port invariants; not whole-item/native provider acceptance",
+  "confidence": "High for exercised persistence invariants",
+  "environment": {
+    "os": "Darwin 27.0.0 arm64",
+    "rustc": "1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "1.98.0 (797e8a9bc 2026-08-05)"
+  },
+  "checks": [
+    {
+      "command": "cargo check --locked -p devworks-core -p devworks-adapters",
+      "result": "passed",
+      "note": "First compiled checkpoint f949f12b; final strict all-targets gate also typechecks final source."
+    },
+    {
+      "command": "cargo test --locked -p devworks-adapters --lib storage::sqlite::tests::embedding -- --nocapture",
+      "result": "passed",
+      "tests": [
+        "sql33_preserves_prefix_and_initial_selection_is_explicit_cas",
+        "immutable_candidates_preserve_declared_names_and_paged_identity",
+        "native_evidence_is_staged_before_terminal_qualification_and_survives_restart",
+        "stale_owners_and_changed_native_evidence_cannot_qualify",
+        "source_changes_fence_completion_and_selection_without_relabelling_history",
+        "unknown_probe_reconciles_same_identity_without_resend",
+        "restored_probe_authority_is_not_selection_authority",
+        "cosmetic_connection_change_preserves_qualification_but_selection_cas_still_applies",
+        "existing_vector_identity_is_never_relabelled_by_qualification",
+        "late_cancellation_preserves_accounted_native_result_without_qualifying",
+        "durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation"
+      ],
+      "passed": 11,
+      "failed": 0,
+      "elapsedSeconds": 9.18,
+      "log": "/tmp/dw119-embedding-storage-native.log"
+    },
+    {
+      "command": "cargo clippy --locked -p devworks-core -p devworks-adapters --all-targets -- -D warnings",
+      "result": "passed",
+      "elapsedSeconds": 19.5,
+      "log": "/tmp/dw119-embedding-storage-clippy.log"
+    },
+    {
+      "command": "rustfmt --edition 2024 --check [affected Rust files]",
+      "result": "passed"
+    },
+    {
+      "check": "Migration prefix byte comparison",
+      "result": "passed",
+      "migrations1Through31Reference": "901cfb6991e9727ee7fb6f7bebd96d98a9cb1688",
+      "migration32Reference": "5780bf36",
+      "migration33Sha256": "dac49ad0877ea02a187b3a4aca9181b850afff10b26d7dc28e5057df7e494db2"
+    }
+  ],
+  "sourceSha256": {
+    "crates/devworks-core/src/ports/storage/embedding.rs": "351ef834968d9f117b38b2cf39b3f3e07823943340ff49c42ae8d2d545c2e8c3",
+    "crates/devworks-core/src/ports/storage/router.rs": "f9c9012f9d42070dc10db2680160681737f8bbbfbe745b85e8c983fbc047eb6c",
+    "crates/devworks-core/src/ports/storage.rs": "84ebbb77a866ce03dd06f1358281362d1d8bc47cf5d4d0e51f73b61108181962",
+    "crates/devworks-adapters/src/storage/sqlite/embedding.rs": "94e327dc50a3079555b557d8269c6222665b684671ad6eb01b79011915b2e77d",
+    "crates/devworks-adapters/src/storage/sqlite/migrations/0033_embedding_spaces.sql": "dac49ad0877ea02a187b3a4aca9181b850afff10b26d7dc28e5057df7e494db2",
+    "crates/devworks-adapters/src/storage/sqlite/tests/embedding.rs": "d7abd33b41a145fdc38fd32782ed324b9b34efcae8405485bc9b5e3171a39190"
+  },
+  "migrationPrefixSha256": {
+    "0001_initial.sql": "c64cc140ad8de8c4c2ca7e7d3e3efac32966cea8bfc0bdf5e46e9c55206bd6a4",
+    "0002_claim_boot.sql": "a400cacbe5ef06f2045e6fe839c35c3adbe46dcc52a4aa110608498d88da1d37",
+    "0003_durable_delivery.sql": "b08289a2ef6eea452e7b7513c4c811564b90c2bd550445cb932212805be24ddc",
+    "0004_settings.sql": "15188a10f9c8f49ffde96563e636ccda2116024a7e6bda1e3e01096e25d7bad9",
+    "0005_authority.sql": "3b8c62996c4506f42eb45c0e76db77d4a7160135090c48f533eaec821e48372f",
+    "0006_artifacts.sql": "7a2ebf3518bed204be5592dcdee4ad203b1971efc421c26535a1a6478571e768",
+    "0007_sessions.sql": "2863f135528fc5a7c7499515872eb17a5acbddd1874fbd108d91ad2cd1253077",
+    "0008_receipt_replies.sql": "682af46e64f4ee7d6d854acdbec0862309a2e37262cf639124ccfb0c57a79cb9",
+    "0009_history_feeds.sql": "0a893b2c15371f9d9d251bb45814eb9666ee883f94a5706a165184f5fd88c128",
+    "0010_resources_processes.sql": "7fab1dd563202155578de4ffe4e14bf89647e97815685f0e58a886a051c20f01",
+    "0011_run_controls.sql": "8607df6d8f6fd0fe885e21595e7e5245422916b8bdf0d0679fd7f0ca5b0f19af",
+    "0012_diagnostics.sql": "dbcf28e8dc5a8eb6e4b801fb9f976021cd5e14cbf9e2b5b82af38f008c6cedba",
+    "0013_router.sql": "a666371fe419bf0b2a63e69762a8ca8d5fa9dfb123d4ca019fc2db98087c004b",
+    "0014_projects.sql": "c15736262585b6da18c679eecb6d1263d9263c3b9272725c4d0fa1bc5cd14534",
+    "0015_router_connections.sql": "950ca955706f93e49bd4abafbaedbeac0f60342bfd1e5001fde47b5202985243",
+    "0016_work.sql": "4868dd86ca4af8c5d4e77aa54061dcd0b1e17aac0bf5f5506fdbe231305f847c",
+    "0017_jobs.sql": "c4c2ed1f2231f0cc56c9b55593ba481a39fb0b688fcef61579eb361972274fae",
+    "0018_knowledge.sql": "0461f125bd4b1f5889d535749f33214d379cf7965dd5fb701d13e09648853127",
+    "0019_indexing.sql": "ed77284397dee952eb7feccf17843669545a61f0c0f35797b0fc350f4a32121f",
+    "0020_packages.sql": "7cabf466f43dcc1677f62ad14ebb1e96ed9239f2cf505e9646c0a4e38287876a",
+    "0021_browser_sessions.sql": "27be7d33bb8b6ff768c4de0c2f688ba5442ef699a06130349a054913dcd5bc77",
+    "0022_git_worktrees.sql": "2d0815af52a522e23870f9a2af56dc2a6f2f5227fbb842d1377cd49f84e02524",
+    "0023_browser_source.sql": "bd92e57bf3aa579397301ccbb06deb45570712db11fa2ff229045e0c92c59c93",
+    "0024_eval_runs.sql": "7a648e33e052c1f0e8d2cd5d795f4a68a05f97a97399040b4be4631b7750f44b",
+    "0025_router_pin_identity.sql": "36b3e80b714419a911ac7e7dd74108b6bb17e4e5efedc3c24b8faf76b349d28f",
+    "0026_allocations.sql": "11c429872a1895385d75fd449994beb9bda95ccaf4e920dea63b944da3e2d478",
+    "0027_decisions.sql": "dafafed20991660c492ef38f23448111618cecb0b5f061793f266271a75c1c8f",
+    "0028_usage.sql": "e7a0aa389a4f71a7e4bd0956bcd862fbddc55d0ee7ba3d3910478e7e44be3d96",
+    "0029_connection_account_identity.sql": "7200b277333537224ca24390534988203f57286d8f6158633bed767fded2713e",
+    "0030_help.sql": "173fa5720b9913758994fc2c8c0526476f5468f7758659d9902e21762150cdec",
+    "0031_graph.sql": "4d3d1401b9da77b2511dbef64f1a1cc057a56f0818f970b7976ba967d7892963",
+    "0032_conventions.sql": "200216474dfef210009051fd13968fad1cac37e701d268bb56c028bd78b76cc8"
+  },
+  "integrationNotes": [
+    "SQL32 remains owned by DW33. This run uses its real 5780bf36 checkpoint, unchanged; its owner has not frozen the final publication prefix yet. Recheck the composed final prefix at integration.",
+    "No provider call, network request or inference compute was executed. These are actual SQLite metadata/transaction tests over recorded native facts; finite vector/result parsing is separately owned native executor evidence.",
+    "The host-verified result and vector artifacts must be retained through the owning artifact service. This adapter checks their exact immutable metadata and never writes filesystem bytes or artifact lifecycle policy."
+  ]
+}
