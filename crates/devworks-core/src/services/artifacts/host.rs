@@ -72,68 +72,14 @@ impl ArtifactService {
     ) -> Result<Result<StagedFile, String>, StorageError> {
         self.stage_host_reader(
             store,
-            &mut std::io::Cursor::new(bytes),
-            &sha256_hex(bytes),
-            bytes.len() as u64,
-            source,
+            HostStream {
+                reader: &mut std::io::Cursor::new(bytes),
+                digest: &sha256_hex(bytes),
+                byte_count: bytes.len() as u64,
+                source,
+            },
+            &mut || false,
         )
-    }
-
-    /// Stages a verified host stream without buffering the complete source. The caller binds
-    /// its declared byte budget and digest to an immutable source and polls cancellation in
-    /// its reader. Publication and crash recovery use the same journal as byte-slice staging.
-    pub fn stage_host_reader(
-        &self,
-        store: &dyn ApplicationStore,
-        reader: &mut dyn std::io::Read,
-        expected_digest: &str,
-        expected_bytes: u64,
-        source: Value,
-    ) -> Result<Result<StagedFile, String>, StorageError> {
-        let byte_count = i64::try_from(expected_bytes).map_err(|_| {
-            StorageError::InvalidRecord("host stream length exceeds store range".into())
-        })?;
-        let digest = expected_digest.to_owned();
-        crate::protocol::provider::Digest::try_from(digest.clone())
-            .map_err(|error| StorageError::InvalidRecord(error.into()))?;
-        let env = Preparation::new(store, None, None);
-        let d = digest.clone();
-        let reuse = env
-            .read(|s| s.artifacts().blob(&d))?
-            .filter(|b| matches!(b.state, BlobState::Present | BlobState::UnlinkPending))
-            .map(|b| b.generation);
-        let payload = json!({
-            "digest": digest,
-            "byteCount": byte_count,
-            "source": source,
-        });
-        let (staging, published) =
-            self.journal_and_publish(&env, reader, &digest, byte_count, reuse.as_deref(), payload)?;
-        let published = match published {
-            Ok(p) => p,
-            Err(fault) => {
-                self.abandon_or_defer(
-                    &env,
-                    &staging,
-                    json!({"abandoned": "the host file was not published"}),
-                );
-                if let (FileFault::Corrupt(_), Some(g)) = (&fault, reuse.as_deref()) {
-                    let _ = self.files.quarantine(&digest, g);
-                }
-                return Ok(Err(format!("host file publication failed: {fault:?}")));
-            }
-        };
-        Ok(Ok(StagedFile {
-            operation_id: staging.operation_id.clone(),
-            digest,
-            byte_count,
-            generation: published.generation,
-            reused: published.reused,
-            relative_path: published.relative_path,
-            origin: SourceOrigin::default(),
-            source,
-            fence: staging.fence,
-        }))
     }
 
     /// Streams a bounded host source through the existing staging journal. Both source and
