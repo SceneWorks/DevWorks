@@ -32,6 +32,8 @@ pub struct PreparedSearch {
     query_fingerprint: String,
     offset: usize,
     request_id: Option<Id>,
+    custody_request_id: Option<Id>,
+    custody_operation_id: Option<crate::protocol::OperationId>,
     vector: Option<Vec<f32>>,
     reason: Option<String>,
     configuration: EmbeddingConfiguration,
@@ -43,6 +45,10 @@ struct Position {
     query_id: Id,
     request_id: Option<Id>,
     dense: bool,
+    #[serde(default)]
+    custody_request_id: Option<Id>,
+    #[serde(default)]
+    custody_operation_id: Option<crate::protocol::OperationId>,
 }
 struct Snapshot {
     witness: String,
@@ -162,6 +168,8 @@ impl IndexService {
             query_fingerprint: snapshot.fingerprint.clone(),
             offset: position.as_ref().map_or(0, |p| p.offset),
             request_id: None,
+            custody_request_id: None,
+            custody_operation_id: None,
             vector: None,
             reason: snapshot.configuration.reason.clone(),
             configuration: snapshot.configuration.clone(),
@@ -180,7 +188,11 @@ impl IndexService {
         }
         if let Some(space) = snapshot.configuration.space {
             // A lexical cursor stays lexical even when its original optional provider failed.
-            if position.as_ref().is_some_and(|p| !p.dense) {
+            let lexical_cursor = position.as_ref().is_some_and(|p| !p.dense);
+            if position
+                .as_ref()
+                .is_some_and(|p| !p.dense && p.custody_request_id.is_none())
+            {
                 prepared.reason = Some("The original query used lexical retrieval.".into());
                 return Ok(prepared);
             }
@@ -242,11 +254,19 @@ impl IndexService {
             } else {
                 self.prepare_embedding_inputs(preparation)
             }?;
-            if position
-                .as_ref()
-                .is_some_and(|p| p.request_id.as_ref() != Some(&inputs.request_id))
-            {
+            if position.as_ref().is_some_and(|p| {
+                p.request_id.as_ref().or(p.custody_request_id.as_ref()) != Some(&inputs.request_id)
+                    || p.custody_operation_id
+                        .as_ref()
+                        .is_some_and(|id| id != &inputs.operation_id)
+            }) {
                 return Err(StorageError::CursorExpired.into());
+            }
+            prepared.custody_request_id = Some(inputs.request_id.clone());
+            prepared.custody_operation_id = Some(inputs.operation_id.clone());
+            if lexical_cursor {
+                prepared.reason = Some("The original query used lexical retrieval.".into());
+                return Ok(prepared);
             }
             let request = EmbeddingRequest {
                 request_id: inputs.request_id.clone(),
@@ -361,11 +381,43 @@ impl IndexService {
                         query_id: prepared.query_id.clone(),
                         request_id: prepared.request_id.clone(),
                         dense: prepared.vector.is_some(),
+                        custody_request_id: prepared.custody_request_id.clone(),
+                        custody_operation_id: prepared.custody_operation_id.clone(),
                     })
                     .expect("search cursor"),
                 ),
             )
         });
+        let embedding_operation =
+            match (&prepared.custody_request_id, &prepared.custody_operation_id) {
+                (Some(request), Some(operation)) => {
+                    let inputs = read
+                        .conventions()
+                        .convention_embedding_inputs(request)?
+                        .ok_or(StorageError::CursorExpired)?;
+                    let op = read
+                        .operations()
+                        .operation(operation)?
+                        .ok_or(StorageError::CursorExpired)?;
+                    if inputs.actor_id != *ctx.principal()
+                        || inputs.project_id.as_ref() != ctx.project_id()
+                        || op.capability != "conventions.embedding_prepare"
+                        || op.payload["requestId"] != json!(request)
+                        || op.payload["origin"]["kind"] != "Query"
+                        || op.payload["origin"]["queryId"] != json!(prepared.query_id)
+                        || op.payload["origin"]["fingerprint"] != prepared.query_fingerprint
+                        || op.payload["origin"]["scopeDigest"] != prepared.witness
+                    {
+                        return Err(StorageError::CursorExpired.into());
+                    }
+                    Some(OperationRef {
+                        operation_id: op.id,
+                        state: op.state,
+                    })
+                }
+                (None, None) => None,
+                _ => return Err(invalid("query embedding custody pair missing").into()),
+            };
         Ok(ConventionSearchPage {
             items: BoundedList(items),
             next_cursor,
@@ -387,6 +439,8 @@ impl IndexService {
                 reason: prepared.reason.clone().map(BoundedText),
                 gaps: BoundedList(gaps.into_iter().map(BoundedText).collect()),
                 more_gaps,
+                embedding_request_id: prepared.custody_request_id.clone(),
+                embedding_operation,
             },
         })
     }
