@@ -44,7 +44,7 @@ DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage Deli
            'ArtifactTags Citation RepositorySnapshot ResolvedViewSet'.split())
 SUPPORT = set('Check Label Text Content Cursor PlanItems PlanFeatures Items NonEmpty Rows Page HistoryPage Limit '
               'Depth Port ByteLimit TokenBudget PathSet Url RelativePath Money SignedCounter PositiveCounter Finite Probability '
-              'DynamicJson SavedCommandInput DomainErrorCode DomainFault'.split())
+              'DynamicJson SavedCommandInput GraphText GraphUnitKey DomainErrorCode DomainFault'.split())
 # Hand-written support types that gate a member by schema revision themselves.
 GATED_SUPPORT = {'HistoryPage', 'GraphPage'}
 PRIMITIVE = {'bool', 'i32', 'Option'}
@@ -118,7 +118,7 @@ def camel(s):
     return re.sub(r'_([a-z])', lambda m: m[1].upper(), s)
 
 
-def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
+def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None, strict=()):
     """`one`: members of an exactly-one choice (rendered without null); `schema`: extra keywords."""
     since = since or {}
     schema = schema or {}
@@ -131,7 +131,7 @@ def fields(fs, indent='    ', pub=True, since=None, one=(), schema=None):
                          'deserialize_with = "gated_member")]')
             lines.append(indent + f'#[schemars(with = "{rust(t[1:])}", extend("x-since" = {since[n]}{extra}))]')
         elif t.startswith('?'):
-            lines.append(indent + '#[serde(default, skip_serializing_if = "Option::is_none")]')
+            lines.append(indent + ('#[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "gated_member")]' if n in strict or n in one else '#[serde(default, skip_serializing_if = "Option::is_none")]'))
             if n in one:
                 lines.append(indent + f'#[schemars(with = "{rust(t[1:])}")]')
         lines.append(indent + ('pub ' if pub else '') + f'{n}: {rust(t)},')
@@ -515,7 +515,7 @@ def gen_family(fam, ops):
             one = d.get('exactlyOne', [])
             out += [f'/// `{o["operation"]}` {mode} input.',
                     RECORD + (choice(fs, one, since) if one else '') + f'pub struct {ty} {{',
-                    fields(fs, since=since, one=one, schema=d.get('fieldSchema')), '}',
+                    fields(fs, since=since, one=one, schema=d.get('fieldSchema'), strict=d.get('strictOptional',())), '}',
                     f'impl Check for {ty} {{', '    fn check(&self) -> Result<(), String> {', checks(fs),
                     '        Ok(())', '    }', '}', revisioned(ty, fs, since, RC), '']
     out += [f'/// An admitted input of the `{fam["family"]}` family, built only for the selected operation and mode.',

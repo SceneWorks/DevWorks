@@ -370,7 +370,11 @@ impl Revisioned for PriceRefreshInput {
 pub struct PriceOverrideInput {
     pub model_id: Id,
     pub expected_revision: Revision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
     #[schemars(with = "PriceInput")]
     pub price: Option<PriceInput>,
     #[serde(

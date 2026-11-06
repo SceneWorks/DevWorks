@@ -269,10 +269,10 @@ fn collapse(v: &mut Value) {
                 *v = alt;
                 return collapse(v);
             }
-            if alt
-                .as_object()
-                .is_some_and(|a| a.len() == 1 && a.contains_key("required"))
-            {
+            if alt.as_object().is_some_and(|a| {
+                a.contains_key("required")
+                    && a.keys().all(|key| key == "required" || key == "x-until")
+            }) {
                 m.remove(key);
                 m.insert("required".into(), alt["required"].clone());
             }

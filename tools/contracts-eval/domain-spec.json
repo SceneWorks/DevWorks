@@ -4575,6 +4575,11 @@
         "repository_id": "?Id",
         "node_kind": "?Label",
         "internal_module": "?Content"
+      },
+      "since": {
+        "repository_id": 3,
+        "node_kind": 3,
+        "internal_module": 3
       }
     },
     "CodeNodeSelection": {
@@ -4586,6 +4591,11 @@
         "Name": {
           "name": "Content",
           "repository_id": "?Id"
+        }
+      },
+      "variantSince": {
+        "Name": {
+          "repository_id": 3
         }
       }
     },
@@ -4641,24 +4651,31 @@
         "path": "RelativePath",
         "line": "?PositiveCounter",
         "depth": "?Depth"
-      }
-    },
-    "CodeRepositorySelection": {
-      "kind": "record",
-      "fields": {
-        "repository_id": "Id"
+      },
+      "since": {
+        "line": 3,
+        "depth": 3
       }
     },
     "CodeSourceLocation": {
       "kind": "record",
       "fields": {
-        "citation": "Citation",
+        "snapshot": "RepositorySnapshot",
+        "unit_key": "RelativePath",
+        "source_digest": "Digest",
         "path": "Content",
         "start_line": "Counter",
         "end_line": "Counter",
         "start_byte": "?Counter",
         "end_byte": "?Counter",
-        "language": "?Label"
+        "language": "?Label",
+        "legacy_citation": "?Citation"
+      },
+      "since": {
+        "start_byte": 3,
+        "end_byte": 3,
+        "language": 3,
+        "legacy_citation": 3
       }
     },
     "CodeProperty": {
@@ -4669,6 +4686,9 @@
         "offset": "Counter",
         "total_bytes": "Counter",
         "next_offset": "?Counter"
+      },
+      "since": {
+        "next_offset": 3
       }
     },
     "CodeNode": {
@@ -4677,7 +4697,7 @@
         "node_id": "Id",
         "repository_id": "Id",
         "view_id": "Id",
-        "unit_key": "Id",
+        "unit_key": "GraphUnitKey",
         "node_kind": "Label",
         "name": "Content",
         "qualified_name": "Content",
@@ -4692,7 +4712,23 @@
         "analysis_confidence": "?Label",
         "confidence": "?Label",
         "extraction_source": "?Label",
-        "fallback_reason": "?Content"
+        "fallback_reason": "?Content",
+        "trust_revision": "Revision",
+        "content_digest": "?Digest",
+        "view_digest": "Digest",
+        "content_identity": "Content"
+      },
+      "since": {
+        "internal_module": 3,
+        "parent_id": 3,
+        "source": 3,
+        "trust_score": 3,
+        "description": 3,
+        "analysis_confidence": 3,
+        "confidence": 3,
+        "extraction_source": 3,
+        "fallback_reason": 3,
+        "content_digest": 3
       }
     },
     "CodeEdge": {
@@ -4703,15 +4739,21 @@
         "target_id": "Id",
         "source_repository_id": "Id",
         "target_repository_id": "Id",
-        "producing_unit": "?Id",
+        "producing_unit": "?GraphUnitKey",
         "edge_kind": "Label",
         "resolution": "?Label",
         "confidence": "?Probability",
         "confidence_band": "?Label",
         "properties": "Rows<CodeProperty>",
         "properties_complete": "bool",
-        "source_unit_key": "Id",
-        "target_unit_key": "Id"
+        "source_unit_key": "GraphUnitKey",
+        "target_unit_key": "GraphUnitKey"
+      },
+      "since": {
+        "producing_unit": 3,
+        "resolution": 3,
+        "confidence": 3,
+        "confidence_band": 3
       }
     },
     "CodeSearchRepository": {
@@ -4723,6 +4765,11 @@
         "language": "?Label",
         "framework": "?Label",
         "foundational": "bool"
+      },
+      "since": {
+        "description": 3,
+        "language": 3,
+        "framework": 3
       }
     },
     "CodeSearchHit": {
@@ -4743,6 +4790,9 @@
         "items": "Rows<CodeSearchHit>",
         "total": "?Counter",
         "low_confidence_count": "Counter"
+      },
+      "since": {
+        "total": 3
       }
     },
     "CodeNodesResult": {
@@ -4752,6 +4802,10 @@
         "total": "?Counter",
         "low_confidence_count": "Counter",
         "selected_node_id": "?Id"
+      },
+      "since": {
+        "total": 3,
+        "selected_node_id": 3
       }
     },
     "CodeGraphResult": {
@@ -4761,6 +4815,9 @@
         "edges": "Rows<CodeEdge>",
         "low_confidence_count": "Counter",
         "unmapped_inbound_edges": "?Counter"
+      },
+      "since": {
+        "unmapped_inbound_edges": 3
       }
     },
     "CodeNodeDetail": {
@@ -4779,7 +4836,7 @@
       "fields": {
         "source": "CodeSourceLocation",
         "node_id": "?Id",
-        "text": "Content",
+        "text": "GraphText",
         "start_byte": "Counter",
         "end_byte": "Counter",
         "total_bytes": "Counter",
@@ -4787,6 +4844,11 @@
         "last_line": "Counter",
         "node_start_line": "?Counter",
         "node_end_line": "?Counter"
+      },
+      "since": {
+        "node_id": 3,
+        "node_start_line": 3,
+        "node_end_line": 3
       }
     },
     "CodeCount": {
@@ -4804,6 +4866,9 @@
         "edge_kind": "Label",
         "count": "Counter",
         "confidence_band": "?Label"
+      },
+      "since": {
+        "confidence_band": 3
       }
     },
     "CodeOverviewRepository": {
@@ -4815,6 +4880,11 @@
         "language": "?Label",
         "framework": "?Label",
         "foundational": "bool"
+      },
+      "since": {
+        "source_group": 3,
+        "language": 3,
+        "framework": 3
       }
     },
     "CodeOverview": {
@@ -4850,6 +4920,9 @@
         "ecosystem": "Label",
         "version": "?Content",
         "dependent_count": "Counter"
+      },
+      "since": {
+        "version": 3
       }
     },
     "CodeArchitecture": {
@@ -4866,6 +4939,10 @@
         "package_count": "Counter",
         "package_counts_by_ecosystem": "Rows<CodeCount>",
         "supertypes": "Rows<CodeSupertype>"
+      },
+      "since": {
+        "summary": 3,
+        "confidence": 3
       }
     },
     "CodeRisk": {
@@ -4915,6 +4992,12 @@
         "cross_repository": "Rows<CodeRepositoryLink>",
         "summary": "CodeImpactSummary",
         "unmapped_inbound_edges": "?Counter"
+      },
+      "since": {
+        "path": 3,
+        "language": 3,
+        "language_indexed": 3,
+        "unmapped_inbound_edges": 3
       }
     },
     "CodeTraversalEntry": {
@@ -4925,6 +5008,11 @@
         "parent_id": "?Id",
         "edge_kind": "?Label",
         "edge_id": "?Id"
+      },
+      "since": {
+        "parent_id": 3,
+        "edge_kind": 3,
+        "edge_id": 3
       }
     },
     "CodeCallTrace": {
@@ -4934,6 +5022,10 @@
         "entries": "Rows<CodeTraversalEntry>",
         "low_confidence_count": "Counter",
         "unmapped_inbound_edges": "?Counter"
+      },
+      "since": {
+        "start": 3,
+        "unmapped_inbound_edges": 3
       }
     },
     "CodeLineage": {
@@ -4947,6 +5039,10 @@
         "related_nodes": "Rows<CodeNode>",
         "low_confidence_count": "Counter",
         "unmapped_inbound_edges": "?Counter"
+      },
+      "since": {
+        "model": 3,
+        "unmapped_inbound_edges": 3
       }
     },
     "CodeRelatedNode": {
@@ -4963,6 +5059,9 @@
         "nodes": "Rows<CodeRelatedNode>",
         "low_confidence_count": "Counter",
         "unmapped_inbound_edges": "?Counter"
+      },
+      "since": {
+        "unmapped_inbound_edges": 3
       }
     },
     "CodeSemanticGroup": {
@@ -4973,6 +5072,10 @@
         "outcome": "Label",
         "failure_code": "?Label",
         "detail_code": "?Label"
+      },
+      "since": {
+        "failure_code": 3,
+        "detail_code": 3
       }
     },
     "CodeRustSemantic": {
@@ -4985,6 +5088,9 @@
         "fallback_groups": "Counter",
         "skipped_groups": "Counter",
         "tree_sitter_groups": "Rows<CodeSemanticGroup>"
+      },
+      "since": {
+        "manifest": 3
       }
     },
     "CodeDependencies": {
@@ -5012,6 +5118,9 @@
         "properties": "Rows<CodeSchemaProperty>",
         "notes": "Rows<Content>",
         "artifact": "?ArtifactRef"
+      },
+      "since": {
+        "artifact": 3
       }
     },
     "CodeRepositoryStatus": {
@@ -5032,7 +5141,135 @@
         "current": "bool",
         "unavailable_reason": "?Label",
         "repositories": "Rows<CodeRepositoryStatus>"
+      },
+      "since": {
+        "unavailable_reason": 3
       }
+    },
+    "HelpAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "Missing",
+        "Stale",
+        "Unavailable"
+      ]
+    },
+    "HelpSnapshot": {
+      "kind": "record",
+      "fields": {
+        "app_version": "Label",
+        "help_revision": "Revision",
+        "registry_revision": "Revision",
+        "can_generate": "bool",
+        "cannot_generate_reason": "?Content",
+        "generation_operation": "?OperationRef"
+      }
+    },
+    "HelpProvenance": {
+      "kind": "union",
+      "variants": {
+        "Bundled": {
+          "app_version": "Label",
+          "content_digest": "Digest"
+        },
+        "Package": {
+          "package_id": "Id",
+          "package_version": "Label",
+          "manifest_digest": "Digest",
+          "content_digest": "Digest"
+        },
+        "Generated": {
+          "app_version": "Label",
+          "registry_revision": "Revision",
+          "content_digest": "Digest"
+        }
+      }
+    },
+    "HelpCapabilityMetadata": {
+      "kind": "record",
+      "fields": {
+        "operation": "Label",
+        "mode": "Label",
+        "owner": "Label",
+        "authority": "Label",
+        "effect": "Label",
+        "schema_revision": "Revision",
+        "input_type": "Label",
+        "result_type": "Label",
+        "input_schema_digest": "Digest",
+        "result_schema_digest": "Digest",
+        "available": "bool",
+        "unavailable_reason": "?Content"
+      }
+    },
+    "HelpTopicSummary": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "version": "Label",
+        "title": "Label",
+        "content": "?ArtifactRef",
+        "related_capability_ids": "Items<Id>",
+        "availability": "HelpAvailability",
+        "reason": "?Content",
+        "provenance": "?HelpProvenance",
+        "capabilities": "Rows<HelpCapabilityMetadata>",
+        "related_capabilities": "Rows<Label>"
+      }
+    },
+    "HelpPassage": {
+      "kind": "record",
+      "fields": {
+        "text": "Content",
+        "offset": "Counter",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "HelpReadView": {
+      "kind": "union",
+      "variants": {
+        "Available": {
+          "topic": "HelpTopicSummary",
+          "passage": "HelpPassage",
+          "snapshot": "HelpSnapshot"
+        },
+        "Unavailable": {
+          "topic_id": "Id",
+          "requested_version": "Label",
+          "availability": "HelpAvailability",
+          "reason": "Content",
+          "current_version": "?Label",
+          "snapshot": "HelpSnapshot"
+        }
+      }
+    },
+    "HelpTopicPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<HelpTopicSummary>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "availability": "HelpAvailability",
+        "reason": "?Content",
+        "snapshot": "HelpSnapshot"
+      }
+    },
+    "HelpReadResult": {
+      "kind": "versioned",
+      "legacy": "HelpTopic",
+      "current": "HelpReadView",
+      "revision": 3,
+      "projection": "help_read"
+    },
+    "HelpTopicPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<HelpTopic>",
+      "current": "HelpTopicPage",
+      "revision": 3,
+      "projection": "help_page",
+      "earlierName": "Page"
     }
   },
   "operations": {
@@ -8635,34 +8872,55 @@
         "query": "Text",
         "page": "PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Entirely offline local search of version-matched authorized documentation; * browses visible topics. Cursor is bound to query, Help/registry/source revisions and visibility. Compact summaries do not read remote embeddings or mutate state."
     },
     "help.read": {
       "operation": "help.read",
       "mode": "Query",
       "fields": {
         "topic_id": "Id",
-        "version": "Label"
+        "version": "Label",
+        "cursor": "?Cursor",
+        "max_chars": "?PositiveCounter"
       },
-      "result": "HelpTopic",
+      "result": "HelpReadResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read a version-matched bounded Unicode-scalar passage (default 16384, maximum 65536 characters) under Help permission alone; no artifact-tool permission is required. Cursor binds topic/version/source digest and current visibility. Missing, stale or unavailable source is explicit. Legacy reads use actual published artifact references.",
+      "since": {
+        "cursor": 3,
+        "max_chars": 3
+      }
     },
     "help.topic_for_screen": {
       "operation": "help.topic_for_screen",
       "mode": "Query",
       "fields": {
         "screen_id": "Id",
-        "capability_revision": "Revision"
+        "capability_revision": "?Revision",
+        "current": "?bool",
+        "page": "?PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Exactly one explicit capability revision or current:true; resolve current metadata in the same authorized snapshot, without requiring add-on tools. A stale explicit revision is visible, not silently replaced. Screen mappings are server-owned and paged.",
+      "since": {
+        "current": 3,
+        "page": 3
+      },
+      "exactlyOne": [
+        "capability_revision",
+        "current"
+      ],
+      "fieldSchema": {
+        "current": {
+          "const": true
+        }
+      }
     },
     "help.package_guides": {
       "operation": "help.package_guides",
@@ -8672,10 +8930,10 @@
         "version": "Label",
         "page": "PageRequest"
       },
-      "result": "Page<HelpTopic>",
+      "result": "HelpTopicPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Read verified local Help for the exact installed package version and manifest. Expose package/version/manifest provenance and explicit missing/stale/unavailable outcomes. No add-on or artifact-tool permission is required for authorized Help retrieval."
     },
     "help.generate_capability_docs": {
       "operation": "help.generate_capability_docs",
@@ -8899,7 +9157,10 @@
         "current": {
           "const": true
         }
-      }
+      },
+      "strictOptional": [
+        "views"
+      ]
     },
     "repositories.remove_index": {
       "operation": "repositories.remove_index",
@@ -10017,6 +10278,22 @@
       3
     ],
     "repositories.nodes": [
+      1,
+      3
+    ],
+    "help.search": [
+      1,
+      3
+    ],
+    "help.read": [
+      1,
+      3
+    ],
+    "help.topic_for_screen": [
+      1,
+      3
+    ],
+    "help.package_guides": [
       1,
       3
     ]

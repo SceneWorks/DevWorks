@@ -2,7 +2,7 @@
 use super::domain_support::*;
 use crate::data_delivery::{
     ArtifactTags, Citation, Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid,
-    GraphPage, RepositorySnapshot, ResolvedViewSet, RetrievalPage, ViewSelection,
+    GraphPage, RepositorySnapshot, RetrievalPage, ViewSelection,
 };
 use crate::provider::{ArtifactRef, Digest, SchemaRef, TranscriptPage};
 use crate::{
@@ -12145,11 +12145,26 @@ impl Check for CodeSearchMode {
 pub struct CodeSearchSelection {
     pub mode: CodeSearchMode,
     pub text: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub repository_id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub node_kind: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub internal_module: Option<Content>,
 }
 impl Check for CodeSearchSelection {
@@ -12167,6 +12182,20 @@ impl Check for CodeSearchSelection {
     }
 }
 
+impl Revisioned for CodeSearchSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.repository_id = None;
+        }
+        if revision < 3 {
+            self.node_kind = None;
+        }
+        if revision < 3 {
+            self.internal_module = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum CodeNodeSelection {
@@ -12175,7 +12204,12 @@ pub enum CodeNodeSelection {
     },
     Name {
         name: Content,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
         repository_id: Option<Id>,
     },
 }
@@ -12194,6 +12228,19 @@ impl Check for CodeNodeSelection {
             }
         }
         Ok(())
+    }
+}
+
+impl Revisioned for CodeNodeSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Name { repository_id, .. } => {
+                if revision < 3 {
+                    *repository_id = None;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -12229,6 +12276,12 @@ impl Check for CodeCallSelection {
     }
 }
 
+impl Revisioned for CodeCallSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.target.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeImpactSelection {
@@ -12244,6 +12297,12 @@ impl Check for CodeImpactSelection {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeImpactSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        self.target.retain_revision(revision);
     }
 }
 
@@ -12300,9 +12359,19 @@ impl Check for CodeSourceSelection {
 pub struct CodeFileSelection {
     pub repository_id: Id,
     pub path: RelativePath,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 3))]
     pub line: Option<PositiveCounter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Depth", extend("x-since" = 3))]
     pub depth: Option<Depth>,
 }
 impl Check for CodeFileSelection {
@@ -12319,50 +12388,89 @@ impl Check for CodeFileSelection {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CodeRepositorySelection {
-    pub repository_id: Id,
-}
-impl Check for CodeRepositorySelection {
-    fn check(&self) -> Result<(), String> {
-        self.repository_id.check()?;
-        super::domain_rules::record(
-            "CodeRepositorySelection",
-            &serde_json::to_value(self).map_err(|e| e.to_string())?,
-        )?;
-        Ok(())
+impl Revisioned for CodeFileSelection {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.line = None;
+        }
+        if revision < 3 {
+            self.depth = None;
+        }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeSourceLocation {
-    pub citation: Citation,
+    pub snapshot: RepositorySnapshot,
+    pub unit_key: RelativePath,
+    pub source_digest: Digest,
     pub path: Content,
     pub start_line: Counter,
     pub end_line: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub start_byte: Option<Counter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub end_byte: Option<Counter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub language: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Citation", extend("x-since" = 3))]
+    pub legacy_citation: Option<Citation>,
 }
 impl Check for CodeSourceLocation {
     fn check(&self) -> Result<(), String> {
-        self.citation.check()?;
+        self.snapshot.check()?;
+        self.unit_key.check()?;
+        self.source_digest.check()?;
         self.path.check()?;
         self.start_line.check()?;
         self.end_line.check()?;
         self.start_byte.check()?;
         self.end_byte.check()?;
         self.language.check()?;
+        self.legacy_citation.check()?;
         super::domain_rules::record(
             "CodeSourceLocation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeSourceLocation {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.start_byte = None;
+        }
+        if revision < 3 {
+            self.end_byte = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.legacy_citation = None;
+        }
     }
 }
 
@@ -12373,7 +12481,12 @@ pub struct CodeProperty {
     pub json_text: Content,
     pub offset: Counter,
     pub total_bytes: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub next_offset: Option<Counter>,
 }
 impl Check for CodeProperty {
@@ -12391,37 +12504,100 @@ impl Check for CodeProperty {
     }
 }
 
+impl Revisioned for CodeProperty {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.next_offset = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeNode {
     pub node_id: Id,
     pub repository_id: Id,
     pub view_id: Id,
-    pub unit_key: Id,
+    pub unit_key: GraphUnitKey,
     pub node_kind: Label,
     pub name: Content,
     pub qualified_name: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub internal_module: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub parent_id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeSourceLocation", extend("x-since" = 3))]
     pub source: Option<CodeSourceLocation>,
     pub properties: Rows<CodeProperty>,
     pub properties_complete: bool,
     pub do_not_trust: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Probability", extend("x-since" = 3))]
     pub trust_score: Option<Probability>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub description: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub analysis_confidence: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub confidence: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub extraction_source: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub fallback_reason: Option<Content>,
+    pub trust_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub content_digest: Option<Digest>,
+    pub view_digest: Digest,
+    pub content_identity: Content,
 }
 impl Check for CodeNode {
     fn check(&self) -> Result<(), String> {
@@ -12444,11 +12620,53 @@ impl Check for CodeNode {
         self.confidence.check()?;
         self.extraction_source.check()?;
         self.fallback_reason.check()?;
+        self.trust_revision.check()?;
+        self.content_digest.check()?;
+        self.view_digest.check()?;
+        self.content_identity.check()?;
         super::domain_rules::record(
             "CodeNode",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeNode {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.internal_module = None;
+        }
+        if revision < 3 {
+            self.parent_id = None;
+        }
+        if revision < 3 {
+            self.source = None;
+        } else {
+            self.source.retain_revision(revision);
+        }
+        self.properties.retain_revision(revision);
+        if revision < 3 {
+            self.trust_score = None;
+        }
+        if revision < 3 {
+            self.description = None;
+        }
+        if revision < 3 {
+            self.analysis_confidence = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        if revision < 3 {
+            self.extraction_source = None;
+        }
+        if revision < 3 {
+            self.fallback_reason = None;
+        }
+        if revision < 3 {
+            self.content_digest = None;
+        }
     }
 }
 
@@ -12460,19 +12678,39 @@ pub struct CodeEdge {
     pub target_id: Id,
     pub source_repository_id: Id,
     pub target_repository_id: Id,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub producing_unit: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "GraphUnitKey", extend("x-since" = 3))]
+    pub producing_unit: Option<GraphUnitKey>,
     pub edge_kind: Label,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub resolution: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Probability", extend("x-since" = 3))]
     pub confidence: Option<Probability>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub confidence_band: Option<Label>,
     pub properties: Rows<CodeProperty>,
     pub properties_complete: bool,
-    pub source_unit_key: Id,
-    pub target_unit_key: Id,
+    pub source_unit_key: GraphUnitKey,
+    pub target_unit_key: GraphUnitKey,
 }
 impl Check for CodeEdge {
     fn check(&self) -> Result<(), String> {
@@ -12498,16 +12736,49 @@ impl Check for CodeEdge {
     }
 }
 
+impl Revisioned for CodeEdge {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.producing_unit = None;
+        }
+        if revision < 3 {
+            self.resolution = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        if revision < 3 {
+            self.confidence_band = None;
+        }
+        self.properties.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeSearchRepository {
     pub repository_id: Id,
     pub name: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub description: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub language: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub framework: Option<Label>,
     pub foundational: bool,
 }
@@ -12524,6 +12795,20 @@ impl Check for CodeSearchRepository {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeSearchRepository {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.description = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.framework = None;
+        }
     }
 }
 
@@ -12547,12 +12832,30 @@ impl Check for CodeSearchHit {
     }
 }
 
+impl Revisioned for CodeSearchHit {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Node { node, .. } => {
+                node.retain_revision(revision);
+            }
+            Self::Repository { repository, .. } => {
+                repository.retain_revision(revision);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeSearchResult {
     pub mode: CodeSearchMode,
     pub items: Rows<CodeSearchHit>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub total: Option<Counter>,
     pub low_confidence_count: Counter,
 }
@@ -12570,14 +12873,33 @@ impl Check for CodeSearchResult {
     }
 }
 
+impl Revisioned for CodeSearchResult {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+        if revision < 3 {
+            self.total = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeNodesResult {
     pub nodes: Rows<CodeNode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub total: Option<Counter>,
     pub low_confidence_count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub selected_node_id: Option<Id>,
 }
 impl Check for CodeNodesResult {
@@ -12594,13 +12916,30 @@ impl Check for CodeNodesResult {
     }
 }
 
+impl Revisioned for CodeNodesResult {
+    fn retain_revision(&mut self, revision: u32) {
+        self.nodes.retain_revision(revision);
+        if revision < 3 {
+            self.total = None;
+        }
+        if revision < 3 {
+            self.selected_node_id = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeGraphResult {
     pub nodes: Rows<CodeNode>,
     pub edges: Rows<CodeEdge>,
     pub low_confidence_count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub unmapped_inbound_edges: Option<Counter>,
 }
 impl Check for CodeGraphResult {
@@ -12614,6 +12953,16 @@ impl Check for CodeGraphResult {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeGraphResult {
+    fn retain_revision(&mut self, revision: u32) {
+        self.nodes.retain_revision(revision);
+        self.edges.retain_revision(revision);
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
     }
 }
 
@@ -12643,21 +12992,46 @@ impl Check for CodeNodeDetail {
     }
 }
 
+impl Revisioned for CodeNodeDetail {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+        self.neighbors.retain_revision(revision);
+        self.incoming.retain_revision(revision);
+        self.outgoing.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeSourceText {
     pub source: CodeSourceLocation,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub node_id: Option<Id>,
-    pub text: Content,
+    pub text: GraphText,
     pub start_byte: Counter,
     pub end_byte: Counter,
     pub total_bytes: Counter,
     pub first_line: Counter,
     pub last_line: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub node_start_line: Option<Counter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub node_end_line: Option<Counter>,
 }
 impl Check for CodeSourceText {
@@ -12677,6 +13051,21 @@ impl Check for CodeSourceText {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeSourceText {
+    fn retain_revision(&mut self, revision: u32) {
+        self.source.retain_revision(revision);
+        if revision < 3 {
+            self.node_id = None;
+        }
+        if revision < 3 {
+            self.node_start_line = None;
+        }
+        if revision < 3 {
+            self.node_end_line = None;
+        }
     }
 }
 
@@ -12705,7 +13094,12 @@ pub struct CodeRepositoryLink {
     pub target_repository_id: Id,
     pub edge_kind: Label,
     pub count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub confidence_band: Option<Label>,
 }
 impl Check for CodeRepositoryLink {
@@ -12723,16 +13117,39 @@ impl Check for CodeRepositoryLink {
     }
 }
 
+impl Revisioned for CodeRepositoryLink {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.confidence_band = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeOverviewRepository {
     pub repository_id: Id,
     pub name: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub source_group: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub language: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub framework: Option<Label>,
     pub foundational: bool,
 }
@@ -12752,6 +13169,20 @@ impl Check for CodeOverviewRepository {
     }
 }
 
+impl Revisioned for CodeOverviewRepository {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.source_group = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.framework = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeOverview {
@@ -12767,6 +13198,13 @@ impl Check for CodeOverview {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeOverview {
+    fn retain_revision(&mut self, revision: u32) {
+        self.repositories.retain_revision(revision);
+        self.dependencies.retain_revision(revision);
     }
 }
 
@@ -12821,7 +13259,12 @@ impl Check for CodeSupertype {
 pub struct CodePackageDependency {
     pub name: Content,
     pub ecosystem: Label,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub version: Option<Content>,
     pub dependent_count: Counter,
 }
@@ -12839,13 +13282,31 @@ impl Check for CodePackageDependency {
     }
 }
 
+impl Revisioned for CodePackageDependency {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.version = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeArchitecture {
     pub repository_id: Id,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub summary: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub confidence: Option<Label>,
     pub node_counts: Rows<CodeCount>,
     pub hotspots: Rows<CodeHotspot>,
@@ -12874,6 +13335,20 @@ impl Check for CodeArchitecture {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeArchitecture {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.summary = None;
+        }
+        if revision < 3 {
+            self.confidence = None;
+        }
+        self.inbound.retain_revision(revision);
+        self.outbound.retain_revision(revision);
+        self.packages.retain_revision(revision);
     }
 }
 
@@ -12917,6 +13392,12 @@ impl Check for CodeAffectedNode {
     }
 }
 
+impl Revisioned for CodeAffectedNode {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeImpactSummary {
@@ -12951,18 +13432,38 @@ impl Check for CodeImpactSummary {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeImpact {
     pub found: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub path: Option<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub language: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
     pub language_indexed: Option<bool>,
     pub blast_radius: CodeRisk,
     pub changed: Rows<CodeAffectedNode>,
     pub affected: Rows<CodeAffectedNode>,
     pub cross_repository: Rows<CodeRepositoryLink>,
     pub summary: CodeImpactSummary,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub unmapped_inbound_edges: Option<Counter>,
 }
 impl Check for CodeImpact {
@@ -12985,16 +13486,51 @@ impl Check for CodeImpact {
     }
 }
 
+impl Revisioned for CodeImpact {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.path = None;
+        }
+        if revision < 3 {
+            self.language = None;
+        }
+        if revision < 3 {
+            self.language_indexed = None;
+        }
+        self.changed.retain_revision(revision);
+        self.affected.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeTraversalEntry {
     pub node: CodeNode,
     pub depth: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub parent_id: Option<Id>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub edge_kind: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
     pub edge_id: Option<Id>,
 }
 impl Check for CodeTraversalEntry {
@@ -13012,14 +13548,39 @@ impl Check for CodeTraversalEntry {
     }
 }
 
+impl Revisioned for CodeTraversalEntry {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+        if revision < 3 {
+            self.parent_id = None;
+        }
+        if revision < 3 {
+            self.edge_kind = None;
+        }
+        if revision < 3 {
+            self.edge_id = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeCallTrace {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNode", extend("x-since" = 3))]
     pub start: Option<CodeNode>,
     pub entries: Rows<CodeTraversalEntry>,
     pub low_confidence_count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub unmapped_inbound_edges: Option<Counter>,
 }
 impl Check for CodeCallTrace {
@@ -13036,18 +13597,42 @@ impl Check for CodeCallTrace {
     }
 }
 
+impl Revisioned for CodeCallTrace {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.start = None;
+        } else {
+            self.start.retain_revision(revision);
+        }
+        self.entries.retain_revision(revision);
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeLineage {
     pub model_name: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeNode", extend("x-since" = 3))]
     pub model: Option<CodeNode>,
     pub producers: Rows<CodeTraversalEntry>,
     pub consumers: Rows<CodeTraversalEntry>,
     pub cross_repository: Rows<CodeEdge>,
     pub related_nodes: Rows<CodeNode>,
     pub low_confidence_count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub unmapped_inbound_edges: Option<Counter>,
 }
 impl Check for CodeLineage {
@@ -13065,6 +13650,23 @@ impl Check for CodeLineage {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeLineage {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.model = None;
+        } else {
+            self.model.retain_revision(revision);
+        }
+        self.producers.retain_revision(revision);
+        self.consumers.retain_revision(revision);
+        self.cross_repository.retain_revision(revision);
+        self.related_nodes.retain_revision(revision);
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
     }
 }
 
@@ -13088,12 +13690,23 @@ impl Check for CodeRelatedNode {
     }
 }
 
+impl Revisioned for CodeRelatedNode {
+    fn retain_revision(&mut self, revision: u32) {
+        self.node.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeRelated {
     pub nodes: Rows<CodeRelatedNode>,
     pub low_confidence_count: Counter,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
     pub unmapped_inbound_edges: Option<Counter>,
 }
 impl Check for CodeRelated {
@@ -13109,15 +13722,34 @@ impl Check for CodeRelated {
     }
 }
 
+impl Revisioned for CodeRelated {
+    fn retain_revision(&mut self, revision: u32) {
+        self.nodes.retain_revision(revision);
+        if revision < 3 {
+            self.unmapped_inbound_edges = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeSemanticGroup {
     pub index: Counter,
     pub crates: Rows<Content>,
     pub outcome: Label,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub failure_code: Option<Label>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub detail_code: Option<Label>,
 }
 impl Check for CodeSemanticGroup {
@@ -13135,11 +13767,27 @@ impl Check for CodeSemanticGroup {
     }
 }
 
+impl Revisioned for CodeSemanticGroup {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.failure_code = None;
+        }
+        if revision < 3 {
+            self.detail_code = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeRustSemantic {
     pub status: Label,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
     pub manifest: Option<Content>,
     pub group_count: Counter,
     pub semantic_groups: Counter,
@@ -13164,6 +13812,15 @@ impl Check for CodeRustSemantic {
     }
 }
 
+impl Revisioned for CodeRustSemantic {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.manifest = None;
+        }
+        self.tree_sitter_groups.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodeDependencies {
@@ -13183,6 +13840,14 @@ impl Check for CodeDependencies {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeDependencies {
+    fn retain_revision(&mut self, revision: u32) {
+        self.inbound.retain_revision(revision);
+        self.outbound.retain_revision(revision);
+        self.rust_semantic.retain_revision(revision);
     }
 }
 
@@ -13213,7 +13878,12 @@ pub struct CodeSchema {
     pub edge_kinds: Rows<Label>,
     pub properties: Rows<CodeSchemaProperty>,
     pub notes: Rows<Content>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ArtifactRef", extend("x-since" = 3))]
     pub artifact: Option<ArtifactRef>,
 }
 impl Check for CodeSchema {
@@ -13228,6 +13898,14 @@ impl Check for CodeSchema {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeSchema {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.artifact = None;
+        }
     }
 }
 
@@ -13261,7 +13939,12 @@ pub struct CodeScopeStatus {
     pub stamp: ReadStamp,
     pub coverage: Coverage,
     pub current: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub unavailable_reason: Option<Label>,
     pub repositories: Rows<CodeRepositoryStatus>,
 }
@@ -13277,6 +13960,406 @@ impl Check for CodeScopeStatus {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for CodeScopeStatus {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.unavailable_reason = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HelpAvailability {
+    Available,
+    Missing,
+    Stale,
+    Unavailable,
+}
+impl Check for HelpAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpSnapshot {
+    pub app_version: Label,
+    pub help_revision: Revision,
+    pub registry_revision: Revision,
+    pub can_generate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cannot_generate_reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_operation: Option<OperationRef>,
+}
+impl Check for HelpSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.app_version.check()?;
+        self.help_revision.check()?;
+        self.registry_revision.check()?;
+        self.can_generate.check()?;
+        self.cannot_generate_reason.check()?;
+        self.generation_operation.check()?;
+        super::domain_rules::record(
+            "HelpSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpProvenance {
+    Bundled {
+        app_version: Label,
+        content_digest: Digest,
+    },
+    Package {
+        package_id: Id,
+        package_version: Label,
+        manifest_digest: Digest,
+        content_digest: Digest,
+    },
+    Generated {
+        app_version: Label,
+        registry_revision: Revision,
+        content_digest: Digest,
+    },
+}
+impl Check for HelpProvenance {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Bundled {
+                app_version,
+                content_digest,
+            } => {
+                app_version.check()?;
+                content_digest.check()?;
+            }
+            Self::Package {
+                package_id,
+                package_version,
+                manifest_digest,
+                content_digest,
+            } => {
+                package_id.check()?;
+                package_version.check()?;
+                manifest_digest.check()?;
+                content_digest.check()?;
+            }
+            Self::Generated {
+                app_version,
+                registry_revision,
+                content_digest,
+            } => {
+                app_version.check()?;
+                registry_revision.check()?;
+                content_digest.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpCapabilityMetadata {
+    pub operation: Label,
+    pub mode: Label,
+    pub owner: Label,
+    pub authority: Label,
+    pub effect: Label,
+    pub schema_revision: Revision,
+    pub input_type: Label,
+    pub result_type: Label,
+    pub input_schema_digest: Digest,
+    pub result_schema_digest: Digest,
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<Content>,
+}
+impl Check for HelpCapabilityMetadata {
+    fn check(&self) -> Result<(), String> {
+        self.operation.check()?;
+        self.mode.check()?;
+        self.owner.check()?;
+        self.authority.check()?;
+        self.effect.check()?;
+        self.schema_revision.check()?;
+        self.input_type.check()?;
+        self.result_type.check()?;
+        self.input_schema_digest.check()?;
+        self.result_schema_digest.check()?;
+        self.available.check()?;
+        self.unavailable_reason.check()?;
+        super::domain_rules::record(
+            "HelpCapabilityMetadata",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicSummary {
+    pub id: Id,
+    pub version: Label,
+    pub title: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ArtifactRef>,
+    pub related_capability_ids: Items<Id>,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<HelpProvenance>,
+    pub capabilities: Rows<HelpCapabilityMetadata>,
+    pub related_capabilities: Rows<Label>,
+}
+impl Check for HelpTopicSummary {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.version.check()?;
+        self.title.check()?;
+        self.content.check()?;
+        self.related_capability_ids.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.provenance.check()?;
+        self.capabilities.check()?;
+        self.related_capabilities.check()?;
+        super::domain_rules::record(
+            "HelpTopicSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpPassage {
+    pub text: Content,
+    pub offset: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for HelpPassage {
+    fn check(&self) -> Result<(), String> {
+        self.text.check()?;
+        self.offset.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "HelpPassage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum HelpReadView {
+    Available {
+        topic: HelpTopicSummary,
+        passage: HelpPassage,
+        snapshot: HelpSnapshot,
+    },
+    Unavailable {
+        topic_id: Id,
+        requested_version: Label,
+        availability: HelpAvailability,
+        reason: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_version: Option<Label>,
+        snapshot: HelpSnapshot,
+    },
+}
+impl Check for HelpReadView {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Available {
+                topic,
+                passage,
+                snapshot,
+            } => {
+                topic.check()?;
+                passage.check()?;
+                snapshot.check()?;
+            }
+            Self::Unavailable {
+                topic_id,
+                requested_version,
+                availability,
+                reason,
+                current_version,
+                snapshot,
+            } => {
+                topic_id.check()?;
+                requested_version.check()?;
+                availability.check()?;
+                reason.check()?;
+                current_version.check()?;
+                snapshot.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HelpTopicPage {
+    pub items: Rows<HelpTopicSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub availability: HelpAvailability,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+    pub snapshot: HelpSnapshot,
+}
+impl Check for HelpTopicPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.availability.check()?;
+        self.reason.check()?;
+        self.snapshot.check()?;
+        super::domain_rules::record(
+            "HelpTopicPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "HelpTopic", "before": 3}))]
+pub enum HelpReadResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(HelpTopic),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpReadView),
+}
+impl Check for HelpReadResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<HelpTopic> = match self {
+                Self::Current(HelpReadView::Available { topic, .. }) => {
+                    topic.content.clone().map(|content| HelpTopic {
+                        id: topic.id.clone(),
+                        version: topic.version.clone(),
+                        title: topic.title.clone(),
+                        related_capability_ids: topic.related_capability_ids.clone(),
+                        content,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum HelpTopicPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<HelpTopic>),
+    #[schemars(extend("x-since" = 3))]
+    Current(HelpTopicPage),
+}
+impl Check for HelpTopicPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for HelpTopicPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<HelpTopic>> = match self {
+                Self::Current(value)
+                    if matches!(value.availability, HelpAvailability::Available)
+                        && value.items.0.iter().all(|topic| {
+                            matches!(topic.availability, HelpAvailability::Available)
+                                && topic.content.is_some()
+                        }) =>
+                {
+                    Some(Page {
+                        items: BoundedList(
+                            value
+                                .items
+                                .0
+                                .iter()
+                                .map(|topic| HelpTopic {
+                                    id: topic.id.clone(),
+                                    version: topic.version.clone(),
+                                    title: topic.title.clone(),
+                                    related_capability_ids: topic.related_capability_ids.clone(),
+                                    content: topic
+                                        .content
+                                        .clone()
+                                        .expect("checked published artifact"),
+                                })
+                                .collect(),
+                        ),
+                        next_cursor: value.next_cursor.clone(),
+                        has_more: value.has_more,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -13411,7 +14494,11 @@ pub enum DomainQuery {
     #[serde(rename = "history.tool_usage")]
     #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "page"]}, {"required": ["kind", "projectId", "page"], "x-since": 2}, {"required": ["kind", "workspace", "page"], "x-since": 2}]))]
     HistoryToolUsage {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "RootId")]
         root_id: Option<RootId>,
         #[serde(
@@ -13439,7 +14526,11 @@ pub enum DomainQuery {
     #[serde(rename = "indexing.status")]
     #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId"]}, {"required": ["kind", "overlayId"], "x-since": 2}]))]
     IndexingStatus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "Id")]
         repository_id: Option<Id>,
         #[serde(
@@ -14201,11 +15292,49 @@ pub enum DomainQuery {
     #[serde(rename = "help.search")]
     HelpSearch { query: Text, page: PageRequest },
     #[serde(rename = "help.read")]
-    HelpRead { topic_id: Id, version: Label },
+    HelpRead {
+        topic_id: Id,
+        version: Label,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Cursor", extend("x-since" = 3))]
+        cursor: Option<Cursor>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PositiveCounter", extend("x-since" = 3))]
+        max_chars: Option<PositiveCounter>,
+    },
     #[serde(rename = "help.topic_for_screen")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "screenId", "capabilityRevision"]}, {"required": ["kind", "screenId", "current"], "x-since": 3}]))]
     HelpTopicForScreen {
         screen_id: Id,
-        capability_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Revision")]
+        capability_revision: Option<Revision>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+        current: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 3))]
+        page: Option<PageRequest>,
     },
     #[serde(rename = "help.package_guides")]
     HelpPackageGuides {
@@ -14325,7 +15454,11 @@ pub enum DomainQuery {
     #[schemars(extend("oneOf" = [{"required": ["kind", "repositoryId", "views", "page"]}, {"required": ["kind", "repositoryId", "current", "page"], "x-since": 3}]))]
     RepositoriesNodes {
         repository_id: Id,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "ViewSelection")]
         views: Option<ViewSelection>,
         #[serde(
@@ -15497,16 +16630,27 @@ impl Check for DomainQuery {
                 query.check()?;
                 page.check()?;
             }
-            Self::HelpRead { topic_id, version } => {
+            Self::HelpRead {
+                topic_id,
+                version,
+                cursor,
+                max_chars,
+            } => {
                 topic_id.check()?;
                 version.check()?;
+                cursor.check()?;
+                max_chars.check()?;
             }
             Self::HelpTopicForScreen {
                 screen_id,
                 capability_revision,
+                current,
+                page,
             } => {
                 screen_id.check()?;
                 capability_revision.check()?;
+                current.check()?;
+                page.check()?;
             }
             Self::HelpPackageGuides {
                 package_id,
@@ -15850,6 +16994,24 @@ impl Revisioned for DomainQuery {
                     *snapshot_ids = None;
                 }
             }
+            Self::HelpRead {
+                cursor, max_chars, ..
+            } => {
+                if revision < 3 {
+                    *cursor = None;
+                }
+                if revision < 3 {
+                    *max_chars = None;
+                }
+            }
+            Self::HelpTopicForScreen { current, page, .. } => {
+                if revision < 3 {
+                    *current = None;
+                }
+                if revision < 3 {
+                    *page = None;
+                }
+            }
             Self::WorkspaceLogs {
                 severity,
                 outcome,
@@ -16056,7 +17218,11 @@ pub enum DomainCommand {
     FeaturesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_work_ids: Option<NonEmpty<Id>>,
         #[serde(
@@ -16072,7 +17238,11 @@ pub enum DomainCommand {
     IssuesPrioritize {
         project_id: ProjectId,
         expected_queue_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_work_ids: Option<NonEmpty<Id>>,
         #[serde(
@@ -16548,7 +17718,11 @@ pub enum DomainCommand {
     #[schemars(extend("oneOf" = [{"required": ["kind", "scope", "sourceId", "expectedScopeRevision", "previewDigest"]}, {"required": ["kind", "scope", "expectedScopeRevision", "previewDigest", "sourceLabel"], "x-since": 3}]))]
     KnowledgeDeleteBySource {
         scope: DataScope,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "Id")]
         source_id: Option<Id>,
         expected_scope_revision: Revision,
@@ -17068,7 +18242,11 @@ pub enum DomainCommand {
     RouterPriceOverride {
         model_id: Id,
         expected_revision: Revision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "PriceInput")]
         price: Option<PriceInput>,
         #[serde(
@@ -17381,7 +18559,11 @@ pub enum DomainCommand {
         feature_id: Option<RootId>,
         expected_queue_revision: Revision,
         priority: i32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
         #[schemars(with = "NonEmpty<Id>")]
         ordered_task_ids: Option<NonEmpty<Id>>,
         #[serde(
@@ -20195,13 +21377,13 @@ pub enum OperationResult {
     #[serde(rename = "addons.logs")]
     AddonsLogs { value: Page<Diagnostic> },
     #[serde(rename = "help.search")]
-    HelpSearch { value: Page<HelpTopic> },
+    HelpSearch { value: HelpTopicPageResult },
     #[serde(rename = "help.read")]
-    HelpRead { value: HelpTopic },
+    HelpRead { value: HelpReadResult },
     #[serde(rename = "help.topic_for_screen")]
-    HelpTopicForScreen { value: Page<HelpTopic> },
+    HelpTopicForScreen { value: HelpTopicPageResult },
     #[serde(rename = "help.package_guides")]
-    HelpPackageGuides { value: Page<HelpTopic> },
+    HelpPackageGuides { value: HelpTopicPageResult },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs { value: OperationRef },
     #[serde(rename = "workspace.diagnostics")]
@@ -21246,6 +22428,10 @@ impl Revisioned for OperationResult {
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
             Self::AddonsCatalog { value } => value.retain_revision(revision),
             Self::AddonsConfigure { value } => value.retain_revision(revision),
+            Self::HelpSearch { value } => value.retain_revision(revision),
+            Self::HelpRead { value } => value.retain_revision(revision),
+            Self::HelpTopicForScreen { value } => value.retain_revision(revision),
+            Self::HelpPackageGuides { value } => value.retain_revision(revision),
             Self::WorkspaceDiagnostics { value } => value.retain_revision(revision),
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
@@ -21301,6 +22487,10 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),
+            Self::HelpSearch { value } => value.check_revision(revision),
+            Self::HelpRead { value } => value.check_revision(revision),
+            Self::HelpTopicForScreen { value } => value.check_revision(revision),
+            Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
             Self::CodeArchitecture { value } => value.check_revision(revision),

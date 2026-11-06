@@ -8,7 +8,7 @@ def generate(name, definition, types):
     current = definition['current']
     revision = definition['revision']
     variants = definition.get('claimVariants')
-    if variants is None and definition.get('projection') != 'none':
+    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page'):
         raise ValueError(f'{name}: an explicit legacy projection strategy is required')
     conversion = ''
     if variants:
@@ -22,6 +22,8 @@ def generate(name, definition, types):
             if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
         }}
 """
+    if definition.get('projection', '').startswith('help_'):
+        conversion = help_conversion(definition, types)
     def revisioned(ty, seen=None):
         seen = set() if seen is None else seen
         for token in re.findall(r'[A-Za-z_][A-Za-z0-9_]*', ty):
@@ -66,4 +68,25 @@ impl Revisioned for {name} {{
         }}
     }}
 }}
+'''
+
+
+def help_conversion(definition, types):
+    """Basic Help projections retain actual published artifact references, never fabricated IDs."""
+    legacy, current, revision = (definition[k] for k in ('legacy', 'current', 'revision'))
+    fields = ', '.join(f'{field}: topic.{field}.clone()' for field in types['HelpTopic']['fields'] if field != 'content')
+    if definition['projection'] == 'help_read':
+        projection = f'''Self::Current({current}::Available {{ topic, .. }}) => topic.content.clone().map(|content| HelpTopic {{ {fields}, content }}),'''
+    else:
+        projection = f'''Self::Current(value) if matches!(value.availability, HelpAvailability::Available)
+                && value.items.0.iter().all(|topic| matches!(topic.availability, HelpAvailability::Available) && topic.content.is_some()) =>
+                    Some(Page {{ items: BoundedList(value.items.0.iter().map(|topic| HelpTopic {{ {fields}, content: topic.content.clone().expect("checked published artifact") }}).collect()),
+                        next_cursor: value.next_cursor.clone(), has_more: value.has_more }}),'''
+    return f'''        if revision < {revision} {{
+            let legacy: Option<{legacy}> = match self {{
+                {projection}
+                _ => None,
+            }};
+            if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
+        }}
 '''
