@@ -1,6 +1,96 @@
 use super::*;
 
 #[test]
+fn saved_commit_manifest_honors_repository_filemode_for_new_files() {
+    for honor_mode in [false, true] {
+        let h = Harness::new();
+        let store = h.open();
+        let dir = h.root.join("filemode-manifest");
+        std::fs::create_dir(&dir).unwrap();
+        git(&dir, &["init", "-b", "main"]);
+        git(
+            &dir,
+            &[
+                "config",
+                "core.fileMode",
+                if honor_mode { "true" } else { "false" },
+            ],
+        );
+        std::fs::write(dir.join("tracked"), "initial\n").unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "initial"]);
+        let head = git(&dir, &["rev-parse", "HEAD"]);
+        // Header-like file content must remain byte-exact when only the mode is normalized.
+        std::fs::write(dir.join("executable"), "new file mode 100755\n#!/bin/sh\n").unwrap();
+        std::fs::write(dir.join("binary"), [0, 255, 4, 0]).unwrap();
+        std::fs::write(dir.join("empty"), []).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in ["executable", "binary", "empty"] {
+                std::fs::set_permissions(dir.join(path), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+            std::os::unix::fs::symlink("tracked", dir.join("link")).unwrap();
+        }
+        let helpers = SupervisedHelpers {
+            supervisor: Arc::new(ProcessSupervisor::new(
+                store.clone(),
+                Arc::new(NativeProcessHost),
+                Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
+            )),
+            store: store.clone(),
+            fs: Arc::new(NativeFilesystem::new()),
+        };
+        let info = store.info();
+        let ctx = HostIngress::new(&*store).context(
+            info.host_actor,
+            PrincipalKind::Host,
+            id("filemode-invoke"),
+            id("filemode-session"),
+            Counter::new(info.restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        );
+        let capture = devworks_core::services::indexing::git::Git {
+            runner: &helpers,
+            ctx: &ctx,
+            program: "git",
+            deadline: std::time::Duration::from_secs(30),
+            stop: &|| false,
+        };
+        let reviewed = capture.commit_manifest(&dir, &head).unwrap();
+        assert_eq!(
+            git(&dir, &["diff", "--cached", "--stat"]),
+            "",
+            "review cannot stage files"
+        );
+        git(&dir, &["add", "--all"]);
+        assert_eq!(
+            capture.staged_commit_manifest(&dir, &head).unwrap(),
+            reviewed,
+            "unchanged reviewed files must match actual staging with core.fileMode={honor_mode}"
+        );
+        git(&dir, &["commit", "-m", "reviewed mode semantics"]);
+        let expected = if honor_mode && cfg!(unix) {
+            "100755"
+        } else {
+            "100644"
+        };
+        let tree = git(&dir, &["ls-tree", "HEAD", "executable", "binary", "empty"]);
+        assert!(
+            tree.lines().all(|line| line.starts_with(expected)),
+            "{tree}"
+        );
+        assert_eq!(
+            git(&dir, &["show", "HEAD:executable"]),
+            "new file mode 100755\n#!/bin/sh"
+        );
+        #[cfg(unix)]
+        assert!(git(&dir, &["ls-tree", "HEAD", "link"]).starts_with("120000"));
+    }
+}
+
+#[test]
 fn saved_commit_manifest_binds_dirty_contents_and_matches_actual_staging() {
     let h = Harness::new();
     let store = h.open();
