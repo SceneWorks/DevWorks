@@ -8,16 +8,15 @@ use devworks_adapters::fs::{
 use devworks_core::{
     authority::HostAuthority,
     context::{InvocationContext, PrincipalKind},
-    gateway::{AdmittedCommand, Gateway},
-    operations::{OperationInput, conventions as ops},
-    ports::{CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared, storage::*},
+    gateway::Gateway,
+    ports::storage::*,
     protocol::{
-        CommandReply, CorrelationId, OperationId, OperationState, provider::ArtifactRef,
-        results::DomainDecision,
+        CommandReply, OperationId, OperationState, provider::ArtifactRef, results::DomainDecision,
     },
     services::{
+        UseCases,
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
-        conventions::{importing::ImportService, indexing::IndexService, model},
+        conventions::{ConventionService, importing::ImportService, indexing::IndexService, model},
         sessions::Failure,
     },
 };
@@ -27,50 +26,12 @@ use std::sync::Arc;
 // Compile the actual production consumer while composition is integrated by its runtime owner.
 #[path = "../src/conventions_import.rs"]
 mod actual_consumer;
-struct Handler(Arc<ImportService>);
-fn input(c: &AdmittedCommand) -> &ops::ImportInput {
-    let OperationInput::Conventions(ops::Input::Import(i)) = c.input() else {
-        panic!("import frame")
-    };
-    i
-}
-impl CommandHandler for Handler {
-    fn prepare(
-        &self,
-        c: &InvocationContext,
-        a: &AdmittedCommand,
-        e: &Preparation<'_>,
-    ) -> Result<Option<Prepared>, StorageError> {
-        self.0
-            .prepare_import(c, input(a), e)
-            .map(|p| Some(Prepared::new(p)))
-            .map_err(|error| panic!("native import preparation unexpectedly failed: {error:?}"))
-    }
-    fn decide(
-        &self,
-        c: &InvocationContext,
-        a: &AdmittedCommand,
-        t: &mut dyn WriteTransaction,
-    ) -> Result<Decided, HandlerFailure> {
-        match self.0.decide_import(c, a, t, input(a)) {
-            Ok(d) => Ok(d),
-            Err(Failure::Storage(e)) => {
-                panic!("native import admission unexpectedly failed: {e:?}")
-            }
-            Err(Failure::Refused(e)) => Ok(Decided {
-                decision: DomainDecision::Refused {
-                    fault: e.fault(CorrelationId(t.new_id(IdKind::Correlation))),
-                },
-                operation_id: None,
-            }),
-        }
-    }
-}
 struct Fx {
     h: Harness,
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
     service: Arc<ImportService>,
+    catalog: Arc<ConventionService>,
     ctx: InvocationContext,
 }
 impl Fx {
@@ -92,21 +53,19 @@ impl Fx {
             h.clock(),
             h.ids.clone(),
         ));
-        let index = Arc::new(IndexService::new(
+        let catalog = Arc::new(ConventionService::new(
             store.clone(),
             artifacts.clone(),
             h.ids.clone(),
             h.clock(),
         ));
-        let service = Arc::new(
-            ImportService::new(store.clone(), artifacts.clone(), h.ids.clone(), h.clock())
-                .with_index(index),
-        );
+        let service = catalog.imports();
         Self {
             h,
             store,
             artifacts,
             service,
+            catalog,
             ctx,
         }
     }
@@ -163,12 +122,13 @@ impl Fx {
             |project| json!({"kind":"Project","projectId":project}),
         );
         let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"mode":"Command","requestKey":key,"body":{"kind":"conventions.import","scope":scope,"source":reference,"schema":model::manifest_schema()}});
-        match gateway
+        match UseCases::new()
+            .with_conventions(self.catalog.clone())
             .command(
+                &gateway,
                 &self.ctx,
                 "conventions.import",
                 frame.to_string().as_bytes(),
-                Arc::new(Handler(self.service.clone())),
             )
             .unwrap()
         {
@@ -494,10 +454,12 @@ fn actual_reopen_resumes_private_checkpoint_and_observes_publication_without_dup
             store,
             artifacts,
             service,
+            catalog,
             ctx,
         } = f;
         let prior_boot = store.info().boot_id;
         drop(service);
+        drop(catalog);
         drop(store);
         let store = h.open();
         assert_ne!(
