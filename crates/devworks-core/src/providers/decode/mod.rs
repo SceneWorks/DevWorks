@@ -3,6 +3,7 @@
 mod chat;
 mod embedding;
 mod messages;
+mod reasoning_index;
 mod responses;
 mod think_tags;
 mod usage;
@@ -166,6 +167,9 @@ pub struct Decoder {
     model: Option<String>,
     generation_id: Option<String>,
     chat_reasoning: Value,
+    chat_details: reasoning_index::ReasoningIndex,
+    #[cfg(test)]
+    chat_detail_probes: usize,
     continuations: BTreeMap<(u64, String), Value>,
     stopped_blocks: std::collections::BTreeSet<u64>,
     embedding_dimensions: Option<usize>,
@@ -199,6 +203,9 @@ impl Decoder {
             model: None,
             generation_id: None,
             chat_reasoning: serde_json::json!({}),
+            chat_details: Default::default(),
+            #[cfg(test)]
+            chat_detail_probes: 0,
             continuations: BTreeMap::new(),
             stopped_blocks: Default::default(),
             embedding_dimensions: None,
