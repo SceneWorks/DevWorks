@@ -38,6 +38,7 @@ mod indexing;
 mod jobs;
 mod knowledge;
 mod migrations;
+mod notification_delivery;
 mod packages;
 mod projects;
 mod repos;

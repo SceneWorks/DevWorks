@@ -347,6 +347,7 @@ fn notification_list(
     rows(conn, &sql, params_from_iter(p), notification)
 }
 macro_rules! decision_reads {($t:ty)=>{impl DecisionRead for $t{
+    fn os_notification_delivery(&self,user:&ActorId,notification:&Id)->Result<Option<StoredOsNotificationDelivery>,StorageError>{super::notification_delivery::read(self.conn,user,notification)}
     fn notification_users(&self)->Result<Vec<ActorId>,StorageError>{
         let mut statement=db(self.conn.prepare_cached("SELECT a.id FROM notification_audience n JOIN actors a ON a.id=n.user_id WHERE n.singleton=1 AND a.kind='human'"))?;
         let values=db(db(statement.query_map([],|r|r.get::<_,String>(0)))?.collect::<rusqlite::Result<Vec<_>>>())?;
@@ -365,6 +366,28 @@ decision_reads!(Snapshot<'_>);
 decision_reads!(Unit<'_>);
 
 impl DecisionRepository for Unit<'_> {
+    fn claim_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        expected: Option<i64>,
+        retry: bool,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        super::notification_delivery::claim(self, user, notification, expected, retry)
+    }
+    fn settle_os_notification_delivery(
+        &mut self,
+        user: &ActorId,
+        notification: &Id,
+        fence: &OsNotificationDeliveryFence,
+        state: &str,
+        detail: Option<&str>,
+    ) -> Result<StoredOsNotificationDelivery, StorageError> {
+        super::notification_delivery::settle(self, user, notification, fence, state, detail)
+    }
+    fn recover_os_notification_deliveries(&mut self) -> Result<u64, StorageError> {
+        super::notification_delivery::recover(self)
+    }
     fn bind_notification_user(&mut self, user: &ActorId) -> Result<(), StorageError> {
         actor(self.conn, user, PrincipalKind::Human)?;
         db(self.conn.execute("INSERT INTO notification_audience(singleton,user_id) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET user_id=excluded.user_id",[user.0.as_str()]))?;
