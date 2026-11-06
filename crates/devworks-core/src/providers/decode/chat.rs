@@ -271,10 +271,9 @@ impl Decoder {
                     });
                 identity
                     && ["type", "id"].iter().all(|k| {
-                        fragment
-                            .get(k)
-                            .filter(|v| !v.is_null())
-                            .is_none_or(|v| entry.get(k).is_none_or(|e| e == v))
+                        fragment.get(k).filter(|v| !v.is_null()).is_none_or(|v| {
+                            entry.get(k).filter(|e| !e.is_null()).is_none_or(|e| e == v)
+                        })
                     })
             });
             if let Some(entry) = existing {

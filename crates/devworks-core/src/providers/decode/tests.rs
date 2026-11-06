@@ -731,3 +731,30 @@ fn explicit_chat_reasoning_and_openrouter_details_suppress_duplicate_tagged_reas
         &json!({"reasoning_details":details})
     );
 }
+
+#[test]
+fn retained_openrouter_null_fragment_identity_can_be_completed_without_duplicate_entries() {
+    for initial_type in [Value::Null, json!("reasoning.text")] {
+        let mut d = Decoder::new(EndpointProfile::OpenRouterChat);
+        for detail in [
+            json!({"index":0,"type":initial_type,"id":null,"text":"a"}),
+            json!({"index":0,"type":"reasoning.text","id":"r0","text":"b"}),
+        ] {
+            event(
+                &mut d,
+                json!({"choices":[{"index":0,"delta":{"reasoning_details":[detail]},"finish_reason":null}]}),
+            );
+        }
+        event(
+            &mut d,
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+        );
+        d.consume_data_event(None, "[DONE]");
+        let frames = d.finish();
+        assert_eq!(outcome(&frames), &DecodedOutcome::Completed);
+        assert_eq!(
+            continuation(&frames).unwrap()["reasoning_details"],
+            json!([{"index":0,"type":"reasoning.text","id":"r0","text":"ab"}])
+        );
+    }
+}
