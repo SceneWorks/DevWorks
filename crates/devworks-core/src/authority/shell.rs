@@ -1826,6 +1826,11 @@ fn git_dir(dir: &Option<Word>) -> Word {
 }
 
 fn git(args: &[Word], c: &mut Collector) -> bool {
+    // Exact discovery forms only: --exec-path=<path> and extra arguments stay unmodeled.
+    if args.len() == 1 && matches!(args[0].text.as_str(), "--version" | "--exec-path") {
+        return true;
+    }
+
     let mut j = 0;
     let mut dir: Option<Word> = None;
     while let Some(a) = args.get(j) {

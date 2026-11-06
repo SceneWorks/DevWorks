@@ -543,7 +543,7 @@ pub(crate) fn admit_attempt(
         &request.quote,
         request.input_tokens,
         request.output_headroom,
-        request.pricing.cache_write_possible,
+        &request.pricing,
         &request.unit_headroom,
     )
     .map_err(|_| invalid("invalid monetary reservation"))?;

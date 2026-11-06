@@ -279,13 +279,63 @@ fn native_git_inspection_and_diff_use_the_owned_process_and_artifact_boundaries(
 
 #[test]
 fn native_worktree_creation_is_journaled_isolated_and_recoverable() {
-    native_task_lifecycle(false);
+    native_task_lifecycle(false, None);
 }
 #[test]
 fn native_task_pr_is_observed_linked_and_recovered_after_response_loss() {
-    native_task_lifecycle(true);
+    native_task_lifecycle(true, None);
 }
-fn native_task_lifecycle(with_pr: bool) {
+#[derive(Clone, Copy, Debug)]
+enum ReviewedCommitCase {
+    PreCommit,
+    ConfiguredPreCommit,
+    PostIndex,
+    Signer,
+    UnexpectedTree,
+    UnexpectedMessage,
+    ChangedHookNames,
+    LateConfiguredHook,
+    UnavailablePolicy,
+}
+
+#[test]
+fn reviewed_commit_never_executes_traditional_or_configured_hooks_or_signer() {
+    for case in [
+        ReviewedCommitCase::PreCommit,
+        ReviewedCommitCase::ConfiguredPreCommit,
+        ReviewedCommitCase::PostIndex,
+        ReviewedCommitCase::Signer,
+    ] {
+        native_task_lifecycle(false, Some(case));
+    }
+}
+
+#[test]
+fn reviewed_commit_does_not_accept_unexpected_committed_tree_or_message_on_recovery() {
+    for case in [
+        ReviewedCommitCase::UnexpectedTree,
+        ReviewedCommitCase::UnexpectedMessage,
+    ] {
+        native_task_lifecycle(false, Some(case));
+    }
+}
+
+#[test]
+fn reviewed_commit_blocks_new_hook_added_at_the_native_spawn_boundary() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::LateConfiguredHook));
+}
+
+#[test]
+fn reviewed_commit_policy_unavailable_refuses_before_proposal() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::UnavailablePolicy));
+}
+
+#[test]
+fn reviewed_commit_refuses_changed_hook_name_witness_before_dispatch() {
+    native_task_lifecycle(false, Some(ReviewedCommitCase::ChangedHookNames));
+}
+
+fn native_task_lifecycle(with_pr: bool, reviewed_case: Option<ReviewedCommitCase>) {
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, ProjectId, RootId};
     use devworks_core::services::git::{EffectOutcome, RegisteredGitRoot};
@@ -370,14 +420,20 @@ fn native_task_lifecycle(with_pr: bool) {
     let filesystem = Arc::new(NativeFilesystem::new());
     let processes = Arc::new(ProcessSupervisor::new(
         store.clone(),
-        Arc::new(NativeProcessHost),
+        Arc::new(ReviewedProcessHost {
+            case: reviewed_case,
+            injected: std::sync::atomic::AtomicBool::new(false),
+        }),
         Arc::new(ResourceService::new(h.ids.clone(), h.clock())),
     ));
-    let helpers = Arc::new(CommitReplyLost(SupervisedHelpers {
-        supervisor: processes.clone(),
-        store: store.clone(),
-        fs: filesystem.clone(),
-    }));
+    let helpers = Arc::new(CommitReplyLost(
+        SupervisedHelpers {
+            supervisor: processes.clone(),
+            store: store.clone(),
+            fs: filesystem.clone(),
+        },
+        reviewed_case,
+    ));
     let artifacts = Arc::new(ArtifactService::new(
         Arc::new(NativeArtifactFiles::new(
             h.root.clone(),
@@ -444,7 +500,7 @@ fn native_task_lifecycle(with_pr: bool) {
         ids: &*h.ids,
     };
     let frame = serde_json::json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"create-tree","body":{"kind":"git.worktree","repositoryId":"repo","workId":"task","expectedRevision":"1","action":"Create","base":{"format":"Sha1","hex":head},"registeredRootId":"owned-root"}});
-    if !with_pr {
+    if !with_pr && reviewed_case.is_none() {
         let mut cancelled = frame.clone();
         cancelled["requestKey"] = serde_json::json!("cancel-create");
         let op = match gateway
@@ -571,6 +627,18 @@ fn native_task_lifecycle(with_pr: bool) {
         "recovery reads its durable result without replay"
     );
     let tree_path = Path::new(&after.path);
+    if let Some(case) = reviewed_case {
+        approvals::assert_reviewed_commit(
+            &h,
+            store.clone(),
+            (service, artifacts),
+            &gateway,
+            &ctx,
+            &after,
+            case,
+        );
+        return;
+    }
     std::fs::write(tree_path.join("new.txt"), "new task work\n").unwrap();
     let requested_message = "\nTask implementation   \n\nBody   \n";
     let message = artifacts
@@ -1110,9 +1178,100 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
     }
 }
 
+/// Intercept at the last actual native spawn boundary, after every Git configuration witness.
+/// The requested process policy still runs through the real native adapter and kernel.
+struct ReviewedProcessHost {
+    case: Option<ReviewedCommitCase>,
+    injected: std::sync::atomic::AtomicBool,
+}
+impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn probe(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.terminate(identity)
+    }
+    fn spawn(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        if matches!(self.case, Some(ReviewedCommitCase::UnavailablePolicy))
+            && spec.no_child_processes
+            && spec.args == ["--version"]
+        {
+            return Err(
+                devworks_core::ports::process::ProcessError::EnforcementUnavailable(
+                    "controlled unavailable platform".into(),
+                ),
+            );
+        }
+        if spec.no_child_processes
+            && matches!(
+                spec.args.first().map(String::as_str),
+                Some("add" | "commit")
+            )
+        {
+            for (key, expected) in [
+                ("index.threads", "1"),
+                ("pack.threads", "1"),
+                ("core.preloadIndex", "false"),
+                ("checkout.workers", "1"),
+                ("gc.auto", "0"),
+                ("maintenance.auto", "false"),
+                ("commit.gpgSign", "false"),
+            ] {
+                let suffix = spec
+                    .env
+                    .iter()
+                    .find_map(|(name, value)| {
+                        (name.starts_with("GIT_CONFIG_KEY_") && value == key)
+                            .then(|| name.trim_start_matches("GIT_CONFIG_KEY_"))
+                    })
+                    .expect("explicit helper-free option");
+                assert!(spec.env.iter().any(|(name, value)| name
+                    == &format!("GIT_CONFIG_VALUE_{suffix}")
+                    && value == expected));
+            }
+            if matches!(self.case, Some(ReviewedCommitCase::LateConfiguredHook))
+                && spec.args.first().is_some_and(|v| v == "commit")
+                && !self
+                    .injected
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let path = spec.cwd.as_deref().unwrap();
+                git(path, &["config", "hook.late.event", "pre-commit"]);
+                git(
+                    path,
+                    &[
+                        "config",
+                        "hook.late.command",
+                        "printf ran > review-hook-marker",
+                    ],
+                );
+            }
+        }
+        NativeProcessHost.spawn(spec)
+    }
+}
+
 /// Lose the successful commit reply before the Git owner can checkpoint it. All native
 /// processes still run through the real supervisor; recovery must observe, never replay.
-struct CommitReplyLost(SupervisedHelpers);
+struct CommitReplyLost(SupervisedHelpers, Option<ReviewedCommitCase>);
 impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost {
     fn filesystem(&self) -> Option<&dyn devworks_core::authority::destructive::FilesystemResolver> {
         self.0.filesystem()
@@ -1129,6 +1288,26 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
         self.0.run(ctx, spec, limits, stop)
     }
+    fn run_difference(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        self.0.run_difference(ctx, spec, limits, stop)
+    }
+    fn run_recorded_difference(
+        &self,
+        ctx: &devworks_core::context::InvocationContext,
+        spec: devworks_core::ports::process::ProcessSpec,
+        limits: devworks_core::services::indexing::helper::HelperLimits,
+        stop: &(dyn Fn() -> bool + Sync),
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
+        self.0
+            .run_recorded_difference(ctx, spec, limits, stop, operation)
+    }
     fn run_recorded(
         &self,
         ctx: &devworks_core::context::InvocationContext,
@@ -1138,11 +1317,30 @@ impl devworks_core::services::indexing::helper::HelperRunner for CommitReplyLost
         operation: &devworks_core::protocol::OperationId,
         approved_hold: bool,
     ) -> Result<Vec<u8>, devworks_core::services::indexing::helper::HelperFault> {
-        let commit = spec.args.iter().any(|arg| arg == "commit");
+        let commit = spec.args.first().is_some_and(|arg| arg == "commit");
+        let directory = spec.cwd.clone();
         let reply = self
             .0
             .run_recorded(ctx, spec, limits, stop, operation, approved_hold)?;
         if commit {
+            if let Some(case) = self.1 {
+                let path = directory.as_deref().unwrap();
+                match case {
+                    ReviewedCommitCase::UnexpectedTree => {
+                        std::fs::write(path.join("unexpected.txt"), "not reviewed\n").unwrap();
+                        git(path, &["add", "unexpected.txt"]);
+                        git(path, &["commit", "--amend", "--no-edit"]);
+                    }
+                    ReviewedCommitCase::UnexpectedMessage => {
+                        git(
+                            path,
+                            &["commit", "--amend", "-m", "not the reviewed message"],
+                        );
+                    }
+                    _ => {}
+                }
+                return Ok(reply);
+            }
             Err(
                 devworks_core::services::indexing::helper::HelperFault::Uncertain(
                     "successful commit reply lost".into(),

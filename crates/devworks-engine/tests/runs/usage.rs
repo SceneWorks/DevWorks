@@ -759,6 +759,8 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                     panic!("source did not settle")
                 };
                 assert!(balance.local_quiescent && balance.unknown_tail);
+            assert!(devworks_core::services::usage::accounting::summary(&balance).unwrap().cancellation_requested);
+
                 assert!(read(&*f.store, |s| s
                     .runs()
                     .inference_quiescent(&RootId(id(execution_root)))));
@@ -972,6 +974,19 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
             assert_eq!(attempt.job_run_id, Some(run_id));
             assert_eq!(attempt.feature_id, None);
             assert_eq!(attempt.execution_root_id, None);
+            let before_close = read(&*f.store, |s| {
+                s.usage().attempt_balance(&attempt.attempt_id)
+            })
+            .unwrap();
+            assert!(
+                devworks_core::services::usage::accounting::summary(&before_close)
+                    .unwrap()
+                    .cancellation_requested
+            );
+            assert!(
+                !before_close.local_quiescent,
+                "a cancellation request does not prove transport closure"
+            );
             assert!(
                 !read(&*f.store, |s| s
                     .usage()
@@ -988,6 +1003,12 @@ fn primary_job_custody_is_rechecked_before_dispatch_and_while_the_source_waits()
                 panic!("job source not settled")
             };
             assert!(balance.local_quiescent && balance.unknown_tail);
+            assert!(
+                devworks_core::services::usage::accounting::summary(&balance)
+                    .unwrap()
+                    .cancellation_requested
+            );
+
             runtime.drain().await;
         }
     }));
@@ -1075,6 +1096,297 @@ fn recovery_retains_live_native_owner_and_retires_only_after_verified_process_ex
         assert_eq!(read(store.as_ref(), |s| s.runs().blockers(&BlockerFilter::Root(RootId(id("root-f"))), None, 64)), holds);
         host.stop(); host.drain().await;
     }));
+}
+
+#[test]
+fn settled_unknown_and_cancelled_producer_replay_never_reopens_the_same_admission() {
+    runtime().block_on(async {
+        struct TerminalSource {
+            opened: Arc<AtomicUsize>,
+            terminal: Option<devworks_core::services::usage::accounting::AttemptEnd>,
+        }
+        impl OwnedInferenceSource for TerminalSource {
+            fn start(&mut self, _: &StoredInferenceAttempt) -> Result<(), StorageError> {
+                self.opened.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            fn next(&mut self, _: &Cancellation) -> Result<Option<InferenceFrame>, StorageError> {
+                Ok(self.terminal.take().map(InferenceFrame::Terminal))
+            }
+            fn close(&mut self) -> Result<(), StorageError> {
+                Ok(())
+            }
+        }
+        use devworks_core::services::usage::accounting::AttemptEnd;
+        for end in [
+            Some(AttemptEnd::Completed),
+            Some(AttemptEnd::UnknownTail),
+            Some(AttemptEnd::Cancelled),
+            None,
+        ] {
+            let f = Fx::new();
+            let selected_router = router(&f);
+            let info = f.store.info();
+            let context = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+                info.host_actor,
+                PrincipalKind::Host,
+                id("replay-invocation"),
+                id("native-replay"),
+                devworks_core::protocol::Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            );
+            let logical = RequestAdmission {
+                request_id: id("replay-request"),
+                purpose: Purpose::Conversation,
+                session_id: None,
+                project_id: None,
+                root_id: None,
+                model_id: id("usage-model"),
+                connection_id: id("usage-connection"),
+                pin_id: None,
+                args_digest: "a".repeat(64),
+            };
+            let request = AttemptRequest {
+                admission_key: id("replay-admission"),
+                request_id: logical.request_id.clone(),
+                actor_id: context.principal().clone(),
+                work_id: None,
+                job_run_id: None,
+                role: "Host".into(),
+                query: PriceQuery {
+                    catalog_model_id: id("usage-model"),
+                    provider_model_id: Some("native-metadata-source".into()),
+                    connection_id: id("usage-connection"),
+                    endpoint_profile: "CompatibleChat".into(),
+                    access_mode: "host-derived".into(),
+                    service_tier: None,
+                    input_tokens: Some(10),
+                    cache_write_ttl_ms: None,
+                    processing_region: None,
+                    required_modalities: vec!["Text".into()],
+                },
+                quote: PriceQuote {
+                    classification: CostClassification::LocalFree,
+                    connection_revision: Some(1),
+                    snapshot_id: None,
+                    price_revision: None,
+                    override_revision: None,
+                    currency: "USD".into(),
+                    rates: None,
+                    tariffs: vec![],
+                    untracked_reason: None,
+                },
+                price_generation: 1,
+                override_revision: 1,
+                pricing: PricingContext {
+                    input_semantics: InputSemantics::Inclusive,
+                    cache_read_possible: false,
+                    cache_write_possible: false,
+                    cache_write_ttl_ms: None,
+                },
+                selection: AttemptSelection::Conversation {
+                    intent: RouteIntent::Model {
+                        model_id: id("usage-model"),
+                    },
+                    effort: EffortName::Default,
+                    required_capabilities: vec![],
+                    pin: None,
+                },
+                input_tokens: 10,
+                output_headroom: 10,
+                unit_headroom: vec![],
+                expected_context_epoch: None,
+                dispatch: None,
+                cache_diagnostics: vec![],
+            };
+            let owned = UsageRuntime::new(
+                f.store.clone(),
+                f.service.clone(),
+                Some(selected_router.clone()),
+            );
+            let opened = Arc::new(AtomicUsize::new(0));
+            if let Some(end) = end {
+                let result = owned
+                    .produce(
+                        context.clone(),
+                        logical.clone(),
+                        ReportCategory::Other,
+                        request.clone(),
+                        Box::new(TerminalSource {
+                            opened: opened.clone(),
+                            terminal: Some(end),
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                assert!(matches!(result, DriveOutcome::Settled(_)));
+            } else {
+                let host = devworks_core::services::usage::host::AttemptHost::new(
+                    f.store.clone(),
+                    f.service.clone(),
+                    selected_router,
+                );
+                let devworks_core::services::usage::accounting::Admission::Admitted {
+                    attempt, ..
+                } = host
+                    .admit(
+                        context.clone(),
+                        logical.clone(),
+                        ReportCategory::Other,
+                        request.clone(),
+                    )
+                    .unwrap()
+                else {
+                    panic!("not admitted")
+                };
+                let cancel = Cancellation::new();
+                cancel.cancel();
+                assert!(matches!(
+                    host.drive(
+                        attempt.attempt_id,
+                        Box::new(TerminalSource {
+                            opened: opened.clone(),
+                            terminal: None
+                        }),
+                        cancel
+                    )
+                    .unwrap(),
+                    DriveOutcome::CancelledBeforeDispatch
+                ));
+            }
+            let before = read(f.store.as_ref(), |s| {
+                let attempts =
+                    s.usage()
+                        .inference_attempts(&UsageAttemptFilter::default(), None, 64)?;
+                assert_eq!(attempts.len(), 1);
+                Ok((
+                    attempts[0].clone(),
+                    s.usage().attempt_balance(&attempts[0].attempt_id)?.unwrap(),
+                ))
+            });
+            let result = owned
+                .produce(
+                    context,
+                    logical,
+                    ReportCategory::Other,
+                    request,
+                    Box::new(TerminalSource {
+                        opened: opened.clone(),
+                        terminal: Some(AttemptEnd::Completed),
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(result, DriveOutcome::AlreadyDispatched),
+                "{result:?}"
+            );
+            assert_eq!(opened.load(Ordering::SeqCst), usize::from(end.is_some()));
+            let after = read(f.store.as_ref(), |s| {
+                let attempts =
+                    s.usage()
+                        .inference_attempts(&UsageAttemptFilter::default(), None, 64)?;
+                assert_eq!(attempts.len(), 1);
+                Ok((
+                    attempts[0].clone(),
+                    s.usage().attempt_balance(&attempts[0].attempt_id)?.unwrap(),
+                ))
+            });
+            assert_eq!(
+                before, after,
+                "same admission must preserve canonical attempt and balance"
+            );
+        }
+    });
+}
+
+#[test]
+fn native_audio_token_subsets_keep_text_remainder_in_the_actual_immutable_quote() {
+    runtime().block_on(async {
+ struct Audio { first:bool,cached:i64 }
+ impl OwnedInferenceSource for Audio {
+ fn start(&mut self,_:&StoredInferenceAttempt)->Result<(),StorageError>{Ok(())}
+ fn next(&mut self,_:&Cancellation)->Result<Option<InferenceFrame>,StorageError>{if self.first {self.first=false;Ok(Some(InferenceFrame::Usage(devworks_core::services::usage::accounting::Observation {key:"actual-audio".into(),sequence:1,semantics:devworks_core::services::usage::meter::ObservationSemantics::Cumulative,quantities:devworks_core::services::usage::meter::Quantities {input_tokens:Some(10),output_tokens:Some(4),cached_read_tokens:Some(self.cached),cache_write_tokens:Some(0),additional:vec![devworks_core::services::usage::meter::MeasuredQuantity {modality:"Audio".into(),charge_kind:"Input".into(),unit:"Token".into(),cache_write_ttl_ms:None,quantity:4},devworks_core::services::usage::meter::MeasuredQuantity {modality:"Audio".into(),charge_kind:"Output".into(),unit:"Token".into(),cache_write_ttl_ms:None,quantity:1}],..Default::default()},reported_cost:None,provider_model_id:Some("native-metadata-source".into())})))}else{Ok(Some(InferenceFrame::Terminal(devworks_core::services::usage::accounting::AttemptEnd::Completed)))}}
+ fn close(&mut self)->Result<(),StorageError>{Ok(())}
+ }
+ for (cached,expected,complete) in [(0,28,true),(2,10,false)] {
+let f=Fx::new();let selected_router=router(&f);let info=f.store.info();let context=devworks_core::context::HostIngress::new(f.store.as_ref()).context(info.host_actor,PrincipalKind::Host,id("audio-invocation"),id("native-audio"),devworks_core::protocol::Counter::new(info.restore_epoch).unwrap(),Revision::new(1).unwrap());
+            let logical = RequestAdmission {
+                request_id: id("replay-request"),
+                purpose: Purpose::Conversation,
+                session_id: None,
+                project_id: None,
+                root_id: None,
+                model_id: id("usage-model"),
+                connection_id: id("usage-connection"),
+                pin_id: None,
+                args_digest: "a".repeat(64),
+            };
+            let mut request = AttemptRequest {
+                admission_key: id("replay-admission"),
+                request_id: logical.request_id.clone(),
+                actor_id: context.principal().clone(),
+                work_id: None,
+                job_run_id: None,
+                role: "Host".into(),
+                query: PriceQuery {
+                    catalog_model_id: id("usage-model"),
+                    provider_model_id: Some("native-metadata-source".into()),
+                    connection_id: id("usage-connection"),
+                    endpoint_profile: "CompatibleChat".into(),
+                    access_mode: "host-derived".into(),
+                    service_tier: None,
+                    input_tokens: Some(10),
+                    cache_write_ttl_ms: None,
+                    processing_region: None,
+                    required_modalities: vec!["Text".into()],
+                },
+                quote: PriceQuote {
+                    classification: CostClassification::LocalFree,
+                    connection_revision: Some(1),
+                    snapshot_id: None,
+                    price_revision: None,
+                    override_revision: None,
+                    currency: "USD".into(),
+                    rates: None,
+                    tariffs: vec![],
+                    untracked_reason: None,
+                },
+                price_generation: 1,
+                override_revision: 1,
+                pricing: PricingContext {
+                    input_semantics: InputSemantics::Inclusive,
+                    cache_read_possible: false,
+                    cache_write_possible: false,
+                    cache_write_ttl_ms: None,
+                },
+                selection: AttemptSelection::Conversation {
+                    intent: RouteIntent::Model {
+                        model_id: id("usage-model"),
+                    },
+                    effort: EffortName::Default,
+                    required_capabilities: vec![],
+                    pin: None,
+                },
+                input_tokens: 10,
+                output_headroom: 10,
+                unit_headroom: vec![],
+                expected_context_epoch: None,
+                dispatch: None,
+                cache_diagnostics: vec![],
+            };
+
+write(f.store.as_ref(),|tx|{
+let mut connection=tx.router().connection(&id("usage-connection"))?.unwrap();connection.local_free=false;let expected=connection.revision;tx.router().put_connection(&connection,Some(expected))?;
+let tariff=|modality:&str,kind:&str,amount:&str|devworks_core::ports::usage::PublishedTariff {upstream_model_id:"native-metadata-source".into(),service_tier:"Standard".into(),context_lower_exclusive:None,context_upper_inclusive:None,modality:modality.into(),charge_kind:kind.into(),cache_ttl_seconds:None,unit:"Token".into(),units:1000000,amount_usd:amount.into(),region:None,endpoint_profile:None};
+let author=tx.store().host_actor.clone();tx.usage().put_price_override(&StoredPriceOverride{model_id:id("usage-model"),revision:2,mode:"Set".into(),tariffs:vec![tariff("Text","Input","1"),tariff("Text","Output","2"),tariff("Audio","Input","3"),tariff("Audio","Output","4")],updated_by:author,updated_at_ms:T0},1).map(|_|())
+}).unwrap();
+request.pricing.cache_read_possible=true;request.query.required_modalities=vec!["Text".into(),"Audio".into()];
+use devworks_core::ports::usage::PriceResolver;
+request.quote=read(f.store.as_ref(),|s|devworks_core::services::prices::CatalogPriceResolver.quote(s,&request.query));request.price_generation=read(f.store.as_ref(),|s|s.usage().price_revision());request.override_revision=2;assert_eq!(request.quote.classification,CostClassification::ConfiguredEstimate);let quoted=request.quote.clone();
+let owned=UsageRuntime::new(f.store.clone(),f.service.clone(),Some(selected_router));let DriveOutcome::Settled(balance)=owned.produce(context,logical,ReportCategory::Other,request,Box::new(Audio{first:true,cached})).await.unwrap() else{panic!("not settled")};assert_eq!(balance.priced_micro_usd,Some(expected));assert_eq!(balance.monetary_complete,complete);let attempt=read(f.store.as_ref(),|s|s.usage().inference_attempt(&balance.attempt_id)).unwrap();assert_eq!(devworks_core::services::usage::accounting::snapshot(&attempt).unwrap().quote,quoted);assert_eq!(devworks_core::services::usage::accounting::summary(&balance).unwrap().meter.quantities.input_tokens,Some(10));owned.stop();owned.drain().await;
+ }
+});
 }
 
 #[path = "../providers/managed.rs"]

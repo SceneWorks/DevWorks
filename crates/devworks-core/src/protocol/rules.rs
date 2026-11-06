@@ -399,6 +399,12 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "features.edit_plan" && present(v, "clearBudgetProposal") {
+        require(
+            v["clearBudgetProposal"] == true && !present(v, "budget"),
+            "clearBudgetProposal must be true and excludes budget",
+        )?;
+    }
     if op == "router.price_override" {
         require(
             present(v, "price") != present(v, "change"),

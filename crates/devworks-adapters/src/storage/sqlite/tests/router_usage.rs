@@ -20,6 +20,9 @@ impl NativeFx {
     fn new() -> Self {
         Self::with_upstream("OpenAiResponses", "upstream/accounted")
     }
+    fn profile(profile: &str) -> Self {
+        Self::with_upstream(profile, "upstream/accounted")
+    }
     fn with_upstream(profile: &str, upstream: &str) -> Self {
         let fx = Fx::new();
         fx.dir.set(
@@ -289,12 +292,26 @@ fn native_attempt_replay_stream_zero_and_late_reported_correction() {
     let merged = accounting::summary(&late).unwrap();
     assert_eq!(merged.meter.quantities.input_tokens, Some(110));
     let (src, events) = source(vec![], false);
-    assert!(
-        f.host()
-            .drive(attempt.attempt_id, src, Cancellation::new())
-            .is_err()
-    );
+    let replayed = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap();
+    assert!(matches!(replayed, DriveOutcome::AlreadyDispatched));
+    let Admission::Admitted {
+        attempt: settled,
+        reused: true,
+    } = f.admit()
+    else {
+        panic!("settled admission must retain its existing source receipt")
+    };
+    assert_eq!(settled.state, "Settled");
+    assert_eq!(settled.attempt_id, attempt.attempt_id);
     assert!(events.lock().unwrap().is_empty());
+    assert_eq!(
+        f.fx.read(|s| s.usage().attempt_balance(&attempt.attempt_id))
+            .unwrap(),
+        late
+    );
 }
 #[test]
 fn eof_unknown_tail_closes_local_transport_but_failed_close_keeps_guard() {
@@ -952,5 +969,835 @@ fn legacy_gateway_keeps_full_stored_dates_including_maximum_timestamp() {
                 other => panic!("{other:?}"),
             }
         }
+    }
+}
+
+#[test]
+fn ttl_unrestricted_legacy_price_survives_actual_quote_settlement_and_gateway_report() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::usage::meter::MeasuredQuantity;
+    for dimensional in [false, true] {
+        let mut f = NativeFx::new();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+            devworks_core::services::prices::PriceService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+                false,
+            ),
+        ));
+        let decision=recorded(f.fx.command(&f.fx.user(),"router.price_override",json!({"modelId":"accounted","expectedRevision":"1","price":{"inputUsdPerMillion":"1","outputUsdPerMillion":"2","cacheWriteUsdPerMillion":"3"}}))).0;
+        assert!(
+            matches!(decision, DomainDecision::Applied { .. }),
+            "{decision:?}"
+        );
+        f.request.query.cache_write_ttl_ms = Some(300_000);
+        f.request.pricing.cache_write_possible = true;
+        f.request.pricing.cache_write_ttl_ms = Some(300_000);
+        f.request.pricing.input_semantics = InputSemantics::Disjoint;
+        f.request.quote = f.fx.read(|r| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+        });
+        f.request.override_revision = 2;
+        assert_eq!(
+            f.request.quote.classification,
+            CostClassification::ConfiguredEstimate
+        );
+        assert_eq!(
+            f.request.quote.rates.as_ref().unwrap().cache_writes[0].ttl_ms,
+            None
+        );
+        let headroom = MeasuredQuantity {
+            modality: "Text".into(),
+            charge_kind: "CacheWrite".into(),
+            unit: "Token".into(),
+            cache_write_ttl_ms: Some(300_000),
+            quantity: 20,
+        };
+        let reserved = devworks_core::services::usage::pricing::reservation(
+            &f.request.quote,
+            0,
+            0,
+            &f.request.pricing,
+            std::slice::from_ref(&headroom),
+        )
+        .unwrap();
+        assert_eq!(reserved.tracked_micro_usd, Some(60));
+        assert!(reserved.monetary_complete);
+        let attempt = f.admitted();
+        let mut frame = observation("cache-write", 1, Some(0), None);
+        frame.quantities.cached_read_tokens = Some(0);
+        frame.quantities.cache_write_tokens = Some(20);
+        if dimensional {
+            frame.quantities.additional.push(MeasuredQuantity {
+                modality: "Text".into(),
+                charge_kind: "CacheWrite".into(),
+                unit: "Token".into(),
+                cache_write_ttl_ms: Some(300_000),
+                quantity: 20,
+            });
+        }
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let DriveOutcome::Settled(balance) = f
+            .host()
+            .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+            .unwrap()
+        else {
+            panic!("unsettled")
+        };
+        assert_eq!(
+            balance.priced_micro_usd,
+            Some(60),
+            "dimensional={dimensional}"
+        );
+        assert!(balance.monetary_complete);
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+            Some(3),
+        ));
+        let OperationResult::RouterUsage {
+            value:
+                devworks_core::protocol::records::RouterUsageResult::Current(
+                    devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                ),
+        } = report
+        else {
+            panic!("{report:?}")
+        };
+        assert_eq!(page.totals.tracked_micro_usd.get(), 60);
+        assert_eq!(
+            page.items.0[0]
+                .cache_write_micro_usd
+                .as_ref()
+                .unwrap()
+                .get(),
+            60
+        );
+        let mut ambiguous = f.request.quote.clone();
+        // Older admitted quotes carried only the convenience rates, so exercise that
+        // fallback independently of the canonical tariff records in the current quote.
+        ambiguous.tariffs.clear();
+        let rates = ambiguous.rates.as_mut().unwrap();
+        let mut duplicate = rates.cache_writes[0].clone();
+        duplicate.ttl_ms = Some(300_000);
+        rates.cache_writes.push(duplicate);
+        let estimate = devworks_core::services::usage::pricing::estimate(
+            &ambiguous,
+            &Quantities {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                cached_read_tokens: Some(0),
+                cache_write_tokens: Some(20),
+                ..Default::default()
+            },
+            &f.request.pricing,
+        )
+        .unwrap();
+        assert!(
+            !estimate.monetary_complete,
+            "unrestricted and exact TTL overlap stays ambiguous"
+        );
+    }
+}
+
+#[test]
+fn subscription_reported_usd_never_becomes_api_charge_without_a_matching_tariff() {
+    use devworks_core::ports::usage::{PriceResolver, PublishedTariff};
+    for profile in ["CodexSubscriptionResponses", "ClaudeSubscriptionMessages"] {
+        for priced in [false, true] {
+            let mut f = NativeFx::profile(profile);
+            if priced {
+                let profile = profile.to_owned();
+                f.fx.write(move |tx| {
+                    tx.usage().put_price_override(
+                        &StoredPriceOverride {
+                            model_id: id("accounted"),
+                            revision: 2,
+                            mode: "Set".into(),
+                            tariffs: ["Input", "Output"]
+                                .map(|kind| PublishedTariff {
+                                    upstream_model_id: "upstream/accounted".into(),
+                                    service_tier: "Standard".into(),
+                                    context_lower_exclusive: None,
+                                    context_upper_inclusive: None,
+                                    modality: "Text".into(),
+                                    charge_kind: kind.into(),
+                                    cache_ttl_seconds: None,
+                                    unit: "Token".into(),
+                                    units: 1_000_000,
+                                    amount_usd: "1".into(),
+                                    region: None,
+                                    endpoint_profile: Some(profile.clone()),
+                                })
+                                .to_vec(),
+                            updated_by: actor("user-a"),
+                            updated_at_ms: T0,
+                        },
+                        1,
+                    )
+                });
+                f.request.override_revision = 2;
+            }
+            f.request.quote = f.fx.read(|r| {
+                devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+            });
+            assert_eq!(
+                f.request.quote.classification,
+                if priced {
+                    CostClassification::SubscriptionApiEquivalent
+                } else {
+                    CostClassification::Untracked
+                }
+            );
+            let attempt = f.admitted();
+            assert_eq!(attempt.access_mode, "Subscription");
+            assert_eq!(
+                accounting::snapshot(&attempt).unwrap().query.access_mode,
+                "Subscription"
+            );
+            let (src, _) = source(
+                vec![
+                    InferenceFrame::Usage(observation(
+                        "reported-subscription",
+                        1,
+                        Some(100),
+                        Some("0.012345"),
+                    )),
+                    InferenceFrame::Terminal(AttemptEnd::Completed),
+                ],
+                false,
+            );
+            let DriveOutcome::Settled(balance) = f
+                .host()
+                .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+                .unwrap()
+            else {
+                panic!("unsettled")
+            };
+            assert_eq!(
+                balance.priced_micro_usd,
+                priced.then_some(100),
+                "{profile},priced={priced}"
+            );
+            assert_ne!(balance.classification, "ReportedCharge");
+            assert_eq!(
+                accounting::summary(&balance)
+                    .unwrap()
+                    .reported_cost
+                    .unwrap()
+                    .amount,
+                "0.012345"
+            );
+            let persisted =
+                f.fx.read(|r| {
+                    r.usage()
+                        .usage_observation(&attempt.attempt_id, "reported-subscription")
+                })
+                .unwrap();
+            assert_eq!(persisted.payload["reported_cost"]["amount"], "0.012345");
+            f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+                devworks_core::services::usage::UsageService::new(
+                    f.fx.h.ids.clone(),
+                    f.fx.h.clock.clone(),
+                ),
+            ));
+            let report = result(f.fx.query_at(
+                &f.fx.user(),
+                "router.usage",
+                json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+                Some(3),
+            ));
+            let OperationResult::RouterUsage {
+                value:
+                    devworks_core::protocol::records::RouterUsageResult::Current(
+                        devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                    ),
+            } = report
+            else {
+                panic!("{report:?}")
+            };
+            assert_eq!(page.totals.reported_micro_usd.get(), 0);
+            assert_eq!(
+                page.totals.tracked_micro_usd.get(),
+                if priced { 100 } else { 0 }
+            );
+            assert_eq!(
+                page.items.0[0]
+                    .cost
+                    .amount_micro_usd
+                    .as_ref()
+                    .map(|v| v.get()),
+                priced.then_some(100)
+            );
+            assert_eq!(
+                page.items.0[0].cost.original_amount.as_ref().unwrap().0,
+                "0.012345"
+            );
+        }
+    }
+}
+
+#[test]
+fn confirmed_cancelled_activity_uses_last_source_outcome_without_masking_later_retries() {
+    fn activity(f: &NativeFx) -> Value {
+        let value=result(f.fx.query_at(&f.fx.user(),"router.usage",json!({"sessionId":"s1","reportKind":"AssistantActivity","startMs":(T0-1).to_string(),"endMs":(T0+1).to_string(),"page":{"limit":100}}),Some(3)));
+        serde_json::to_value(value).unwrap()
+    }
+    fn metric(value: &Value, key: &str) -> i64 {
+        let rows = value["value"]["report"]["items"].as_array().unwrap();
+        rows.iter()
+            .find(|r| r["kind"] == "Total" && r["key"] == key)
+            .unwrap()["value"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    for later in [None, Some(AttemptEnd::Failed), Some(AttemptEnd::Completed)] {
+        let mut f = NativeFx::new();
+        let first = f.admitted();
+        let (src, _) = source(vec![InferenceFrame::Terminal(AttemptEnd::Cancelled)], false);
+        f.host()
+            .drive(first.attempt_id, src, Cancellation::new())
+            .unwrap();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = activity(&f);
+        assert_eq!(metric(&report, "cancelledRuns"), 1);
+        assert_eq!(metric(&report, "failedRuns"), 0);
+        assert!(
+            report["value"]["report"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["dimension"] == "status" && r["label"] == "cancelled"),
+            "{report}"
+        );
+        let operation = first.operation_id;
+        // Seed a recorded retry intent; this report fixture does not add a new retry policy
+        // to terminal operations. Admission/dispatch of the subsequent source remains real.
+        f.fx.store
+            .with_writer_connection(move |conn| {
+                super::super::super::conn::db(conn.execute(
+                    "UPDATE operations SET state='RetryPending',revision=revision+1 WHERE id=?1",
+                    [operation.0.as_str()],
+                ))
+                .map(|_| ())
+            })
+            .unwrap();
+        f.request.admission_key = id("retry-admission");
+        let second = f.admitted();
+        assert_eq!(second.attempt_number, 2);
+        if let Some(end) = later {
+            let (src, _) = source(vec![InferenceFrame::Terminal(end)], false);
+            f.host()
+                .drive(second.attempt_id, src, Cancellation::new())
+                .unwrap();
+        } else {
+            let router = f.fx.router.clone();
+            let control = f.control.clone();
+            f.fx.write(move |tx| router.mark_attempt_dispatched(tx, &control, &second.attempt_id));
+        }
+        let report = activity(&f);
+        assert_eq!(metric(&report, "cancelledRuns"), 0);
+        assert_eq!(
+            metric(&report, "failedRuns"),
+            i64::from(later == Some(AttemptEnd::Failed))
+        );
+        assert_eq!(
+            metric(&report, "completedRuns"),
+            i64::from(later == Some(AttemptEnd::Completed))
+        );
+    }
+}
+
+#[test]
+fn non_million_override_reserves_feature_budget_and_settles_aggregate_tokens_exactly() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::usage::budget::{self, BudgetBlock};
+    let mut f = NativeFx::new();
+    f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+        devworks_core::services::prices::PriceService::new(
+            f.fx.h.ids.clone(),
+            f.fx.h.clock.clone(),
+            false,
+        ),
+    ));
+    let tariffs = [("Input", "0.002"), ("Output", "0.004"), ("CacheRead", "0.0005"), ("CacheWrite", "0.003")]
+        .map(|(kind, amount)| json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount}));
+    let decision = recorded(f.fx.command_keyed_at(&f.fx.user(), "router.price_override", "non-million-price", json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}), 3)).0;
+    assert!(
+        matches!(decision, DomainDecision::Applied { .. }),
+        "{decision:?}"
+    );
+    f.request.query.cache_write_ttl_ms = Some(300_000);
+    f.request.pricing.cache_read_possible = true;
+    f.request.pricing.cache_write_possible = true;
+    f.request.pricing.cache_write_ttl_ms = Some(300_000);
+    f.request.quote = f
+        .fx
+        .read(|r| devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query));
+    f.request.override_revision = 2;
+    assert_eq!(f.request.quote.tariffs.len(), 4);
+    assert!(
+        f.request.quote.rates.is_none(),
+        "the lossy per-million projection is unnecessary"
+    );
+    let feature = f.fx.write(|tx| {
+        let feature = StoredWork {
+            id: id("denominator-feature"),
+            project_id: project("project-a"),
+            kind: FEATURE.into(),
+            parent_feature_id: None,
+            status_id: None,
+            title: "Exact denominator feature".into(),
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            created_by: None,
+            updated_by: None,
+            search_key: "denominator feature".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({}),
+        };
+        tx.work().insert_work(&feature)?;
+        budget::configure(
+            tx,
+            &feature,
+            &actor("user-a"),
+            &devworks_core::protocol::records::FeatureBudgetInput::Limit {
+                micro_usd: Counter::new(499).unwrap(),
+            },
+        )?;
+        Ok(feature)
+    });
+    f.request.request_id = id("denominator-logical");
+    f.request.work_id = Some(feature.id.clone());
+    f.request.selection = AttemptSelection::Conversation {
+        intent: RouteIntent::Model {
+            model_id: id("accounted"),
+        },
+        effort: EffortName::Default,
+        required_capabilities: vec![],
+        pin: None,
+    };
+    let router = f.fx.router.clone();
+    let ctx = f.fx.user();
+    f.fx.write(move |tx| {
+        router.admit_owned_request(
+            tx,
+            &ctx,
+            &RequestAdmission {
+                request_id: id("denominator-logical"),
+                purpose: Purpose::Conversation,
+                session_id: Some(id("work-a")),
+                project_id: Some(project("project-a")),
+                root_id: Some(devworks_core::protocol::RootId(id("denominator-feature"))),
+                model_id: id("accounted"),
+                connection_id: id("api"),
+                pin_id: None,
+                args_digest: "d".repeat(64),
+            },
+            devworks_core::services::router::accounting::ReportCategory::Assistant,
+        )
+    });
+    while !f
+        .fx
+        .write(|tx| devworks_core::services::usage::ingest::bootstrap_page(tx, 64))
+        .complete
+    {}
+    assert!(
+        matches!(f.admit(), Admission::Blocked(BudgetBlock::ReservationWait)),
+        "the exact 500-micro reservation exceeds the 499-micro cap"
+    );
+    let configured = feature.clone();
+    f.fx.write(move |tx| {
+        budget::configure(
+            tx,
+            &configured,
+            &actor("user-a"),
+            &devworks_core::protocol::records::FeatureBudgetInput::Limit {
+                micro_usd: Counter::new(500).unwrap(),
+            },
+        )
+    });
+    let attempt = f.admitted();
+    let admitted =
+        f.fx.read(|r| r.usage().attempt_balance(&attempt.attempt_id))
+            .unwrap();
+    assert_eq!(admitted.reserved_micro_usd, Some(500));
+    let view = f.fx.read(|r| budget::view(r, &feature.id));
+    assert_eq!(view.reserved_micro_usd.get(), 500);
+    let mut frame = observation("non-million-aggregate", 1, Some(100), None);
+    frame.quantities.output_tokens = Some(10);
+    frame.quantities.cached_read_tokens = Some(40);
+    frame.quantities.cache_write_tokens = Some(20);
+    let (src, _) = source(
+        vec![
+            InferenceFrame::Usage(frame),
+            InferenceFrame::Terminal(AttemptEnd::Completed),
+        ],
+        false,
+    );
+    let DriveOutcome::Settled(balance) = f
+        .host()
+        .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+        .unwrap()
+    else {
+        panic!("unsettled")
+    };
+    assert_eq!(balance.priced_micro_usd, Some(200));
+    assert!(balance.monetary_complete);
+    assert_eq!(balance.reserved_micro_usd, None);
+    let view = f.fx.read(|r| budget::view(r, &feature.id));
+    assert_eq!(view.spent_micro_usd.get(), 200);
+    assert_eq!(view.reserved_micro_usd.get(), 0);
+    f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+        devworks_core::services::usage::UsageService::new(f.fx.h.ids.clone(), f.fx.h.clock.clone()),
+    ));
+    let report = result(f.fx.query_at(
+        &f.fx.user(),
+        "router.usage",
+        json!({"sessionId":"work-a","page":{"limit":10},"endMs":(T0+1).to_string()}),
+        Some(3),
+    ));
+    let OperationResult::RouterUsage {
+        value:
+            devworks_core::protocol::records::RouterUsageResult::Current(
+                devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+            ),
+    } = report
+    else {
+        panic!("{report:?}")
+    };
+    assert_eq!(page.totals.tracked_micro_usd.get(), 200);
+    assert_eq!(
+        page.items.0[0].cache_read_micro_usd.as_ref().unwrap().get(),
+        20
+    );
+    assert_eq!(
+        page.items.0[0]
+            .cache_write_micro_usd
+            .as_ref()
+            .unwrap()
+            .get(),
+        60
+    );
+    assert!(page.items.0[0].cost.monetary_complete);
+}
+
+#[test]
+fn actual_non_million_quotes_preserve_large_units_zero_and_overlapping_rate_unknowns() {
+    use devworks_core::ports::usage::PriceResolver;
+    // Independent exact Fraction references: 150 * (999999999999 * 1e6 / i64::MAX)
+    // reserves 17 micros; 110 tokens settle to 12. No per-million decimal can replace it.
+    for (units, amount, overlap, reserved, incurred, complete) in [
+        (i64::MAX, "999999999999", false, 17, 12, true),
+        (1000, "0", false, 0, 0, true),
+        (1000, "0.002", true, 100, 20, false),
+    ] {
+        let mut f = NativeFx::new();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+            devworks_core::services::prices::PriceService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+                false,
+            ),
+        ));
+        let mut tariffs = ["Input", "Output"].map(|kind|json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":units.to_string(),"amountUsd":amount})).to_vec();
+        if overlap {
+            // A valid Any row overlaps Text. The resolver's million-only projection contains
+            // zero, but it cannot hide the conflicting canonical exact-denominator input row.
+            tariffs.push(json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Any","chargeKind":"Input","unit":"Token","units":"1000000","amountUsd":"0"}));
+        }
+        let decision=recorded(f.fx.command_keyed_at(&f.fx.user(),"router.price_override","exact-units-price",json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}),3)).0;
+        assert!(
+            matches!(decision, DomainDecision::Applied { .. }),
+            "{decision:?}"
+        );
+        f.request.quote = f.fx.read(|r| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+        });
+        f.request.override_revision = 2;
+        assert_eq!(
+            f.request.quote.classification,
+            CostClassification::ConfiguredEstimate
+        );
+        assert_eq!(f.request.quote.tariffs[0].units, units);
+        let attempt = f.admitted();
+        let before =
+            f.fx.read(|r| r.usage().attempt_balance(&attempt.attempt_id))
+                .unwrap();
+        assert_eq!(
+            before.reserved_micro_usd,
+            Some(reserved),
+            "units={units},overlap={overlap}"
+        );
+        let mut frame = observation("exact-units-observation", 1, Some(100), None);
+        frame.quantities.output_tokens = Some(10);
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let DriveOutcome::Settled(balance) = f
+            .host()
+            .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+            .unwrap()
+        else {
+            panic!("unsettled")
+        };
+        assert_eq!(
+            balance.priced_micro_usd,
+            Some(incurred),
+            "units={units},overlap={overlap}"
+        );
+        assert_eq!(balance.monetary_complete, complete);
+        assert_eq!(balance.reserved_micro_usd, None);
+        let retained =
+            f.fx.read(|r| r.usage().inference_attempt(&attempt.attempt_id))
+                .unwrap();
+        assert_eq!(
+            accounting::snapshot(&retained).unwrap().quote,
+            f.request.quote
+        );
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"s1","page":{"limit":10},"endMs":(T0+1).to_string()}),
+            Some(3),
+        ));
+        let OperationResult::RouterUsage {
+            value:
+                devworks_core::protocol::records::RouterUsageResult::Current(
+                    devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                ),
+        } = report
+        else {
+            panic!("{report:?}")
+        };
+        assert_eq!(page.totals.tracked_micro_usd.get(), incurred);
+        assert_eq!(page.items.0[0].cost.monetary_complete, complete);
+        assert_eq!(
+            page.items.0[0]
+                .cost
+                .amount_micro_usd
+                .as_ref()
+                .unwrap()
+                .get(),
+            incurred
+        );
+        assert_eq!(page.items.0[0].cost.untracked_reason.is_some(), !complete);
+    }
+}
+
+#[test]
+fn actual_feature_reservation_uses_only_host_possible_cache_reads_and_keeps_missing_rates_partial()
+{
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::usage::budget::{self, BudgetBlock};
+    for (read_possible, read_priced, reserved, incurred, complete) in [
+        (true, true, 300, 300, true),
+        (false, true, 200, 200, true),
+        (true, false, 200, 0, false),
+    ] {
+        let mut f = NativeFx::new();
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_prices(Arc::new(
+            devworks_core::services::prices::PriceService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+                false,
+            ),
+        ));
+        let mut tariffs=[("Input","0.002"),("Output","0"),("CacheWrite","0.0015")].map(|(kind,amount)|json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":kind,"unit":"Token","units":"1000","amountUsd":amount})).to_vec();
+        if read_priced {
+            tariffs.push(json!({"upstreamModelId":"upstream/accounted","serviceTier":"Standard","modality":"Text","chargeKind":"CacheRead","unit":"Token","units":"1000","amountUsd":"0.003"}));
+        }
+        let decision=recorded(f.fx.command_keyed_at(&f.fx.user(),"router.price_override","read-reservation-price",json!({"modelId":"accounted","expectedRevision":"1","change":{"kind":"Set","tariffs":tariffs}}),3)).0;
+        assert!(
+            matches!(decision, DomainDecision::Applied { .. }),
+            "{decision:?}"
+        );
+        f.request.pricing.cache_read_possible = read_possible;
+        f.request.pricing.cache_write_possible = true;
+        f.request.pricing.cache_write_ttl_ms = Some(300_000);
+        f.request.query.cache_write_ttl_ms = Some(300_000);
+        f.request.output_headroom = 0;
+        f.request.quote = f.fx.read(|r| {
+            devworks_core::services::prices::CatalogPriceResolver.quote(r, &f.request.query)
+        });
+        f.request.override_revision = 2;
+        let feature = f.fx.write(|tx| {
+            let feature = StoredWork {
+                id: id("read-budget-feature"),
+                project_id: project("project-a"),
+                kind: FEATURE.into(),
+                parent_feature_id: None,
+                status_id: None,
+                title: "Cache read budget".into(),
+                priority: 0,
+                manual_order: 0,
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                created_by: None,
+                updated_by: None,
+                search_key: "cache read budget".into(),
+                caller_ref: None,
+                completion: None,
+                brief: json!({}),
+            };
+            tx.work().insert_work(&feature)?;
+            budget::configure(
+                tx,
+                &feature,
+                &actor("user-a"),
+                &devworks_core::protocol::records::FeatureBudgetInput::Limit {
+                    micro_usd: Counter::new(250).unwrap(),
+                },
+            )?;
+            Ok(feature)
+        });
+        f.request.work_id = Some(feature.id.clone());
+        f.request.request_id = id("read-budget-logical");
+        f.request.selection = AttemptSelection::Conversation {
+            intent: RouteIntent::Model {
+                model_id: id("accounted"),
+            },
+            effort: EffortName::Default,
+            required_capabilities: vec![],
+            pin: None,
+        };
+        let router = f.fx.router.clone();
+        let ctx = f.fx.user();
+        f.fx.write(move |tx| {
+            router.admit_owned_request(
+                tx,
+                &ctx,
+                &RequestAdmission {
+                    request_id: id("read-budget-logical"),
+                    purpose: Purpose::Conversation,
+                    session_id: Some(id("work-a")),
+                    project_id: Some(project("project-a")),
+                    root_id: Some(devworks_core::protocol::RootId(id("read-budget-feature"))),
+                    model_id: id("accounted"),
+                    connection_id: id("api"),
+                    pin_id: None,
+                    args_digest: "e".repeat(64),
+                },
+                devworks_core::services::router::accounting::ReportCategory::Assistant,
+            )
+        });
+        while !f
+            .fx
+            .write(|tx| devworks_core::services::usage::ingest::bootstrap_page(tx, 64))
+            .complete
+        {}
+        if reserved > 250 {
+            assert!(
+                matches!(f.admit(), Admission::Blocked(BudgetBlock::ReservationWait)),
+                "the actual possible cache-read charge must fence a 250-micro cap"
+            );
+            let edited = feature.clone();
+            f.fx.write(move |tx| {
+                budget::configure(
+                    tx,
+                    &edited,
+                    &actor("user-a"),
+                    &devworks_core::protocol::records::FeatureBudgetInput::Limit {
+                        micro_usd: Counter::new(301).unwrap(),
+                    },
+                )
+            });
+        }
+        let attempt = f.admitted();
+        let admitted =
+            f.fx.read(|r| r.usage().attempt_balance(&attempt.attempt_id))
+                .unwrap();
+        assert_eq!(admitted.reserved_micro_usd, Some(reserved));
+        assert_eq!(
+            accounting::summary(&admitted)
+                .unwrap()
+                .unknown_components
+                .contains(&"cache read reservation".into()),
+            read_possible && !read_priced
+        );
+        let mut frame = observation("read-priced-observation", 1, Some(100), None);
+        frame.quantities.cached_read_tokens = Some(if read_possible { 100 } else { 0 });
+        frame.quantities.cache_write_tokens = Some(0);
+        let (src, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let DriveOutcome::Settled(balance) = f
+            .host()
+            .drive(attempt.attempt_id.clone(), src, Cancellation::new())
+            .unwrap()
+        else {
+            panic!("unsettled")
+        };
+        assert_eq!(balance.priced_micro_usd, Some(incurred));
+        assert_eq!(balance.monetary_complete, complete);
+        assert_eq!(balance.reserved_micro_usd, None);
+        let budget = f.fx.read(|r| budget::view(r, &feature.id));
+        assert_eq!(budget.spent_micro_usd.get(), incurred);
+        assert_eq!(budget.reserved_micro_usd.get(), 0);
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+        let report = result(f.fx.query_at(
+            &f.fx.user(),
+            "router.usage",
+            json!({"sessionId":"work-a","page":{"limit":10},"endMs":(T0+1).to_string()}),
+            Some(3),
+        ));
+        let OperationResult::RouterUsage {
+            value:
+                devworks_core::protocol::records::RouterUsageResult::Current(
+                    devworks_core::protocol::records::UsageQueryResult::Attempts { page },
+                ),
+        } = report
+        else {
+            panic!("{report:?}")
+        };
+        assert_eq!(page.totals.tracked_micro_usd.get(), incurred);
+        assert_eq!(page.items.0[0].cost.monetary_complete, complete);
+        assert_eq!(page.items.0[0].cost.untracked_reason.is_some(), !complete);
     }
 }

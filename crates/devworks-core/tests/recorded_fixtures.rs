@@ -345,7 +345,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 1587), 1587);
+    assert_eq!(run("domain-fixtures.json", 1592), 1592);
 }
 
 #[test]
