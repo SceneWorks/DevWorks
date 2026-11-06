@@ -11559,7 +11559,7 @@ pub struct UsageCostSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub currency: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_amount: Option<Money>,
+    pub original_amount: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classification: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
