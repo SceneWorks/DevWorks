@@ -231,6 +231,81 @@ fn scoped_a(f: &Fx) -> GraphScope {
 }
 
 #[test]
+fn literal_name_filters_preserve_unicode_qualified_names_wildcards_and_masking() {
+    let h = Harness::new();
+    let s = h.store();
+    let selected = write(&s, |tx| {
+        repository(tx, "names")?;
+        generation(tx, "names-base", "names", LAYER_BASELINE)?;
+        for (key, name, qualified) in [
+            ("a.rs", "Kelvin_K", json!("Exact::Qualified")),
+            ("b.rs", "literal_%", json!(null)),
+            ("c.rs", "other", json!(42)),
+        ] {
+            let mut row = node(key, name, "Function");
+            row.payload["qualifiedName"] = qualified;
+            tx.indexing()
+                .put_unit(&unit("names-base", key), &[row], &[])?;
+        }
+        seal(tx, "names-base")?;
+        Ok(GraphScope {
+            views: vec![view(tx, "names-view", "names", "names-base", None)?],
+        })
+    });
+    for (query, contains, expected) in [
+        ("KELVIN_k", false, Some("a.rs")),
+        ("VIN_k", true, Some("a.rs")),
+        ("VIN_k", false, None),
+        ("Exact::Qualified", false, Some("a.rs")),
+        ("exact::qualified", false, None),
+        ("literal_%", false, Some("b.rs")),
+        ("%", true, Some("b.rs")),
+        ("OTHER", false, Some("c.rs")),
+        ("absent", true, None),
+    ] {
+        let page = read(&s, |r| {
+            r.graph().graph_nodes(
+                &selected,
+                &GraphNodeFilter {
+                    name: Some(GraphNameFilter {
+                        name: query.into(),
+                        contains,
+                    }),
+                    ..Default::default()
+                },
+                None,
+                1,
+            )
+        });
+        assert_eq!(
+            page.items.first().map(|n| n.node.unit_key.as_str()),
+            expected,
+            "{query}/{contains}"
+        );
+        assert!(!page.has_more);
+    }
+    let f = Fx::new();
+    let hidden = read(&f.s, |r| {
+        r.graph().graph_nodes(
+            &scoped_a(&f),
+            &GraphNodeFilter {
+                name: Some(GraphNameFilter {
+                    name: "old".into(),
+                    contains: false,
+                }),
+                ..Default::default()
+            },
+            None,
+            1,
+        )
+    });
+    assert!(
+        hidden.items.is_empty(),
+        "masking precedes the target predicate"
+    );
+}
+
+#[test]
 fn graph31_masking_scope_composite_identity_and_pages_precede_caps() {
     let f = Fx::new();
     let a = scoped_a(&f);

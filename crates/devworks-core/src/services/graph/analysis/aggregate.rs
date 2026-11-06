@@ -23,6 +23,7 @@ impl Aggregate {
             reader.read,
             &scope,
             &reader.selected.layers,
+            &[],
             &mut reader.budget,
             |edge, budget| {
                 let Ok(edge) = edge else {

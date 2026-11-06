@@ -92,7 +92,11 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
         let mut source = String::new();
         for item in 0..100 {
             let i = unit * 100 + item;
-            source.push_str(&format!("pub fn matched_{i:05}() {{}}\n"));
+            if i == 0 {
+                source.push_str("pub fn matched_K() { matched_00001(); }\n");
+            } else {
+                source.push_str(&format!("pub fn matched_{i:05}() {{}}\n"));
+            }
         }
         std::fs::write(repo.join(format!("src/unit_{unit:03}.rs")), source).unwrap();
     }
@@ -110,6 +114,10 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
     assert!(
         counts.nodes > 20000,
         "fixture actually exceeds the desktop work budget: {counts:?}"
+    );
+    assert!(
+        counts.edges > 20000,
+        "real containment edges also exceed the budget: {counts:?}"
     );
     let kind = read(&*store, |r| {
         r.graph().graph_nodes(
@@ -197,6 +205,30 @@ fn native_search_keeps_matches_and_continuation_when_the_desktop_visit_budget_is
             second_names.iter().all(|n| !names.contains(n)),
             "stable pages do not repeat matches"
         );
+    }
+    // Literal-name resolution must leave the fixed native visit budget available for
+    // relationships, including Rust's Unicode lowercase match (Kelvin sign → k).
+    for target in [
+        json!({"kind":"Name","name":"MATCHED_k","repositoryId":repositories[0]}),
+        json!({"kind":"Name","name":"HED_k"}),
+    ] {
+        let answer = graph(
+            &app,
+            &ctx,
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":target,"direction":"Outbound","depth":1}}),
+            None,
+            None,
+        );
+        let GraphResult::CallTrace { value } = &answer.result else {
+            panic!("native name trace: {answer:?}")
+        };
+        assert_eq!(
+            value.entries.0.len(),
+            1,
+            "named target retains its actual call: {answer:?}"
+        );
+        assert!(!gaps(&answer).to_string().contains("graph_visited_limit"));
     }
     executor.block_on(app.shutdown());
     let _ = std::fs::remove_dir_all(src);

@@ -20,7 +20,7 @@ ed25519-dalek = "=2.2.0"
 # file schema resolution).
 package_ureq = { package = "ureq", version = "=2.12.1", default-features = false, features = ["tls"] }
 jsonschema = { version = "=0.28.3", default-features = false }
-rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache", "hooks"] }
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache", "hooks", "functions"] }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
