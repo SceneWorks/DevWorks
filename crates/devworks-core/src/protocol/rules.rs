@@ -64,25 +64,25 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             "aggregate page requires a report selection",
         )?;
     }
-    if name == "UsageAttemptRecord" {
-        if let Some(quantities) = v["unitQuantities"].as_array() {
-            require(
-                quantities.len() <= 128,
-                "measured usage quantities exceed host bound",
-            )?;
-            let mut dimensions = std::collections::HashSet::new();
-            require(
-                quantities.iter().all(|q| {
-                    dimensions.insert((
-                        q["modality"].as_str(),
-                        q["chargeKind"].as_str(),
-                        q["unit"].as_str(),
-                        q["cacheWriteTtlMs"].as_str(),
-                    ))
-                }),
-                "duplicate measured usage dimension/TTL",
-            )?;
-        }
+    if name == "UsageAttemptRecord"
+        && let Some(quantities) = v["unitQuantities"].as_array()
+    {
+        require(
+            quantities.len() <= 128,
+            "measured usage quantities exceed host bound",
+        )?;
+        let mut dimensions = std::collections::HashSet::new();
+        require(
+            quantities.iter().all(|q| {
+                dimensions.insert((
+                    q["modality"].as_str(),
+                    q["chargeKind"].as_str(),
+                    q["unit"].as_str(),
+                    q["cacheWriteTtlMs"].as_str(),
+                ))
+            }),
+            "duplicate measured usage dimension/TTL",
+        )?;
     }
     if name == "UsageReportRange" {
         let start = v["startMs"].as_str().and_then(|n| n.parse::<u128>().ok());
