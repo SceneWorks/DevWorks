@@ -834,3 +834,102 @@ fn late_cancellation_preserves_accounted_native_result_without_qualifying() {
         );
     }
 }
+
+fn probe_intent(
+    tx: &mut dyn WriteTransaction,
+    name: &str,
+) -> Result<StoredEmbeddingProbe, StorageError> {
+    let op = intent(tx, name)?;
+    let event_id = EventId(id(&format!("event-{name}")));
+    let delivery_id = id(&format!("delivery-{name}"));
+    let actor = tx.store().host_actor.clone();
+    tx.history().append(NewEvent {
+        id: event_id.clone(),
+        actor: actor.clone(),
+        project_id: None,
+        root_id: None,
+        operation_id: Some(op.id.clone()),
+        aggregate_kind: "embedding_space".into(),
+        aggregate_id: "candidate".into(),
+        aggregate_revision: 1,
+        kind: "EmbeddingQualificationRequested".into(),
+        payload: json!({}),
+    })?;
+    tx.queue().enqueue(NewQueueEntry {
+        id: delivery_id.clone(),
+        consumer: "embedding-qualification".into(),
+        event_id,
+        root_id: None,
+        operation_id: Some(op.id.clone()),
+        partition: None,
+        priority: 0,
+        ready_at_ms: T0,
+        payload: json!({}),
+    })?;
+    Ok(StoredEmbeddingProbe {
+        operation_id: op.id,
+        delivery_id,
+        request_id: id(&format!("request-{name}")),
+        admission_key: id(&format!("admission-{name}")),
+        candidate_revision: 1,
+        store_id: tx.store().store_id.clone(),
+        restore_epoch: tx.store().restore_epoch,
+        actor_id: actor,
+        scope: DataScope::Workspace,
+        connection_revision: 1,
+        source_context: json!({"version":1,"recordedFixture":true}),
+        authority_fences: vec![],
+    })
+}
+#[test]
+fn durable_probe_identity_cannot_be_reassigned_to_another_candidate_or_operation() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let second = candidate(&s, "second-candidate");
+    let original = run_write(&s, WriteOptions::default(), move |tx| {
+        tx.router().insert_embedding_candidate(&second, 1)?;
+        let p = probe_intent(tx, "first-intent")?;
+        tx.router()
+            .start_embedding_qualification(&id("candidate"), 1, &p)?;
+        Ok(p)
+    })
+    .unwrap();
+    for kind in 0..3 {
+        let old = original.clone();
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| {
+                let p = if kind == 0 {
+                    old
+                } else {
+                    let mut p = probe_intent(tx, &format!("other-intent-{kind}"))?;
+                    if kind == 1 {
+                        p.request_id = old.request_id;
+                    } else {
+                        p.admission_key = old.admission_key;
+                    }
+                    p
+                };
+                tx.router()
+                    .start_embedding_qualification(&id("second-candidate"), 1, &p)
+            })
+            .is_err()
+        );
+    }
+    let untouched = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.router().embedding_qualification(&id("second-candidate"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(untouched.revision, 1);
+    assert_eq!(untouched.state, EmbeddingQualificationState::Unqualified);
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT count(*) FROM operations WHERE id LIKE 'other-intent-%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}

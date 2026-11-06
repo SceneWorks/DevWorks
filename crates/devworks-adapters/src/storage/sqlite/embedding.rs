@@ -236,6 +236,14 @@ impl EmbeddingRepository for Unit<'_> {
         {
             return Err(StorageError::ScopeDenied);
         }
+        let reused:bool=db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id=?1 AND candidate_id<>?2) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.requestId')=?3 AND operation_id<>?1) OR EXISTS(SELECT 1 FROM router_embedding_qualifications WHERE operation_id IS NOT NULL AND json_extract(body_json,'$.probe.admissionKey')=?4 AND operation_id<>?1)",
+            params![p.operation_id.0.as_str(),id.as_str(),p.request_id.as_str(),p.admission_key.as_str()],|r|r.get(0)))?;
+        if reused {
+            return Err(invalid(
+                "embedding probe identity already belongs to another intent",
+            ));
+        }
         if let Some(previous) = &q.probe {
             let previous = self
                 .operation(&previous.operation_id)?

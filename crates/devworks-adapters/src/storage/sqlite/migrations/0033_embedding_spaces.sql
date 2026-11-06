@@ -26,3 +26,9 @@ CREATE TABLE router_embedding_selection (
     CHECK((candidate_id IS NULL)=(space_id IS NULL))
 ) STRICT;
 INSERT INTO router_embedding_selection(revision,candidate_id,space_id) VALUES(1,NULL,NULL);
+-- Native request/admission identities belong to one durable qualification intent. Historical
+-- revisions repeat the same probe, so these are lookup indexes rather than per-row uniqueness.
+CREATE INDEX router_embedding_probe_request ON router_embedding_qualifications(
+    json_extract(body_json,'$.probe.requestId'),operation_id) WHERE operation_id IS NOT NULL;
+CREATE INDEX router_embedding_probe_admission ON router_embedding_qualifications(
+    json_extract(body_json,'$.probe.admissionKey'),operation_id) WHERE operation_id IS NOT NULL;
