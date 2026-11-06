@@ -281,6 +281,10 @@ impl Decoder {
         self.chat_native_slot();
         self.explicit_reasoning |= !details.is_empty();
         if aggregate {
+            self.chat_details.clear();
+            for (position, entry) in details.iter().enumerate() {
+                self.chat_details.insert(position, entry);
+            }
             self.chat_reasoning["reasoning_details"] = Value::Array(details.clone());
             return;
         }
@@ -299,25 +303,14 @@ impl Decoder {
             let collected = self.chat_reasoning["reasoning_details"]
                 .as_array_mut()
                 .unwrap();
-            let existing = collected.iter_mut().find(|entry| {
-                let identity = fragment
-                    .get("index")
-                    .filter(|v| !v.is_null())
-                    .map(|v| entry.get("index") == Some(v))
-                    .unwrap_or_else(|| {
-                        fragment
-                            .get("id")
-                            .filter(|v| !v.is_null())
-                            .is_some_and(|v| entry.get("id") == Some(v))
-                    });
-                identity
-                    && ["type", "id"].iter().all(|k| {
-                        fragment.get(k).filter(|v| !v.is_null()).is_none_or(|v| {
-                            entry.get(k).filter(|e| !e.is_null()).is_none_or(|e| e == v)
-                        })
-                    })
-            });
-            if let Some(entry) = existing {
+            let (position, _probes) = self.chat_details.find(fragment);
+            #[cfg(test)]
+            {
+                self.chat_detail_probes += _probes;
+            }
+            if let Some(position) = position {
+                let entry = &mut collected[position];
+                self.chat_details.remove(position, entry);
                 for (name, value) in fields {
                     if matches!(name.as_str(), "text" | "summary" | "data" | "signature")
                         && let (Some(Value::String(old)), Some(part)) =
@@ -330,7 +323,9 @@ impl Decoder {
                         entry[name] = value.clone();
                     }
                 }
+                self.chat_details.insert(position, entry);
             } else {
+                self.chat_details.insert(collected.len(), fragment);
                 collected.push(fragment.clone());
             }
         }

@@ -71,3 +71,18 @@ All 56 native core provider/codec cases pass (0.73 s), including every retained 
 explicit reasoning precedence and exact continuation behavior. Core all-target strict checks
 pass (18.57 s). These checks decode recorded JSON; no account, OS credential store or learned
 inference is used. Exact-head hosted CI and fresh review remain required.
+
+### Indexed native reasoning-detail identities (review 4497287470)
+
+Streamed reasoning details now use a native identity/compatibility index. Each fragment probes
+at most four type/ID keys and selects the earliest compatible original position. Updating a
+missing type or ID removes the old wildcard entries before indexing the completed identity;
+index precedence over ID and JSON-value equality remain intact. Distinct conflicting details
+are retained in original order, without rescanning the prior population.
+
+The counted old-source regression fails after10 fragments (45 comparisons versus a40-probe
+bound). The fixed case qualifies50,000 distinct details on both Chat profiles. A bounded
+1,000-fragment differential oracle checks the retained source merge semantics for missing,
+null, conflicting and completed type/ID fields, ID fallback, index precedence and composite
+JSON identities. All58 core provider cases pass (1.65s); core all-target strict checks pass
+(20.06s). No smaller input limits, larger timeouts, OS credentials or learned inference.
