@@ -110,6 +110,12 @@ fn digest(s: &str) -> Result<(), StorageError> {
         Err(invalid("usage digest must be lowercase SHA256"))
     }
 }
+/// Provider identities share the retained protocol Text contract, including Unicode/newlines.
+fn provider_model_text(value: &str) -> Result<(), StorageError> {
+    serde_json::from_value::<devworks_core::protocol::support::Text>(Value::String(value.into()))
+        .map(|_| ())
+        .map_err(|_| invalid("provider model identity is outside the Text contract"))
+}
 fn positive(n: i64) -> Result<(), StorageError> {
     if n > 0 {
         Ok(())
@@ -1013,7 +1019,7 @@ fn tariffs(r: &[devworks_core::ports::usage::PublishedTariff]) -> Result<(), Sto
         return Err(invalid("tariff catalog exceeds bound"));
     }
     for t in r {
-        bounded(&t.upstream_model_id, 256)?;
+        provider_model_text(&t.upstream_model_id)?;
         bounded(&t.service_tier, 128)?;
         bounded(&t.modality, 64)?;
         bounded(&t.charge_kind, 64)?;
@@ -1039,6 +1045,20 @@ impl UsageRepository for Unit<'_> {
             bounded(s, 256)?;
         }
         object(&r.pricing_snapshot)?;
+        if let Some(value) = &r.provider_model_id {
+            provider_model_text(value)?;
+        }
+        if let Some(value) = r
+            .pricing_snapshot
+            .get("quoted_provider_model_id")
+            .filter(|v| !v.is_null())
+        {
+            provider_model_text(
+                value
+                    .as_str()
+                    .ok_or_else(|| invalid("quoted provider model identity must be Text"))?,
+            )?;
+        }
         validate_binding(self, r)?;
         validate_quote(self, r)?;
         write_attempt(self.conn, r, false)
@@ -1065,7 +1085,7 @@ impl UsageRepository for Unit<'_> {
             return Err(invalid("attempt admission binding is immutable"));
         }
         if let Some(v) = &r.provider_model_id {
-            bounded(v, 256)?;
+            provider_model_text(v)?;
         }
         if r.state != old.state
             && !matches!(

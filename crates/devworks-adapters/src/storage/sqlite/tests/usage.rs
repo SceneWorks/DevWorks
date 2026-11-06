@@ -1472,3 +1472,136 @@ fn usage28_override_history_retains_set_a_set_b_clear_and_pages_across_models_af
     .unwrap();
     assert!(s.integrity_check().unwrap().problems.is_empty());
 }
+#[test]
+fn usage28_provider_model_identity_uses_retained_text_contract_without_byte_or_newline_narrowing() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let ascii = "x".repeat(513);
+    let unicode = format!("{}\n", "界".repeat(4095));
+    assert_eq!(unicode.chars().count(), 4096);
+    assert!(unicode.len() > 4096);
+    let mut a = attempt(&s, "served-identity");
+    a.provider_model_id = Some(ascii.clone());
+    a.pricing_snapshot["quoted_provider_model_id"] = json!(ascii.clone());
+    let quoted = a.pricing_snapshot.clone();
+    let mut original = a.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)
+    })
+    .unwrap();
+    original.revision = 2;
+    original.state = "Dispatched".into();
+    original.provider_model_id = Some(unicode.clone());
+    let observed = original.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().update_inference_attempt(&observed, 1)
+    })
+    .unwrap();
+    let mut ascii_only = attempt(&s, "ascii-identity");
+    ascii_only.provider_model_id = Some(ascii.clone());
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&ascii_only)
+    })
+    .unwrap();
+    let invalid_admission = attempt(&s, "invalid-identity");
+    for invalid in ["x".repeat(4097), "model\0identity".into(), String::new()] {
+        let mut update = original.clone();
+        update.revision = 3;
+        update.provider_model_id = Some(invalid.clone());
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .usage()
+                .update_inference_attempt(&update, 2))
+            .is_err()
+        );
+        let mut insert = invalid_admission.clone();
+        insert.provider_model_id = Some(invalid.clone());
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .usage()
+                .insert_inference_attempt(&insert))
+            .is_err()
+        );
+        let mut insert = invalid_admission.clone();
+        insert.pricing_snapshot["quoted_provider_model_id"] = json!(invalid);
+        assert!(
+            run_write(&s, WriteOptions::default(), move |tx| tx
+                .usage()
+                .insert_inference_attempt(&insert))
+            .is_err()
+        );
+    }
+    let mut a = attempt(&s, "quoted-unicode");
+    a.provider_model_id = Some(unicode.clone());
+    a.pricing_snapshot["quoted_provider_model_id"] = json!(unicode.clone());
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.usage().insert_inference_attempt(&a)
+    })
+    .unwrap();
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let a = r
+            .usage()
+            .inference_attempt(&id("served-identity"))?
+            .unwrap();
+        assert_eq!(a.provider_model_id, Some(unicode.clone()));
+        assert_eq!(a.revision, 2);
+        assert_eq!(a.pricing_snapshot, quoted);
+        assert_eq!(a.pricing_snapshot["quoted_provider_model_id"], json!(ascii));
+        assert_eq!(
+            r.usage()
+                .inference_attempt(&id("ascii-identity"))?
+                .unwrap()
+                .provider_model_id,
+            Some(ascii.clone())
+        );
+        let a = r.usage().inference_attempt(&id("quoted-unicode"))?.unwrap();
+        assert_eq!(
+            a.pricing_snapshot["quoted_provider_model_id"],
+            json!(unicode)
+        );
+        assert!(
+            r.usage()
+                .inference_attempt(&id("invalid-identity"))?
+                .is_none()
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn usage28_quoted_tariff_upstream_identity_preserves_full_text_contract() {
+    let h = Harness::new();
+    let s = seeded(&h);
+    let unicode = format!("{}\n", "界".repeat(4095));
+    let expected = unicode.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        let mut row = StoredPriceOverride {
+            model_id: id("sol"),
+            revision: 2,
+            mode: "Set".into(),
+            tariffs: vec![tariff()],
+            updated_by: tx.store().host_actor.clone(),
+            updated_at_ms: T0,
+        };
+        row.tariffs[0].upstream_model_id = unicode;
+        tx.usage().put_price_override(&row, 1)?;
+        for invalid in ["x".repeat(4097), "upstream\0identity".into()] {
+            row.revision = 3;
+            row.tariffs[0].upstream_model_id = invalid;
+            assert!(tx.usage().put_price_override(&row, 2).is_err());
+        }
+        Ok(())
+    })
+    .unwrap();
+    drop(s);
+    let s = h.store();
+    read_snapshot(&s, &ReadOptions::default(), |r| {
+        let row = r.usage().price_override(&id("sol"))?.unwrap();
+        assert_eq!(row.revision, 2);
+        assert_eq!(row.tariffs[0].upstream_model_id, expected);
+        Ok(())
+    })
+    .unwrap();
+}
