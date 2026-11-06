@@ -179,7 +179,13 @@ fn authority_witness(
     principal: Option<&PrincipalBinding>,
     policy: &str,
 ) -> Value {
-    json!({"sourceContext":crate::services::approvals::save_source_context(ctx),"policy":policy,"principal":principal.map(|p|json!({"actor":p.actor,"kind":format!("{:?}",p.kind),"active":p.active,"revision":p.revision.to_string(),"projectId":p.project_id,"role":p.role.map(|r|r.as_str()),"tools":p.tool_families}))})
+    let mut source_context = crate::services::approvals::save_source_context(ctx);
+    // An invocation identifies this ingress, not a change to the caller's authority.
+    // Keep the same stable context used by the paid preparation/custody owner.
+    if let Some(invocation) = source_context["invocationContext"].as_object_mut() {
+        invocation.remove("invocation");
+    }
+    json!({"sourceContext":source_context,"policy":policy,"principal":principal.map(|p|json!({"actor":p.actor,"kind":format!("{:?}",p.kind),"active":p.active,"revision":p.revision.to_string(),"projectId":p.project_id,"role":p.role.map(|r|r.as_str()),"tools":p.tool_families}))})
 }
 fn resolved(
     selection: Selection,

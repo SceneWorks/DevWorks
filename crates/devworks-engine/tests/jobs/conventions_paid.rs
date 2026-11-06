@@ -461,3 +461,6 @@ fn paid_native_index_waits_for_actual_accepted_job_link_and_accounts_seven_token
 
 #[path = "conventions_paid_cancel.rs"]
 mod cancellation;
+
+#[path = "conventions_query_recovery.rs"]
+mod query_recovery;

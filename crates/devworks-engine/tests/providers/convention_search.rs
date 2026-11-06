@@ -260,10 +260,18 @@ fn native_qualified_index_and_hybrid_pages_reuse_exact_query_without_second_send
     assert!(page["retrieval"]["gaps"].as_array().unwrap().is_empty());
     let cursor = page["nextCursor"].as_str().unwrap();
     assert_eq!(sent(&f), 4);
+    let next_invocation = devworks_core::context::HostIngress::new(f.store.as_ref()).context(
+        ctx.principal().clone(),
+        ctx.principal_kind(),
+        id("next-native-invocation"),
+        ctx.ingress_namespace().clone(),
+        Counter::new(f.store.info().restore_epoch).unwrap(),
+        ctx.policy_revision().clone(),
+    );
     let second = search(
         &f,
         index,
-        &ctx,
+        &next_invocation,
         "actual-search-page-two",
         "alpha",
         Some(cursor),
