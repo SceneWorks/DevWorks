@@ -239,3 +239,13 @@ coordination, sealed Human-only review/confirmation, integrated native acceptanc
 independent review, platform CI, merge and CodeGraph acceptance. Candidate SQL
 selectors are not deletion authorization. File-port support alone does not prove
 project quiescence, reference/pin eligibility or full purge completion.
+
+Native session ownership now includes conversations belonging to explicitly
+project-scoped sessions even when the session has no work root. A surviving
+workspace artifact's real transcript link retains only a minimal closed session
+and conversation header; it does not retain private session text or transcripts.
+A project-root session without explicit project scope remains an unresolved
+legacy mapping. The missing-conversation regression failed before correction
+(1.11 seconds); all 15 planning cases pass (21.61 seconds), and strict
+workspace/all-target checks pass (16.90 seconds). This remains read-only
+classification; the destructive executor and client coordination are pending.

@@ -4991,3 +4991,107 @@ fn purge_planning_minimal_control_publication_does_not_stale_business_review() {
     assert!(held.unresolved.iter().any(|r| r.table == "artifacts"));
     assert_ne!(before.digest, held.digest);
 }
+
+#[test]
+fn purge_planning_rootless_project_sessions_own_conversations_and_keep_only_referenced_headers() {
+    let fx = Fx::new();
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("private-rootless-session"),
+            conversation_id: id("rootless-conversation"),
+            agent_id: actor("user-a"),
+            project_id: Some(project("project-a")),
+            root_id: None,
+            title: "private session title".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let conversation_key = sha256_hex(
+        serde_json::to_string(&["rootless-conversation"])
+            .unwrap()
+            .as_bytes(),
+    );
+    let session_key = sha256_hex(
+        serde_json::to_string(&["private-rootless-session"])
+            .unwrap()
+            .as_bytes(),
+    );
+    let before = assess();
+    assert!(
+        before.rows.iter().any(|r| r.table == "conversations"
+            && r.key_digest == conversation_key
+            && r.action == ProjectPurgeRowAction::Delete),
+        "rootless project sessions still own their native conversation"
+    );
+    let kept = saved(fx.save_workspace(
+        &fx.user(),
+        "rootless-reference-source",
+        "independent workspace bytes",
+        b"independent workspace bytes",
+        json!([]),
+        3,
+    ));
+    let version = kept.artifact.version_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts().add_link(&ArtifactLink {
+            version_id: version,
+            subject: SubjectKey::session(&id("private-rootless-session")),
+            purpose: LinkPurpose::Reference,
+        })
+    });
+    let after = assess();
+    for (table, key) in [
+        ("sessions", &session_key),
+        ("conversations", &conversation_key),
+    ] {
+        assert!(
+            after.rows.iter().any(|r| r.table == table
+                && &r.key_digest == key
+                && r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+            "{table}: {:?}",
+            after.unresolved
+        );
+    }
+    assert!(
+        !after
+            .unresolved
+            .iter()
+            .any(|r| matches!(r.table.as_str(), "sessions" | "conversations")),
+        "{:?}",
+        after.unresolved
+    );
+    assert_ne!(
+        before.digest, after.digest,
+        "surviving artifact history changes the exact keeper set"
+    );
+    assert_eq!(
+        fx.artifact(&kept.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT title FROM sessions WHERE id='private-rootless-session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "private session title",
+        "assessment remains read-only"
+    );
+}

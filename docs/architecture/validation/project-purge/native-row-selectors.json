@@ -30,7 +30,8 @@
     "relatedArtifactVersions": "SELECT id FROM artifact_versions WHERE artifact_id IN(SELECT id FROM relatedArtifacts)",
     "relatedSearchChunks": "SELECT id FROM search_chunks WHERE source_version_id IN(SELECT id FROM relatedArtifactVersions)",
     "relatedLegacyKnowledge": "SELECT id FROM knowledge_entries WHERE project_id=?1 OR id IN(SELECT entry_id FROM knowledge_shares WHERE project_id=?1)",
-    "relatedReceipts": "SELECT * FROM ownedReceipts UNION SELECT actor_id,scope_key,idempotency_key FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1"
+    "relatedReceipts": "SELECT * FROM ownedReceipts UNION SELECT actor_id,scope_key,idempotency_key FROM command_receipts WHERE command_kind='projects.create' AND json_extract(result_json,'$.receipt.decision.result.value.id')=?1",
+    "ownedConversations": "SELECT id FROM conversations WHERE root_id IN(SELECT id FROM ownedWork) OR id IN(SELECT conversation_id FROM sessions WHERE id IN(SELECT id FROM ownedSessions))"
   },
   "candidatePredicates": {
     "allocation_claims": "project_id=?1",
@@ -64,7 +65,7 @@
     "convention_term_batches": "generation_id IN(SELECT id FROM ownedConventionIndexes)",
     "convention_terms": "generation_id IN(SELECT id FROM ownedConventionIndexes)",
     "convention_versions": "project_id=?1",
-    "conversations": "root_id IN(SELECT id FROM ownedWork)",
+    "conversations": "id IN(SELECT id FROM ownedConversations)",
     "decision_approvals": "project_id=?1",
     "diagnostic_exports": "project_id=?1",
     "diagnostic_records": "project_id=?1",
@@ -130,7 +131,7 @@
     "session_tool_calls": "session_id IN(SELECT id FROM ownedSessions)",
     "session_turns": "session_id IN(SELECT id FROM ownedSessions)",
     "session_usage": "project_id=?1",
-    "sessions": "project_id=?1",
+    "sessions": "project_id=?1 OR root_id IN(SELECT id FROM ownedWork)",
     "stop_coverage": "root_id IN(SELECT id FROM ownedWork) OR operation_id IN(SELECT id FROM ownedOperations)",
     "tool_calls": "provider_attempt_id IN(SELECT id FROM ownedProviderAttempts)",
     "tool_invocations": "project_id=?1",

@@ -3720,3 +3720,51 @@ fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_bef
         .unwrap()
     );
 }
+
+#[test]
+fn purge_planning_legacy_project_root_without_session_scope_refuses_ownership_inference() {
+    let fx = Fx::new();
+    let p = fx.create("legacy scope fixture", &[]);
+    fx.seed_roots(&p.id, &["legacy-project-root"]);
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("legacy-root-session"),
+            conversation_id: id("legacy-root-conversation"),
+            agent_id: actor("user-a"),
+            project_id: None,
+            root_id: Some(RootId(id("legacy-project-root"))),
+            title: "ambiguous private session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(!plan.is_resolved());
+    assert!(
+        plan.unresolved
+            .iter()
+            .any(|r| r.table == "sessions"
+                && r.reason == ProjectPurgeUnresolvedReason::LegacyMapping)
+    );
+    assert!(!format!("{:?}", plan.rows).contains("ambiguous private session"));
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT title FROM sessions WHERE id='legacy-root-session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "ambiguous private session"
+    );
+}

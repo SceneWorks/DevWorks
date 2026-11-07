@@ -278,7 +278,7 @@
     {
       "table": "conversations",
       "class": "work_lineage",
-      "selector": "root_id in ownedWork",
+      "selector": "root_id in ownedWork or conversation_id of an exact owned session, including rootless project sessions; surviving references retain only a minimal header",
       "disposition": "owned_lineage"
     },
     {

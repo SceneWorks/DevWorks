@@ -9,6 +9,48 @@ use devworks_core::protocol::ProjectId;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
+pub(super) fn session_scope(
+    conn: &Connection,
+    project: &ProjectId,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> Result<(), StorageError> {
+    let selection = super::candidates::selection(project)?;
+    let sql = selection.sql("sessions", "id,project_id,root_id", "1=1")?;
+    let mut statement = db(conn.prepare(&sql))?;
+    let mut records = db(statement.query(selection.parameters()))?;
+    while let Some(record) = db(records.next())? {
+        let (id, owner, root) = (
+            db(record.get::<_, String>(0))?,
+            db(record.get::<_, Option<String>>(1))?,
+            db(record.get::<_, Option<String>>(2))?,
+        );
+        let root_matches = match root {
+            None => true,
+            Some(root) => db(conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM work_items WHERE id=?1 AND project_id=?2)",
+                [root.as_str(), project.0.as_str()],
+                |r| r.get::<_, bool>(0),
+            ))?,
+        };
+        if owner.as_deref() != Some(project.0.as_str()) || !root_matches {
+            let key =
+                super::guard::key_digest(&serde_json::to_string(&[id]).expect("session key"))?;
+            rows.remove(&("sessions".into(), key.clone()));
+            unresolved.insert(
+                ("sessions".into(), key.clone()),
+                ProjectPurgeUnresolved {
+                    table: "sessions".into(),
+                    key_digest: key,
+                    reason:
+                        devworks_core::ports::storage::ProjectPurgeUnresolvedReason::LegacyMapping,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn source_access(
     conn: &Connection,
     project: &ProjectId,

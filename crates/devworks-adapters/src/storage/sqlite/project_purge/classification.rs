@@ -126,6 +126,17 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
         "workflow_statuses" | "index_runs" => (&["project_id"], &[]),
         "events" => (&["actor_id", "project_id"], &["root_id", "operation_id"]),
         "operations" => (&[], &["root_id", "assignment_id"]),
+        "sessions" => (
+            &[
+                "conversation_id",
+                "agent_id",
+                "project_id",
+                "created_by",
+                "closed_by",
+            ],
+            &["root_id"],
+        ),
+        "conversations" => (&[], &["root_id"]),
         "command_receipts" => (&["actor_id", "operation_id"], &[]),
         "project_managed_files" => (&["project_id"], &[]),
         "schema_sources" => (&["owner_id"], &[]),
@@ -411,6 +422,7 @@ pub(in crate::storage::sqlite) fn planning(
         }
     }
     content_partitions(conn, project, &mut rows, &mut unresolved)?;
+    super::mixed::session_scope(conn, project, &mut rows, &mut unresolved)?;
     // Workspace-created project snapshots are independently attributed receipts.
     // Their recognized result needs explicit compaction; do not relabel the
     // CommandDecided event or silently omit private copied project content.
@@ -501,6 +513,8 @@ pub(in crate::storage::sqlite) fn planning(
                     | "events"
                     | "operations"
                     | "index_runs"
+                    | "sessions"
+                    | "conversations"
             ) {
                 row.action = Action::Scrub;
                 row.reason = Reason::MinimalDeletedIdentity;

@@ -47,6 +47,12 @@ Known cross-owner keeper cases are explicit:
 - A kept typed integration/intake link keeps only remote/local opaque identities and
   an honest deleted local reference. Its remote resource and independently authored
   history remain. Automatically copied project titles/body snapshots are removed.
+- A retained workspace artifact's native transcript link may require a minimal
+  closed session header and its conversation identity. Keep only opaque IDs,
+  monotonic counters and lifecycle attribution; remove the session title, pin,
+  root/private transcript and checkpoint content. A rootless project session still
+  owns its conversation through sessions.conversation_id. This is an explicit
+  finite keeper case, not a generic FK retention or deletion rule.
 - A surviving work header may require a workflow-status identity: retain only the
   ID/project, fixed deleted label and valid static kind fields. It is a reference
   placeholder, not a live status or allocatable work item.
