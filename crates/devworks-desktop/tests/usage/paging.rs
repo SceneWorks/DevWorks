@@ -149,14 +149,16 @@ impl Backend for Hinted {
 
 /// An owned no-op transaction controls this fixture's no-event premise. It never completes a
 /// native producer or manufactures a reply; all first/continuation reads still use the gateway.
-struct WriterHold {
+pub(super) struct WriterHold {
     release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     cancel: devworks_core::ports::storage::Cancellation,
     worker:
         Option<std::thread::JoinHandle<Result<(), devworks_core::ports::storage::StorageError>>>,
 }
 impl WriterHold {
-    fn new(store: std::sync::Arc<dyn devworks_core::ports::storage::ApplicationStore>) -> Self {
+    pub(super) fn new(
+        store: std::sync::Arc<dyn devworks_core::ports::storage::ApplicationStore>,
+    ) -> Self {
         use devworks_core::ports::storage::{Cancellation, StorageError, WriteOptions, run_write};
         let release =
             std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
