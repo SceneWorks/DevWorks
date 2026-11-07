@@ -30,3 +30,6 @@ END
 $metadata_fixture$;
 CREATE DATABASE metadata_inaccessible;
 REVOKE CONNECT ON DATABASE metadata_inaccessible FROM PUBLIC;
+
+CREATE TABLE public.meta_include_primary(id INT,payload TEXT,PRIMARY KEY(id) INCLUDE(payload));
+INSERT INTO public.meta_include_primary VALUES(1,NULL);

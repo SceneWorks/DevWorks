@@ -46,6 +46,23 @@ pub enum ReadIntent {
     Objects(bool),
     Relationships { ids: Vec<String>, append: bool },
 }
+impl DatabasesScreen {
+    pub fn clear_explorer(&mut self) {
+        self.view = None;
+        self.read_pin = None;
+        self.object_id = None;
+        self.parent = None;
+        self.object_next = None;
+        self.relation_next = None;
+        self.relation_ids.clear();
+        self.objects.clear();
+        self.relations.clear();
+        self.selected_object = None;
+        self.pending_read = None;
+        self.read_loading = false;
+        self.read_sequence = self.read_sequence.wrapping_add(1);
+    }
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Draft {
     pub scope: Option<String>,

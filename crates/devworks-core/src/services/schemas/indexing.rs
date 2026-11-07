@@ -25,6 +25,55 @@ use std::{
 
 pub const EFFECT_CONSUMER: &str = "schema_metadata";
 pub const JOB_KIND: &str = "SchemaMetadataV1";
+
+/// Settle the source side of an undispatched cancellation in the same writer unit.
+/// This changes status only; it never reads the target or publishes metadata.
+pub(crate) fn settle_cancelled(
+    tx: &mut dyn WriteTransaction,
+    operation_id: &OperationId,
+) -> Result<(), StorageError> {
+    let operation = tx
+        .operations()
+        .operation(operation_id)?
+        .ok_or_else(invalid)?;
+    if operation.state != OperationState::CancelledBeforeDispatch {
+        return Ok(());
+    }
+    let job: SchemaJob = serde_json::from_value(operation.payload).map_err(|_| invalid())?;
+    if !matches!(
+        operation.capability.as_str(),
+        "schemas.index" | "schemas.refresh"
+    ) || job.kind != JOB_KIND
+        || job.store_id != tx.store().store_id
+        || job.restore_epoch != tx.store().restore_epoch
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let entry = tx.queue().entry(&job.delivery_id)?.ok_or_else(invalid)?;
+    if entry.consumer != EFFECT_CONSUMER
+        || entry.operation_id.as_ref() != Some(operation_id)
+        || entry.state != QueueState::Cancelled
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    if let Some(mut source) = tx.schemas().schema_source(&job.connection_id)?
+        && source.connection.active_operation_id.as_ref() == Some(&operation_id.0)
+    {
+        let expected = source.connection.revision.get();
+        source.connection.revision = source
+            .connection
+            .revision
+            .checked_next()
+            .ok_or_else(invalid)?;
+        source.connection.active_operation_id = None;
+        source.connection.last_error = Some(crate::protocol::support::BoundedText(
+            "MetadataCancelled".into(),
+        ));
+        source.updated_at_ms = tx.now_ms();
+        tx.schemas().revise_schema_source(&source, expected)?;
+    }
+    Ok(())
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchemaJob {

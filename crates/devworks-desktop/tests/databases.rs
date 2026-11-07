@@ -164,6 +164,30 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
             .is_some_and(|c| c.current_view_id.is_none() && c.active_operation_id.is_none())
             && !s.databases.busy
     });
+    assert!(
+        h.state().databases.objects.is_empty(),
+        "removed metadata must leave the explorer"
+    );
+    assert!(h.state().databases.relations.is_empty());
+    assert!(h.state().databases.selected_object.is_none());
+    assert!(h.state().databases.view.is_none() && h.state().databases.read_pin.is_none());
+    click(&mut h, Role::Button, "Sync database metadata");
+    step_until(&mut h, "replacement native metadata published", |s| {
+        !s.databases.busy
+            && s.databases
+                .connections
+                .first()
+                .is_some_and(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
+    });
+    click(&mut h, Role::Button, "Search schema objects");
+    step_until(&mut h, "replacement explorer uses a live read pin", |s| {
+        !s.databases.read_loading && !s.databases.objects.is_empty()
+    });
+    assert!(
+        h.state().databases.error.is_none(),
+        "{:?}",
+        h.state().databases.error
+    );
     let source =
         rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .unwrap();
