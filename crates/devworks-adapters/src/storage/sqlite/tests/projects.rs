@@ -2749,14 +2749,14 @@ fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomicall
 }
 
 #[test]
-fn purge_migration36_refuses_an_older_reader_before_changing_the_store() {
+fn purge_migrations_refuse_an_older_reader_before_changing_the_store() {
     let h = Harness::new();
     drop(h.store());
     let before = super::file_digest(&h);
     let boot_count = super::boots(&h);
     match SqliteStore::open_with(h.config(), &through(35)) {
         Err(StorageError::IncompatibleSchema(message)) => {
-            assert!(message.contains("reader version 36"))
+            assert!(message.contains("reader version 37"))
         }
         _ => panic!("an older reader must not interpret compact purge identities"),
     }
@@ -2784,7 +2784,7 @@ fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileRes
 
 #[test]
 fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_files() {
-    use crate::fs::client_paste::NativeClientPasteFiles;
+    use crate::fs::client_staging::NativeClientStagingFiles;
     let fx = Fx::new();
     let p = fx.create("paste project", &[]);
     let project_id = p.id.clone();
@@ -2813,7 +2813,7 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
         Ok(())
     });
     let root = fx.h.root.0.join("staging-ui");
-    let files = NativeClientPasteFiles::new(root.clone(), fx.store.clone());
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
     let path = files
         .write(
             Some(&id("project-paste-session")),
@@ -2891,7 +2891,7 @@ fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_file
 
 #[test]
 fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
-    use crate::fs::client_paste::NativeClientPasteFiles;
+    use crate::fs::client_staging::NativeClientStagingFiles;
     let fx = Fx::new();
     let p = fx.create("legacy paste project", &[]);
     fx.seed_roots(&p.id, &["legacy-paste-root"]);
@@ -2914,7 +2914,7 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
         })
     });
     let root = fx.h.root.0.join("staging-ui");
-    let files = NativeClientPasteFiles::new(root.clone(), fx.store.clone());
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
     assert!(
         files
             .write(
@@ -2936,7 +2936,7 @@ fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
 
 #[test]
 fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
-    use crate::fs::client_paste::NativeClientPasteFiles;
+    use crate::fs::client_staging::NativeClientStagingFiles;
     use std::io::Write;
     let h = Harness::new();
     let store = Arc::new(h.store());
@@ -2969,7 +2969,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     file.write_all(b"interrupted private PNG").unwrap();
     file.sync_all().unwrap();
     drop(file);
-    let files = NativeClientPasteFiles::new(root.clone(), store.clone());
+    let files = NativeClientStagingFiles::new(root.clone(), store.clone());
     let independent = files
         .write(None, &id("workspace-paste"), b"workspace PNG")
         .unwrap();
@@ -2981,7 +2981,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
     drop(files);
     drop(store);
     let store = Arc::new(h.store());
-    let files = NativeClientPasteFiles::new(root, store.clone());
+    let files = NativeClientStagingFiles::new(root, store.clone());
     files.recover_abandoned().unwrap();
     assert!(!path.exists());
     assert_eq!(std::fs::read(independent).unwrap(), b"workspace PNG");
@@ -2997,7 +2997,7 @@ fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
 
 #[test]
 fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity() {
-    use crate::fs::client_paste::NativeClientPasteFiles;
+    use crate::fs::client_staging::NativeClientStagingFiles;
     let h = Harness::new();
     let store = Arc::new(h.store());
     purge_storage_fixture(store.as_ref());
@@ -3027,7 +3027,7 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
     std::fs::write(&path, b"independent replacement").unwrap();
     drop(store);
     let store = Arc::new(h.store());
-    let files = NativeClientPasteFiles::new(root, store.clone());
+    let files = NativeClientStagingFiles::new(root, store.clone());
     assert!(files.recover_abandoned().is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"independent replacement");
     assert_eq!(std::fs::read(moved).unwrap(), b"original private bytes");
@@ -3038,6 +3038,95 @@ fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity(
         })
         .unwrap()
     );
+}
+
+#[test]
+fn client_staging_custody_covers_plan_and_convention_sources_without_claiming_workspace_inputs() {
+    use crate::fs::{client_staging::NativeClientStagingFiles, purge::NativeProjectPurgeFiles};
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileOwner, PurgeFileSelection,
+    };
+    let fx = Fx::new();
+    let p = fx.create("text staging project", &[]);
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientStagingFiles::new(root.clone(), fx.store.clone());
+    let mut owners = Vec::new();
+    let mut paths = Vec::new();
+    for extension in ["md", "txt", "json"] {
+        let file_id = id(&format!("private-{extension}"));
+        paths.push(
+            files
+                .write_project(Some(&p.id), &file_id, extension, b"private editor bytes")
+                .unwrap(),
+        );
+        owners.push(PurgeFileOwner::ClientStaging { file_id });
+    }
+    let workspace = files
+        .write_project(None, &id("workspace-editor"), "txt", b"workspace editor")
+        .unwrap();
+    let picked = root.join("picked-input.txt");
+    std::fs::write(&picked, b"independent picked file").unwrap();
+    let info = fx.store.info();
+    let selection = PurgeFileSelection {
+        project_id: p.id.clone(),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners,
+    };
+    let physical = NativeProjectPurgeFiles::new(
+        fx.h.root.0.clone(),
+        fx.h.root.0.join("cache"),
+        fx.store.clone(),
+    )
+    .with_paste_root(root);
+    let snapshot = physical.inventory(&selection, &mut || false).unwrap();
+    assert_eq!(snapshot.files.len(), 3);
+    assert!(
+        snapshot
+            .files
+            .iter()
+            .all(|f| matches!(f.owner, PurgeFileOwner::ClientStaging { .. }))
+    );
+    for witness in &snapshot.files {
+        physical.remove_reviewed(witness, &mut || false).unwrap()
+    }
+    assert!(paths.iter().all(|p| !p.exists()));
+    assert_eq!(std::fs::read(workspace).unwrap(), b"workspace editor");
+    assert_eq!(std::fs::read(picked).unwrap(), b"independent picked file");
+}
+
+#[test]
+fn client_staging_migration_preserves_existing_custody_and_fences_older_builds() {
+    let h = Harness::new();
+    let store = SqliteStore::open_with(h.config(), &through(36)).unwrap();
+    purge_storage_fixture(&store);
+    let reserved = managed_reservation(&store, "prior-custody");
+    let expected = reserved.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    drop(store);
+    let store = h.store();
+    let rows = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, expected.id);
+    assert_eq!(rows[0].relative_path, expected.relative_path);
+    assert_eq!(rows[0].root, expected.root);
+    assert_eq!(rows[0].store_id, expected.store_id);
+    assert_eq!(rows[0].restore_epoch, expected.restore_epoch);
+    assert!(rows[0].writing);
+    drop(store);
+    let before = super::file_digest(&h);
+    assert!(matches!(
+        SqliteStore::open_with(h.config(), &through(36)),
+        Err(StorageError::IncompatibleSchema(_))
+    ));
+    assert_eq!(super::file_digest(&h), before);
 }
 fn managed_publication(r: &ProjectManagedFileReservation) -> StoredProjectManagedFile {
     StoredProjectManagedFile {

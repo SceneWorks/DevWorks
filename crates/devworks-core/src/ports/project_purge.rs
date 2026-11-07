@@ -16,6 +16,7 @@ pub enum PurgeFileOwner {
     BrowserProfile { session_id: Id },
     DiagnosticExport { file_id: Id },
     ClientPaste { file_id: Id },
+    ClientStaging { file_id: Id },
 }
 
 /// Exact owner set materialized from the same reviewed native project snapshot.

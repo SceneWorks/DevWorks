@@ -463,14 +463,14 @@ async fn compose(
     let runtime = boot(composition).await.map_err(StartError::Boot)?;
     // A previous boot cannot still be producing a paste. Live draft files require the
     // client keeper snapshot; this owner only reconciles incomplete reserved writes.
-    if let Err(error) = devworks_adapters::fs::client_paste::NativeClientPasteFiles::new(
+    if let Err(error) = devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
         config.data_root.join("staging-ui"),
         store.clone(),
     )
     .recover_abandoned()
     {
         // Its durable Writing row continues to hold purge preparation on uncertainty.
-        eprintln!("Pasted-image recovery remains held: {error}");
+        eprintln!("UI staging recovery remains held: {error}");
     }
     // Host bookkeeping after recovery: the local user is the human principal of the UI.
     let user = ActorId(Id::new(USER_ACTOR).expect("valid actor"));
@@ -844,11 +844,28 @@ impl Backend for DesktopBackend {
         self.host.data_root.join("staging-ui")
     }
     fn stage_pasted_image(&self, session: Option<&Id>, png: &[u8]) -> Result<PathBuf, String> {
-        devworks_adapters::fs::client_paste::NativeClientPasteFiles::new(
+        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
             self.scratch_dir(),
             self.host.runtime.store().clone(),
         )
         .write(session, &self.host.ids.next_id(IdKind::Artifact), png)
+    }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        devworks_adapters::fs::client_staging::NativeClientStagingFiles::new(
+            self.scratch_dir(),
+            self.host.runtime.store().clone(),
+        )
+        .write_project(
+            project,
+            &self.host.ids.next_id(IdKind::Artifact),
+            extension,
+            bytes,
+        )
     }
     fn refresh_packages(&self) -> Result<(), String> {
         let host = self

@@ -262,3 +262,15 @@ regression was corrected by using the same verified canonical root as inventory.
 Replacement identities and colliding independent files survive. Full client keeper
 coordination remains pending, including the newly discovered project-owned feature
 plan/decision Markdown and convention text/portable-manifest staging producers.
+
+Schema37 preserves every schema36 managed-file custody row and adds ClientStaging
+for the actual feature-plan/decision Markdown and convention text/portable-manifest
+producers. Both reader/writer floors advance; old builds refuse the new class.
+These files use the same identity-before-bytes native owner as pasted images.
+Workspace editor files and picked/imported inputs remain independent. The explicit
+schema37 ownership extension participates in the planning digest; unknown later
+schema shapes still refuse. Six native custody/migration cases pass (6.01 seconds),
+all15 planning cases pass (23.78 seconds), all18 convention UI cases pass (136.04
+seconds), all23 work UI cases pass (37.91 seconds), and strict workspace/all-target
+checks pass (44.48 seconds). The new class has local native evidence; fresh Windows
+runtime evidence and the complete purge/client executor remain pending.

@@ -157,7 +157,8 @@ impl NativeProjectPurgeFiles {
     ) -> Result<Option<PurgeFileWitness>, PurgeFileFault> {
         let file_id = match owner {
             PurgeFileOwner::DiagnosticExport { file_id }
-            | PurgeFileOwner::ClientPaste { file_id } => file_id,
+            | PurgeFileOwner::ClientPaste { file_id }
+            | PurgeFileOwner::ClientStaging { file_id } => file_id,
             _ => return Ok(None),
         };
         let file = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |r| {
@@ -207,7 +208,7 @@ impl NativeProjectPurgeFiles {
                 self.data_root.clone(),
                 vec!["diagnostics".into(), "exports".into()],
             ),
-            PurgeFileOwner::ClientPaste { .. } => (
+            PurgeFileOwner::ClientPaste { .. } | PurgeFileOwner::ClientStaging { .. } => (
                 self.paste_root
                     .clone()
                     .ok_or(PurgeFileFault::Unattributed)?,
@@ -229,7 +230,8 @@ impl NativeProjectPurgeFiles {
             }
             PurgeFileOwner::BrowserProfile { session_id } => Some(session_id.as_str().to_owned()),
             PurgeFileOwner::DiagnosticExport { file_id }
-            | PurgeFileOwner::ClientPaste { file_id } => {
+            | PurgeFileOwner::ClientPaste { file_id }
+            | PurgeFileOwner::ClientStaging { file_id } => {
                 let _ = file_id;
                 Some(
                     self.registered(owner, binding)?
@@ -402,7 +404,9 @@ fn owner_relative(owner: &PurgeFileOwner, relative: &str) -> bool {
                         !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')
                     })
         }
-        PurgeFileOwner::DiagnosticExport { .. } | PurgeFileOwner::ClientPaste { .. } => {
+        PurgeFileOwner::DiagnosticExport { .. }
+        | PurgeFileOwner::ClientPaste { .. }
+        | PurgeFileOwner::ClientStaging { .. } => {
             std::path::Path::new(relative).components().count() == 1
         }
     }

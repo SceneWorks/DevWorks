@@ -104,6 +104,14 @@ pub trait Backend: Send + Sync {
     fn stage_pasted_image(&self, _session: Option<&Id>, _png: &[u8]) -> Result<PathBuf, String> {
         Err("pasted-image custody is not available here".into())
     }
+    fn stage_project_text(
+        &self,
+        _project: Option<&devworks_core::protocol::ProjectId>,
+        _extension: &str,
+        _bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        Err("project text staging is not available here".into())
+    }
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;

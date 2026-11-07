@@ -436,6 +436,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0036_project_purge.sql"),
         rebuilds_tables: false,
     },
+    // Preserve existing managed-file custody while recognizing all owned UI staging.
+    Migration {
+        version: 37,
+        minimum_reader: 37,
+        minimum_writer: 37,
+        sql: include_str!("migrations/0037_client_staging_custody.sql"),
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

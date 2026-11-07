@@ -145,7 +145,7 @@ pub(super) fn managed_files(
         );
         if !matches!(
             kind.as_str(),
-            "DiagnosticExport" | "ClientPaste" | "Preview"
+            "DiagnosticExport" | "ClientPaste" | "ClientStaging" | "Preview"
         ) {
             continue;
         }
@@ -158,7 +158,7 @@ pub(super) fn managed_files(
             let Ok(witness) = serde_json::from_value::<PurgeFileWitness>(raw.clone()) else {
                 continue;
             };
-            let owner = matches!((&*kind,&witness.owner),("DiagnosticExport",PurgeFileOwner::DiagnosticExport{file_id})|("ClientPaste",PurgeFileOwner::ClientPaste{file_id}) if file_id.as_str()==id);
+            let owner = matches!((&*kind,&witness.owner),("DiagnosticExport",PurgeFileOwner::DiagnosticExport{file_id})|("ClientPaste",PurgeFileOwner::ClientPaste{file_id})|("ClientStaging",PurgeFileOwner::ClientStaging{file_id}) if file_id.as_str()==id);
             let normal = std::path::Path::new(&path);
             if !owner
                 || witness.project_id != *project

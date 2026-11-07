@@ -1,22 +1,27 @@
-//! Native pasted-image custody. Scope comes from the stored session, never navigation.
+//! Native UI staging custody. Scope comes from the stored session or typed editor owner.
 use super::purge::capture_managed_file;
 use devworks_core::ports::project_purge::{PurgeFileOwner, PurgeFileSelection};
 use devworks_core::ports::storage::{
     ApplicationStore, ProjectManagedFileReservation, ReadOptions, StorageError,
     StoredProjectManagedFile, WriteOptions, read_snapshot, run_write,
 };
-use devworks_core::protocol::Id;
+use devworks_core::protocol::{Id, ProjectId};
+
+enum Owner {
+    Session(Option<Id>),
+    Project(Option<ProjectId>),
+}
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub struct NativeClientPasteFiles {
+pub struct NativeClientStagingFiles {
     root: PathBuf,
     store: Arc<dyn ApplicationStore>,
 }
 
-impl NativeClientPasteFiles {
+impl NativeClientStagingFiles {
     pub fn new(root: PathBuf, store: Arc<dyn ApplicationStore>) -> Self {
         Self { root, store }
     }
@@ -24,14 +29,19 @@ impl NativeClientPasteFiles {
     /// Only incomplete writes from a previous boot: no path was returned to a draft.
     /// Live paste files require the client keeper snapshot and are never swept here.
     pub fn recover_abandoned(&self) -> Result<(), String> {
+        self.recover_kind("ClientPaste")?;
+        self.recover_kind("ClientStaging")
+    }
+
+    fn recover_kind(&self, kind: &'static str) -> Result<(), String> {
         let boot = self.store.info().boot_id;
         let mut after = None;
         loop {
             let page = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |r| {
                 r.projects()
-                    .managed_file_recovery("ClientPaste", after.as_ref(), 500)
+                    .managed_file_recovery(kind, after.as_ref(), 500)
             })
-            .map_err(|_| "paste recovery inventory is unavailable".to_owned())?;
+            .map_err(|_| "staging recovery inventory is unavailable".to_owned())?;
             if page.is_empty() {
                 return Ok(());
             }
@@ -41,11 +51,11 @@ impl NativeClientPasteFiles {
                 }
                 let info = self.store.info();
                 if row.store_id != info.store_id || row.restore_epoch != info.restore_epoch {
-                    return Err("paste recovery store or restore epoch changed".into());
+                    return Err("staging recovery store or restore epoch changed".into());
                 }
                 if let Some(identity) = row.file_identity {
                     if super::normal_components(&row.relative_path).is_none_or(|p| p.len() != 1) {
-                        return Err("paste recovery path is invalid".into());
+                        return Err("staging recovery path is invalid".into());
                     }
                     let path = self.root.join(&row.relative_path);
                     match std::fs::symlink_metadata(path) {
@@ -54,7 +64,7 @@ impl NativeClientPasteFiles {
                         Ok(_) => {
                             let root = open_root(&self.root).map_err(|e| e.to_string())?;
                             if super::identity_for_file(&root) != Some(row.root) {
-                                return Err("paste recovery root changed".into());
+                                return Err("staging recovery root changed".into());
                             }
                             let info = self.store.info();
                             let binding = PurgeFileSelection {
@@ -67,19 +77,17 @@ impl NativeClientPasteFiles {
                                 &self.root,
                                 &binding,
                                 &row.relative_path,
-                                PurgeFileOwner::ClientPaste {
-                                    file_id: row.id.clone(),
-                                },
+                                file_owner(kind, &row.id),
                                 &mut || false,
                             )
-                            .map_err(|_| "paste recovery witness changed".to_owned())?;
+                            .map_err(|_| "staging recovery witness changed".to_owned())?;
                             if witness.root != row.root || witness.identity != identity {
-                                return Err("paste recovery file changed".into());
+                                return Err("staging recovery file changed".into());
                             }
                             let canonical_root =
                                 std::fs::canonicalize(&self.root).map_err(|e| e.to_string())?;
                             super::purge::remove_native(&canonical_root, &witness, &mut || false)
-                                .map_err(|_| "paste recovery removal is incomplete".to_owned())?;
+                                .map_err(|_| "staging recovery removal is incomplete".to_owned())?;
                         }
                     }
                 }
@@ -90,7 +98,7 @@ impl NativeClientPasteFiles {
                 run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
                     tx.projects().finish_project_managed_file(&project, &id)
                 })
-                .map_err(|_| "paste recovery settlement is unavailable".to_owned())?;
+                .map_err(|_| "staging recovery settlement is unavailable".to_owned())?;
             }
             after = page.last().map(|r| r.id.clone());
         }
@@ -99,29 +107,65 @@ impl NativeClientPasteFiles {
     /// Reserve before creation, bind the create-new identity before bytes, then publish.
     /// A failed project write stays durably Writing for the staging owner's recovery.
     pub fn write(&self, session: Option<&Id>, id: &Id, bytes: &[u8]) -> Result<PathBuf, String> {
+        self.write_owned(
+            Owner::Session(session.cloned()),
+            id,
+            "ClientPaste",
+            "png",
+            bytes,
+        )
+    }
+
+    pub fn write_project(
+        &self,
+        project: Option<&ProjectId>,
+        id: &Id,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        if !matches!(extension, "md" | "txt" | "json") {
+            return Err("unsupported native staging format".into());
+        }
+        self.write_owned(
+            Owner::Project(project.cloned()),
+            id,
+            "ClientStaging",
+            extension,
+            bytes,
+        )
+    }
+
+    fn write_owned(
+        &self,
+        owner: Owner,
+        id: &Id,
+        kind: &'static str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
         std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
         let held_root = open_root(&self.root).map_err(|e| e.to_string())?;
         let root = super::identity_for_file(&held_root)
             .ok_or_else(|| "paste directory identity is unavailable".to_owned())?;
-        let relative = format!("{}.png", id.as_str());
+        let relative = format!("{}.{extension}", id.as_str());
         // Id's wire shape is not a filesystem capability.
         if super::normal_components(&relative).is_none_or(|parts| parts.len() != 1) {
-            return Err("invalid pasted-image identity".into());
+            return Err("invalid staged-file identity".into());
         }
         #[cfg(windows)]
         if super::windows_unsafe_component(&relative) {
-            return Err("invalid pasted-image identity".into());
+            return Err("invalid staged-file identity".into());
         }
-        let stored_session = session.cloned();
         let reserved_id = id.clone();
         let reserved_path = relative.clone();
         let reservation = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
-            let project = match stored_session.as_ref() {
-                None => None,
-                Some(id) => {
+            let project = match owner {
+                Owner::Project(project) => project,
+                Owner::Session(None) => None,
+                Owner::Session(Some(id)) => {
                     let s = tx
                         .sessions()
-                        .session(id)?
+                        .session(&id)?
                         .ok_or(StorageError::ScopeDenied)?;
                     if let Some(root) = &s.root_id {
                         let work = tx.work().work(&root.0)?.ok_or(StorageError::ScopeDenied)?;
@@ -139,7 +183,7 @@ impl NativeClientPasteFiles {
             let file = ProjectManagedFileReservation {
                 id: reserved_id,
                 project_id,
-                kind: "ClientPaste".into(),
+                kind: kind.into(),
                 relative_path: reserved_path,
                 root,
                 created_identity: None,
@@ -151,7 +195,7 @@ impl NativeClientPasteFiles {
             tx.projects().reserve_project_managed_file(&file)?;
             Ok(Some(file))
         })
-        .map_err(|_| "the session cannot stage a pasted image".to_owned())?;
+        .map_err(|_| "the native owner cannot stage this file".to_owned())?;
 
         let mut file = match create(&held_root, &self.root, &relative) {
             Ok(file) => file,
@@ -162,13 +206,13 @@ impl NativeClientPasteFiles {
                         tx.projects()
                             .finish_project_managed_file(&reserved.project_id, &reserved.id)
                     })
-                    .map_err(|_| "paste reservation settlement is unavailable".to_owned())?;
+                    .map_err(|_| "staging reservation settlement is unavailable".to_owned())?;
                 }
                 return Err(error.to_string());
             }
         };
         let identity = super::identity_for_file(&file)
-            .ok_or_else(|| "pasted-image identity is unavailable".to_owned())?;
+            .ok_or_else(|| "staged-file identity is unavailable".to_owned())?;
         if let Some(reserved) = &reservation {
             let project = reserved.project_id.clone();
             let id = id.clone();
@@ -176,7 +220,7 @@ impl NativeClientPasteFiles {
                 tx.projects()
                     .begin_project_managed_file_write(&project, &id, identity)
             })
-            .map_err(|_| "pasted-image creation could not be recorded".to_owned())?;
+            .map_err(|_| "staged-file creation could not be recorded".to_owned())?;
         }
         file.write_all(bytes).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
@@ -195,14 +239,12 @@ impl NativeClientPasteFiles {
                 &self.root,
                 &binding,
                 &relative,
-                PurgeFileOwner::ClientPaste {
-                    file_id: id.clone(),
-                },
+                file_owner(kind, id),
                 &mut || false,
             )
-            .map_err(|_| "pasted-image publication witness changed".to_owned())?;
+            .map_err(|_| "staged-file publication witness changed".to_owned())?;
             if witness.root != root || witness.identity != identity {
-                return Err("pasted-image publication identity changed".into());
+                return Err("staged-file publication identity changed".into());
             }
             let published = StoredProjectManagedFile {
                 id: id.clone(),
@@ -215,9 +257,20 @@ impl NativeClientPasteFiles {
             run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
                 tx.projects().register_project_managed_file(&published)
             })
-            .map_err(|_| "pasted-image publication could not be recorded".to_owned())?;
+            .map_err(|_| "staged-file publication could not be recorded".to_owned())?;
         }
         Ok(self.root.join(relative))
+    }
+}
+
+fn file_owner(kind: &str, id: &Id) -> PurgeFileOwner {
+    match kind {
+        "ClientPaste" => PurgeFileOwner::ClientPaste {
+            file_id: id.clone(),
+        },
+        _ => PurgeFileOwner::ClientStaging {
+            file_id: id.clone(),
+        },
     }
 }
 

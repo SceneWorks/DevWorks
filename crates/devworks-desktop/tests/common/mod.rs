@@ -418,6 +418,14 @@ impl Backend for Gated {
     ) -> Result<PathBuf, String> {
         self.inner.stage_pasted_image(session, png)
     }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_project_text(project, extension, bytes)
+    }
     fn read_stream(
         &self,
         stream: &devworks_core::protocol::Id,
@@ -565,6 +573,14 @@ impl Backend for LoseAcks {
         png: &[u8],
     ) -> Result<PathBuf, String> {
         self.inner.stage_pasted_image(session, png)
+    }
+    fn stage_project_text(
+        &self,
+        project: Option<&devworks_core::protocol::ProjectId>,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        self.inner.stage_project_text(project, extension, bytes)
     }
     fn read_stream(
         &self,

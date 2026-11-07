@@ -1353,11 +1353,7 @@ impl Shell {
         let started = self.client.as_mut().is_some_and(|c| {
             c.task(slot, "Storing the plan and decisions", move |b| {
                 let dir = b.scratch_dir();
-                std::fs::create_dir_all(&dir)
-                    .map_err(|e| format!("could not write the plan text: {e}"))?;
-                let path = dir.join(format!("plan-{}.md", b.token("p")));
-                std::fs::write(&path, text.as_bytes())
-                    .map_err(|e| format!("could not write the plan text: {e}"))?;
+                let path = b.stage_project_text(Some(&project), "md", text.as_bytes())?;
                 let digest = devworks_core::fingerprint::sha256_hex(text.as_bytes());
                 let ticket = b.mint_project_upload(&project, &path)?;
                 let frame = ops::save_project_artifact(

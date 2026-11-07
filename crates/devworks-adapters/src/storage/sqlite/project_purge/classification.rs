@@ -19,6 +19,10 @@ const EXTENSION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/architecture/validation/project-purge/schema36-extension.json"
 ));
+const STAGING_EXTENSION: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../docs/architecture/validation/project-purge/schema37-extension.json"
+));
 pub(super) type Key = (String, String);
 fn invalid() -> StorageError {
     StorageError::IncompatibleSchema("unmapped project purge ownership policy".into())
@@ -569,6 +573,7 @@ pub(in crate::storage::sqlite) fn planning(
         "format":"dw83-ownership-assessment-v1","project":project,
         "policy":devworks_core::fingerprint::sha256_hex(POLICIES.as_bytes()),
         "extension":devworks_core::fingerprint::sha256_hex(EXTENSION.as_bytes()),
+        "stagingExtension":devworks_core::fingerprint::sha256_hex(STAGING_EXTENSION.as_bytes()),
         "selection":snapshot.policy_digest,"rows":business_rows,"references":references,"unresolved":unresolved
     })).map_err(|_|invalid())?.as_bytes());
     Ok(Some(ProjectPurgePlanning {

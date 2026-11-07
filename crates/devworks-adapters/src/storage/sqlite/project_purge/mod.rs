@@ -204,7 +204,8 @@ pub(super) fn register_managed_file(
     use devworks_core::ports::project_purge::PurgeFileOwner;
     let owner_matches = match (&*file.kind, &file.witness.owner) {
         ("DiagnosticExport", PurgeFileOwner::DiagnosticExport { file_id })
-        | ("ClientPaste", PurgeFileOwner::ClientPaste { file_id }) => file_id == &file.id,
+        | ("ClientPaste", PurgeFileOwner::ClientPaste { file_id })
+        | ("ClientStaging", PurgeFileOwner::ClientStaging { file_id }) => file_id == &file.id,
         _ => false,
     };
     let path = std::path::Path::new(&file.relative_path);
@@ -336,7 +337,10 @@ pub(super) fn reserve_managed_file(
         || file.boot_id != store.boot_id
         || file.boot_id.is_none()
         || file.restore_epoch != store.restore_epoch
-        || !matches!(&*file.kind, "DiagnosticExport" | "ClientPaste" | "Preview")
+        || !matches!(
+            &*file.kind,
+            "DiagnosticExport" | "ClientPaste" | "ClientStaging" | "Preview"
+        )
         || file.created_at_ms < 0
         || file.relative_path.is_empty()
         || file.relative_path.contains('\\')
@@ -412,7 +416,12 @@ pub(super) fn managed_recovery(
     after: Option<&Id>,
     n: u16,
 ) -> Result<Vec<ProjectManagedFileRecovery>, StorageError> {
-    if !matches!(kind, "DiagnosticExport" | "ClientPaste" | "Preview") || n == 0 || n > 500 {
+    if !matches!(
+        kind,
+        "DiagnosticExport" | "ClientPaste" | "ClientStaging" | "Preview"
+    ) || n == 0
+        || n > 500
+    {
         return Err(invalid("managed recovery page"));
     }
     let mut query=db(conn.prepare("SELECT id,project_id,relative_path,identity_json,state FROM project_managed_files WHERE kind=?1 AND state<>'Removed' AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"))?;

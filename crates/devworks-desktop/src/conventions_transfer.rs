@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
@@ -39,30 +39,30 @@ fn hex(bytes: &[u8]) -> String {
 fn hash(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
-fn scratch(b: &dyn Backend, suffix: &str) -> Result<(PathBuf, File), String> {
-    let path = b
-        .scratch_dir()
-        .join(format!("convention-{}.{suffix}", b.token("source")));
-    std::fs::create_dir_all(b.scratch_dir()).map_err(|e| e.to_string())?;
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| e.to_string())?;
-    Ok((path, file))
+fn stage_bytes(
+    b: &dyn Backend,
+    scope: &Scope,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let project = match scope {
+        Scope::Workspace => None,
+        Scope::Project(id) => Some(devworks_core::protocol::ProjectId(
+            devworks_core::protocol::Id::new(id.clone()).map_err(|e| e.to_string())?,
+        )),
+    };
+    b.stage_project_text(project.as_ref(), extension, bytes)
 }
 fn stage_text(
     b: &dyn Backend,
+    scope: &Scope,
     text: &str,
     pointer: &str,
     media: &str,
     owned: &mut Vec<PathBuf>,
 ) -> Result<StagedFile, String> {
-    let (path, mut file) = scratch(b, "txt")?;
+    let path = stage_bytes(b, scope, "txt", text.as_bytes())?;
     owned.push(path.clone());
-    file.write_all(text.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(|e| e.to_string())?;
     Ok(StagedFile {
         path,
         name: "Convention source".into(),
@@ -119,6 +119,7 @@ fn prepare_edit_inner(
         if d.markdown_changed {
             files.push(stage_text(
                 b,
+                &scope,
                 &d.markdown,
                 "/content",
                 "text/markdown",
@@ -131,6 +132,7 @@ fn prepare_edit_inner(
                     body["rawContent"] = json!({"kind":"Set","content":content});
                     files.push(stage_text(
                         b,
+                        &scope,
                         &d.raw,
                         "/rawContent/content",
                         "text/plain",
@@ -161,9 +163,7 @@ fn prepare_edit_inner(
         let raw_hash = hash(d.raw.as_bytes());
         let mut markdown = d.markdown.as_bytes();
         let mut raw = d.raw.as_bytes();
-        let (path, file) = scratch(b, "json")?;
-        let mut file = std::io::BufWriter::with_capacity(65536, file);
-        owned.push(path.clone());
+        let mut file = Vec::new();
         let result = write_editor_manifest(
             &mut file,
             EditorConvention {
@@ -190,13 +190,9 @@ fn prepare_edit_inner(
             },
             std::iter::empty::<EditorResource<'_>>(),
         );
-        if let Err(error) = result {
-            crate::attachments::remove_owned(&path, &b.scratch_dir());
-            return Err(error.to_string());
-        }
-        file.flush()
-            .and_then(|()| file.get_ref().sync_all())
-            .map_err(|e| e.to_string())?;
+        result.map_err(|e| e.to_string())?;
+        let path = stage_bytes(b, &scope, "json", &file)?;
+        owned.push(path.clone());
         Ok(Pipeline {
             scope: scope.clone(),
             operation: "conventions.import".into(),
