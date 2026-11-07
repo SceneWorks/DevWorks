@@ -9,6 +9,9 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod scoped;
+pub use scoped::project_scoped_editors;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemoryPurgeFault {
     UnknownShape,
@@ -208,7 +211,7 @@ mod tests {
     use super::*;
     use crate::memory::{PendingUpload, SubmittedMemory};
     use devworks_core::protocol::{Id, ProjectId};
-    fn scope() -> ProjectPurgeClientScope {
+    pub(super) fn scope() -> ProjectPurgeClientScope {
         ProjectPurgeClientScope {
             project_id: ProjectId(Id::new("p").unwrap()),
             session_ids: vec![Id::new("p-session").unwrap()],
