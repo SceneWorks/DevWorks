@@ -43,3 +43,21 @@ Tests retain actual temporary SQLite/runtime composition, SessionSecrets and rec
 provider ports. No learned execution, Git/auth probes or OS secrets are involved. Native and
 strict campaigns run in an exclusively coordinated window, with two build jobs, incremental
 compilation disabled and the existing target; disk remained above the 8 GiB stop floor.
+
+## Older positive paging case (DW-137)
+
+PR43/b777394b CI42314779894 Ubuntu-desktop128224772973 observed90 versus105 rows in
+`native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload`.
+This separate older case did not use the writer control above. The original uninstrumented
+failure still does not establish a particular event producer or product defect.
+
+It now reuses the same real writer hold and explicitly reloads its first page before the
+single More gesture. The hold ends after validating/capturing the105-tariff draft, before
+the test's deliberately changed source command. All original105rows/twopages/draft/background
+preservation/explicit-reload assertions remain. The real event cursor and product controller
+are unchanged, and no producer is disabled or marked complete. The existing true-event
+CursorExpired negative and same-frame-hint positive remain in the full suite.
+
+Complete default native Usage UI suite:19/19 pass84.50s. Desktop all-target strict Clippy:
+34.61s. All original bounds and internal concurrency remain intact; fresh reviewed platform
+CI and merge acceptance are still required. SessionSecrets/recorded sources only, no inference.
