@@ -575,7 +575,9 @@ impl UsageScreen {
             ui.checkbox(&mut self.history, "Include historical price sources");
             if ui
                 .add_enabled(
-                    !self.prices_loading,
+                    // A retained catalog may revalidate in the click frame. Applying
+                    // new filters supersedes that request through its generation fence.
+                    !self.prices_loading || self.prices.is_some(),
                     egui::Button::new("Apply price catalog filters"),
                 )
                 .clicked()
