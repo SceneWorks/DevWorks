@@ -61,3 +61,7 @@ CREATE DATABASE metadata_inaccessible;
 GO
 USE metadata_fixture;
 GO
+
+CREATE TABLE dbo.meta_filtered_index(email nvarchar(200), active bit NOT NULL);
+CREATE UNIQUE INDEX meta_filtered_email ON dbo.meta_filtered_index(email) WHERE active=1;
+GO
