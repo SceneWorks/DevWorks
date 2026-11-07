@@ -2102,6 +2102,120 @@ fn purge_candidate_reader_hashes_full_scoped_rows_without_copying_keys_or_other_
 }
 
 #[test]
+fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it_for_deletion() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    store.with_writer_connection(|c| {
+        super::super::conn::db(c.execute_batch(
+            "INSERT INTO artifacts(id,title,revision,scope_revision,origin_project_id,current_project_id,scope_kind,owner_actor_id) VALUES
+             ('owned-private','private sentinel',1,1,'purge-a','purge-a','Project',NULL),
+             ('shared-out','shared sentinel',1,1,'purge-a','purge-a','Project',NULL),
+             ('moved-workspace','independent workspace sentinel',1,1,'purge-a',NULL,'Workspace','purge-human'),
+             ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',NULL),
+             ('unrelated','unrelated sentinel',1,1,'purge-b','purge-b','Project',NULL);
+             INSERT INTO artifact_shares VALUES('shared-out','purge-b'),('shared-in','purge-a');
+             INSERT INTO knowledge_entries VALUES
+             ('knowledge-owned','purge-a','fact','Project',1,'Active','{\"private\":\"sentinel\"}',1),
+             ('knowledge-shared','purge-a','fact','Project',1,'Active','{\"shared\":\"sentinel\"}',1),
+             ('knowledge-other','purge-b','fact','Project',1,'Active','{}',1);
+             INSERT INTO knowledge_shares VALUES('knowledge-shared','purge-b');"
+        ))
+    }).unwrap();
+    let snapshot = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let before = snapshot();
+    let count = |table: &str| before.rows.iter().filter(|r| r.table == table).count();
+    assert_eq!(count("artifacts"), 4);
+    assert_eq!(count("artifact_shares"), 2);
+    assert_eq!(count("knowledge_entries"), 2);
+    assert_eq!(count("knowledge_shares"), 1);
+    assert!(
+        !serde_json::to_string(&before.rows)
+            .unwrap()
+            .contains("sentinel")
+    );
+    h.raw()
+        .execute(
+            "UPDATE artifacts SET title='unrelated changed' WHERE id='unrelated'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(snapshot().digest, before.digest);
+    h.raw()
+        .execute(
+            "DELETE FROM artifact_shares WHERE artifact_id='shared-out'",
+            [],
+        )
+        .unwrap();
+    assert_ne!(
+        snapshot().digest,
+        before.digest,
+        "a changed keeper invalidates the snapshot"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT title FROM artifacts WHERE id='moved-workspace'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "independent workspace sentinel"
+    );
+}
+
+#[test]
+fn purge_candidate_receipt_attribution_uses_the_actual_command_event_not_the_scope_key() {
+    let fx = Fx::new();
+    let p = fx.create("Receipt project", &[]);
+    let other = fx.create("Other receipt project", &[]);
+    applied(fx.command(&fx.user(), "projects.edit", json!({"projectId":p.id,"expectedRevision":"1","changes":{"name":"Renamed private project"}})));
+    applied(fx.command(
+        &fx.user(),
+        "projects.edit",
+        json!({"projectId":p.id,"expectedRevision":"2","changes":{"name":"Renamed again"}}),
+    ));
+    applied(fx.command(
+        &fx.user(),
+        "projects.edit",
+        json!({"projectId":other.id,"expectedRevision":"1","changes":{"name":"Other renamed"}}),
+    ));
+    assert_eq!(fx.h.raw().query_row("SELECT count(*) FROM events WHERE kind='CommandDecided' AND project_id IS NULL AND json_extract(payload_json,'$.operation')='projects.create'", [], |r| r.get::<_,i64>(0)).unwrap(), 2, "workspace creation receipts need typed snapshot redaction, not invented project ownership");
+    let snapshot = |p: &ProjectId| {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(p)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let count = |p: &ProjectId| {
+        snapshot(p)
+            .rows
+            .iter()
+            .filter(|r| r.table == "command_receipts")
+            .count()
+    };
+    assert_eq!(count(&p.id), 2);
+    assert_eq!(count(&other.id), 1);
+    // Every command used the same current Human/store scope. Attribution still
+    // follows its actual CommandDecided target, and selection mutates nothing.
+    assert_eq!(fx.h.raw().query_row("SELECT count(DISTINCT scope_key) FROM command_receipts WHERE command_kind IN('projects.create','projects.edit')",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    assert_eq!(count(&p.id), 2);
+}
+
+#[test]
 fn purge_manifest_storage_refuses_stale_store_project_and_entry_fences_atomically() {
     let h = Harness::new();
     let store = h.store();
