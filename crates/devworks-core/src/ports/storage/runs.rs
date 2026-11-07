@@ -361,6 +361,29 @@ pub enum AssignmentState {
     Failed,
     Superseded,
 }
+
+/// A primary work owner and its delegated children share a root but have different custody.
+/// Only primary assignments participate in the one-live-owner constraint for a work item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssignmentPurpose {
+    Primary,
+    Child,
+}
+impl AssignmentPurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "Primary",
+            Self::Child => "Child",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "Primary" => Some(Self::Primary),
+            "Child" => Some(Self::Child),
+            _ => None,
+        }
+    }
+}
 impl AssignmentState {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -392,6 +415,7 @@ impl AssignmentState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredAssignment {
     pub id: AssignmentId,
+    pub purpose: AssignmentPurpose,
     pub root_id: RootId,
     /// The work item it is for: the root itself or work in the root's hierarchy.
     pub work_id: RootId,
@@ -623,8 +647,8 @@ pub trait RunRepository: RunRead {
         blocker: &StoredBlocker,
         expected: i64,
     ) -> Result<(), StorageError>;
-    /// Inserts an assignment. A second live coordinator of one root, or a second live
-    /// assignment of one work item, is [`StorageError::Duplicate`].
+    /// Inserts an assignment. A second live primary owner of one work item is
+    /// [`StorageError::Duplicate`]; child assignments retain their own identity.
     fn insert_assignment(&mut self, assignment: &StoredAssignment) -> Result<(), StorageError>;
     fn update_assignment(
         &mut self,

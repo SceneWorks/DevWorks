@@ -1,0 +1,14 @@
+{
+  "schema": 39,
+  "policy": "dw15-assignment-purpose-v1",
+  "tables": {
+    "assignments": {
+      "ownership": "WorkLineage",
+      "addedColumns": ["purpose"],
+      "purpose": "Distinguish primary issue ownership from delegated children. Both remain in the same root and retain the existing project purge ownership selector."
+    }
+  },
+  "indexes": ["one_live_assignment", "assignment_child_root"],
+  "readerFloor": 39,
+  "writerFloor": 39
+}

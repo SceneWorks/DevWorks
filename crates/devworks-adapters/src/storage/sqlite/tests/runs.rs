@@ -1,7 +1,7 @@
 //! Migration 11 and the run root control records on the real SQLite store: a version-10 store
 //! is upgraded in place (its rows untouched, the new columns defaulted, the new tables empty),
 //! and the store-level invariants hold under it — one live activation per root, one live
-//! coordinator per root, one live assignment per work item, one in-flight turn per session,
+//! coordinator per root, one live primary assignment per work item, one in-flight turn per session,
 //! compare-and-set on every record and final ended records. No inference.
 use super::{Harness, through};
 use crate::storage::sqlite::{MIGRATION_0011_SHA256, MIGRATIONS, SqliteStore};
@@ -47,6 +47,7 @@ fn activation(s: &SqliteStore, a: &str, r: &str, generation: i64) -> StoredActiv
 }
 fn assignment(a: &str, work: &str, parent: Option<&str>, session: &str) -> StoredAssignment {
     StoredAssignment {
+        purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
         id: AssignmentId(id(a)),
         root_id: root("root-a"),
         work_id: root(work),
@@ -64,6 +65,49 @@ fn assignment(a: &str, work: &str, parent: Option<&str>, session: &str) -> Store
         instruction_revision: 0,
         created_at_ms: 0,
     }
+}
+
+#[test]
+fn migration_39_keeps_primary_ownership_and_allows_issue_children() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(38)).unwrap());
+    h.raw().execute_batch(
+        "INSERT INTO actors VALUES('agent-a','agent','Agent');
+         INSERT INTO projects VALUES('project-a','A','Active',1,1,1);
+         INSERT INTO work_items VALUES('root-a','project-a','issue',NULL,NULL,NULL,'A',1,0,1,1,1,'{}');
+         INSERT INTO conversations VALUES('conv-a','root-a',0);
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision)
+           VALUES('s-a','conv-a','agent-a','root-a',0,1),
+                 ('s-b','conv-a','agent-a','root-a',0,1);
+         INSERT INTO assignments(id,root_id,work_id,session_id,state,generation,slot_held,revision,created_at)
+           VALUES('primary','root-a','root-a','s-a','Ready',0,0,1,0);",
+    ).unwrap();
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    write(&s, |tx| {
+        let primary = tx.runs().assignment(&AssignmentId(id("primary")))?.unwrap();
+        assert_eq!(primary.purpose, AssignmentPurpose::Primary);
+        let mut child = assignment("child", "root-a", Some("primary"), "s-b");
+        child.purpose = AssignmentPurpose::Child;
+        tx.runs().insert_assignment(&child)?;
+        assert_eq!(
+            tx.runs()
+                .live_assignment_for_work(&root("root-a"))?
+                .unwrap()
+                .id,
+            primary.id
+        );
+        assert_eq!(
+            tx.runs().assignment(&child.id)?.unwrap().purpose,
+            AssignmentPurpose::Child
+        );
+        let duplicate = assignment("second-primary", "root-a", Some("primary"), "s-b");
+        assert!(matches!(
+            tx.runs().insert_assignment(&duplicate),
+            Err(StorageError::Duplicate { .. })
+        ));
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
@@ -135,6 +179,11 @@ fn migration_11_adds_run_controls_to_a_version_10_store() {
         (hold.cause, hold.reason.as_str()),
         (HoldCause::HumanPause, "")
     );
+
+    // Exercise the current repository implementation after checking the version-11 upgrade.
+    // Its assignment reader intentionally requires the purpose column introduced in 39.
+    drop(s);
+    let s = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
 
     // One live activation per root; a stopped one is final.
     let a1 = activation(&s, "act-1", "root-a", 3);

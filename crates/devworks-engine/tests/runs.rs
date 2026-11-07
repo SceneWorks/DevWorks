@@ -639,6 +639,86 @@ fn one_live_coordinator_per_root_and_assignment_identity_is_enforced() {
     assert_eq!(child.parent_id, Some(coord.id.clone()));
 }
 
+#[test]
+fn standalone_issue_can_register_children_without_replacing_its_primary_owner() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let primary = fx.assign("root-i", "root-i", None, None);
+    let new = NewRunAssignment {
+        root: rid("root-i"),
+        work: rid("root-i"),
+        parent: Some(primary.id.clone()),
+        session: fx.session("root-i"),
+        scope_key: None,
+    };
+    let child = fx.tx(move |service, tx| {
+        let host = tx.store().host_actor.clone();
+        Ok(service
+            .register_child_assignment(tx, &host, new)?
+            .expect("child"))
+    });
+    assert_eq!(child.purpose, AssignmentPurpose::Child);
+    assert_eq!(child.parent_id, Some(primary.id.clone()));
+    assert_eq!(fx.inspection("root-i").assignments.len(), 2);
+    let owner = read(&*fx.store, |snapshot| {
+        snapshot.runs().live_assignment_for_work(&rid("root-i"))
+    });
+    assert_eq!(owner.unwrap().id, primary.id);
+}
+
+#[test]
+fn issue_subagent_allowance_is_atomic_per_root() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-i", 1, 1));
+    let primary = fx.assign("root-i", "root-i", None, None);
+    let mut children = Vec::new();
+    for _ in 0..11 {
+        let new = NewRunAssignment {
+            root: rid("root-i"),
+            work: rid("root-i"),
+            parent: Some(primary.id.clone()),
+            session: fx.session("root-i"),
+            scope_key: None,
+        };
+        children.push(fx.tx(move |service, tx| {
+            let host = tx.store().host_actor.clone();
+            Ok(service
+                .register_child_assignment(tx, &host, new)?
+                .expect("child"))
+        }));
+    }
+    for child in children.iter().take(10) {
+        let child = child.clone();
+        let changed = fx.tx(move |service, tx| {
+            let host = tx.store().host_actor.clone();
+            service.set_assignment_state(
+                tx,
+                &host,
+                &child.id,
+                child.revision,
+                AssignmentState::Active,
+                None,
+            )
+        });
+        assert!(matches!(changed, Ok(ref assignment) if assignment.slot_held));
+    }
+    let last = children.last().unwrap().clone();
+    let refused = fx.tx(move |service, tx| {
+        let host = tx.store().host_actor.clone();
+        service.set_assignment_state(
+            tx,
+            &host,
+            &last.id,
+            last.revision,
+            AssignmentState::Active,
+            None,
+        )
+    });
+    assert!(matches!(refused, Err(Fenced::Invalid(_))), "{refused:?}");
+}
+
 // ---------------------------------------------------------------------------------------------
 // CONTROL-03 / CONTROL-12: Pause, requested/acknowledged/stopped, Start leaves pauses
 

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 fn assignment(name: &str, work: &str, root: &str, parent: Option<&str>) -> StoredAssignment {
     StoredAssignment {
+        purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
         id: AssignmentId(id(name)),
         root_id: RootId(id(root)),
         work_id: RootId(id(work)),
@@ -447,7 +448,7 @@ fn global_assignment_lookup_finds_worker_under_old_membership_using_existing_ind
     s.with_writer_connection(|c|{
         let db=super::super::super::conn::db;
         db(c.execute("UPDATE assignments SET state='Waiting' WHERE id='worker'",[]))?;
-        let detail:String=super::super::super::conn::db(c.query_row("EXPLAIN QUERY PLAN SELECT id FROM assignments WHERE work_id='task-a' AND state IN ('Ready','Active','Waiting') LIMIT 1",[],|row|row.get(3)))?;
+        let detail:String=super::super::super::conn::db(c.query_row("EXPLAIN QUERY PLAN SELECT id FROM assignments WHERE work_id='task-a' AND purpose='Primary' AND state IN ('Ready','Active','Waiting') LIMIT 1",[],|row|row.get(3)))?;
         assert!(detail.contains("one_live_assignment"),"{detail}");Ok(())
     }).unwrap();
     read_snapshot(&s, &ReadOptions::default(), |r| {

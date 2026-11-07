@@ -418,7 +418,7 @@ fn state_name(s: BlockerState) -> &'static str {
 // ---------------------------------------------------------------------------------------------
 // Assignments
 
-const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,instruction_revision,created_at";
+const ASSIGNMENT_COLUMNS: &str = "id,root_id,work_id,parent_id,session_id,execution_id,state,generation,slot_held,revision,checkpoint_json,scope_key,scope_digest,plan_revision,instruction_revision,created_at,purpose";
 type AssignmentRaw = (
     (
         String,
@@ -439,6 +439,7 @@ type AssignmentRaw = (
         Option<i64>,
         i64,
         i64,
+        String,
     ),
 );
 fn assignment_of(r: &Row<'_>) -> rusqlite::Result<AssignmentRaw> {
@@ -462,14 +463,17 @@ fn assignment_of(r: &Row<'_>) -> rusqlite::Result<AssignmentRaw> {
             r.get(13)?,
             r.get(14)?,
             r.get(15)?,
+            r.get(16)?,
         ),
     ))
 }
 fn assignment(raw: AssignmentRaw) -> Result<StoredAssignment, StorageError> {
     let ((id, root, work, parent, session, execution, state, generation), b) = raw;
-    let (slot, revision, checkpoint, key, digest, plan, instr, created) = b;
+    let (slot, revision, checkpoint, key, digest, plan, instr, created, purpose) = b;
     Ok(StoredAssignment {
         id: AssignmentId(id_of(id)?),
+        purpose: AssignmentPurpose::parse(&purpose)
+            .ok_or_else(|| corrupt(format!("stored assignment purpose {purpose}")))?,
         root_id: RootId(id_of(root)?),
         work_id: RootId(id_of(work)?),
         parent_id: opt_id(parent)?.map(AssignmentId),
@@ -749,7 +753,7 @@ macro_rules! run_reads {
                 inherited_requirements(self.conn,work)
             }
             fn live_assignment_for_work(&self,work:&RootId)->Result<Option<StoredAssignment>,StorageError>{
-                Ok(assignments(self.conn,&format!("work_id=?1 AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
+                Ok(assignments(self.conn,&format!("work_id=?1 AND purpose='Primary' AND {LIVE_ASSIGNMENT} LIMIT 1"),[work.0.as_str()])?.into_iter().next())
             }
             fn assignment(
                 &self,
@@ -1181,11 +1185,14 @@ impl RunRepository for Unit<'_> {
         if a.revision < 1 || a.generation < 0 || a.instruction_revision < 0 {
             return Err(invalid("assignment revision or counters out of range"));
         }
+        if a.purpose == AssignmentPurpose::Child && a.parent_id.is_none() {
+            return Err(invalid("a child assignment requires a parent"));
+        }
         if let Some(k) = &a.scope_key {
             bounded("scope key", k, 256)?;
         }
         db(self.conn.execute(
-            &format!("INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"),
+            &format!("INSERT INTO assignments({ASSIGNMENT_COLUMNS}) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)"),
             params![
                 a.id.0.as_str(),
                 a.root_id.0.as_str(),
@@ -1203,6 +1210,7 @@ impl RunRepository for Unit<'_> {
                 a.plan_revision,
                 a.instruction_revision,
                 a.created_at_ms,
+                a.purpose.as_str(),
             ],
         ))
         .map(|_| ())
@@ -1231,6 +1239,7 @@ impl RunRepository for Unit<'_> {
         if current.root_id != a.root_id
             || current.work_id != a.work_id
             || current.parent_id != a.parent_id
+            || current.purpose != a.purpose
             || !current.state.is_live()
             || a.revision <= expected
             || a.generation < current.generation

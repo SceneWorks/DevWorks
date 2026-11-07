@@ -1192,6 +1192,7 @@ fn managed_source(s: &SqliteStore, name: &str, worker: bool) -> StoredInferenceA
         })?;
         if worker {
             tx.runs().insert_assignment(&StoredAssignment {
+                purpose: devworks_core::ports::storage::AssignmentPurpose::Primary,
                 id: AssignmentId(id(name)),
                 root_id: RootId(id("feature")),
                 work_id: RootId(id("feature")),
