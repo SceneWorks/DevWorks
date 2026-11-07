@@ -1,7 +1,8 @@
 //! SQLite schema catalogs only: no view, virtual-table content or source data is selected.
 use super::*;
 use devworks_core::protocol::records::DbEngine;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -39,6 +40,13 @@ fn object(
         metadata: metadata(name, "main", Some("main"), details)?,
         coverage: coverage(),
     })
+}
+fn partial(c: &mut Collector, node: &mut MetadataObject, reason: &str) {
+    c.gap(reason);
+    node.coverage.state = CoverageState::Partial;
+    node.coverage
+        .gaps
+        .push(Id::new(reason).expect("static metadata gap"));
 }
 fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
     if !matches!(request.config.engine, DbEngine::Sqlite)
@@ -95,7 +103,7 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         json!({"driver":"rusqlite-0.41.1","serverVersion":rusqlite::version(),"authentication":"File","tls":"NotApplicable",
         "readOnlyBoundary":"SQLite READONLY open, query_only and fixed catalog statements",
         "supportedMetadata":["Catalog","Schema","Table","View","Column","Index","Constraint"],"unsupportedMetadata":["Procedure","Type","GraphEntity","GraphEdge"],
-        "limitations":["One file source exposes its main schema; SQLite has no stored-procedure catalog."]}),
+        "limitations":["One file source exposes its main schema; SQLite has no stored-procedure catalog.","CHECK expressions remain in table DDL and are not separately enumerated."]}),
     )?;
     if c.request.test_only {
         conn.execute_batch("ROLLBACK").map_err(|_| failure(&c))?;
@@ -119,7 +127,7 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         return Ok(c.finish(profile));
     }
     c.relationship(&root, &schema_key, "CONTAINS")?;
-    let mut tables=conn.prepare("SELECT name,type,CASE WHEN length(sql)<=65536 THEN sql END,length(sql)>65536 FROM main.sqlite_schema WHERE type IN('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name COLLATE BINARY").map_err(|_|failure(&c))?;
+    let mut tables=conn.prepare("SELECT name,type,CASE WHEN length(sql)<=65536 THEN sql END,length(sql)>65536 FROM main.sqlite_schema WHERE type IN('table','view') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY name COLLATE BINARY").map_err(|_|failure(&c))?;
     let mut rows = tables.query([]).map_err(|_| failure(&c))?;
     while let Some(row) = rows.next().map_err(|_| failure(&c))? {
         c.check()?;
@@ -131,14 +139,11 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
         }
         let definition: Option<String> =
             row.get(2).map_err(|_| MetadataFailure::InvalidMetadata)?;
-        if row
+        let truncated = row
             .get::<_, Option<bool>>(3)
             .map_err(|_| MetadataFailure::InvalidMetadata)?
-            .unwrap_or(false)
-        {
-            c.gap("sqlite_definition_size_limit");
-        }
-        let node = object(
+            .unwrap_or(false);
+        let mut node = object(
             if kind == "view" { "View" } else { "Table" },
             &name,
             Some(&schema_key),
@@ -146,12 +151,15 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             json!({}),
             definition,
         )?;
+        if truncated {
+            partial(&mut c, &mut node, "sqlite_definition_size_limit");
+        }
         let table = node.key.clone();
         if !c.object(node)? {
             break;
         }
         c.relationship(&schema_key, &table, "CONTAINS")?;
-        let mut columns=conn.prepare("SELECT cid,name,type,\"notnull\",dflt_value,pk,hidden FROM pragma_table_xinfo(?1,'main') ORDER BY cid").map_err(|_|failure(&c))?;
+        let mut columns=conn.prepare("SELECT cid,name,type,\"notnull\",substr(dflt_value,1,4096),pk,hidden,length(dflt_value)>4096 FROM pragma_table_xinfo(?1,'main') ORDER BY cid").map_err(|_|failure(&c))?;
         let mut columns = columns.query([&name]).map_err(|_| failure(&c))?;
         let mut primary = Vec::new();
         while let Some(column) = columns.next().map_err(|_| failure(&c))? {
@@ -191,7 +199,7 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
                     _ => "GeneratedStored",
                 });
             }
-            let col = object(
+            let mut col = object(
                 "Column",
                 &column_name,
                 Some(&table),
@@ -199,6 +207,13 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
                 details,
                 None,
             )?;
+            if column
+                .get::<_, Option<bool>>(7)
+                .map_err(|_| MetadataFailure::InvalidMetadata)?
+                .unwrap_or(false)
+            {
+                partial(&mut c, &mut col, "sqlite_default_size_limit");
+            }
             let id = col.key.clone();
             if !c.object(col)? {
                 return Ok(c.finish(profile));
@@ -248,14 +263,26 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             if expression {
                 c.gap("sqlite_expression_index_columns");
             }
-            let definition: Option<String> = conn
-                .query_row(
-                    "SELECT sql FROM main.sqlite_schema WHERE type='index' AND name=?1",
-                    [&index_name],
-                    |r| r.get(0),
-                )
-                .map_err(|_| failure(&c))?;
-            let node = object(
+            let (definition,truncated): (Option<String>,Option<bool>) = conn.query_row(
+                "SELECT CASE WHEN length(sql)<=65536 THEN sql END,length(sql)>65536 FROM main.sqlite_schema WHERE type='index' AND name=?1",
+                [&index_name], |r| Ok((r.get(0)?,r.get(1)?))).map_err(|_|failure(&c))?;
+            let origin: String = index.get(2).map_err(|_| MetadataFailure::InvalidMetadata)?;
+            if origin == "u" {
+                let constraint = object(
+                    "Constraint",
+                    &index_name,
+                    Some(&table),
+                    format!("{qualified}.unique.{index_name}"),
+                    json!({"constraintType":"Unique","columnNames":names}),
+                    None,
+                )?;
+                let cid = constraint.key.clone();
+                if !c.object(constraint)? {
+                    return Ok(c.finish(profile));
+                }
+                c.relationship(&table, &cid, "HAS_CONSTRAINT")?;
+            }
+            let mut node = object(
                 "Index",
                 &index_name,
                 Some(&table),
@@ -263,37 +290,88 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
                 json!({"unique":index.get::<_,bool>(1).map_err(|_|MetadataFailure::InvalidMetadata)?,"columnNames":names,"indexType":"BTree"}),
                 definition,
             )?;
+            if truncated.unwrap_or(false) {
+                partial(&mut c, &mut node, "sqlite_definition_size_limit");
+            }
+            if expression {
+                partial(&mut c, &mut node, "sqlite_expression_index_columns");
+            }
             let id = node.key.clone();
             if !c.object(node)? {
                 return Ok(c.finish(profile));
             }
             c.relationship(&table, &id, "HAS_INDEX")?;
         }
-        let mut foreign=conn.prepare("SELECT id,seq,\"table\",\"from\",\"to\",on_update,on_delete,\"match\" FROM pragma_foreign_key_list(?1,'main') ORDER BY id,seq").map_err(|_|failure(&c))?;
+        let mut foreign=conn.prepare("SELECT id,seq,\"table\",\"from\",\"to\" FROM pragma_foreign_key_list(?1,'main') ORDER BY id,seq").map_err(|_|failure(&c))?;
         let mut foreign = foreign.query(params![name]).map_err(|_| failure(&c))?;
+        type ForeignColumns = (String, Vec<String>, Vec<Option<String>>);
+        let mut groups: BTreeMap<i64, ForeignColumns> = BTreeMap::new();
+        let mut count = 0;
         while let Some(fk) = foreign.next().map_err(|_| failure(&c))? {
             c.check()?;
+            if count >= c.request.limits.max_objects {
+                let id: i64 = fk.get(0).map_err(|_| MetadataFailure::InvalidMetadata)?;
+                groups.remove(&id);
+                c.gap("sqlite_foreign_key_row_limit");
+                break;
+            }
+            count += 1;
             let id: i64 = fk.get(0).map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let seq: i64 = fk.get(1).map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let target: String = fk.get(2).map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let from: String = fk.get(3).map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let to: Option<String> = fk.get(4).map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let constraint = object(
+            let declared: String = fk.get(2).map_err(|_| MetadataFailure::InvalidMetadata)?;
+            let group = groups
+                .entry(id)
+                .or_insert_with(|| (declared, Vec::new(), Vec::new()));
+            group
+                .1
+                .push(fk.get(3).map_err(|_| MetadataFailure::InvalidMetadata)?);
+            group
+                .2
+                .push(fk.get(4).map_err(|_| MetadataFailure::InvalidMetadata)?);
+        }
+        for (id, (declared, columns, declared_columns)) in groups {
+            c.check()?;
+            let actual:Option<String>=conn.query_row("SELECT name FROM main.sqlite_schema WHERE type='table' AND name=?1 COLLATE NOCASE",[&declared],|r|r.get(0)).optional().map_err(|_|failure(&c))?;
+            let target = actual.as_deref().unwrap_or(&declared);
+            let mut unavailable = actual.is_none();
+            let referenced = if declared_columns.iter().all(Option::is_none) {
+                let mut pk = conn
+                    .prepare(
+                        "SELECT name FROM pragma_table_xinfo(?1,'main') WHERE pk>0 ORDER BY pk",
+                    )
+                    .map_err(|_| failure(&c))?;
+                let names = pk
+                    .query_map([target], |r| r.get::<_, String>(0))
+                    .map_err(|_| failure(&c))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| failure(&c))?;
+                unavailable |= names.len() != columns.len();
+                names
+            } else {
+                unavailable |= declared_columns.iter().any(Option::is_none);
+                declared_columns.into_iter().flatten().collect()
+            };
+            let mut constraint = object(
                 "Constraint",
-                &format!("foreign-key-{id}-{seq}"),
+                &format!("foreign-key-{id}"),
                 Some(&table),
-                format!("{qualified}.foreign-key-{id}-{seq}"),
-                json!({"constraintType":"ForeignKey","columnNames":[from],"referencedTable":format!("main.{target}"),"referencedColumns":to.into_iter().collect::<Vec<_>>()}),
+                format!("{qualified}.foreign-key-{id}"),
+                json!({"constraintType":"ForeignKey","columnNames":columns,"referencedTable":format!("main.{target}"),"referencedColumns":referenced}),
                 None,
             )?;
+            if unavailable {
+                partial(
+                    &mut c,
+                    &mut constraint,
+                    "sqlite_foreign_key_target_unavailable",
+                );
+            }
             let cid = constraint.key.clone();
             if !c.object(constraint)? {
                 return Ok(c.finish(profile));
             }
             c.relationship(&table, &cid, "HAS_CONSTRAINT")?;
-            // The immutable constraint keeps exact declared target names even when a table is
-            // outside selection. Relationship endpoints are retained only when visible.
-            let target_id = key(&["main", "Table", &schema_key, &target]);
+            // Source names are case-insensitive; immutable endpoints use actual catalog identity.
+            let target_id = key(&["main", "Table", &schema_key, target]);
             c.relationship(&table, &target_id, "FOREIGN_KEY")?;
         }
     }
@@ -472,5 +550,125 @@ mod tests {
         request.test_only = true;
         let probe = run(request).unwrap();
         assert!(probe.objects.is_empty());
+    }
+    #[test]
+    fn native_sqlite_keeps_user_names_resembling_reserved_prefix() {
+        let target = Target::new("CREATE TABLE sqliteX_records(id INTEGER);");
+        let snapshot = run(target.request()).unwrap();
+        assert!(
+            snapshot
+                .objects
+                .iter()
+                .any(|o| o.kind == "Table" && o.metadata.name.0 == "sqliteX_records")
+        );
+    }
+    #[test]
+    fn native_sqlite_composite_implicit_foreign_key_resolves_case_and_primary_order() {
+        let target = Target::new(
+            "CREATE TABLE ParentTable(second INTEGER,first INTEGER,PRIMARY KEY(second,first),UNIQUE(first,second)); CREATE TABLE child(b INTEGER,a INTEGER,FOREIGN KEY(b,a) REFERENCES parenttable);",
+        );
+        let snapshot = run(target.request()).unwrap();
+        let constraints = snapshot
+            .objects
+            .iter()
+            .filter(|o| {
+                o.metadata
+                    .constraint_type
+                    .as_ref()
+                    .is_some_and(|t| t.0 == "ForeignKey")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            constraints.len(),
+            1,
+            "one composite declaration is one constraint"
+        );
+        let fk = constraints[0];
+        assert_eq!(
+            fk.metadata
+                .column_names
+                .0
+                .iter()
+                .map(|n| n.0.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+        assert_eq!(
+            fk.metadata
+                .referenced_columns
+                .0
+                .iter()
+                .map(|n| n.0.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "first"]
+        );
+        assert_eq!(
+            fk.metadata.referenced_table.as_ref().unwrap().0,
+            "main.ParentTable"
+        );
+        let parent = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Table" && o.metadata.name.0 == "ParentTable")
+            .unwrap();
+        assert!(
+            snapshot
+                .relationships
+                .iter()
+                .any(|r| r.kind == "FOREIGN_KEY" && r.to_key == parent.key)
+        );
+        assert!(snapshot.objects.iter().any(|o| {
+            o.metadata
+                .constraint_type
+                .as_ref()
+                .is_some_and(|t| t.0 == "Unique")
+                && o.metadata
+                    .column_names
+                    .0
+                    .iter()
+                    .map(|n| n.0.as_str())
+                    .collect::<Vec<_>>()
+                    == ["first", "second"]
+        }));
+    }
+    #[test]
+    fn native_sqlite_reports_bounded_defaults_and_omitted_ddl_as_partial_per_object() {
+        let target = Target::new(&format!(
+            "CREATE TABLE defaults(value TEXT DEFAULT '{}'); CREATE VIEW oversized(value) AS SELECT 1 /*{}*/;",
+            "x".repeat(6000),
+            "x".repeat(66000)
+        ));
+        let snapshot = run(target.request()).unwrap();
+        assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column" && o.qualified_name == "main.defaults.value")
+            .unwrap();
+        assert!(matches!(column.coverage.state, CoverageState::Partial));
+        assert!(
+            column
+                .metadata
+                .default_value
+                .as_ref()
+                .unwrap()
+                .0
+                .chars()
+                .count()
+                <= 4096
+        );
+        let view = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "View" && o.metadata.name.0 == "oversized")
+            .unwrap();
+        assert!(view.metadata.definition_sql.is_none());
+        assert!(matches!(view.coverage.state, CoverageState::Partial));
+        assert!(
+            view.coverage
+                .gaps
+                .iter()
+                .any(|g| g.as_str() == "sqlite_definition_size_limit")
+        );
     }
 }

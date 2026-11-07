@@ -7,7 +7,7 @@ use devworks_core::protocol::data::CoverageState;
 use serde_json::json;
 
 fn request(engine: &str, endpoint: &str) -> MetadataRequest {
-    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
+    MetadataRequest {connection_id:Id::new("metadata-fixture").unwrap(),config:serde_json::from_value(json!({"name":"Isolated metadata fixture","engine":engine,"endpoint":endpoint,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":["meta_large_default"],"writesEnabled":false,"enabled":true,"authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"})).unwrap(),password:Some(Secret::new("devworks_metadata_reader")),ca_certificate:None,test_only:false,limits:MetadataLimits::default(),cancellation:Default::default()}
 }
 fn qualify(engine: &str, var: &str) {
     let endpoint = std::env::var(var).expect("explicit isolated fixture endpoint is required");
@@ -373,4 +373,201 @@ fn hidden_definition(engine: &str, variable: &str, owner_user: &str) {
             .all(|o| o.metadata.definition_sql.is_some())
     );
     assert!(!format!("{full:?}").contains("SOURCE_ROW_SENTINEL_NEVER_INDEX"));
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL multi-root TLS fixture"]
+fn native_postgres_uses_matching_root_after_unrelated_first_pem_certificate() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_POSTGRES")
+        .expect("isolated fixture endpoint")
+        .replace("127.0.0.1", "localhost");
+    let mut roots =
+        std::fs::read(std::env::var("DEVWORKS_METADATA_UNUSED_CA").expect("unrelated isolated CA"))
+            .unwrap();
+    roots.extend_from_slice(
+        &std::fs::read(std::env::var("DEVWORKS_METADATA_CA").expect("matching isolated CA"))
+            .unwrap(),
+    );
+    let mut configured = request("Postgres", &endpoint);
+    configured.config.tls = Some(devworks_core::protocol::records::SchemaTlsMode::VerifyFull);
+    configured.ca_certificate = Some(roots);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = runtime
+        .block_on(NetworkMetadataReader.read(configured))
+        .expect("the matching second connection-owned trust root must be used");
+    assert!(
+        snapshot
+            .objects
+            .iter()
+            .any(|o| o.kind == "Table" && o.metadata.name.0 == "parent")
+    );
+}
+
+#[test]
+#[ignore = "explicit isolated MariaDB composite/check/parameter fixture"]
+fn native_mariadb_keeps_composite_constraints_checks_and_declared_parameter_order() {
+    mysql_edges("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated MySQL composite/check/parameter fixture"]
+fn native_mysql_keeps_composite_constraints_checks_and_declared_parameter_order() {
+    mysql_edges("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+fn mysql_edges(engine: &str, variable: &str) {
+    let endpoint = std::env::var(variable).expect("isolated metadata-edge fixture");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime
+        .block_on(NetworkMetadataReader.read(request(engine, &endpoint)))
+        .unwrap();
+    let find = |name: &str| {
+        result
+            .objects
+            .iter()
+            .find(|o| o.kind == "Constraint" && o.metadata.name.0 == name)
+            .unwrap()
+    };
+    let check = result
+        .objects
+        .iter()
+        .find(|o| {
+            o.kind == "Constraint"
+                && o.metadata.name.0 == "pair_nonnegative"
+                && o.qualified_name
+                    .ends_with("meta_pair_parent.pair_nonnegative")
+        })
+        .unwrap();
+    if engine == "MariaDb" {
+        let other = result
+            .objects
+            .iter()
+            .find(|o| {
+                o.kind == "Constraint"
+                    && o.metadata.name.0 == "pair_nonnegative"
+                    && o.qualified_name
+                        .ends_with("meta_check_other.pair_nonnegative")
+            })
+            .unwrap();
+        assert!(
+            other
+                .metadata
+                .check_clause
+                .as_ref()
+                .is_some_and(|c| c.0.contains("100"))
+        );
+        assert!(
+            !check
+                .metadata
+                .check_clause
+                .as_ref()
+                .is_some_and(|c| c.0.contains("100"))
+        );
+    }
+    assert!(
+        check
+            .metadata
+            .check_clause
+            .as_ref()
+            .is_some_and(|c| c.0.contains('z')),
+        "real CHECK expression must be retained"
+    );
+    let foreign = find("pair_reference");
+    assert_eq!(
+        foreign
+            .metadata
+            .column_names
+            .0
+            .iter()
+            .map(|v| v.0.as_str())
+            .collect::<Vec<_>>(),
+        ["from_z", "from_a"]
+    );
+    let routine = result
+        .objects
+        .iter()
+        .find(|o| o.kind == "Procedure" && o.metadata.name.0 == "meta_parameters")
+        .unwrap();
+    assert_eq!(
+        routine
+            .metadata
+            .parameters
+            .0
+            .iter()
+            .map(|p| p.name.0.as_str())
+            .collect::<Vec<_>>(),
+        ["third", "first_param", "last_param"]
+    );
+    assert_eq!(
+        routine
+            .metadata
+            .parameters
+            .0
+            .iter()
+            .map(|p| p.ordinal.get())
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+}
+
+#[test]
+#[ignore = "explicit isolated MariaDB long-default fixture"]
+fn native_mariadb_long_default_reports_partial() {
+    long_default("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated MySQL long-default fixture"]
+fn native_mysql_long_default_reports_partial() {
+    long_default("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated SQLServer long-default fixture"]
+fn native_sql_server_long_default_reports_partial() {
+    long_default("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
+}
+fn long_default(engine: &str, variable: &str) {
+    let endpoint = std::env::var(variable).expect("isolated long-default fixture");
+    let mut configured = request(engine, &endpoint);
+    configured.config.exclude_patterns.0.clear();
+    configured.config.include_patterns.0 = vec![devworks_core::protocol::support::BoundedText(
+        "meta_large_default".into(),
+    )];
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime
+        .block_on(NetworkMetadataReader.read(configured))
+        .unwrap();
+    let column = result
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column" && o.metadata.name.0 == "value")
+        .unwrap();
+    assert!(matches!(result.coverage.state, CoverageState::Partial));
+    assert!(matches!(column.coverage.state, CoverageState::Partial));
+    assert!(
+        column
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_definition_byte_limit")
+    );
+    assert!(
+        column
+            .metadata
+            .default_value
+            .as_ref()
+            .unwrap()
+            .0
+            .chars()
+            .count()
+            <= 4096
+    );
 }

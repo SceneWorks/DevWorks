@@ -57,9 +57,19 @@ async fn session(
         tls.danger_accept_invalid_hostnames(true);
     }
     if let Some(pem) = &c.request.ca_certificate {
-        tls.add_root_certificate(
-            native_tls::Certificate::from_pem(pem).map_err(|_| MetadataFailure::InvalidTarget)?,
-        );
+        use rustls::pki_types::{CertificateDer, pem::PemObject};
+        let mut count = 0;
+        for root in CertificateDer::pem_slice_iter(pem) {
+            let root = root.map_err(|_| MetadataFailure::InvalidTarget)?;
+            tls.add_root_certificate(
+                native_tls::Certificate::from_der(root.as_ref())
+                    .map_err(|_| MetadataFailure::InvalidTarget)?,
+            );
+            count += 1;
+        }
+        if count == 0 {
+            return Err(MetadataFailure::InvalidTarget);
+        }
     }
     let tls = postgres_native_tls::MakeTlsConnector::new(
         tls.build()

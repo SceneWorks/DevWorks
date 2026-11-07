@@ -253,3 +253,72 @@ fn native_database_sync_all_includes_sources_after_the_first_catalog_page() {
     // This is admission evidence, not a fabricated assertion that all101 external reads finished.
     assert!(path.exists());
 }
+
+#[test]
+fn native_database_inspector_explains_partial_object_metadata() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-partial-object");
+    let path = root.file("source.sqlite", b"");
+    let source = rusqlite::Connection::open(&path).unwrap();
+    source
+        .execute_batch(&format!(
+            "CREATE TABLE defaults(value TEXT DEFAULT '{}');",
+            "x".repeat(6000)
+        ))
+        .unwrap();
+    drop(source);
+    let original = std::fs::read(&path).unwrap();
+    let engine = start(&root);
+    let dialogs = Script::default();
+    dialogs.files.lock().unwrap().push(vec![path.clone()]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New database source");
+    replace(&mut h, "Database source name", "Partial metadata fixture");
+    click(&mut h, Role::Button, "Choose database file");
+    click(&mut h, Role::Button, "Save database source");
+    step_until(&mut h, "partial fixture configured", |s| {
+        !s.databases.busy && !s.databases.loading && s.databases.connections.len() == 1
+    });
+    click(&mut h, Role::Button, "Sync database metadata");
+    step_until(&mut h, "bounded metadata published", |s| {
+        s.databases.connections.first().is_some_and(|c| {
+            c.current_view_id.is_some()
+                && c.active_operation_id.is_none()
+                && matches!(
+                    c.coverage.as_ref().map(|v| &v.state),
+                    Some(devworks_core::protocol::data::CoverageState::Partial)
+                )
+        })
+    });
+    click(&mut h, Role::Button, "Search schema objects");
+    step_until(&mut h, "partial column listed", |s| {
+        !s.databases.read_loading
+            && s.databases
+                .objects
+                .iter()
+                .any(|o| o.qualified_name.0 == "main.defaults.value")
+    });
+    click(&mut h, Role::Button, "Column main.defaults.value");
+    assert!(h.query_by_label("Object coverage: Partial").is_some());
+    assert!(
+        h.query_by_label("Object coverage gap: sqlite_default_size_limit")
+            .is_some()
+    );
+    let object = h.state().databases.selected_object.as_ref().unwrap();
+    assert_eq!(
+        object
+            .metadata
+            .as_ref()
+            .unwrap()
+            .default_value
+            .as_ref()
+            .unwrap()
+            .0
+            .chars()
+            .count(),
+        4096
+    );
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}

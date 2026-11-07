@@ -130,6 +130,13 @@ impl Catalog {
         if let Some(definition) = row.get("definition").filter(|v| v.is_string()) {
             details["definitionSql"] = definition.clone();
         }
+        if let Some(parameters) = details.get_mut("parameters").and_then(Value::as_array_mut) {
+            parameters.sort_by_key(|p| {
+                p.get("ordinal")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<u64>().ok())
+            });
+        }
         let qualified = if parent.is_some() {
             format!("{selected_name}.{name}")
         } else {
@@ -143,11 +150,19 @@ impl Catalog {
             metadata: metadata(name, &self.catalog, Some(schema), details)?,
             coverage: coverage(),
         };
-        if matches!(kind, "View" | "Procedure")
-            && row
-                .get("definition")
-                .and_then(Value::as_str)
-                .is_none_or(|d| d.is_empty())
+        let missing_check = kind == "Constraint"
+            && node
+                .metadata
+                .constraint_type
+                .as_ref()
+                .is_some_and(|t| t.0.eq_ignore_ascii_case("check"))
+            && node.metadata.check_clause.is_none();
+        if missing_check
+            || matches!(kind, "View" | "Procedure")
+                && row
+                    .get("definition")
+                    .and_then(Value::as_str)
+                    .is_none_or(|d| d.is_empty())
         {
             self.collector.gap("metadata_definition_unavailable");
             node.coverage.state = CoverageState::Partial;

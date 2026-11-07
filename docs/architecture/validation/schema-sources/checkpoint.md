@@ -232,3 +232,36 @@ actual definitions and Complete coverage remain available. All13 dispatched nati
 network/coverage/TLS cases pass0.36s. No extra source grants are added to make the
 restricted role appear complete. Supported x86 SQLServer CI and final integrated
 review/CI/merge acceptance remain pending.
+
+Adapter edge checkpoint (7 November): PostgreSQL accepts all PEM roots from the
+selected connection CA bundle. The actual TLS case with an unrelated first root
+reproduces InvalidTarget0.08s before the fix and succeeds with the matching second
+root afterward. Each root is parsed into the per-connection connector only.
+
+SQLite now preserves user names resembling the reserved prefix, groups composite
+foreign keys into one constraint, resolves implicit referenced primary-key order
+and case-insensitive target identity, and enumerates UNIQUE constraints. Oversized
+defaults and omitted DDL retain explicit per-object/snapshot Partial coverage; CHECK
+expressions remain visible in table DDL with the profile's enumeration limitation.
+Three original native regressions fail0.05s, and the final5-case suite passes0.03s.
+The revised bounded-default oracle names its exact qualified column and explicit
+view column. Reverting only the default bound reproduces InvalidMetadata0.04s;
+the temporary fault is removed before the final green run.
+
+MariaDB/MySQL retain actual CHECK clauses, ordered composite columns and declared
+routine parameter order. MariaDB's table identity binds duplicate CHECK names;
+MySQL's different catalog uses its own compile-time SQL variant. Both original
+CHECK regressions fail0.04s. The explicit large-default cases also qualify bounded
+Partial results on MariaDB, MySQL and SQLServer. The simple Complete-profile cases
+exclude that separately tested oversized fixture using the documented glob selector;
+restricted/owner routine visibility remains independently checked.
+
+All19 dispatched actual-network cases pass0.38s, including TLS chain/hostname
+refusals and the new limits/constraint cases. SQLServer remains local x86 emulation
+in this evidence; the dedicated native-x86 workflow now runs all3 corresponding
+cases. Twelve native source/gateway cases pass10.80s; four native Databases UI cases
+pass19.36s including visible per-object coverage, bounded value and unchanged source
+bytes; two native schema-job cases pass10.71s. Workspace/all-target strict checks
+pass39.11s before final current-main integration. No learned computation, real
+credential store access or OS trust changes occur. Review/CI/merge/acceptance remain
+required; this checkpoint does not complete DW-36.

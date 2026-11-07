@@ -18,3 +18,8 @@ GO
 CREATE PROCEDURE dbo.describe_parent @input_id INT AS SELECT id FROM dbo.parent WHERE id=@input_id;
 GO
 SELECT CONVERT(VARCHAR(128),SERVERPROPERTY('ProductVersion')) AS engine_version;
+USE metadata_fixture;
+GO
+DECLARE @ddl NVARCHAR(MAX)=N'CREATE TABLE dbo.meta_large_default(value NVARCHAR(MAX) DEFAULT(N''' + REPLICATE(CAST(N'x' AS NVARCHAR(MAX)),6000) + N'''));';
+EXEC sys.sp_executesql @ddl;
+GO

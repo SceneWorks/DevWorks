@@ -72,13 +72,13 @@ with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
         env = os.environ.copy()
         env.update(DEVWORKS_METADATA_SQLSERVER=f'sqlserver://{endpoint}/metadata_fixture',
                    DEVWORKS_METADATA_CA=str(f/'ca.pem'))
-        # Ordinary tests ignore network fixture cases; this explicit job runs both actual
-        # metadata extraction and verified TLS/CA/hostname-refusal paths without inference.
+        # Ordinary tests ignore network fixture cases; this explicit job runs extraction,
+        # bounded defaults and verified TLS/CA/hostname-refusal paths without inference.
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
                         'database_metadata', 'native_sql_server', '--', '--ignored', '--nocapture'],
                        cwd=ROOT, env=env, check=True)
         print(json.dumps({'host': platform.machine(), 'nativeX86': platform.machine().lower() in ('x86_64','amd64'),
-                          'image': IMAGE, 'cases': 2, 'osTrustChanges': False, 'inference': False}))
+                          'image': IMAGE, 'cases': 3, 'osTrustChanges': False, 'inference': False}))
     finally:
         if started:
             subprocess.run(['docker', 'rm', '--force', name], capture_output=True, check=False)

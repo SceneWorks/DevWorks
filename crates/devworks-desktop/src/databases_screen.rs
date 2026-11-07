@@ -508,6 +508,11 @@ impl DatabasesScreen {
         if let Some(object) = &self.selected_object {
             ui.separator();
             ui.heading(&object.qualified_name.0);
+            let coverage = &object.coverage;
+            ui.label(format!("Object coverage: {:?}", coverage.state));
+            for gap in &coverage.gaps {
+                ui.label(format!("Object coverage gap: {}", gap.as_str()));
+            }
             if let Some(m) = &object.metadata {
                 ui.label(&m.name.0);
                 for (label, value) in [
