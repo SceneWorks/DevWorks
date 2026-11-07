@@ -1311,3 +1311,25 @@ fn native_sql_server_filtered_index_retains_its_predicate() {
         .0;
     assert!(predicate.contains("active") && predicate.contains('1'));
 }
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL domain nullability fixture"]
+fn native_review10_postgres_domain_not_null_is_column_not_null() {
+    let snapshot = boundary_snapshot(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        "meta_domain_nullability",
+    );
+    for (name, nullable) in [
+        ("required_value", false),
+        ("optional_value", true),
+        ("column_required", false),
+    ] {
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column" && o.metadata.name.0 == name)
+            .unwrap();
+        assert_eq!(column.metadata.nullable, Some(nullable), "{name}");
+    }
+}
