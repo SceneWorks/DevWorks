@@ -767,7 +767,8 @@
         "coverage": "?Coverage",
         "last_synced_at_ms": "?Counter",
         "last_error": "?Text",
-        "active_operation_id": "?Id"
+        "active_operation_id": "?Id",
+        "read_view": "?ResolvedViewSet"
       },
       "since": {
         "config": 5,
@@ -776,7 +777,8 @@
         "coverage": 5,
         "last_synced_at_ms": 5,
         "last_error": 5,
-        "active_operation_id": 5
+        "active_operation_id": 5,
+        "read_view": 5
       }
     },
     "ConnectionConfig": {

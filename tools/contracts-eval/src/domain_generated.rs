@@ -2,7 +2,7 @@
 use super::domain_support::*;
 use crate::data_delivery::{
     ArtifactTags, Citation, Coverage, DataScope, DeliveryBarrier, DeliverySnapshot, GitOid,
-    GraphPage, RepositorySnapshot, RetrievalPage, ViewSelection,
+    GraphPage, RepositorySnapshot, ResolvedViewSet, RetrievalPage, ViewSelection,
 };
 use crate::provider::{ArtifactRef, Digest, SchemaRef, TranscriptPage};
 use crate::{
@@ -1677,6 +1677,13 @@ pub struct SchemaConnection {
     )]
     #[schemars(with = "Id", extend("x-since" = 5))]
     pub active_operation_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ResolvedViewSet", extend("x-since" = 5))]
+    pub read_view: Option<ResolvedViewSet>,
 }
 impl Check for SchemaConnection {
     fn check(&self) -> Result<(), String> {
@@ -1696,6 +1703,7 @@ impl Check for SchemaConnection {
         self.last_synced_at_ms.check()?;
         self.last_error.check()?;
         self.active_operation_id.check()?;
+        self.read_view.check()?;
         super::domain_rules::record(
             "SchemaConnection",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -1728,6 +1736,9 @@ impl Revisioned for SchemaConnection {
         }
         if revision < 5 {
             self.active_operation_id = None;
+        }
+        if revision < 5 {
+            self.read_view = None;
         }
     }
 }

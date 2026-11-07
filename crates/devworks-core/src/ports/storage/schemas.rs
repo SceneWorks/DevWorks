@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredSchemaSource {
+    pub configuration_revision: i64,
     pub connection: SchemaConnection,
     pub owner_id: ActorId,
     pub deleted: bool,
@@ -25,6 +26,8 @@ pub struct StoredSchemaView {
     pub id: Id,
     pub connection_id: Id,
     pub source_revision: i64,
+    pub configuration_revision: i64,
+    pub coverage: crate::protocol::data::Coverage,
     pub operation_id: OperationId,
     pub digest: String,
     pub sealed: bool,
@@ -44,7 +47,28 @@ pub struct StoredSchemaPublication {
     pub result: IndexRunRecord,
     pub created_at_ms: i64,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredSchemaReadPin {
+    pub id: Id,
+    pub owner_namespace: String,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub scope_digest: String,
+    pub intent_digest: String,
+    pub connection_id: Id,
+    pub view_id: Id,
+    pub view_digest: String,
+    pub configuration_revision: i64,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+}
 pub trait SchemaRead {
+    fn schema_pin(&self, id: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError>;
+    fn schema_active_pin(
+        &self,
+        intent: &str,
+        now: i64,
+    ) -> Result<Option<StoredSchemaReadPin>, StorageError>;
     /// True only for a currently retained source; no secret value is stored here.
     fn schema_credential_in_use(&self, handle: &Id) -> Result<bool, StorageError>;
     fn schema_inventory_revision(&self) -> Result<i64, StorageError>;
@@ -77,6 +101,8 @@ pub trait SchemaRead {
     ) -> Result<Option<StoredSchemaPublication>, StorageError>;
 }
 pub trait SchemaRepository: SchemaRead {
+    fn create_schema_pin(&mut self, pin: &StoredSchemaReadPin) -> Result<(), StorageError>;
+    fn expire_schema_pins(&mut self, now: i64, limit: u16) -> Result<usize, StorageError>;
     fn create_schema_source(&mut self, row: &StoredSchemaSource) -> Result<(), StorageError>;
     fn revise_schema_source(
         &mut self,

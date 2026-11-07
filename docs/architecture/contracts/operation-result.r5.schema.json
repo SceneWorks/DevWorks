@@ -16295,6 +16295,10 @@
           "$ref": "#/$defs/SchemaAdapterProfile",
           "x-since": 5
         },
+        "readView": {
+          "$ref": "#/$defs/ResolvedViewSet",
+          "x-since": 5
+        },
         "revision": {
           "$ref": "#/$defs/Revision"
         },

@@ -86,3 +86,9 @@ def append_metadata_cases(case, sample, request, artifact):
     case('dw36-r5-exact-object','domain-request.r5',exact)
     old=copy.deepcopy(exact);old['schemaRevision']=1
     case('dw36-before5-exact-object','domain-request',old,False,False)
+
+    leased=copy.deepcopy(connection)
+    leased['readView']=dict(pinId='schema-pin',stamp=dict(storeId='store-a',restoreEpoch='0',sequence='1',policyRevision='1',scopeRevision='1'),expiresAtMs='600000',views=[],schemaViews=[dict(connectionId='schema-connection',snapshotId='schema-view',generationId='schema-view',schemaDigest='a'*64,accessRevision='1',coverage=dict(state='Complete',gaps=[],moreGaps=False))])
+    output=dict(kind='schemas.connections',value=dict(items=[leased],hasMore=False))
+    case('dw36-r5-retained-view','operation-result.r5',output)
+    case('dw36-before5-retained-view','operation-result.r4',output,False,False)

@@ -4,7 +4,7 @@ use crate::{
     context::InvocationContext,
     gateway::AdmittedQuery,
     operations::{OperationInput, schemas as ops},
-    ports::{IdKind, QueryAnswer, QueryHandler, storage::*},
+    ports::{IdKind, Preparation, Prepared, QueryAnswer, QueryHandler, storage::*},
     protocol::{
         CorrelationId, DomainErrorCode, DomainFault, Id,
         data::{DataScope, ViewSelection},
@@ -92,7 +92,13 @@ fn view(
     read: &dyn ReadSnapshot,
     source: &StoredSchemaSource,
     selected: &ViewSelection,
+    ctx: &InvocationContext,
+    scope: &DataScope,
+    now: i64,
 ) -> Result<StoredSchemaView, Failure> {
+    if let Some(view) = super::pins::selected(read, ctx, scope, source, selected, now)? {
+        return Ok(view);
+    }
     let unavailable = || {
         Refusal::new(
             DomainErrorCode::ViewUnavailable,
@@ -115,7 +121,11 @@ fn view(
     };
     read.schemas()
         .schema_view(id)?
-        .filter(|v| v.connection_id == source.connection.id && v.sealed)
+        .filter(|v| {
+            v.connection_id == source.connection.id
+                && v.configuration_revision == source.configuration_revision
+                && v.sealed
+        })
         .ok_or_else(|| unavailable().into())
 }
 impl SchemaService {
@@ -124,6 +134,7 @@ impl SchemaService {
         read: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         input: &ops::ConnectionsInput,
+        prepared: Option<&super::pins::PreparedViews>,
     ) -> Result<(OperationResult, i64), Failure> {
         let visibility = access::visibility(read, ctx, &input.scope)?;
         let revision = read.schemas().schema_inventory_revision()?;
@@ -146,8 +157,19 @@ impl SchemaService {
         };
         let mut result = page(
             rows.iter()
-                .map(|r| access::project(r, &visibility))
-                .collect(),
+                .map(|r| {
+                    let mut row = access::project(r, &visibility);
+                    row.read_view = super::pins::projection(
+                        read,
+                        ctx,
+                        &input.scope,
+                        r,
+                        prepared,
+                        self.clock.now_ms().get(),
+                    )?;
+                    Ok(row)
+                })
+                .collect::<Result<Vec<_>, Failure>>()?,
             usize::from(n),
             &binding,
             |r: &SchemaConnection| &r.id,
@@ -175,11 +197,64 @@ impl SchemaService {
     ) -> Result<(StoredSchemaSource, StoredSchemaView), Failure> {
         let visibility = access::visibility(read, ctx, scope)?;
         let source = access::source(read, id, &visibility)?;
-        let view = view(read, &source, selection)?;
+        let view = view(
+            read,
+            &source,
+            selection,
+            ctx,
+            scope,
+            self.clock.now_ms().get(),
+        )?;
         Ok((source, view))
     }
 }
 impl QueryHandler for SchemaService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, DomainFault> {
+        let result: Result<Option<Prepared>, Failure> = (|| {
+            let OperationInput::Schemas(ops::Input::Connections(input)) = query.input() else {
+                return Ok(None);
+            };
+            if query.schema_revision().0 < 5 || self.runtime.is_none() {
+                return Ok(None);
+            }
+            if env.stopped(self.clock.now_ms().get()) {
+                return Err(StorageError::Cancelled.into());
+            }
+            let (sources, visibility) = env.read(|read| {
+                Ok((|| -> Result<_, Failure> {
+                    let visibility = access::visibility(read, ctx, &input.scope)?;
+                    let (OperationResult::SchemasConnections { value }, _) =
+                        self.connections(read, ctx, input, None)?
+                    else {
+                        unreachable!()
+                    };
+                    let sources = value
+                        .items
+                        .0
+                        .iter()
+                        .map(|r| read.schemas().schema_source(&r.id))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    Ok((sources, visibility))
+                })())
+            })??;
+            self.prepare_connection_views(ctx, query, env, &input.scope, sources, visibility)
+        })();
+        result.map_err(|e| {
+            query_fault(
+                e,
+                "schema",
+                CorrelationId(self.ids.next_id(IdKind::Correlation)),
+            )
+        })
+    }
     fn query(
         &self,
         ctx: &InvocationContext,
@@ -187,13 +262,16 @@ impl QueryHandler for SchemaService {
         read: &dyn ReadSnapshot,
     ) -> Result<QueryAnswer, DomainFault> {
         let result: Result<(OperationResult, i64), Failure> = (|| match query.input() {
-            OperationInput::Schemas(ops::Input::Connections(input)) => {
-                self.connections(read, ctx, input)
-            }
+            OperationInput::Schemas(ops::Input::Connections(input)) => self.connections(
+                read,
+                ctx,
+                input,
+                query.prepared::<super::pins::PreparedViews>(),
+            ),
             OperationInput::Schemas(ops::Input::Objects(input)) => {
                 let (source, view) =
                     self.selected(read, ctx, &input.scope, &input.connection_id, &input.views)?;
-                let revision = read.schemas().schema_inventory_revision()?;
+                let revision = source.configuration_revision;
                 let binding = binding(
                     ctx,
                     "schemas.objects",
@@ -203,7 +281,7 @@ impl QueryHandler for SchemaService {
                         "{}:{}:{}",
                         view.id.as_str(),
                         view.digest,
-                        source.connection.revision.get()
+                        source.configuration_revision
                     ),
                 )?;
                 let after = after(&input.page, &binding)?;
@@ -250,7 +328,7 @@ impl QueryHandler for SchemaService {
             OperationInput::Schemas(ops::Input::Relationships(input)) => {
                 let (source, view) =
                     self.selected(read, ctx, &input.scope, &input.connection_id, &input.views)?;
-                let revision = read.schemas().schema_inventory_revision()?;
+                let revision = source.configuration_revision;
                 let binding = binding(
                     ctx,
                     "schemas.relationships",
@@ -260,7 +338,7 @@ impl QueryHandler for SchemaService {
                         "{}:{}:{}",
                         view.id.as_str(),
                         view.digest,
-                        source.connection.revision.get()
+                        source.configuration_revision
                     ),
                 )?;
                 let after = after(&input.page, &binding)?;

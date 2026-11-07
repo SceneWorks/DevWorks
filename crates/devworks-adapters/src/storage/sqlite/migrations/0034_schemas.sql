@@ -2,9 +2,11 @@
 CREATE TABLE schema_sources (
  id TEXT PRIMARY KEY,
  revision INTEGER NOT NULL CHECK(revision>0),
+ configuration_revision INTEGER NOT NULL CHECK(configuration_revision>0),
  owner_id TEXT NOT NULL REFERENCES actors(id),
  deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
  body_json TEXT NOT NULL CHECK(json_valid(body_json) AND json_type(body_json)='object'),
+ CHECK(json_extract(body_json,'$.configuration_revision')=configuration_revision),
  CHECK(json_extract(body_json,'$.connection.id')=id),
  CHECK(json_extract(body_json,'$.connection.revision')=CAST(revision AS TEXT)),
  CHECK(json_extract(body_json,'$.owner_id')=owner_id)
@@ -14,6 +16,8 @@ CREATE TABLE schema_views (
  id TEXT PRIMARY KEY,
  connection_id TEXT NOT NULL REFERENCES schema_sources(id),
  source_revision INTEGER NOT NULL CHECK(source_revision>0),
+ configuration_revision INTEGER NOT NULL CHECK(configuration_revision>0),
+ coverage_json TEXT NOT NULL CHECK(json_valid(coverage_json)),
  operation_id TEXT NOT NULL REFERENCES operations(id),
  digest TEXT NOT NULL CHECK(length(digest)=64 AND digest NOT GLOB '*[^0-9a-f]*'),
  sealed INTEGER NOT NULL CHECK(sealed IN(0,1)),
@@ -59,3 +63,14 @@ CREATE TRIGGER schema_sources_update AFTER UPDATE ON schema_sources BEGIN UPDATE
 CREATE TRIGGER schema_views_delete AFTER DELETE ON schema_views BEGIN UPDATE schema_inventory SET revision=revision+1 WHERE singleton=1; END;
 
 CREATE INDEX schema_source_credential ON schema_sources(json_extract(body_json,'$.connection.credentialRef')) WHERE deleted=0;
+
+CREATE TABLE schema_read_pins (
+ id TEXT PRIMARY KEY,
+ view_id TEXT NOT NULL REFERENCES schema_views(id) ON DELETE CASCADE,
+ intent_digest TEXT NOT NULL CHECK(length(intent_digest)=64),
+ expires_at INTEGER NOT NULL,
+ body_json TEXT NOT NULL CHECK(json_valid(body_json))
+) STRICT;
+CREATE INDEX schema_read_pin_intent ON schema_read_pins(intent_digest,expires_at,id);
+CREATE INDEX schema_read_pin_expiry ON schema_read_pins(expires_at,id);
+CREATE INDEX schema_read_pin_view ON schema_read_pins(view_id,expires_at);

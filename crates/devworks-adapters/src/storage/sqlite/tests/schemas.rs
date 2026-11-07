@@ -9,7 +9,7 @@ fn id(s: &str) -> Id {
     Id::new(s).unwrap()
 }
 fn source(name: &str, shared: bool) -> StoredSchemaSource {
-    StoredSchemaSource{connection:serde_json::from_value(json!({"id":name,"revision":"1","name":name,"engine":"Sqlite","state":"Enabled","writesEnabled":false,"metadataOnly":true,"ownerId":"host","config":{"name":name,"engine":"Sqlite","endpoint":"/tmp/metadata-fixture.sqlite","catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"workspaceExposed":shared,"projectAccess":[{"projectId":"metadata-project","metadataEnabled":shared,"dataReadEnabled":false,"dataWriteEnabled":false}],"exposureMode":"SchemaOnly","authentication":"File"}})).unwrap(),owner_id:ActorId(id("host")),deleted:false,created_at_ms:T0,updated_at_ms:T0}
+    StoredSchemaSource{configuration_revision:1,connection:serde_json::from_value(json!({"id":name,"revision":"1","name":name,"engine":"Sqlite","state":"Enabled","writesEnabled":false,"metadataOnly":true,"ownerId":"host","config":{"name":name,"engine":"Sqlite","endpoint":"/tmp/metadata-fixture.sqlite","catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"workspaceExposed":shared,"projectAccess":[{"projectId":"metadata-project","metadataEnabled":shared,"dataReadEnabled":false,"dataWriteEnabled":false}],"exposureMode":"SchemaOnly","authentication":"File"}})).unwrap(),owner_id:ActorId(id("host")),deleted:false,created_at_ms:T0,updated_at_ms:T0}
 }
 #[test]
 fn source_visibility_precedes_keyset_limit_and_revision_cas_preserves_identity() {
@@ -60,6 +60,7 @@ fn source_visibility_precedes_keyset_limit_and_revision_cas_preserves_identity()
     .unwrap();
     let mut changed = first[0].clone();
     changed.connection.revision = Revision::new(2).unwrap();
+    changed.configuration_revision += 1;
     changed.connection.config.as_mut().unwrap().project_access =
         Some(serde_json::from_value(json!([])).unwrap());
     let saved = changed.clone();
@@ -111,6 +112,11 @@ fn hidden_staging_seals_atomically_and_exact_publication_survives_index_removal(
             id: id("schema-view"),
             connection_id: id("schema-source"),
             source_revision: 1,
+            configuration_revision: 1,
+            coverage: serde_json::from_value(
+                json!({"state":"Complete","gaps":[],"moreGaps":false}),
+            )
+            .unwrap(),
             operation_id: op_for_create,
             digest: sha256_hex(b"metadata-only"),
             sealed: false,
@@ -427,6 +433,7 @@ fn native_gateway_shared_pages_redact_other_projects_and_expire_after_access_cha
     run_write(&s, WriteOptions::default(), |tx| {
         let mut row = tx.schemas().schema_source(&id("d-shared"))?.unwrap();
         row.connection.revision = Revision::new(2).unwrap();
+        row.configuration_revision += 1;
         row.connection.config.as_mut().unwrap().project_access =
             Some(serde_json::from_value(json!([])).unwrap());
         tx.schemas().revise_schema_source(&row, 1)
@@ -730,6 +737,11 @@ fn native_metadata_worker_recovers_staging_publishes_no_rows_and_observes_after_
             id: id("abandoned-stage"),
             connection_id: connection,
             source_revision: 2,
+            configuration_revision: 1,
+            coverage: serde_json::from_value(
+                json!({"state":"Complete","gaps":[],"moreGaps":false}),
+            )
+            .unwrap(),
             operation_id: old,
             digest: sha256_hex(b"abandoned-stage"),
             sealed: false,
@@ -995,4 +1007,264 @@ fn native_metadata_missing_target_is_failed_not_empty_and_releases_source_for_re
     assert!(
         current.connection.current_view_id.is_some() && current.connection.last_error.is_none()
     );
+}
+
+#[test]
+fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
+    use devworks_core::{
+        protocol::results::{DomainDecision, DomainQueryReply, OperationResult},
+        services::schemas::indexing::SchemaOutcome,
+    };
+    use std::sync::{Arc, atomic::Ordering};
+    let h = Harness::new();
+    let s = Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let path = h.root.0.join("retained-schema.sqlite");
+    let target = rusqlite::Connection::open(&path).unwrap();
+    target
+        .execute_batch(
+            "CREATE TABLE original(id INTEGER PRIMARY KEY); INSERT INTO original VALUES(7);",
+        )
+        .unwrap();
+    let reader = Arc::new(CountingMetadata(std::sync::atomic::AtomicUsize::new(0)));
+    let service = metadata_owner(&h, s.clone(), reader.clone());
+    let mut config =
+        serde_json::to_value(source("pin-source", true).connection.config.unwrap()).unwrap();
+    config["endpoint"] = json!(path.to_str().unwrap());
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: created },
+    } = owner_command(
+        &h,
+        &s,
+        service.clone(),
+        "pin-create",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    )
+    else {
+        panic!("source creation");
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let index = |key: &str| {
+        let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+            r.schemas().schema_source(&created.id)
+        })
+        .unwrap()
+        .unwrap();
+        let DomainDecision::Accepted { operation_id } = owner_command(
+            &h,
+            &s,
+            service.clone(),
+            key,
+            "schemas.index",
+            json!({"connectionId":created.id,"expectedRevision":current.connection.revision}),
+        ) else {
+            panic!("index admission");
+        };
+        let operation = dispatch_metadata(&s, operation_id, false);
+        assert!(matches!(
+            runtime
+                .block_on(service.run_metadata(&operation, &Cancellation::new()))
+                .unwrap(),
+            SchemaOutcome::Completed(_)
+        ));
+    };
+    let query = |who: &str, op: &str, mut body: serde_json::Value| {
+        let authority = devworks_core::authority::HostAuthority {
+            store: &*s,
+            clock: &*h.clock,
+            protected_branches: &[],
+        };
+        let gateway = devworks_core::gateway::Gateway {
+            authority: &authority,
+            store: &*s,
+            ids: &*h.ids,
+        };
+        body["kind"] = json!(op);
+        let frame = json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":5,"queryId":"retained-schema-query","body":body});
+        gateway
+            .query(
+                &schema_context(&s, who),
+                op,
+                frame.to_string().as_bytes(),
+                &*service,
+            )
+            .unwrap()
+    };
+    let catalog = |who: &str, scope: serde_json::Value| {
+        let result = query(
+            who,
+            "schemas.connections",
+            json!({"scope":scope,"page":{"limit":100}}),
+        );
+        let DomainQueryReply::Result {
+            result: OperationResult::SchemasConnections { value },
+            ..
+        } = result
+        else {
+            panic!("{result:?}");
+        };
+        value
+            .items
+            .0
+            .into_iter()
+            .find(|row| row.id == created.id)
+            .unwrap()
+            .read_view
+            .unwrap()
+    };
+    let objects = |who: &str, scope: serde_json::Value, pin: &Id, cursor: Option<&str>| {
+        let mut body = json!({"scope":scope,"connectionId":created.id,"views":{"kind":"Pinned","pinId":pin},"kinds":[],"page":{"limit":1}});
+        if let Some(cursor) = cursor {
+            body["page"]["cursor"] = json!(cursor);
+        }
+        query(who, "schemas.objects", body)
+    };
+    index("pin-index-first");
+    let first = catalog("schema-owner", json!({"kind":"Workspace"}));
+    let repeated = catalog("schema-owner", json!({"kind":"Workspace"}));
+    assert_eq!(first.pin_id, repeated.pin_id);
+    assert_eq!(first.expires_at_ms, repeated.expires_at_ms);
+    let before = objects(
+        "schema-owner",
+        json!({"kind":"Workspace"}),
+        &first.pin_id,
+        None,
+    );
+    let DomainQueryReply::Result {
+        result: OperationResult::SchemasObjects { value: old_page },
+        ..
+    } = before
+    else {
+        panic!("{before:?}");
+    };
+    assert!(!old_page.items.0.is_empty());
+    let cursor = old_page.next_cursor.unwrap();
+    assert!(matches!(
+        objects(
+            "schema-other",
+            json!({"kind":"Workspace"}),
+            &first.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        objects(
+            "schema-owner",
+            json!({"kind":"Project","projectId":"metadata-project"}),
+            &first.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    target.execute_batch("CREATE TABLE later(id INT);").unwrap();
+    index("pin-index-second");
+    let current = catalog("schema-owner", json!({"kind":"Workspace"}));
+    assert_ne!(first.pin_id, current.pin_id);
+    assert_ne!(
+        first.schema_views[0].snapshot_id,
+        current.schema_views[0].snapshot_id
+    );
+    let retained = objects(
+        "schema-owner",
+        json!({"kind":"Workspace"}),
+        &first.pin_id,
+        Some(&cursor.0),
+    );
+    assert!(
+        matches!(
+            retained,
+            DomainQueryReply::Result {
+                result: OperationResult::SchemasObjects { .. },
+                ..
+            }
+        ),
+        "{retained:?}"
+    );
+    let old = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_objects(
+            &first.schema_views[0].snapshot_id,
+            &SchemaObjectFilter::default(),
+            None,
+            500,
+        )
+    })
+    .unwrap();
+    assert!(old.iter().all(|o| !o.qualified_name.0.contains("later")));
+    h.clock.0.store(first.expires_at_ms.get(), Ordering::SeqCst);
+    assert!(matches!(
+        objects(
+            "schema-owner",
+            json!({"kind":"Workspace"}),
+            &first.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    let fresh = catalog("schema-owner", json!({"kind":"Workspace"}));
+    assert_ne!(current.pin_id, fresh.pin_id);
+    assert!(matches!(
+        objects(
+            "schema-owner",
+            json!({"kind":"Workspace"}),
+            &first.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    // Current scope revocation wins even while a foreign reader's retained pin is live.
+    let shared = catalog(
+        "schema-other",
+        json!({"kind":"Project","projectId":"metadata-project"}),
+    );
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&created.id)
+    })
+    .unwrap()
+    .unwrap();
+    config["projectAccess"] = json!([]);
+    config["workspaceExposed"] = json!(false);
+    let edited = owner_command(
+        &h,
+        &s,
+        service.clone(),
+        "pin-revoke",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"connectionId":created.id,"expectedRevision":current.connection.revision,"config":config}),
+    );
+    assert!(matches!(edited, DomainDecision::Applied { .. }));
+    assert!(matches!(
+        objects(
+            "schema-other",
+            json!({"kind":"Project","projectId":"metadata-project"}),
+            &shared.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        objects(
+            "schema-owner",
+            json!({"kind":"Workspace"}),
+            &fresh.pin_id,
+            None
+        ),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert_eq!(
+        reader.0.load(Ordering::SeqCst),
+        2,
+        "all drill-downs are local immutable reads"
+    );
+    assert_eq!(
+        target
+            .query_row("SELECT id FROM original", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        7
+    );
+    service.stop();
 }

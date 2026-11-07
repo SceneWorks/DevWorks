@@ -4,6 +4,7 @@ mod access;
 mod commands;
 mod credentials;
 pub mod indexing;
+mod pins;
 mod queries;
 
 use crate::ports::{Clock, IdSource};

@@ -183,6 +183,7 @@ impl SchemaService {
         }
         let now = self.clock.now_ms().get();
         let mut row = old.clone().unwrap_or_else(|| StoredSchemaSource {
+            configuration_revision: 1,
             connection: SchemaConnection {
                 id: tx.new_id(IdKind::Connection),
                 revision: rev(1),
@@ -200,6 +201,7 @@ impl SchemaService {
                 last_synced_at_ms: None,
                 last_error: None,
                 active_operation_id: None,
+                read_view: None,
             },
             owner_id: ctx.principal().clone(),
             deleted: false,
@@ -210,6 +212,16 @@ impl SchemaService {
             row.connection.revision =
                 old.connection.revision.checked_next().ok_or_else(|| {
                     StorageError::InvalidRecord("schema revision overflow".into())
+                })?;
+        }
+        if let Some(old) = old.as_ref()
+            && (removing
+                || serde_json::to_value(&old.connection.config).ok()
+                    != serde_json::to_value(Some(&input.config)).ok())
+        {
+            row.configuration_revision =
+                old.configuration_revision.checked_add(1).ok_or_else(|| {
+                    StorageError::InvalidRecord("schema configuration revision overflow".into())
                 })?;
         }
         row.updated_at_ms = now;

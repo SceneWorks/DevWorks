@@ -61,20 +61,17 @@ fn sources(
     rows.into_iter().map(decode).collect()
 }
 fn view(conn: &Connection, id: &Id) -> Result<Option<StoredSchemaView>, StorageError> {
-    let row=db(conn.query_row("SELECT id,connection_id,source_revision,operation_id,digest,sealed,created_at FROM schema_views WHERE id=?1 AND sealed=1",[id.as_str()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,bool>(5)?,r.get::<_,i64>(6)?))).optional())?;
-    row.map(|(id, c, rev, op, digest, sealed, created_at_ms)| {
-        Ok(StoredSchemaView {
-            id: Id::new(id).map_err(|_| invalid("invalid schema view id"))?,
-            connection_id: Id::new(c).map_err(|_| invalid("invalid schema source id"))?,
-            source_revision: rev,
-            operation_id: OperationId(
-                Id::new(op).map_err(|_| invalid("invalid schema operation id"))?,
-            ),
-            digest,
-            sealed,
-            created_at_ms,
-        })
-    })
+    db(conn.query_row("SELECT json_object('id',id,'connection_id',connection_id,'source_revision',source_revision,'configuration_revision',configuration_revision,'coverage',json(coverage_json),'operation_id',operation_id,'digest',digest,'sealed',json('true'),'created_at_ms',created_at) FROM schema_views WHERE id=?1 AND sealed=1",[id.as_str()],|r|r.get::<_,String>(0)).optional())?.map(decode).transpose()
+}
+fn pin(conn: &Connection, id: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+    db(conn
+        .query_row(
+            "SELECT body_json FROM schema_read_pins WHERE id=?1",
+            [id.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .optional())?
+    .map(decode)
     .transpose()
 }
 fn objects(
@@ -123,6 +120,11 @@ fn relations(
 macro_rules! reads {
     ($t:ty) => {
         impl SchemaRead for $t {
+            fn schema_pin(&self,id:&Id)->Result<Option<StoredSchemaReadPin>,StorageError>{pin(self.conn,id)}
+            fn schema_active_pin(&self,intent:&str,now:i64)->Result<Option<StoredSchemaReadPin>,StorageError>{
+                db(self.conn.query_row("SELECT body_json FROM schema_read_pins WHERE intent_digest=?1 AND expires_at>?2 ORDER BY expires_at DESC,id LIMIT 1",params![intent,now],|r|r.get::<_,String>(0)).optional())?.map(decode).transpose()
+            }
+
             fn schema_credential_in_use(&self, handle: &Id) -> Result<bool, StorageError> {
                 db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM schema_sources WHERE deleted=0 AND json_extract(body_json,'$.connection.credentialRef')=?1)", [handle.as_str()], |r| r.get(0)))
             }
@@ -186,14 +188,52 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl SchemaRepository for Unit<'_> {
+    fn create_schema_pin(&mut self, row: &StoredSchemaReadPin) -> Result<(), StorageError> {
+        if row.store_id != self.info.store_id
+            || row.restore_epoch != self.info.restore_epoch
+            || row.created_at_ms > self.now
+            || row.expires_at_ms <= self.now
+            || row.expires_at_ms.saturating_sub(self.now) > GRAPH_PIN_TTL_MS
+            || row.owner_namespace.is_empty()
+            || row.scope_digest.len() != 64
+            || row.intent_digest.len() != 64
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let retained = view(self.conn, &row.view_id)?.ok_or(StorageError::ViewUnavailable)?;
+        let source = source(self.conn, &row.connection_id)?.ok_or(StorageError::ViewUnavailable)?;
+        if source.deleted
+            || source.configuration_revision != row.configuration_revision
+            || retained.configuration_revision != row.configuration_revision
+            || retained.connection_id != row.connection_id
+            || retained.digest != row.view_digest
+        {
+            return Err(StorageError::ViewUnavailable);
+        }
+        db(self.conn.execute("INSERT INTO schema_read_pins(id,view_id,intent_digest,expires_at,body_json) VALUES(?1,?2,?3,?4,?5)",params![row.id.as_str(),row.view_id.as_str(),row.intent_digest,row.expires_at_ms,encode(row)?]))?;
+        Ok(())
+    }
+    fn expire_schema_pins(&mut self, now: i64, n: u16) -> Result<usize, StorageError> {
+        db(self.conn.execute("DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",params![now,limit(n)?]))
+    }
+
     fn create_schema_source(&mut self, row: &StoredSchemaSource) -> Result<(), StorageError> {
         row.connection
             .check()
             .map_err(|_| invalid("invalid schema source"))?;
+        if row.configuration_revision != 1
+            || row.connection.config.is_none()
+            || row.connection.owner_id.as_ref() != Some(&row.owner_id)
+        {
+            return Err(invalid("invalid schema source configuration owner"));
+        }
+        if row.connection.current_view_id.is_some() {
+            return Err(invalid("new source cannot publish a schema view"));
+        }
         if row.connection.revision.get() != 1 {
             return Err(invalid("new schema source revision must be one"));
         }
-        db(self.conn.execute("INSERT INTO schema_sources(id,revision,owner_id,deleted,body_json) VALUES(?1,1,?2,?3,?4)",params![row.connection.id.as_str(),row.owner_id.0.as_str(),row.deleted,encode(row)?]))?;
+        db(self.conn.execute("INSERT INTO schema_sources(id,revision,owner_id,deleted,body_json,configuration_revision) VALUES(?1,1,?2,?3,?4,?5)",params![row.connection.id.as_str(),row.owner_id.0.as_str(),row.deleted,encode(row)?,row.configuration_revision]))?;
         Ok(())
     }
     fn revise_schema_source(
@@ -229,7 +269,34 @@ impl SchemaRepository for Unit<'_> {
         {
             return Err(invalid("schema source revision must advance once"));
         }
-        let changed=db(self.conn.execute("UPDATE schema_sources SET revision=?1,deleted=?2,body_json=?3 WHERE id=?4 AND revision=?5 AND owner_id=?6",params![row.connection.revision.get(),row.deleted,encode(row)?,row.connection.id.as_str(),expected,row.owner_id.0.as_str()]))?;
+        let changed_config = serde_json::to_value(&row.connection.config)
+            .map_err(|_| invalid("schema config"))?
+            != serde_json::to_value(&old.connection.config)
+                .map_err(|_| invalid("schema config"))?
+            || row.deleted != old.deleted;
+        let expected_config = old
+            .configuration_revision
+            .checked_add(i64::from(changed_config))
+            .ok_or_else(|| invalid("schema config revision overflow"))?;
+        if row.configuration_revision != expected_config
+            || row.connection.config.is_none()
+            || row.connection.owner_id.as_ref() != Some(&row.owner_id)
+        {
+            return Err(invalid(
+                "schema configuration revision or owner changed incorrectly",
+            ));
+        }
+        if let Some(id) = &row.connection.current_view_id {
+            let view = view(self.conn, id)?.ok_or(StorageError::ViewUnavailable)?;
+            if row.deleted
+                || view.connection_id != row.connection.id
+                || view.configuration_revision != row.configuration_revision
+                || view.source_revision > row.connection.revision.get()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        let changed=db(self.conn.execute("UPDATE schema_sources SET revision=?1,deleted=?2,body_json=?3,configuration_revision=?7 WHERE id=?4 AND revision=?5 AND owner_id=?6",params![row.connection.revision.get(),row.deleted,encode(row)?,row.connection.id.as_str(),expected,row.owner_id.0.as_str(),row.configuration_revision]))?;
         if changed != 1 {
             return Err(StorageError::ScopeDenied);
         }
@@ -250,7 +317,7 @@ impl SchemaRepository for Unit<'_> {
         if row.sealed {
             return Err(invalid("new schema view must be staged"));
         }
-        db(self.conn.execute("INSERT INTO schema_views(id,connection_id,source_revision,operation_id,digest,sealed,created_at) VALUES(?1,?2,?3,?4,?5,0,?6)",params![row.id.as_str(),row.connection_id.as_str(),row.source_revision,row.operation_id.0.as_str(),row.digest,row.created_at_ms]))?;
+        db(self.conn.execute("INSERT INTO schema_views(id,connection_id,source_revision,operation_id,digest,sealed,created_at,configuration_revision,coverage_json) VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8)",params![row.id.as_str(),row.connection_id.as_str(),row.source_revision,row.operation_id.0.as_str(),row.digest,row.created_at_ms,row.configuration_revision,encode(&row.coverage)?]))?;
         Ok(())
     }
     fn append_schema_rows(

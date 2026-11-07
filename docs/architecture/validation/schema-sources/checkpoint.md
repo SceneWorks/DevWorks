@@ -113,3 +113,32 @@ buttons use explicit UI roots. Temporary geometry/timing diagnostics were remove
 
 These are local implementation checkpoints, not item acceptance. Retained schema pins,
 scheduled sync, remaining adapter/TLS qualification and full reviewed CI/merge acceptance remain.
+
+## Retained schema read checkpoint (2026-11-06)
+
+Revision5 source results now include an owner/store/restore/scope-bound readView when a current
+sealed metadata head can be captured. Internal query preparation rechecks writer-side authority
+before creating the ten-minute retention lease; the final result and each drill-down resolve
+current access independently. Listing again can reuse a still-live identity without extending
+its expiry. Expired identities are never revived. Configuration/access revisions are independent
+of ordinary indexing status/publication revisions, so reindexing preserves an explicitly pinned
+old view and its cursor while source configuration changes revoke it. The native Databases screen
+uses the selected pin for object and relationship reads; background source updates do not retarget
+an existing selection.
+
+All nine native SQLite/source/worker/credential cases pass8.20s, including a real target-file
+reindex proving retained old metadata/cursor continuation, fresh current capture, wrong-owner and
+wrong-scope rejection, expiry without revival, live project-access revocation, and unchanged source
+rows. Forty revision5 DW36 wire cases pass typed and independent JSON Schema4.25.1 validation;
+the complete domain corpus is1867 fixtures. Strict workspace/all-target checks pass17.40s.
+The new regression also passes alone0.83s. These checks execute no learned inference or real
+OS credential access. Migration34's current checksum is
+0172c4261c1994bfc3545aeb6061e128d5c22c041daf8468da0f8c050ef8b661.
+
+Bounded obsolete-view retention maintenance, scheduled synchronization, remaining adapter/TLS
+and supported-x86 SQLServer qualification, full native acceptance and reviewed CI/merge remain
+required parts of DW36. Earlier paragraphs are historical checkpoints, not current completion.
+
+The complete native Databases UI suite passes3/3 in14.33s with pin-based exploration. The full
+create/sync/page/inspect/remove flow still leaves source rows intact;101-source admission and
+password-free draft restart cases remain unchanged.

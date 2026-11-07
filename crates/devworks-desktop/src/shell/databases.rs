@@ -66,12 +66,20 @@ impl Shell {
         let Some(source) = self.databases.source().cloned() else {
             return;
         };
-        if self.databases.view.is_none() {
-            self.databases.view = source.current_view_id.map(|id| id.as_str().into());
+        if self.databases.view.is_none()
+            && let Some(captured) = &source.read_view
+        {
+            self.databases.view = captured
+                .schema_views
+                .first()
+                .map(|v| v.snapshot_id.as_str().into());
+            self.databases.read_pin = Some(captured.pin_id.as_str().into());
         }
-        let Some(view) = self.databases.view.clone() else {
-            self.databases.error =
-                Some("No published schema view is available. Sync this source first.".into());
+        let Some(pin) = self.databases.read_pin.clone() else {
+            self.databases.error = Some(
+                "No retained schema view is available. Refresh sources or sync this source first."
+                    .into(),
+            );
             return;
         };
         if !append {
@@ -80,7 +88,7 @@ impl Shell {
         }
         self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
         let n = self.databases.read_sequence;
-        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Exact","viewIds":[view]},"connectionId":source.id,"kinds":if self.databases.kind.is_empty(){vec![]}else{vec![self.databases.kind.clone()]},"page":{"limit":100}});
+        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"kinds":if self.databases.kind.is_empty(){vec![]}else{vec![self.databases.kind.clone()]},"page":{"limit":100}});
         if let Some(cursor) = self.databases.object_next.clone().filter(|_| append) {
             body["page"]["cursor"] = json!(cursor);
         }
@@ -104,9 +112,9 @@ impl Shell {
         }
     }
     fn load_database_relations(&mut self, ids: Vec<String>, append: bool) {
-        let (Some(source), Some(view)) = (
+        let (Some(source), Some(pin)) = (
             self.databases.source().cloned(),
-            self.databases.view.clone(),
+            self.databases.read_pin.clone(),
         ) else {
             return;
         };
@@ -117,7 +125,7 @@ impl Shell {
         }
         self.databases.read_sequence = self.databases.read_sequence.wrapping_add(1);
         let n = self.databases.read_sequence;
-        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Exact","viewIds":[view]},"connectionId":source.id,"objectIds":ids,"page":{"limit":100}});
+        let mut body = json!({"scope":self.databases.scope(),"views":{"kind":"Pinned","pinId":pin},"connectionId":source.id,"objectIds":ids,"page":{"limit":100}});
         if let Some(cursor) = self.databases.relation_next.clone().filter(|_| append) {
             body["page"]["cursor"] = json!(cursor);
         }
@@ -235,6 +243,7 @@ impl Shell {
         match action {
             Action::Refresh => {
                 self.databases.view = None;
+                self.databases.read_pin = None;
                 self.databases.objects.clear();
                 self.databases.relations.clear();
                 self.databases.selected_object = None;
@@ -253,6 +262,7 @@ impl Shell {
             Action::Select(id) => {
                 self.databases.selected = Some(id);
                 self.databases.view = None;
+                self.databases.read_pin = None;
                 self.databases.parent = None;
                 self.databases.objects.clear();
                 self.databases.relations.clear();

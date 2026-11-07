@@ -19,6 +19,7 @@ pub struct DatabasesScreen {
     pub relation_next: Option<String>,
     pub selected_object: Option<SchemaObject>,
     pub view: Option<String>,
+    pub read_pin: Option<String>,
     pub filter: String,
     pub kind: String,
     pub parent: Option<String>,

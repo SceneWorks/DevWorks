@@ -3804,6 +3804,16 @@ impl ConventionImportRepository for Unsupported {
 }
 
 impl SchemaRead for Unsupported {
+    fn schema_pin(&self, _: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+        nope()
+    }
+    fn schema_active_pin(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<Option<StoredSchemaReadPin>, StorageError> {
+        nope()
+    }
     fn schema_credential_in_use(&self, _: &Id) -> Result<bool, StorageError> {
         nope()
     }
@@ -3850,6 +3860,12 @@ impl SchemaRead for Unsupported {
     }
 }
 impl SchemaRepository for Unsupported {
+    fn create_schema_pin(&mut self, _: &StoredSchemaReadPin) -> Result<(), StorageError> {
+        nope()
+    }
+    fn expire_schema_pins(&mut self, _: i64, _: u16) -> Result<usize, StorageError> {
+        nope()
+    }
     fn create_schema_source(&mut self, _: &StoredSchemaSource) -> Result<(), StorageError> {
         nope()
     }

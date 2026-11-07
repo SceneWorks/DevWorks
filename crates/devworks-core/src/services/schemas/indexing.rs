@@ -47,7 +47,7 @@ pub(super) struct Runtime {
     pub store: Arc<dyn ApplicationStore>,
     reader: Arc<dyn MetadataReader>,
     artifacts: Arc<ArtifactService>,
-    closed: Arc<crate::services::conventions::indexing::lifecycle::PublicationFence>,
+    pub(super) closed: Arc<crate::services::conventions::indexing::lifecycle::PublicationFence>,
     active: Mutex<BTreeMap<String, Cancellation>>,
 }
 #[derive(Debug)]
@@ -460,6 +460,8 @@ impl SchemaService {
                 id: view.clone(),
                 connection_id: job.connection_id.clone(),
                 source_revision: job.source_revision,
+                configuration_revision: source.configuration_revision,
+                coverage: snapshot.coverage.clone(),
                 operation_id: op.id.clone(),
                 digest,
                 sealed: false,

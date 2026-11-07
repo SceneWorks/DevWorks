@@ -5,7 +5,7 @@ mod cursor;
 mod dataset;
 mod impact;
 mod languages;
-mod lease;
+pub(crate) mod lease;
 mod linking;
 mod model;
 mod modules;
