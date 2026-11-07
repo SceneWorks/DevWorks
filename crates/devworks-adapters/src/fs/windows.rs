@@ -52,6 +52,10 @@ fn handle_information(file: &File) -> io::Result<HandleInformation> {
     Ok(info)
 }
 
+pub(super) fn file_identity(file: &File) -> Option<FileIdentity> {
+    handle_information(file).ok().map(|i| i.identity())
+}
+
 const FILE_SHARE_READ: u32 = 0x1;
 const FILE_SHARE_WRITE: u32 = 0x2;
 const FILE_SHARE_DELETE: u32 = 0x4;
@@ -74,7 +78,7 @@ pub(super) fn path_identity(path: &Path) -> Option<FileIdentity> {
 
 /// Opens the object itself (never a reparse target) and holds it without delete sharing, so it
 /// cannot be renamed or replaced while held.
-fn open_held(path: &Path) -> io::Result<File> {
+pub(super) fn open_held(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)

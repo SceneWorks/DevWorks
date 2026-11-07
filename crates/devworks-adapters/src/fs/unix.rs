@@ -17,11 +17,11 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 
-fn cname(name: &OsStr) -> io::Result<CString> {
+pub(super) fn cname(name: &OsStr) -> io::Result<CString> {
     CString::new(name.as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
 
-fn stat_at(dir: RawFd, name: &CStr) -> io::Result<libc::stat> {
+pub(super) fn stat_at(dir: RawFd, name: &CStr) -> io::Result<libc::stat> {
     let mut st = MaybeUninit::<libc::stat>::uninit();
     // SAFETY: live directory fd, NUL-terminated name, `st` is a valid out pointer.
     let rc = unsafe {
@@ -39,7 +39,7 @@ fn stat_at(dir: RawFd, name: &CStr) -> io::Result<libc::stat> {
     Ok(unsafe { st.assume_init() })
 }
 
-fn fstat(fd: RawFd) -> io::Result<libc::stat> {
+pub(super) fn fstat(fd: RawFd) -> io::Result<libc::stat> {
     let mut st = MaybeUninit::<libc::stat>::uninit();
     // SAFETY: live fd and a valid out pointer.
     if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
@@ -49,7 +49,7 @@ fn fstat(fd: RawFd) -> io::Result<libc::stat> {
     Ok(unsafe { st.assume_init() })
 }
 
-fn open_at(dir: RawFd, name: &CStr, flags: libc::c_int) -> io::Result<OwnedFd> {
+pub(super) fn open_at(dir: RawFd, name: &CStr, flags: libc::c_int) -> io::Result<OwnedFd> {
     // SAFETY: live directory fd, NUL-terminated name; no caller-controlled pointers.
     let fd = unsafe { libc::openat(dir, name.as_ptr(), flags | libc::O_CLOEXEC) };
     if fd < 0 {
@@ -59,7 +59,7 @@ fn open_at(dir: RawFd, name: &CStr, flags: libc::c_int) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn unlink_at(dir: RawFd, name: &CStr, directory: bool) -> io::Result<()> {
+pub(super) fn unlink_at(dir: RawFd, name: &CStr, directory: bool) -> io::Result<()> {
     let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
     // SAFETY: live directory fd and NUL-terminated name.
     if unsafe { libc::unlinkat(dir, name.as_ptr(), flags) } != 0 {
@@ -70,26 +70,26 @@ fn unlink_at(dir: RawFd, name: &CStr, directory: bool) -> io::Result<()> {
 
 // `st_dev`/`st_ino` widths differ across Unix targets.
 #[allow(clippy::unnecessary_cast)]
-fn ident(st: &libc::stat) -> FileIdentity {
+pub(super) fn ident(st: &libc::stat) -> FileIdentity {
     FileIdentity {
         volume: st.st_dev as u64,
         file: st.st_ino as u64,
     }
 }
-fn is_link(st: &libc::stat) -> bool {
+pub(super) fn is_link(st: &libc::stat) -> bool {
     st.st_mode & libc::S_IFMT == libc::S_IFLNK
 }
-fn is_dir(st: &libc::stat) -> bool {
+pub(super) fn is_dir(st: &libc::stat) -> bool {
     st.st_mode & libc::S_IFMT == libc::S_IFDIR
 }
-fn is_reg(st: &libc::stat) -> bool {
+pub(super) fn is_reg(st: &libc::stat) -> bool {
     st.st_mode & libc::S_IFMT == libc::S_IFREG
 }
 
 const DIR_NOFOLLOW: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW;
 
 /// Opens an absolute directory path component by component without following any link.
-fn open_dir_nofollow(path: &Path) -> io::Result<OwnedFd> {
+pub(super) fn open_dir_nofollow(path: &Path) -> io::Result<OwnedFd> {
     let mut dir = open_at(libc::AT_FDCWD, c"/", libc::O_RDONLY | libc::O_DIRECTORY)?;
     for c in path.components() {
         match c {

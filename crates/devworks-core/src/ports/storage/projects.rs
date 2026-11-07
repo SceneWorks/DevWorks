@@ -170,7 +170,65 @@ pub fn project_purge_digest(p: &StoredProjectPurge) -> String {
     )
 }
 
+/// Reserved before external creation; a live write prevents purge preparation.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectManagedFileReservation {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub kind: String,
+    pub relative_path: String,
+    pub root: crate::authority::destructive::FileIdentity,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
+    pub boot_id: Option<Id>,
+    pub created_at_ms: i64,
+}
+
+/// A host-created transient file, attributed durably before its source handle escapes.
+#[derive(Clone, Debug)]
+pub struct StoredProjectManagedFile {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub kind: String,
+    pub relative_path: String,
+    pub witness: crate::ports::project_purge::PurgeFileWitness,
+    pub created_at_ms: i64,
+}
+
+/// Recovery view for one normal staging owner, including incomplete writes.
+#[derive(Clone, Debug)]
+pub struct ProjectManagedFileRecovery {
+    pub id: Id,
+    pub project_id: ProjectId,
+    pub relative_path: String,
+    pub root: crate::authority::destructive::FileIdentity,
+    pub writing: bool,
+    pub boot_id: Option<Id>,
+}
+
 pub trait ProjectRead {
+    fn managed_file_recovery(
+        &self,
+        kind: &str,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<ProjectManagedFileRecovery>, StorageError>;
+
+    fn pending_project_managed_writes(&self, project: &ProjectId) -> Result<bool, StorageError>;
+
+    fn project_managed_file(
+        &self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<Option<StoredProjectManagedFile>, StorageError>;
+    fn project_managed_files(
+        &self,
+        project: &ProjectId,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredProjectManagedFile>, StorageError>;
+
     /// Exact project binding is mandatory even when the manifest ID is known.
     fn purge_manifest(
         &self,
@@ -218,6 +276,22 @@ pub trait ProjectRead {
 }
 
 pub trait ProjectRepository: ProjectRead {
+    fn reserve_project_managed_file(
+        &mut self,
+        file: &ProjectManagedFileReservation,
+    ) -> Result<(), StorageError>;
+
+    fn register_project_managed_file(
+        &mut self,
+        file: &StoredProjectManagedFile,
+    ) -> Result<(), StorageError>;
+    /// A normal staging owner records physical settlement and forgets its private path.
+    fn finish_project_managed_file(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<(), StorageError>;
+
     /// Records an immutable preparation under its current project/store fences.
     fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError>;
 

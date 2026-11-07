@@ -39,13 +39,18 @@
 //!   are atomic and survive a crash once its log is flushed, which write-through forces for the
 //!   rename), but a newly created directory's own entry is not separately forced to disk.
 use devworks_core::ports::files::{ArtifactFiles, FileFault, PublishedBlob};
+use devworks_core::ports::storage::{
+    ApplicationStore, ProjectManagedFileReservation, ReadOptions, WriteOptions, read_snapshot,
+    run_write,
+};
+use devworks_core::protocol::ProjectId;
 use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 /// Timestamp granularity margin of the racy-timestamp rule (covers 2 s FAT granularity).
@@ -191,6 +196,7 @@ pub struct NativeArtifactFiles {
     data_root: PathBuf,
     cache_root: PathBuf,
     serial: AtomicU64,
+    store: Option<Arc<dyn ApplicationStore>>,
     verified: Mutex<HashMap<(String, String), Stamp>>,
     #[cfg(test)]
     pub(crate) crash_at: Mutex<Option<Step>>,
@@ -303,6 +309,7 @@ impl NativeArtifactFiles {
             data_root: data_root.into(),
             cache_root: cache_root.into(),
             serial: AtomicU64::new(0),
+            store: None,
             verified: Mutex::new(HashMap::new()),
             #[cfg(test)]
             crash_at: Mutex::new(None),
@@ -310,6 +317,11 @@ impl NativeArtifactFiles {
             synced: Mutex::new(Vec::new()),
         }
     }
+    pub fn with_store(mut self, store: Arc<dyn ApplicationStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
     fn staging(&self) -> PathBuf {
         self.data_root.join("staging")
     }
@@ -826,6 +838,110 @@ impl ArtifactFiles for NativeArtifactFiles {
         let tmp = dir.join(format!("{key}.{}-{n}.tmp", std::process::id()));
         std::fs::write(&tmp, bytes).map_err(fault)?;
         std::fs::rename(&tmp, dir.join(key)).map_err(fault)
+    }
+
+    fn write_project_derived(
+        &self,
+        project: &ProjectId,
+        key: &str,
+        bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        valid_name(key)?;
+        if !key.starts_with("pv-")
+            || key.len() != 43
+            || !key[3..]
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(FileFault::Unsupported(
+                "invalid project preview identity".into(),
+            ));
+        }
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| FileFault::Unsupported("project cache custody unavailable".into()))?;
+        let dir = self.previews();
+        std::fs::create_dir_all(&dir).map_err(fault)?;
+        let meta = std::fs::symlink_metadata(&dir).map_err(fault)?;
+        let root = super::identity_at(&dir, &meta)
+            .ok_or_else(|| FileFault::Unsupported("cache root identity unavailable".into()))?;
+        let project = project.clone();
+        let relative_path = key.to_owned();
+        let reserved = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+            let info = tx.store().clone();
+            let reserved = ProjectManagedFileReservation {
+                id: tx.new_id(devworks_core::ports::IdKind::Artifact),
+                project_id: project,
+                kind: "Preview".into(),
+                relative_path,
+                root,
+                store_id: info.store_id,
+                restore_epoch: info.restore_epoch,
+                boot_id: info.boot_id,
+                created_at_ms: tx.now_ms(),
+            };
+            tx.projects().reserve_project_managed_file(&reserved)?;
+            Ok(reserved)
+        })
+        .map_err(|_| FileFault::Unsupported("project cache write closed".into()))?;
+        let result = self.write_derived(key, bytes);
+        let finished = run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+            tx.projects()
+                .finish_project_managed_file(&reserved.project_id, &reserved.id)
+        });
+        if finished.is_err() {
+            return Err(FileFault::Io("project cache settlement unavailable".into()));
+        }
+        result
+    }
+
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        let boot = store.info().boot_id;
+        let mut after = None;
+        loop {
+            let rows = read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+                r.projects()
+                    .managed_file_recovery("Preview", after.as_ref(), 500)
+            })
+            .map_err(|_| FileFault::Io("cache recovery unavailable".into()))?;
+            if rows.is_empty() {
+                return Ok(());
+            }
+            after = rows.last().map(|r| r.id.clone());
+            for row in rows {
+                if !row.writing || row.boot_id == boot {
+                    continue;
+                }
+                let dir = self.previews();
+                if let Ok(meta) = std::fs::symlink_metadata(&dir) {
+                    if super::identity_at(&dir, &meta) != Some(row.root) {
+                        return Err(FileFault::Mismatch);
+                    }
+                    valid_name(&row.relative_path)?;
+                    let prefix = format!("{}.", row.relative_path);
+                    for entry in std::fs::read_dir(&dir).map_err(fault)? {
+                        let entry = entry.map_err(fault)?;
+                        let name = entry.file_name();
+                        let Some(name) = name.to_str() else { continue };
+                        if (name == row.relative_path
+                            || (name.starts_with(&prefix) && name.ends_with(".tmp")))
+                            && entry.file_type().map_err(fault)?.is_file()
+                        {
+                            std::fs::remove_file(entry.path()).map_err(fault)?;
+                        }
+                    }
+                }
+                run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+                    tx.projects()
+                        .finish_project_managed_file(&row.project_id, &row.id)
+                })
+                .map_err(|_| FileFault::Io("cache recovery settlement unavailable".into()))?;
+            }
+        }
     }
 
     fn read_derived(&self, key: &str, max: usize) -> Result<Option<Vec<u8>>, FileFault> {

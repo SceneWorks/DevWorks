@@ -102,6 +102,13 @@ impl HostArtifactSources {
         }
     }
 
+    pub(crate) fn new_managed_file_id(&self) -> Id {
+        self.ids.next_id(IdKind::Artifact)
+    }
+    pub(crate) fn now_ms(&self) -> i64 {
+        self.clock.now_ms().get()
+    }
+
     /// Registers a handle, refusing a duplicate ID of the same kind, and evicts expired ones.
     fn insert(&self, kind: Kind, id: &Id, handle: Handle) -> Result<(), IssueRefusal> {
         let now = self.clock.now_ms().get();

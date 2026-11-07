@@ -4,7 +4,8 @@ pub(super) mod guard;
 mod selectors;
 use super::conn::db;
 use devworks_core::ports::storage::{
-    StorageError, StoreInfo, StoredProjectPurge, project_purge_digest,
+    ProjectManagedFileRecovery, ProjectManagedFileReservation, StorageError, StoreInfo,
+    StoredProjectManagedFile, StoredProjectPurge, project_purge_digest,
 };
 use devworks_core::protocol::{
     Id, ProjectId,
@@ -28,6 +29,9 @@ pub(super) fn insert_manifest(
     stored: &StoredProjectPurge,
 ) -> Result<(), StorageError> {
     let m = &stored.manifest;
+    if pending_managed_writes(conn, &m.project_id)? {
+        return Err(StorageError::Busy);
+    }
     m.check().map_err(|_| invalid("invalid purge manifest"))?;
     if !matches!(m.phase, PurgePhase::Prepared)
         || m.revision.get() != 1
@@ -128,4 +132,227 @@ pub(super) fn manifest(
         return Err(invalid("stored purge preparation content changed"));
     }
     Ok(Some(stored))
+}
+
+pub(super) fn register_managed_file(
+    conn: &Connection,
+    store: &StoreInfo,
+    file: &StoredProjectManagedFile,
+) -> Result<(), StorageError> {
+    use devworks_core::ports::project_purge::PurgeFileOwner;
+    let owner_matches = match (&*file.kind, &file.witness.owner) {
+        ("DiagnosticExport", PurgeFileOwner::DiagnosticExport { file_id })
+        | ("ClientPaste", PurgeFileOwner::ClientPaste { file_id }) => file_id == &file.id,
+        _ => false,
+    };
+    let path = std::path::Path::new(&file.relative_path);
+    if file.witness.project_id != file.project_id
+        || file.witness.store_id != store.store_id
+        || file.witness.restore_epoch != store.restore_epoch
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    if !owner_matches
+        || file.relative_path != file.witness.relative_entry
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|p| !matches!(p, std::path::Component::Normal(_)))
+        || file.witness.directory
+        || file.witness.link
+        || !digest(&file.witness.content_digest)
+    {
+        return Err(invalid("invalid managed purge file attribution"));
+    }
+    let bytes =
+        i64::try_from(file.witness.byte_count).map_err(|_| invalid("managed purge file size"))?;
+    let witness =
+        serde_json::to_string(&file.witness).map_err(|_| invalid("managed purge file witness"))?;
+    managed_scope_open(conn, &file.project_id)?;
+    let reservation:Option<String>=db(conn.query_row("SELECT identity_json FROM project_managed_files WHERE id=?1 AND project_id=?2 AND state='Writing'",params![file.id.as_str(),file.project_id.0.as_str()],|r|r.get(0)).optional())?;
+    let reserved: ProjectManagedFileReservation =
+        serde_json::from_str(&reservation.ok_or(StorageError::ScopeDenied)?)
+            .map_err(|_| invalid("managed file reservation"))?;
+    if reserved.id != file.id
+        || reserved.project_id != file.project_id
+        || reserved.kind != file.kind
+        || reserved.relative_path != file.relative_path
+        || reserved.root != file.witness.root
+        || reserved.store_id != store.store_id
+        || reserved.restore_epoch != store.restore_epoch
+        || reserved.boot_id != store.boot_id
+        || reserved.created_at_ms != file.created_at_ms
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    db(conn.execute("UPDATE project_managed_files SET state='Live',identity_json=?3,byte_count=?4 WHERE id=?1 AND project_id=?2 AND state='Writing'",params![file.id.as_str(),file.project_id.0.as_str(),witness,bytes]))?;
+    Ok(())
+}
+
+pub(super) fn managed_file(
+    conn: &Connection,
+    project: &ProjectId,
+    id: &Id,
+) -> Result<Option<StoredProjectManagedFile>, StorageError> {
+    let raw:Option<(String,String,String,i64,i64)>=db(conn.query_row("SELECT kind,relative_path,identity_json,byte_count,created_at FROM project_managed_files WHERE id=?1 AND project_id=?2 AND state IN('Live','Removing')",params![id.as_str(),project.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional())?;
+    let Some((kind, relative_path, body, bytes, created_at_ms)) = raw else {
+        return Ok(None);
+    };
+    let witness: devworks_core::ports::project_purge::PurgeFileWitness =
+        serde_json::from_str(&body).map_err(|_| invalid("stored managed file witness"))?;
+    if i64::try_from(witness.byte_count).ok() != Some(bytes)
+        || witness.relative_entry != relative_path
+    {
+        return Err(invalid("stored managed file identity"));
+    }
+    Ok(Some(StoredProjectManagedFile {
+        id: id.clone(),
+        project_id: project.clone(),
+        kind,
+        relative_path,
+        witness,
+        created_at_ms,
+    }))
+}
+
+pub(super) fn managed_files(
+    conn: &Connection,
+    project: &ProjectId,
+    after: Option<&Id>,
+    n: u16,
+) -> Result<Vec<StoredProjectManagedFile>, StorageError> {
+    if n == 0 || n > 500 {
+        return Err(invalid("managed file page limit"));
+    }
+    let mut statement=db(conn.prepare("SELECT id FROM project_managed_files WHERE project_id=?1 AND state IN('Live','Removing') AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"))?;
+    let ids = db(statement.query_map(
+        params![project.0.as_str(), after.map(Id::as_str), i64::from(n)],
+        |r| r.get::<_, String>(0),
+    ))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(super::conn::db_err)?;
+    ids.into_iter()
+        .map(|id| {
+            let id = Id::new(id).map_err(|_| invalid("stored managed file ID"))?;
+            managed_file(conn, project, &id)?
+                .ok_or_else(|| invalid("managed file disappeared within snapshot"))
+        })
+        .collect()
+}
+
+pub(super) fn finish_managed_file(
+    conn: &Connection,
+    project: &ProjectId,
+    id: &Id,
+) -> Result<(), StorageError> {
+    db(conn.execute("UPDATE project_managed_files SET state='Removed',relative_path='',identity_json='{}' WHERE id=?1 AND project_id=?2",params![id.as_str(),project.0.as_str()]))?;
+    Ok(())
+}
+
+fn managed_scope_open(conn: &Connection, project: &ProjectId) -> Result<(), StorageError> {
+    let open:bool=db(conn.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1) AND NOT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete'))",[project.0.as_str()],|r|r.get(0)))?;
+    if open {
+        Ok(())
+    } else {
+        Err(StorageError::ScopeDenied)
+    }
+}
+
+pub(super) fn reserve_managed_file(
+    conn: &Connection,
+    store: &StoreInfo,
+    file: &ProjectManagedFileReservation,
+) -> Result<(), StorageError> {
+    if file.store_id != store.store_id
+        || file.boot_id != store.boot_id
+        || file.boot_id.is_none()
+        || file.restore_epoch != store.restore_epoch
+        || !matches!(&*file.kind, "DiagnosticExport" | "ClientPaste" | "Preview")
+        || file.created_at_ms < 0
+        || file.relative_path.is_empty()
+        || file.relative_path.contains('\\')
+        || std::path::Path::new(&file.relative_path)
+            .components()
+            .count()
+            != 1
+        || !matches!(
+            std::path::Path::new(&file.relative_path)
+                .components()
+                .next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err(invalid("managed file reservation identity"));
+    }
+    managed_scope_open(conn, &file.project_id)?;
+    let body = serde_json::to_string(file).map_err(|_| invalid("managed file reservation JSON"))?;
+    db(conn.execute("INSERT INTO project_managed_files(id,project_id,kind,relative_path,identity_json,byte_count,state,created_at) VALUES(?1,?2,?3,?4,?5,0,'Writing',?6)",params![file.id.as_str(),file.project_id.0.as_str(),file.kind,file.relative_path,body,file.created_at_ms]))?;
+    Ok(())
+}
+
+pub(super) fn pending_managed_writes(
+    conn: &Connection,
+    project: &ProjectId,
+) -> Result<bool, StorageError> {
+    db(conn.query_row("SELECT EXISTS(SELECT 1 FROM project_managed_files WHERE project_id=?1 AND state='Writing')",[project.0.as_str()],|r|r.get(0)))
+}
+
+pub(super) fn managed_recovery(
+    conn: &Connection,
+    kind: &str,
+    after: Option<&Id>,
+    n: u16,
+) -> Result<Vec<ProjectManagedFileRecovery>, StorageError> {
+    if !matches!(kind, "DiagnosticExport" | "ClientPaste" | "Preview") || n == 0 || n > 500 {
+        return Err(invalid("managed recovery page"));
+    }
+    let mut query=db(conn.prepare("SELECT id,project_id,relative_path,identity_json,state FROM project_managed_files WHERE kind=?1 AND state<>'Removed' AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT ?3"))?;
+    let rows = db(
+        query.query_map(params![kind, after.map(Id::as_str), i64::from(n)], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        }),
+    )?;
+    rows.map(|row| {
+        let (id, project, path, body, state) = db(row)?;
+        let id = Id::new(id).map_err(|_| invalid("managed recovery ID"))?;
+        let project_id =
+            ProjectId(Id::new(project).map_err(|_| invalid("managed recovery project"))?);
+        let writing = state == "Writing";
+        let mut boot_id = None;
+        let root = if writing {
+            let reserved: ProjectManagedFileReservation =
+                serde_json::from_str(&body).map_err(|_| invalid("managed recovery reservation"))?;
+            if reserved.id != id
+                || reserved.project_id != project_id
+                || reserved.relative_path != path
+                || reserved.kind != kind
+            {
+                return Err(invalid("managed recovery binding"));
+            }
+            boot_id = reserved.boot_id;
+            reserved.root
+        } else {
+            let witness: devworks_core::ports::project_purge::PurgeFileWitness =
+                serde_json::from_str(&body).map_err(|_| invalid("managed recovery witness"))?;
+            if witness.relative_entry != path {
+                return Err(invalid("managed recovery path"));
+            }
+            witness.root
+        };
+        Ok(ProjectManagedFileRecovery {
+            id,
+            project_id,
+            relative_path: path,
+            root,
+            writing,
+            boot_id,
+        })
+    })
+    .collect()
 }

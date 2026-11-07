@@ -363,6 +363,13 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
+            fn managed_file_recovery(&self,kind:&str,after:Option<&Id>,n:u16)->Result<Vec<ProjectManagedFileRecovery>,StorageError> {super::project_purge::managed_recovery(self.conn,kind,after,n)}
+
+            fn pending_project_managed_writes(&self, project:&ProjectId)->Result<bool,StorageError> {super::project_purge::pending_managed_writes(self.conn,project)}
+
+            fn project_managed_file(&self, project:&ProjectId, id:&Id) -> Result<Option<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_file(self.conn,project,id) }
+            fn project_managed_files(&self, project:&ProjectId, after:Option<&Id>, n:u16) -> Result<Vec<StoredProjectManagedFile>,StorageError> { super::project_purge::managed_files(self.conn,project,after,n) }
+
             fn purge_manifest(&self, project: &ProjectId, manifest: &Id) -> Result<Option<StoredProjectPurge>, StorageError> {
                 super::project_purge::manifest(self.conn, project, manifest)
             }
@@ -523,6 +530,27 @@ fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 }
 
 impl ProjectRepository for Unit<'_> {
+    fn reserve_project_managed_file(
+        &mut self,
+        file: &ProjectManagedFileReservation,
+    ) -> Result<(), StorageError> {
+        super::project_purge::reserve_managed_file(self.conn, self.info, file)
+    }
+
+    fn register_project_managed_file(
+        &mut self,
+        file: &StoredProjectManagedFile,
+    ) -> Result<(), StorageError> {
+        super::project_purge::register_managed_file(self.conn, self.info, file)
+    }
+    fn finish_project_managed_file(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+    ) -> Result<(), StorageError> {
+        super::project_purge::finish_managed_file(self.conn, project, id)
+    }
+
     fn insert_purge_manifest(&mut self, manifest: &StoredProjectPurge) -> Result<(), StorageError> {
         super::project_purge::insert_manifest(self.conn, self.info, manifest)
     }

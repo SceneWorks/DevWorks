@@ -139,6 +139,23 @@ pub trait ArtifactFiles: Send + Sync {
     fn stored_files(&self) -> Result<Vec<(String, String)>, FileFault>;
     /// Stores a derived, rebuildable payload (previews) in the disposable cache class.
     fn write_derived(&self, key: &str, bytes: &[u8]) -> Result<(), FileFault>;
+    /// Project previews cannot create private cache bytes after a reviewed purge.
+    /// Unsupported adapters leave the preview uncached.
+    fn write_project_derived(
+        &self,
+        _project: &ProjectId,
+        _key: &str,
+        _bytes: &[u8],
+    ) -> Result<(), FileFault> {
+        Err(FileFault::Unsupported(
+            "project cache custody unavailable".into(),
+        ))
+    }
+    /// Normal cache-owner recovery, never a purge-triggered global cache sweep.
+    fn recover_project_derived(&self) -> Result<(), FileFault> {
+        Ok(())
+    }
+
     /// A derived payload of at most `max` bytes, if still cached.
     fn read_derived(&self, key: &str, max: usize) -> Result<Option<Vec<u8>>, FileFault>;
     /// Removes every derived payload (they are rebuilt on demand); returns how many.

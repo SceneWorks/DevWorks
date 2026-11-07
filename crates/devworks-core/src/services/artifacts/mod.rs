@@ -2180,7 +2180,11 @@ impl ArtifactService {
             .map_err(|_| not_found("artifact_file", &v.id).into())
     }
 
-    fn preview_of(&self, v: &StoredVersion) -> Result<(preview::Preview, ArtifactRef), Failure> {
+    fn preview_of(
+        &self,
+        v: &StoredVersion,
+        project: Option<&ProjectId>,
+    ) -> Result<(preview::Preview, ArtifactRef), Failure> {
         let pid = preview::preview_id(v.id.as_str());
         // The derived cache is disposable: a missing or unreadable entry is rebuilt from the
         // verified source, and a failed cache write only means it is rebuilt next time.
@@ -2195,7 +2199,11 @@ impl ArtifactService {
             None => {
                 let head = self.blob_range(v, 0, preview::PREVIEW_BYTES)?;
                 let p = preview::build(&v.media_type, &head, v.byte_count as u64);
-                let _ = self.files.write_derived(&pid, &preview::encode_cached(&p));
+                let bytes = preview::encode_cached(&p);
+                let _ = match project {
+                    Some(project) => self.files.write_project_derived(project, &pid, &bytes),
+                    None => self.files.write_derived(&pid, &bytes),
+                };
                 p
             }
         };
@@ -2220,7 +2228,7 @@ impl ArtifactService {
     ) -> Result<OperationResult, Failure> {
         let (artifact, version, derived) = self.target(snapshot, ctx, artifact_id, version_id)?;
         let (bytes, reference, textual) = if derived {
-            let (p, r) = self.preview_of(&version)?;
+            let (p, r) = self.preview_of(&version, artifact.scope.project())?;
             (Some(p.bytes), r, true)
         } else {
             (
@@ -2303,7 +2311,7 @@ impl ArtifactService {
         artifact_id: &Id,
         version_id: &Id,
     ) -> Result<OperationResult, Failure> {
-        let (_, version, derived) = self.target(snapshot, ctx, artifact_id, version_id)?;
+        let (artifact, version, derived) = self.target(snapshot, ctx, artifact_id, version_id)?;
         if derived {
             return Err(Refusal::new(
                 DomainErrorCode::UnsupportedTarget,
@@ -2312,7 +2320,7 @@ impl ArtifactService {
             )
             .into());
         }
-        let (p, reference) = self.preview_of(&version)?;
+        let (p, reference) = self.preview_of(&version, artifact.scope.project())?;
         let state = match p.extent {
             preview::Extent::Complete => CoverageState::Complete,
             preview::Extent::Partial => CoverageState::Partial,

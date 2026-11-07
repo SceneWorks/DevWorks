@@ -2046,3 +2046,579 @@ fn purge_migration36_refuses_an_older_reader_before_changing_the_store() {
     let current = h.store();
     assert!(current.integrity_check().unwrap().problems.is_empty());
 }
+
+fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileReservation {
+    let info = store.info();
+    ProjectManagedFileReservation {
+        id: id(name),
+        project_id: project("purge-a"),
+        kind: "DiagnosticExport".into(),
+        relative_path: format!("{name}.jsonl"),
+        root: devworks_core::authority::destructive::FileIdentity { volume: 1, file: 2 },
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        boot_id: info.boot_id,
+        created_at_ms: T0,
+    }
+}
+fn managed_publication(r: &ProjectManagedFileReservation) -> StoredProjectManagedFile {
+    StoredProjectManagedFile {
+        id: r.id.clone(),
+        project_id: r.project_id.clone(),
+        kind: r.kind.clone(),
+        relative_path: r.relative_path.clone(),
+        created_at_ms: r.created_at_ms,
+        witness: devworks_core::ports::project_purge::PurgeFileWitness {
+            project_id: r.project_id.clone(),
+            store_id: r.store_id.clone(),
+            restore_epoch: r.restore_epoch,
+            owner: devworks_core::ports::project_purge::PurgeFileOwner::DiagnosticExport {
+                file_id: r.id.clone(),
+            },
+            root: r.root,
+            relative_entry: r.relative_path.clone(),
+            identity: devworks_core::authority::destructive::FileIdentity { volume: 1, file: 3 },
+            byte_count: 3,
+            content_digest: "a".repeat(64),
+            directory: false,
+            link: false,
+        },
+    }
+}
+#[test]
+fn managed_purge_file_reservations_survive_restart_block_preview_and_publish_only_the_reserved_identity()
+ {
+    let h = Harness::new();
+    let store = h.store();
+    let prepared = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "managed-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&prepared)),
+        Err(StorageError::Busy)
+    ));
+    drop(store);
+    let store = h.store();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let old = managed_publication(&reservation);
+    assert!(
+        matches!(
+            run_write(&store, WriteOptions::default(), move |tx| tx
+                .projects()
+                .register_project_managed_file(&old)),
+            Err(StorageError::ScopeDenied)
+        ),
+        "a restarted host cannot publish a previous boot's unfinished write"
+    );
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .finish_project_managed_file(&project("purge-a"), &reservation.id)
+    })
+    .unwrap();
+    let reservation = managed_reservation(&store, "managed-recovered-export");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let published = managed_publication(&reservation);
+    let mut wrong = published.clone();
+    wrong.witness.root.file += 1;
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&wrong))
+        .is_err()
+    );
+    let saved = published.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&saved)
+    })
+    .unwrap();
+    assert!(
+        !read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .project_managed_file(
+                &project("purge-b"),
+                &id("managed-recovered-export")
+            ))
+        .unwrap()
+        .is_none()
+    );
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .project_managed_file(&project("purge-a"), &id("managed-recovered-export"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(found.witness, published.witness);
+    run_write(&store, WriteOptions::default(), |tx| {
+        tx.projects()
+            .finish_project_managed_file(&project("purge-a"), &id("managed-recovered-export"))
+    })
+    .unwrap();
+    let saved = published;
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&saved))
+        .is_err(),
+        "retired file identities never revive"
+    );
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .project_managed_files(&project("purge-a"), None, 10))
+        .unwrap()
+        .is_empty()
+    );
+    let raw = h.raw();
+    let (path,witness):(String,String)=raw.query_row("SELECT relative_path,identity_json FROM project_managed_files WHERE id='managed-export'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+    assert!(path.is_empty());
+    assert_eq!(witness, "{}");
+}
+
+#[test]
+fn project_preview_writes_refuse_a_logically_purged_project_and_leave_workspace_cache_untouched() {
+    use devworks_core::ports::files::ArtifactFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let prepared = purge_storage_fixture(store.as_ref());
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    let key = devworks_core::services::artifacts::preview::preview_id("before-purge");
+    files
+        .write_project_derived(&project("purge-a"), &key, b"private preview")
+        .unwrap();
+    assert_eq!(
+        files.read_derived(&key, 100).unwrap().unwrap(),
+        b"private preview"
+    );
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let mut manifest = prepared.manifest.clone();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)?;
+        tx.operations().record_intent(NewOperation {
+            id: devworks_core::protocol::OperationId(id("purge-preview-fence")),
+            root_id: None,
+            assignment_id: None,
+            capability: "projects.purge".into(),
+            schema_version: 6,
+            args_digest: "a".repeat(64),
+            payload: json!({}),
+        })?;
+        Ok(())
+    })
+    .unwrap();
+    manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    manifest.revision = Revision::new(2).unwrap();
+    manifest.operation_id = Some(devworks_core::protocol::OperationId(id(
+        "purge-preview-fence",
+    )));
+    manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw().execute("UPDATE project_purge_manifests SET phase='RemovingBytes',revision=2,operation_id='purge-preview-fence',body_json=?1 WHERE id='purge-manifest'",[serde_json::to_string(&manifest).unwrap()]).unwrap();
+    let late = devworks_core::services::artifacts::preview::preview_id("late-purge");
+    assert!(
+        files
+            .write_project_derived(&project("purge-a"), &late, b"late private bytes")
+            .is_err()
+    );
+    assert!(files.read_derived(&late, 100).unwrap().is_none());
+    let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
+    files.write_derived(&workspace, b"workspace cache").unwrap();
+    assert_eq!(
+        files.read_derived(&workspace, 100).unwrap().unwrap(),
+        b"workspace cache"
+    );
+}
+
+#[test]
+fn project_preview_recovery_discards_only_the_interrupted_native_key_after_restart() {
+    use devworks_core::ports::files::ArtifactFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    let workspace = devworks_core::services::artifacts::preview::preview_id("workspace-kept");
+    files.write_derived(&workspace, b"workspace cache").unwrap();
+    let key = devworks_core::services::artifacts::preview::preview_id("interrupted-key");
+    let dir = h.root.0.join("cache").join("artifact-previews");
+    let mut reserved = managed_reservation(store.as_ref(), "interrupted-preview");
+    reserved.kind = "Preview".into();
+    reserved.relative_path = key.clone();
+    reserved.root = crate::fs::identity_at(&dir, &std::fs::metadata(&dir).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    let temp = dir.join(format!("{key}.123-1.tmp"));
+    std::fs::write(&temp, b"interrupted private cache").unwrap();
+    drop(files);
+    drop(store);
+    let store = Arc::new(h.store());
+    assert!(
+        read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    let files =
+        crate::fs::artifacts::NativeArtifactFiles::new(h.root.0.clone(), h.root.0.join("cache"))
+            .with_store(store.clone());
+    files.recover_project_derived().unwrap();
+    assert!(!temp.exists());
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
+    );
+    assert_eq!(
+        files.read_derived(&workspace, 100).unwrap().unwrap(),
+        b"workspace cache"
+    );
+}
+
+fn native_managed_file(
+    store: &SqliteStore,
+    root: &std::path::Path,
+    name: &str,
+    kind: &str,
+    owner: devworks_core::ports::project_purge::PurgeFileOwner,
+    binding: &devworks_core::ports::project_purge::PurgeFileSelection,
+) {
+    std::fs::create_dir_all(root).unwrap();
+    let mut reservation = managed_reservation(store, name);
+    reservation.kind = kind.into();
+    reservation.relative_path = name.into();
+    reservation.root = crate::fs::identity_at(root, &std::fs::metadata(root).unwrap()).unwrap();
+    let saved = reservation.clone();
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    std::fs::write(root.join(name), b"owned transient bytes").unwrap();
+    let witness =
+        crate::fs::purge::capture_managed_file(root, binding, name, owner, &mut || false).unwrap();
+    let live = StoredProjectManagedFile {
+        id: reservation.id,
+        project_id: reservation.project_id,
+        kind: reservation.kind,
+        relative_path: reservation.relative_path,
+        created_at_ms: T0,
+        witness,
+    };
+    run_write(store, WriteOptions::default(), move |tx| {
+        tx.projects().register_project_managed_file(&live)
+    })
+    .unwrap();
+}
+
+#[test]
+fn native_purge_files_cover_all_owned_classes_and_preserve_sources_and_other_generations() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let data = &h.root.0;
+    let cache = data.join("cache");
+    let paste = data.join("paste");
+    let digest = devworks_core::fingerprint::sha256_hex(b"owned blob");
+    let version = id("purge-version");
+    let key = devworks_core::services::artifacts::preview::preview_id(version.as_str());
+    let blob = format!("artifacts/sha256/{}/{}.g1", &digest[..2], digest);
+    let independent = format!("artifacts/sha256/{}/{}.g2", &digest[..2], digest);
+    let mut kept = vec![
+        independent,
+        "staging/other.part".into(),
+        "quarantine/other.g1.1".into(),
+        "browser/sessions/other/profile".into(),
+        "source/.git/config".into(),
+        "source/main.rs".into(),
+    ];
+    let owned = [
+        blob,
+        "staging/purge-op.part".into(),
+        format!("quarantine/{digest}.g1.123-1"),
+        "browser/sessions/purge-session/nested/profile".into(),
+    ];
+    for name in owned.iter().chain(kept.iter()) {
+        let path = data.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"fixture bytes").unwrap();
+    }
+    std::fs::create_dir_all(data.join("browser/sessions/purge-session/empty")).unwrap();
+    std::fs::create_dir_all(cache.join("artifact-previews")).unwrap();
+    for name in [&key, &format!("{key}.123-1.tmp"), "workspace-cache"] {
+        std::fs::write(cache.join("artifact-previews").join(name), b"preview bytes").unwrap();
+    }
+    kept.push("cache/artifact-previews/workspace-cache".into());
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![
+            O::Blob {
+                digest: digest.clone(),
+                generation: "g1".into(),
+            },
+            O::ArtifactStaging {
+                operation_id: id("purge-op"),
+            },
+            O::Quarantine {
+                digest,
+                generation: "g1".into(),
+            },
+            O::Preview {
+                version_id: version,
+            },
+            O::BrowserProfile {
+                session_id: id("purge-session"),
+            },
+            O::DiagnosticExport {
+                file_id: id("purge-export"),
+            },
+            O::ClientPaste {
+                file_id: id("purge-paste"),
+            },
+        ],
+    };
+    native_managed_file(
+        store.as_ref(),
+        &data.join("diagnostics/exports"),
+        "purge-export",
+        "DiagnosticExport",
+        selection.owners[5].clone(),
+        &selection,
+    );
+    native_managed_file(
+        store.as_ref(),
+        &paste,
+        "purge-paste",
+        "ClientPaste",
+        selection.owners[6].clone(),
+        &selection,
+    );
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        data.join("source/main.rs"),
+        data.join("browser/sessions/purge-session/source-link"),
+    )
+    .unwrap();
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(data.join("browser/sessions/purge-session/source-link"))
+            .arg(data.join("source"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "fixture junction creation: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(data.clone(), cache, store)
+        .with_paste_root(paste);
+    let mut snapshot = files.inventory(&selection, &mut || false).unwrap();
+    for owner in &selection.owners {
+        assert!(
+            snapshot.files.iter().any(|w| w.owner == *owner),
+            "missing class {owner:?}"
+        );
+    }
+    snapshot.files.sort_by_key(|w| {
+        (
+            std::cmp::Reverse(w.relative_entry.matches('/').count()),
+            w.directory,
+        )
+    });
+    for w in &snapshot.files {
+        files.remove_reviewed(w, &mut || false).unwrap();
+    }
+    for w in &snapshot.files {
+        files.remove_reviewed(w, &mut || false).unwrap();
+    }
+    assert!(
+        files
+            .inventory(&selection, &mut || false)
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    for path in owned {
+        assert!(!data.join(path).exists());
+    }
+    assert!(!data.join("browser/sessions/purge-session").exists());
+    for path in kept {
+        assert!(
+            data.join(&path).exists(),
+            "independent file removed: {path}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(data.join("source/main.rs")).unwrap(),
+        b"fixture bytes"
+    );
+    assert_eq!(
+        std::fs::read(data.join("source/.git/config")).unwrap(),
+        b"fixture bytes"
+    );
+}
+
+#[test]
+fn native_purge_files_refuse_replacements_new_entries_wrong_bindings_and_forged_names() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("browser/sessions/purge-session");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("profile"), b"original").unwrap();
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![O::BrowserProfile {
+            session_id: id("purge-session"),
+        }],
+    };
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
+        h.root.0.clone(),
+        h.root.0.join("cache"),
+        store,
+    );
+    let snapshot = files.inventory(&selection, &mut || false).unwrap();
+    let profile = snapshot.files.iter().find(|w| !w.directory).unwrap();
+    let dir = snapshot.files.iter().find(|w| w.directory).unwrap();
+    let mut forged = profile.clone();
+    forged.relative_entry = "other-session/profile".into();
+    assert_eq!(
+        files.remove_reviewed(&forged, &mut || false),
+        Err(PurgeFileFault::Unattributed)
+    );
+    let mut stale = profile.clone();
+    stale.restore_epoch += 1;
+    assert_eq!(
+        files.remove_reviewed(&stale, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || true),
+        Err(PurgeFileFault::Cancelled)
+    );
+    std::fs::write(root.join("profile"), b"modified").unwrap();
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    std::fs::rename(root.join("profile"), root.join("held-original")).unwrap();
+    std::fs::write(root.join("profile"), b"original").unwrap();
+    assert_eq!(
+        files.remove_reviewed(profile, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    std::fs::remove_file(root.join("profile")).unwrap();
+    std::fs::remove_file(root.join("held-original")).unwrap();
+    std::fs::write(root.join("unreviewed"), b"new private bytes").unwrap();
+    assert_eq!(
+        files.remove_reviewed(dir, &mut || false),
+        Err(PurgeFileFault::InUse)
+    );
+    assert_eq!(
+        std::fs::read(root.join("unreviewed")).unwrap(),
+        b"new private bytes"
+    );
+    std::fs::remove_file(root.join("unreviewed")).unwrap();
+    files.remove_reviewed(dir, &mut || false).unwrap();
+    assert!(!root.exists());
+}
+
+#[test]
+fn native_purge_files_require_the_published_transient_file_identity_and_content() {
+    use devworks_core::ports::project_purge::{
+        ProjectPurgeFiles, PurgeFileFault, PurgeFileOwner as O, PurgeFileSelection,
+    };
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let _ = purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("diagnostics/exports");
+    let info = store.info();
+    let selection = PurgeFileSelection {
+        project_id: project("purge-a"),
+        store_id: info.store_id,
+        restore_epoch: info.restore_epoch,
+        owners: vec![O::DiagnosticExport {
+            file_id: id("purge-export"),
+        }],
+    };
+    native_managed_file(
+        store.as_ref(),
+        &root,
+        "purge-export",
+        "DiagnosticExport",
+        selection.owners[0].clone(),
+        &selection,
+    );
+    let files = crate::fs::purge::NativeProjectPurgeFiles::new(
+        h.root.0.clone(),
+        h.root.0.join("cache"),
+        store,
+    );
+    let snapshot = files.inventory(&selection, &mut || false).unwrap();
+    let original = &snapshot.files[0];
+    std::fs::write(root.join("purge-export"), b"unreviewed replacement bytes").unwrap();
+    assert!(matches!(
+        files.inventory(&selection, &mut || false),
+        Err(PurgeFileFault::Changed)
+    ));
+    let mut forged = original.clone();
+    forged.content_digest = devworks_core::fingerprint::sha256_hex(b"unreviewed replacement bytes");
+    forged.byte_count = b"unreviewed replacement bytes".len() as u64;
+    assert_eq!(
+        files.remove_reviewed(&forged, &mut || false),
+        Err(PurgeFileFault::Changed)
+    );
+    assert_eq!(
+        std::fs::read(root.join("purge-export")).unwrap(),
+        b"unreviewed replacement bytes"
+    );
+}

@@ -223,10 +223,10 @@ async fn compose(
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
     let sources = Arc::new(HostArtifactSources::new(clock.clone(), id_source.clone()));
-    let artifact_files = Arc::new(NativeArtifactFiles::new(
-        config.data_root.clone(),
-        config.data_root.join("cache"),
-    ));
+    let artifact_files = Arc::new(
+        NativeArtifactFiles::new(config.data_root.clone(), config.data_root.join("cache"))
+            .with_store(store.clone()),
+    );
     let artifacts = Arc::new(ArtifactService::new(
         artifact_files.clone(),
         sources.clone(),
@@ -306,10 +306,13 @@ async fn compose(
         clock.clone(),
         Some(sqlite as Arc<dyn StorageHealthProbe>),
     ));
-    diagnostics.set_export_staging(Arc::new(DiagnosticExports::new(
-        config.data_root.join("diagnostics").join("exports"),
-        sources.clone(),
-    )));
+    diagnostics.set_export_staging(Arc::new(
+        DiagnosticExports::new(
+            config.data_root.join("diagnostics").join("exports"),
+            sources.clone(),
+        )
+        .with_store(store.clone()),
+    ));
     // Managed executable packages (ADDON-01..04, EXT-01..07): verified bundles install into
     // content-addressed directories under the data root; helpers launch through the process
     // owner. No optional runtime is assumed present until a runtime probe is qualified.

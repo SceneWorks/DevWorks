@@ -65,13 +65,15 @@ CREATE TABLE project_purged_subjects (
 CREATE TABLE project_managed_files (
  id TEXT PRIMARY KEY NOT NULL,
  project_id TEXT NOT NULL REFERENCES projects,
- kind TEXT NOT NULL CHECK(kind IN('DiagnosticExport','BrowserUpload','ClientPaste')),
+ kind TEXT NOT NULL CHECK(kind IN('DiagnosticExport','BrowserUpload','ClientPaste','Preview')),
  relative_path TEXT NOT NULL,
  identity_json TEXT NOT NULL CHECK(json_valid(identity_json)),
  byte_count INTEGER NOT NULL CHECK(byte_count>=0),
- state TEXT NOT NULL CHECK(state IN('Live','Removing','Removed')),
+ state TEXT NOT NULL CHECK(state IN('Writing','Live','Removing','Removed')),
  created_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE UNIQUE INDEX project_managed_file_live_path ON project_managed_files(kind,relative_path) WHERE state<>'Removed';
 
 -- Exact reviewed-row exceptions; all original conditional cleanup predicates remain.
 

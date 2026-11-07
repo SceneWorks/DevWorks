@@ -600,6 +600,7 @@ impl ArtifactService {
     /// generation's file, and records the outcome under the same ownership; a failure is
     /// visible and retried. It first retries staging resolutions deferred earlier in this boot.
     pub fn collect(&self, store: &dyn ApplicationStore) -> Result<CollectReport, StorageError> {
+        let _ = self.files.recover_project_derived();
         self.retry_pending(&Preparation::new(store, None, None));
         let owner = self.claimant(store);
         let mut report = CollectReport::default();
@@ -823,6 +824,7 @@ impl ArtifactService {
     /// * Present generations are verified: a missing file is reported; a corrupt one (even with
     ///   the right length) is quarantined and reported. Metadata is never changed to hide either.
     pub fn recover(&self, store: &dyn ApplicationStore) -> Result<RecoveryReport, StorageError> {
+        let _ = self.files.recover_project_derived();
         let env = Preparation::new(store, None, None);
         self.retry_pending(&env);
         let owner = self.claimant(store);

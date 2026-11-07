@@ -15,6 +15,7 @@ pub mod indexing;
 pub mod os_notifications;
 pub mod packages;
 pub mod process;
+pub mod project_purge;
 pub mod provider_http;
 pub mod retrieval;
 pub mod router;
