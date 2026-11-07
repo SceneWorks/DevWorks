@@ -2260,6 +2260,14 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     store.with_writer_connection(|c| super::super::conn::db(c.execute(
         "INSERT INTO usage_price_status(provider,revision,refresh_pending,refresh_operation_id) VALUES('independent-provider',1,0,'owned-operation')",[]
     )).map(|_|())).unwrap();
+    store.with_writer_connection(|c| super::super::conn::db(c.execute_batch(
+        "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,kind,created_at,payload_json) VALUES('global-package-event','purge-human','package','global-package',1,'GlobalFixture',0,'{}');
+         INSERT INTO package_handler_commits(package_id,subscription_id,event_id,receipt_id,payload_digest,state_generation,state_revision,checkpoint,intents_json) VALUES('independent-package','subscription','global-package-event','processing-receipt','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,1,'[{\"actionKey\":\"private-action-key\",\"operationId\":\"owned-operation\"}]');
+         INSERT INTO artifacts(id,title,revision,scope_revision,scope_kind,owner_actor_id) VALUES('independent-artifact','independent artifact sentinel',1,1,'Workspace','purge-human');
+         INSERT INTO blobs(digest,byte_count,relative_path,state,generation) VALUES('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',1,'controlled-reference-fixture','Live','fixture');
+         INSERT INTO artifact_versions(id,artifact_id,version_no,blob_digest,media_type,created_at,source_json) VALUES('independent-version','independent-artifact',1,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','text/plain',0,'{}');
+         INSERT INTO artifact_links VALUES('independent-version','operation','owned-operation','Origin');"
+    ))).unwrap();
     let after = snapshot();
     assert_eq!(
         before.rows, after.rows,
@@ -2274,6 +2282,7 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
         .iter()
         .find(|edge| edge.from_table == "usage_price_status")
         .unwrap();
+    assert_eq!(edge.kind, ProjectPurgeReferenceKind::ForeignKey);
     assert_eq!(edge.to_table, "operations");
     assert_eq!(edge.to_key_digest, operation.key_digest);
     assert_eq!(edge.from_columns, ["refresh_operation_id"]);
@@ -2282,7 +2291,38 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
         ["id"],
         "implicit REFERENCES resolves the actual parent primary key"
     );
+    for (kind, table) in [
+        (
+            ProjectPurgeReferenceKind::PackageIntent,
+            "package_handler_commits",
+        ),
+        (ProjectPurgeReferenceKind::ArtifactSubject, "artifact_links"),
+    ] {
+        let edge = after.references.iter().find(|e| e.kind == kind).unwrap();
+        assert_eq!(edge.from_table, table);
+        assert_eq!(edge.to_table, "operations");
+        assert_eq!(edge.to_key_digest, operation.key_digest);
+    }
+    assert!(
+        !after.rows.iter().any(|r| matches!(
+            r.table.as_str(),
+            "package_handler_commits" | "artifact_links" | "artifacts"
+        )),
+        "typed references cannot claim independently owned content"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT title FROM artifacts WHERE id='independent-artifact'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "independent artifact sentinel"
+    );
     let audit = serde_json::to_string(&after.references).unwrap();
+    assert!(!audit.contains("private-action-key"));
+    assert!(!audit.contains("independent artifact sentinel"));
     assert!(!audit.contains("independent-provider"));
     assert!(!audit.contains("owned-operation"));
     assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");

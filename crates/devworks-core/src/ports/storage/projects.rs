@@ -190,8 +190,18 @@ pub struct ProjectPurgeCandidates {
 
 /// A real reference to a scoped candidate. This identifies a possible keeper;
 /// it never establishes ownership of the referring record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub enum ProjectPurgeReferenceKind {
+    ForeignKey,
+    ArtifactSubject,
+    IndexOverlayRun,
+    PackageIntent,
+    SearchChunk,
+    SchemaCertificate,
+}
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct ProjectPurgeReference {
+    pub kind: ProjectPurgeReferenceKind,
     pub from_table: String,
     pub from_key_digest: String,
     pub from_columns: Vec<String>,

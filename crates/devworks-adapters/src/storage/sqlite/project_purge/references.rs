@@ -2,7 +2,9 @@
 //! not authorize removing a referring row or expanding the ownership selection.
 use super::super::conn::db;
 use super::candidates::{key_value, primary_keys, quote};
-use devworks_core::ports::storage::{ProjectPurgeReference, StorageError};
+use devworks_core::ports::storage::{
+    ProjectPurgeReference, ProjectPurgeReferenceKind, StorageError,
+};
 use devworks_core::protocol::ProjectId;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
@@ -33,6 +35,161 @@ fn key_hash(row: &rusqlite::Row<'_>, start: usize, count: usize) -> Result<Strin
     )
 }
 
+struct Selection<'a> {
+    project: &'a ProjectId,
+    scope_digest: &'a str,
+    anchors: &'a str,
+    predicates: &'a Map<String, Value>,
+}
+struct ReferenceSpec {
+    kind: ProjectPurgeReferenceKind,
+    from_table: String,
+    target: String,
+    source: String,
+    join: String,
+    from_columns: Vec<String>,
+    to_columns: Vec<String>,
+}
+fn collect(
+    conn: &Connection,
+    selection: &Selection<'_>,
+    spec: ReferenceSpec,
+    result: &mut Vec<ProjectPurgeReference>,
+) -> Result<(), StorageError> {
+    let Some(predicate) = selection.predicates.get(&spec.target) else {
+        return Ok(());
+    };
+    let predicate = predicate
+        .as_str()
+        .ok_or_else(|| invalid("purge reference predicate"))?;
+    let from_keys = primary_keys(conn, &spec.from_table)?;
+    let to_keys = primary_keys(conn, &spec.target)?;
+    let source_projection = keys_projection("src", &from_keys, "rowid");
+    let target_projection = keys_projection("dst", &to_keys, "__purge_rowid");
+    let mut projection = source_projection.clone();
+    projection.extend(target_projection.iter().cloned());
+    let target_rows = if to_keys.is_empty() {
+        "rowid AS __purge_rowid,*"
+    } else {
+        "*"
+    };
+    let sql = format!(
+        "WITH {} SELECT {} FROM {} JOIN (SELECT {target_rows} FROM {} WHERE ({predicate})) AS dst ON {}",
+        selection.anchors,
+        projection.join(","),
+        spec.source,
+        quote(&spec.target),
+        spec.join
+    );
+    let mut statement = db(conn.prepare(&sql))?;
+    let mut rows = db(statement.query([selection.project.0.as_str(), selection.scope_digest]))?;
+    while let Some(row) = db(rows.next())? {
+        result.push(ProjectPurgeReference {
+            kind: spec.kind,
+            from_table: spec.from_table.clone(),
+            from_key_digest: key_hash(row, 0, source_projection.len())?,
+            from_columns: spec.from_columns.clone(),
+            to_table: spec.target.clone(),
+            to_key_digest: key_hash(row, source_projection.len(), target_projection.len())?,
+            to_columns: spec.to_columns.clone(),
+        });
+    }
+    Ok(())
+}
+fn typed_references(
+    conn: &Connection,
+    selection: &Selection<'_>,
+    result: &mut Vec<ProjectPurgeReference>,
+) -> Result<(), StorageError> {
+    // These are the six closed SubjectKey variants used by native artifact links.
+    // Their targets remain candidates: an audit link is not a grant to retain
+    // executable/private state or to remove its independently owned source.
+    for (kind, target) in [
+        ("root", "work_items"),
+        ("assignment", "assignments"),
+        ("operation", "operations"),
+        ("resource", "resources"),
+        ("blocker", "blockers"),
+        ("session", "sessions"),
+    ] {
+        collect(
+            conn,
+            selection,
+            ReferenceSpec {
+                kind: ProjectPurgeReferenceKind::ArtifactSubject,
+                from_table: "artifact_links".into(),
+                target: target.into(),
+                source: "artifact_links AS src".into(),
+                join: format!("src.subject_id=dst.id AND src.subject_kind='{kind}'"),
+                from_columns: vec!["subject_kind".into(), "subject_id".into()],
+                to_columns: vec!["id".into()],
+            },
+            result,
+        )?;
+    }
+    for (kind, from, target, column) in [
+        (
+            ProjectPurgeReferenceKind::IndexOverlayRun,
+            "index_overlays",
+            "index_runs",
+            "run_id",
+        ),
+        (
+            ProjectPurgeReferenceKind::SearchChunk,
+            "search_fts",
+            "search_chunks",
+            "chunk_id",
+        ),
+    ] {
+        collect(
+            conn,
+            selection,
+            ReferenceSpec {
+                kind,
+                from_table: from.into(),
+                target: target.into(),
+                source: format!("{} AS src", quote(from)),
+                join: format!("src.{}=dst.id", quote(column)),
+                from_columns: vec![column.into()],
+                to_columns: vec!["id".into()],
+            },
+            result,
+        )?;
+    }
+    collect(
+        conn,
+        selection,
+        ReferenceSpec {
+            kind: ProjectPurgeReferenceKind::PackageIntent,
+            from_table: "package_handler_commits".into(),
+            target: "operations".into(),
+            source: "package_handler_commits AS src JOIN json_each(src.intents_json) AS intent"
+                .into(),
+            join: "json_extract(intent.value,'$.operationId')=dst.id".into(),
+            from_columns: vec!["intents_json".into()],
+            to_columns: vec!["id".into()],
+        },
+        result,
+    )?;
+    collect(
+        conn,
+        selection,
+        ReferenceSpec {
+            kind: ProjectPurgeReferenceKind::SchemaCertificate,
+            from_table: "schema_sources".into(),
+            target: "artifact_versions".into(),
+            source: "schema_sources AS src".into(),
+            join:
+                "json_extract(src.body_json,'$.connection.config.caCertificate.versionId')=dst.id"
+                    .into(),
+            from_columns: vec!["body_json".into()],
+            to_columns: vec!["id".into()],
+        },
+        result,
+    )?;
+    Ok(())
+}
+
 pub(super) fn snapshot(
     conn: &Connection,
     project: &ProjectId,
@@ -45,6 +202,12 @@ pub(super) fn snapshot(
     let tables = db(tables.query_map([], |row| row.get::<_, String>(0)))?
         .map(db)
         .collect::<Result<Vec<_>, _>>()?;
+    let selection = Selection {
+        project,
+        scope_digest,
+        anchors,
+        predicates,
+    };
     let mut result = Vec::new();
     for from_table in tables {
         let mut statement = db(conn.prepare(
@@ -67,13 +230,9 @@ pub(super) fn snapshot(
                 .push((from, to));
         }
         for foreign_key in foreign_keys.into_values() {
-            let Some(predicate) = predicates.get(&foreign_key.target) else {
+            if !predicates.contains_key(&foreign_key.target) {
                 continue;
-            };
-            let predicate = predicate
-                .as_str()
-                .ok_or_else(|| invalid("purge reference predicate"))?;
-            let from_keys = primary_keys(conn, &from_table)?;
+            }
             let to_keys = primary_keys(conn, &foreign_key.target)?;
             let mut to_columns = Vec::new();
             for (index, (_, column)) in foreign_key.columns.iter().enumerate() {
@@ -85,10 +244,6 @@ pub(super) fn snapshot(
                         .ok_or_else(|| invalid("unclassified implicit purge reference"))?,
                 });
             }
-            let source_projection = keys_projection("src", &from_keys, "rowid");
-            let target_projection = keys_projection("dst", &to_keys, "__purge_rowid");
-            let mut projection = source_projection.clone();
-            projection.extend(target_projection.iter().cloned());
             let join = foreign_key
                 .columns
                 .iter()
@@ -96,35 +251,27 @@ pub(super) fn snapshot(
                 .map(|((from, _), to)| format!("src.{}=dst.{}", quote(from), quote(to)))
                 .collect::<Vec<_>>()
                 .join(" AND ");
-            let target_rows = if to_keys.is_empty() {
-                "rowid AS __purge_rowid,*"
-            } else {
-                "*"
-            };
-            let sql = format!(
-                "WITH {anchors} SELECT {} FROM {} AS src JOIN (SELECT {target_rows} FROM {} WHERE ({predicate})) AS dst ON {join}",
-                projection.join(","),
-                quote(&from_table),
-                quote(&foreign_key.target)
-            );
-            let mut statement = db(conn.prepare(&sql))?;
-            let mut rows = db(statement.query([project.0.as_str(), scope_digest]))?;
-            while let Some(row) = db(rows.next())? {
-                result.push(ProjectPurgeReference {
+            collect(
+                conn,
+                &selection,
+                ReferenceSpec {
+                    kind: ProjectPurgeReferenceKind::ForeignKey,
                     from_table: from_table.clone(),
-                    from_key_digest: key_hash(row, 0, source_projection.len())?,
+                    target: foreign_key.target,
+                    source: format!("{} AS src", quote(&from_table)),
+                    join,
                     from_columns: foreign_key
                         .columns
-                        .iter()
-                        .map(|(from, _)| from.clone())
+                        .into_iter()
+                        .map(|(from, _)| from)
                         .collect(),
-                    to_table: foreign_key.target.clone(),
-                    to_key_digest: key_hash(row, source_projection.len(), target_projection.len())?,
-                    to_columns: to_columns.clone(),
-                });
-            }
+                    to_columns,
+                },
+                &mut result,
+            )?;
         }
     }
+    typed_references(conn, &selection, &mut result)?;
     result.sort();
     result.dedup();
     Ok(result)
