@@ -1944,6 +1944,9 @@ impl RouterRepository for Unsupported {
     }
 }
 impl ProjectRead for Unsupported {
+    fn purge_planning(&self, _: &ProjectId) -> Result<Option<ProjectPurgePlanning>, StorageError> {
+        nope()
+    }
     fn purge_candidates(
         &self,
         _: &ProjectId,

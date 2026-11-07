@@ -363,6 +363,7 @@ fn text_of(raw: TextRaw) -> Result<StoredRepositoryText, StorageError> {
 macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
+            fn purge_planning(&self,project:&ProjectId)->Result<Option<ProjectPurgePlanning>,StorageError> {super::project_purge::classification::planning(self.conn,project)}
             fn purge_candidates(&self,project:&ProjectId)->Result<Option<ProjectPurgeCandidates>,StorageError> {super::project_purge::candidates::snapshot(self.conn,project)}
             fn managed_file_recovery(&self,kind:&str,after:Option<&Id>,n:u16)->Result<Vec<ProjectManagedFileRecovery>,StorageError> {super::project_purge::managed_recovery(self.conn,kind,after,n)}
 

@@ -108,6 +108,25 @@ branch passes all 15 native schema cases (12.58 seconds), all 14 database UI cas
 (48.28 seconds), and workspace/all-target strict checks (42.35 seconds). These local
 checks do not establish the pending Windows filesystem runtime qualification.
 
+The local next checkpoint adds typed non-FK witnesses for the six native artifact
+SubjectKey variants, index overlay runs, package intent operations, FTS chunks and
+schema certificate versions. Five native cases pass (5.55 seconds), with strict
+checks (38.97 seconds). The package-intent format is explicitly closed: unknown
+fields or shapes refuse planning without mutating stored content (five native
+cases, 6.19 seconds; strict checks, 15.91 seconds).
+
+An initial native ownership assessment now maps the complete live table policy,
+produces explicit fixed-reason unresolved rows, and only propagates retention from
+surviving references. Two direct native cases pass (1.69 seconds): assessment
+leaves private project data and immutable rows unchanged, ordinary immutable DELETE
+remains denied, and workspace creation snapshots / unknown legacy mappings hold
+planning with hashed keys only. Five native reference cases pass (6.24 seconds),
+including the required minimal operation decision without changing its stored
+outcome. Workspace/all-target strict checks pass (18.92 seconds), including the
+canonical unsupported-adapter fixture's new read-port method. Mixed content,
+receipt-control, typed lease and managed-byte partitions are still explicit holds;
+this assessment is not an execution permit or full ownership qualification.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

@@ -210,6 +210,39 @@ pub struct ProjectPurgeReference {
     pub to_columns: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum ProjectPurgeUnresolvedReason {
+    AutomaticSnapshot,
+    LegacyMapping,
+    MixedOwnership,
+    ReceiptControl,
+    TypedLease,
+    ManagedBytes,
+    LegacySharing,
+    SurvivingReference,
+    ScrubReference,
+    UnmappedTable,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectPurgeUnresolved {
+    pub table: String,
+    pub key_digest: String,
+    pub reason: ProjectPurgeUnresolvedReason,
+}
+/// A read-only ownership assessment. Unresolved rows prohibit preparation and
+/// confirmation; neither this assessment nor its row decisions grant a permit.
+#[derive(Clone, Debug)]
+pub struct ProjectPurgePlanning {
+    pub snapshot: ProjectPurgeCandidates,
+    pub rows: Vec<ProjectPurgeRowWitness>,
+    pub unresolved: Vec<ProjectPurgeUnresolved>,
+}
+impl ProjectPurgePlanning {
+    pub fn is_resolved(&self) -> bool {
+        self.unresolved.is_empty() && self.rows.len() == self.snapshot.rows.len()
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Durable reviewed purge intent. Private source keys are never copied here.
 pub struct StoredProjectPurge {
@@ -282,6 +315,10 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    fn purge_planning(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Option<ProjectPurgePlanning>, StorageError>;
     /// Snapshot exact candidate rows for the ownership classifier. This neither
     /// classifies mixed owners/keepers nor grants permission to delete any row.
     fn purge_candidates(

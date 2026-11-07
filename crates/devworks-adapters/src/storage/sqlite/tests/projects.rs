@@ -2325,6 +2325,29 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     assert!(!audit.contains("independent artifact sentinel"));
     assert!(!audit.contains("independent-provider"));
     assert!(!audit.contains("owned-operation"));
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.rows.iter().any(|r| r.table == "operations"
+        && r.key_digest == operation.key_digest
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity));
+    assert!(
+        !plan.is_resolved(),
+        "control-receipt ownership is still an explicit unresolved partition"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row(
+                "SELECT state FROM operations WHERE id='owned-operation'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Completed"
+    );
     let original_intents=h.raw().query_row("SELECT intents_json FROM package_handler_commits WHERE receipt_id='processing-receipt'",[],|r|r.get::<_,String>(0)).unwrap();
     for unknown in [
         json!({"actionKey":"key","operationId":"owned-operation"}),
@@ -2354,6 +2377,89 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[original_intents]).unwrap();
     assert_eq!(snapshot().digest, after.digest);
     assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");
+}
+
+#[test]
+fn purge_planning_classifies_records_read_only_and_never_enables_ordinary_delete_guards() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    h.raw().execute("INSERT INTO allocation_replays(project_id,key,intent_digest,result_json) VALUES('purge-a',?1,?2,'{}')",rusqlite::params!["a".repeat(64),"b".repeat(64)]).unwrap();
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert_eq!(plan.rows.len(), 3);
+    assert!(
+        plan.rows
+            .iter()
+            .filter(|r| matches!(r.table.as_str(), "projects" | "project_details"))
+            .all(|r| r.action == ProjectPurgeRowAction::Scrub
+                && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity)
+    );
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "allocation_replays" && r.action == ProjectPurgeRowAction::Delete)
+    );
+    assert!(
+        h.raw()
+            .execute("DELETE FROM allocation_replays", [])
+            .is_err(),
+        "an assessment is not a native purge permit"
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM allocation_replays", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT title FROM projects WHERE id='purge-a'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        "private project title"
+    );
+}
+
+#[test]
+fn purge_planning_holds_workspace_creation_snapshots_and_unmapped_legacy_mappings() {
+    let fx = Fx::new();
+    let p = fx.create("Private copied project name", &[]);
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(!plan.is_resolved());
+    assert!(plan.unresolved.iter().any(|r| r.table == "command_receipts"
+        && r.reason == ProjectPurgeUnresolvedReason::AutomaticSnapshot));
+    let audit = serde_json::to_string(&plan.unresolved).unwrap();
+    assert!(!audit.contains("Private copied project name"));
+    assert_eq!(
+        fx.get(&fx.user(), &p.id).unwrap().name.0,
+        "Private copied project name"
+    );
+    fx.h.raw().execute("INSERT INTO import_mappings VALUES('legacy-import','unknown-kind','private-source-key','opaque-local-id','digest')",[]).unwrap();
+    let plan = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&p.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(
+        plan.unresolved.iter().any(|r| r.table == "import_mappings"
+            && r.reason == ProjectPurgeUnresolvedReason::LegacyMapping)
+    );
+    assert!(
+        !serde_json::to_string(&plan.unresolved)
+            .unwrap()
+            .contains("private-source-key")
+    );
 }
 
 #[test]
