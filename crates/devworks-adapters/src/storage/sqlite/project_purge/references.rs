@@ -50,6 +50,31 @@ struct ReferenceSpec {
     from_columns: Vec<String>,
     to_columns: Vec<String>,
 }
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProcessingIntent {
+    action_key: String,
+    operation_id: devworks_core::protocol::Id,
+}
+fn validate_processing_intents(conn: &Connection) -> Result<(), StorageError> {
+    // A newer/legacy producer may have copied arguments here. Its ownership
+    // cannot be inferred from an operationId while silently ignoring that body.
+    let mut statement = db(conn.prepare("SELECT intents_json FROM package_handler_commits"))?;
+    let mut rows = db(statement.query([]))?;
+    while let Some(row) = db(rows.next())? {
+        let encoded = db(row.get::<_, String>(0))?;
+        let intents: Vec<ProcessingIntent> = serde_json::from_str(&encoded)
+            .map_err(|_| invalid("unclassified package processing intent"))?;
+        if intents.iter().any(|intent| {
+            intent.action_key.trim().is_empty()
+                || devworks_core::protocol::Id::new(intent.operation_id.as_str()).is_err()
+        }) {
+            return Err(invalid("unclassified package processing intent"));
+        }
+    }
+    Ok(())
+}
 fn collect(
     conn: &Connection,
     selection: &Selection<'_>,
@@ -101,6 +126,7 @@ fn typed_references(
     selection: &Selection<'_>,
     result: &mut Vec<ProjectPurgeReference>,
 ) -> Result<(), StorageError> {
+    validate_processing_intents(conn)?;
     // These are the six closed SubjectKey variants used by native artifact links.
     // Their targets remain candidates: an audit link is not a grant to retain
     // executable/private state or to remove its independently owned source.

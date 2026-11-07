@@ -2325,6 +2325,34 @@ fn purge_candidate_snapshot_witnesses_independent_references_without_expanding_o
     assert!(!audit.contains("independent artifact sentinel"));
     assert!(!audit.contains("independent-provider"));
     assert!(!audit.contains("owned-operation"));
+    let original_intents=h.raw().query_row("SELECT intents_json FROM package_handler_commits WHERE receipt_id='processing-receipt'",[],|r|r.get::<_,String>(0)).unwrap();
+    for unknown in [
+        json!({"actionKey":"key","operationId":"owned-operation"}),
+        json!([{"actionKey":"key","operationId":"owned-operation","arguments":"unmapped private arguments"}]),
+        json!([{"actionKey":"","operationId":"owned-operation"}]),
+        json!([{"actionKey":"key","operationId":42}]),
+    ] {
+        h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[unknown.to_string()]).unwrap();
+        let refused = read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_candidates(&project("purge-a"))
+        });
+        assert!(
+            refused.is_err(),
+            "unmapped intent formats must hold ownership planning"
+        );
+        assert_eq!(
+            h.raw()
+                .query_row(
+                    "SELECT payload_json FROM operations WHERE id='owned-operation'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "{}"
+        );
+    }
+    h.raw().execute("UPDATE package_handler_commits SET intents_json=?1 WHERE receipt_id='processing-receipt'",[original_intents]).unwrap();
+    assert_eq!(snapshot().digest, after.digest);
     assert_eq!(h.raw().query_row("SELECT refresh_operation_id FROM usage_price_status WHERE provider='independent-provider'",[],|r|r.get::<_,String>(0)).unwrap(),"owned-operation");
 }
 
