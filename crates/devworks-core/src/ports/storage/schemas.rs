@@ -62,7 +62,16 @@ pub struct StoredSchemaReadPin {
     pub created_at_ms: i64,
     pub expires_at_ms: i64,
 }
+#[derive(Clone)]
+pub struct StoredSchemaCertificate {
+    pub reference: crate::protocol::provider::ArtifactRef,
+    pub pem: Vec<u8>,
+}
 pub trait SchemaRead {
+    fn schema_certificate(
+        &self,
+        connection: &Id,
+    ) -> Result<Option<StoredSchemaCertificate>, StorageError>;
     fn schema_pin(&self, id: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError>;
     fn schema_active_pin(
         &self,
@@ -101,6 +110,11 @@ pub trait SchemaRead {
     ) -> Result<Option<StoredSchemaPublication>, StorageError>;
 }
 pub trait SchemaRepository: SchemaRead {
+    fn set_schema_certificate(
+        &mut self,
+        connection: &Id,
+        material: Option<&StoredSchemaCertificate>,
+    ) -> Result<(), StorageError>;
     fn create_schema_pin(&mut self, pin: &StoredSchemaReadPin) -> Result<(), StorageError>;
     fn expire_schema_pins(&mut self, now: i64, limit: u16) -> Result<usize, StorageError>;
     /// Prune at most limit obsolete metadata rows, preserving current heads, live pins and two newest sealed views.

@@ -604,6 +604,16 @@ fn metadata_owner(
     s: std::sync::Arc<super::SqliteStore>,
     reader: std::sync::Arc<dyn devworks_core::ports::database::MetadataReader>,
 ) -> std::sync::Arc<devworks_core::services::schemas::SchemaService> {
+    metadata_owner_parts(h, s, reader).0
+}
+fn metadata_owner_parts(
+    h: &Harness,
+    s: std::sync::Arc<super::SqliteStore>,
+    reader: std::sync::Arc<dyn devworks_core::ports::database::MetadataReader>,
+) -> (
+    std::sync::Arc<devworks_core::services::schemas::SchemaService>,
+    std::sync::Arc<devworks_core::services::artifacts::ArtifactService>,
+) {
     let artifacts = std::sync::Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         std::sync::Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
             h.root.0.clone(),
@@ -617,9 +627,12 @@ fn metadata_owner(
         h.clock.clone(),
         h.ids.clone(),
     ));
-    std::sync::Arc::new(
-        devworks_core::services::schemas::SchemaService::new(h.ids.clone(), h.clock.clone())
-            .with_runtime(s, reader, artifacts),
+    (
+        std::sync::Arc::new(
+            devworks_core::services::schemas::SchemaService::new(h.ids.clone(), h.clock.clone())
+                .with_runtime(s, reader, artifacts.clone()),
+        ),
+        artifacts,
     )
 }
 fn owner_command(
@@ -1290,5 +1303,467 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
             .unwrap(),
         7
     );
+    service.stop();
+}
+
+struct CertificateCustodyReader {
+    expected: Vec<u8>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl devworks_core::ports::database::MetadataReader for CertificateCustodyReader {
+    fn read(
+        &self,
+        request: devworks_core::ports::database::MetadataRequest,
+    ) -> devworks_core::ports::database::MetadataFuture {
+        assert_eq!(
+            request.ca_certificate.as_deref(),
+            Some(self.expected.as_slice())
+        );
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async {
+            Ok(devworks_core::ports::database::MetadataSnapshot {
+            profile:serde_json::from_value(json!({"driver":"RecordedCertificateCustody","serverVersion":"fixture","authentication":"Password","tls":"Recorded; transport qualification separate","readOnlyBoundary":"No target connection in custody fixture","supportedMetadata":[],"unsupportedMetadata":[],"limitations":["Authority/certificate custody only; not server or TLS qualification"]})).unwrap(),
+            coverage:serde_json::from_value(json!({"state":"Complete","gaps":[],"moreGaps":false})).unwrap(),objects:vec![],relationships:vec![],
+        })
+        })
+    }
+}
+#[test]
+fn shared_schema_ca_custody_preserves_agent_and_never_grants_original_artifact_access() {
+    use devworks_core::{
+        context::{HostIngress, PrincipalKind},
+        protocol::{
+            ProjectId,
+            results::{DomainDecision, OperationResult},
+        },
+        services::schemas::indexing::SchemaOutcome,
+    };
+    use std::sync::{Arc, atomic::Ordering};
+    let h = Harness::new();
+    let s = Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    // A structurally bounded certificate block; actual X509/server qualification is the
+    // explicitly dispatched real-network suite, not this recorded-port custody case.
+    let pem=b"-----BEGIN CERTIFICATE-----\nY2VydGlmaWNhdGUtY3VzdG9keS1maXh0dXJl\n-----END CERTIFICATE-----\n".to_vec();
+    let reader = Arc::new(CertificateCustodyReader {
+        expected: pem.clone(),
+        calls: Default::default(),
+    });
+    let (service, artifacts) = metadata_owner_parts(&h, s.clone(), reader.clone());
+    let reference = schema_certificate_artifact(&s, &artifacts, &pem);
+    let owner = schema_context(&s, "schema-owner");
+    let by = owner.clone();
+    run_write(&*s, WriteOptions::default(), move |tx| {
+        tx.actors().register(
+            &ActorId(id("certificate-agent")),
+            PrincipalKind::Agent,
+            "certificate-agent",
+        )?;
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &by,
+            NewPrincipalBinding {
+                actor: ActorId(id("certificate-agent")),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: Some(ProjectId(id("other-project"))),
+                tool_families: None,
+                bound_by: ActorId(id("schema-owner")),
+            },
+            None,
+        )
+        .map_err(|_| StorageError::ScopeDenied)?;
+        Ok(())
+    })
+    .unwrap();
+    let agent = HostIngress::new(&*s)
+        .context(
+            ActorId(id("certificate-agent")),
+            PrincipalKind::Agent,
+            id("certificate-agent-ingress"),
+            id("metadata-tools"),
+            devworks_core::protocol::Counter::new(s.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_lineage(Some(ProjectId(id("other-project"))), None, None);
+    assert!(
+        artifacts
+            .read_exact(&*s, &agent, &reference, 1048576)
+            .is_err()
+    );
+    let mut config = serde_json::to_value(
+        source("certificate-source", false)
+            .connection
+            .config
+            .unwrap(),
+    )
+    .unwrap();
+    config["engine"] = json!("MySql");
+    config["endpoint"] = json!("mysql://fixture.invalid/catalog");
+    config["authentication"] = json!("Password");
+    config["username"] = json!("metadata_reader");
+    config["tls"] = json!("VerifyFull");
+    config["caCertificate"] = json!(reference);
+    config["projectAccess"] = json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}]);
+    let create_body = json!({"scope":{"kind":"Workspace"},"config":config});
+    let made = owner_command(
+        &h,
+        &s,
+        service.clone(),
+        "certificate-create",
+        "schemas.configure",
+        create_body.clone(),
+    );
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: created },
+    } = made
+    else {
+        panic!("{made:?}");
+    };
+    assert_eq!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_certificate(&created.id))
+        .unwrap()
+        .unwrap()
+        .pem,
+        pem
+    );
+    // Delete the original artifact, not the connection-owned public copy. A replay must not
+    // reopen the original input, and the shared agent still gains no artifact permission.
+    let original = reference.artifact_id.clone();
+    run_write(&*s, WriteOptions::default(), move |tx| {
+        let mut a = tx.artifacts().artifact(&original)?.unwrap();
+        a.state = ArtifactState::Deleted;
+        a.revision += 1;
+        tx.artifacts().update_artifact(&a)
+    })
+    .unwrap();
+    assert!(
+        matches!(owner_command(&h,&s,service.clone(),"certificate-create","schemas.configure",create_body),DomainDecision::Applied{result:OperationResult::SchemasConfigure{value}} if value.id==created.id)
+    );
+    assert!(
+        artifacts
+            .read_exact(&*s, &agent, &reference, 1048576)
+            .is_err()
+    );
+    let authority = devworks_core::authority::HostAuthority {
+        store: &*s,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: &*s,
+        ids: &*h.ids,
+    };
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":"certificate-agent-index","body":{"kind":"schemas.index","connectionId":created.id,"expectedRevision":created.revision,"scope":{"kind":"Project","projectId":"other-project"}}});
+    let reply = gateway
+        .command(
+            &agent,
+            "schemas.index",
+            frame.to_string().as_bytes(),
+            service.clone(),
+        )
+        .unwrap();
+    let devworks_core::protocol::CommandReply::Recorded { receipt, .. } = reply else {
+        panic!("{reply:?}");
+    };
+    let DomainDecision::Accepted { operation_id } = receipt.decision else {
+        panic!("{:?}", receipt.decision);
+    };
+    let op = dispatch_metadata(&s, operation_id, false);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert!(matches!(
+        rt.block_on(service.run_metadata(&op, &Cancellation::new()))
+            .unwrap(),
+        SchemaOutcome::Completed(_)
+    ));
+    assert_eq!(reader.calls.load(Ordering::SeqCst), 1);
+    let events = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.history().page(
+            &EventFilter::Aggregate {
+                kind: "schema_connection".into(),
+                id: created.id.as_str().into(),
+            },
+            0,
+            50,
+        )
+    })
+    .unwrap();
+    assert!(
+        events
+            .events
+            .iter()
+            .any(|e| e.kind == "SchemaMetadataRequested"
+                && e.actor == *agent.principal()
+                && e.project_id == Some(ProjectId(id("other-project"))))
+    );
+    let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&created.id)
+    })
+    .unwrap()
+    .unwrap();
+    config["caCertificate"] = serde_json::Value::Null;
+    config.as_object_mut().unwrap().remove("caCertificate");
+    config["projectAccess"] = json!([]);
+    assert!(matches!(
+        owner_command(
+            &h,
+            &s,
+            service.clone(),
+            "certificate-clear",
+            "schemas.configure",
+            json!({"scope":{"kind":"Workspace"},"connectionId":created.id,"expectedRevision":current.connection.revision,"config":config})
+        ),
+        DomainDecision::Applied { .. }
+    ));
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_certificate(&created.id))
+        .unwrap()
+        .is_none()
+    );
+    service.stop();
+}
+
+fn schema_certificate_artifact(
+    store: &std::sync::Arc<super::SqliteStore>,
+    artifacts: &std::sync::Arc<devworks_core::services::artifacts::ArtifactService>,
+    bytes: &[u8],
+) -> devworks_core::protocol::provider::ArtifactRef {
+    use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
+    let staged = std::sync::Arc::new(
+        artifacts
+            .stage_host_bytes(
+                &**store,
+                bytes,
+                json!({"kind":"IsolatedCertificateFixture"}),
+            )
+            .unwrap()
+            .unwrap(),
+    );
+    let (files, copy) = (artifacts.clone(), staged.clone());
+    let version = run_write(&**store, WriteOptions::default(), move |tx| {
+        files.commit_host_bytes_in_scope(
+            tx,
+            &copy,
+            HostArtifactPublication {
+                title: "Project A private certificate fixture",
+                media_type: "application/x-pem-file",
+                provenance: json!({"kind":"IsolatedCertificateFixture"}),
+                scope: ArtifactScope::Project(devworks_core::protocol::ProjectId(id(
+                    "metadata-project",
+                ))),
+                owner: ActorId(id("schema-owner")),
+            },
+        )
+    })
+    .unwrap();
+    artifacts.settle_host_bytes(&**store, &staged, true);
+    version_ref(&version)
+}
+
+#[test]
+fn invalid_or_private_key_ca_inputs_preserve_the_live_source_and_accepted_index() {
+    use devworks_core::protocol::results::{DomainDecision, OperationResult};
+    use std::sync::{Arc, atomic::Ordering};
+    let h = Harness::new();
+    let s = Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let reader = Arc::new(CertificateCustodyReader {
+        expected: vec![],
+        calls: Default::default(),
+    });
+    let (service, artifacts) = metadata_owner_parts(&h, s.clone(), reader.clone());
+    let config = serde_json::to_value(
+        source("invalid-ca-source", false)
+            .connection
+            .config
+            .unwrap(),
+    )
+    .unwrap();
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: created },
+    } = owner_command(
+        &h,
+        &s,
+        service.clone(),
+        "invalid-ca-create",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    )
+    else {
+        panic!("source creation");
+    };
+    let DomainDecision::Accepted { operation_id } = owner_command(
+        &h,
+        &s,
+        service.clone(),
+        "invalid-ca-index",
+        "schemas.index",
+        json!({"connectionId":created.id,"expectedRevision":"1"}),
+    ) else {
+        panic!("index admission");
+    };
+    let operation = read_snapshot(&*s, &ReadOptions::default(), |r| {
+        r.operations().operation(&operation_id)
+    })
+    .unwrap()
+    .unwrap();
+    let delivery: Id = serde_json::from_value(operation.payload["deliveryId"].clone()).unwrap();
+    let bad = [
+        b"not a certificate".to_vec(),
+        b"-----BEGIN PRIVATE KEY-----\nZml4dHVyZQ==\n-----END PRIVATE KEY-----".to_vec(),
+        b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----".to_vec(),
+        vec![b'A'; 1048577],
+    ];
+    for (i, bytes) in bad.iter().enumerate() {
+        let reference = schema_certificate_artifact(&s, &artifacts, bytes);
+        let mut changed = config.clone();
+        changed["caCertificate"] = json!(reference);
+        let decision = owner_command(
+            &h,
+            &s,
+            service.clone(),
+            &format!("invalid-ca-{i}"),
+            "schemas.configure",
+            json!({"scope":{"kind":"Workspace"},"connectionId":created.id,"expectedRevision":"2","config":changed}),
+        );
+        assert!(
+            matches!(decision,DomainDecision::Refused{fault} if fault.code==devworks_core::protocol::DomainErrorCode::InvalidArgument)
+        );
+        let current = read_snapshot(&*s, &ReadOptions::default(), |r| {
+            r.schemas().schema_source(&created.id)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(current.connection.revision.get(), 2);
+        assert_eq!(
+            current.connection.active_operation_id.as_ref(),
+            Some(&operation_id.0)
+        );
+        assert!(
+            read_snapshot(&*s, &ReadOptions::default(), |r| r
+                .schemas()
+                .schema_certificate(&created.id))
+            .unwrap()
+            .is_none()
+        );
+        let queued = read_snapshot(&*s, &ReadOptions::default(), |r| r.queue().entry(&delivery))
+            .unwrap()
+            .unwrap();
+        assert_eq!(queued.state, QueueState::Ready);
+        assert!(!queued.cancel_requested);
+    }
+    assert_eq!(reader.calls.load(Ordering::SeqCst), 0);
+    service.stop();
+}
+
+struct RevokeCertificateBeforeWrite {
+    inner: std::sync::Arc<super::SqliteStore>,
+    artifact: Id,
+    armed: std::sync::atomic::AtomicBool,
+}
+impl ApplicationStore for RevokeCertificateBeforeWrite {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(options, work)
+    }
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            let artifact = self.artifact.clone();
+            run_write(&*self.inner, WriteOptions::default(), move |tx| {
+                let mut a = tx.artifacts().artifact(&artifact)?.unwrap();
+                a.state = ArtifactState::Deleted;
+                a.revision += 1;
+                tx.artifacts().update_artifact(&a)
+            })?;
+        }
+        self.inner.submit_write(options, job)
+    }
+}
+#[test]
+fn certificate_copy_rechecks_original_artifact_after_preparation_before_commit() {
+    use devworks_core::protocol::results::DomainDecision;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let h = Harness::new();
+    let s = Arc::new(h.store());
+    schema_seed_humans(&h, &s);
+    let reader = Arc::new(CertificateCustodyReader {
+        expected: vec![],
+        calls: Default::default(),
+    });
+    let (service, artifacts) = metadata_owner_parts(&h, s.clone(), reader.clone());
+    let pem = b"-----BEGIN CERTIFICATE-----\nY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
+    let reference = schema_certificate_artifact(&s, &artifacts, pem);
+    let gate = RevokeCertificateBeforeWrite {
+        inner: s.clone(),
+        artifact: reference.artifact_id.clone(),
+        armed: AtomicBool::new(true),
+    };
+    let mut config = serde_json::to_value(
+        source("revoked-ca-source", false)
+            .connection
+            .config
+            .unwrap(),
+    )
+    .unwrap();
+    config["caCertificate"] = json!(reference);
+    let authority = devworks_core::authority::HostAuthority {
+        store: &gate,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: &gate,
+        ids: &*h.ids,
+    };
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":"revoked-ca-configure","body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":config}});
+    let reply = gateway
+        .command(
+            &schema_context(&s, "schema-owner"),
+            "schemas.configure",
+            frame.to_string().as_bytes(),
+            service.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(reply,devworks_core::protocol::CommandReply::Recorded{receipt,..} if matches!(&receipt.decision,DomainDecision::Refused{fault} if fault.code==devworks_core::protocol::DomainErrorCode::SourceChanged))
+    );
+    assert!(!gate.armed.load(Ordering::SeqCst));
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM schema_sources", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM schema_certificates", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(reader.calls.load(Ordering::SeqCst), 0);
     service.stop();
 }

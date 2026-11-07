@@ -46,7 +46,7 @@ pub struct SchemaJob {
 pub(super) struct Runtime {
     pub store: Arc<dyn ApplicationStore>,
     reader: Arc<dyn MetadataReader>,
-    artifacts: Arc<ArtifactService>,
+    pub(super) artifacts: Arc<ArtifactService>,
     pub(super) closed: Arc<crate::services::conventions::indexing::lifecycle::PublicationFence>,
     active: Mutex<BTreeMap<String, Cancellation>>,
 }
@@ -344,8 +344,26 @@ impl SchemaService {
             runtime,
             id: op.id.0.as_str().to_owned(),
         };
-        let (source, ctx) =
-            self.metadata_write(op, &job, cancel, |_, source, ctx| Ok((source, ctx)))?;
+        let (source, ca_certificate) =
+            self.metadata_write(op, &job, cancel, |tx, source, _ctx| {
+                let material = tx.schemas().schema_certificate(&source.connection.id)?;
+                let selected = source
+                    .connection
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.ca_certificate.as_ref());
+                let certificate = match (selected, material) {
+                    (None, None) => None,
+                    (Some(reference), Some(material))
+                        if serde_json::to_value(reference).ok()
+                            == serde_json::to_value(&material.reference).ok() =>
+                    {
+                        Some(material.pem)
+                    }
+                    _ => return Err(StorageError::ScopeDenied),
+                };
+                Ok((source, certificate))
+            })?;
         let config = source.connection.config.clone().ok_or_else(invalid)?;
         let password = if let Some(handle) = &config.credential_ref {
             let owner = self.credentials.as_ref().ok_or(StorageError::ScopeDenied)?;
@@ -355,17 +373,6 @@ impl SchemaService {
         } else {
             None
         };
-        let ca_certificate = config
-            .ca_certificate
-            .as_ref()
-            .map(|reference| {
-                runtime
-                    .artifacts
-                    .read_exact(runtime.store.as_ref(), &ctx, reference, 1024 * 1024)
-                    .map(|v| v.0)
-                    .map_err(|_| StorageError::ScopeDenied)
-            })
-            .transpose()?;
         let request = MetadataRequest {
             connection_id: job.connection_id.clone(),
             config,

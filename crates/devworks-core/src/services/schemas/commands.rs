@@ -4,7 +4,7 @@ use crate::{
     context::{InvocationContext, PrincipalKind},
     gateway::AdmittedCommand,
     operations::{OperationInput, schemas as ops},
-    ports::{CommandHandler, Decided, HandlerFailure, IdKind, storage::*},
+    ports::{CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared, storage::*},
     protocol::{
         DomainErrorCode, EventId, Id, RevisionDimension,
         data::DataScope,
@@ -84,6 +84,7 @@ impl SchemaService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         input: &ops::ConfigureInput,
+        prepared: Option<&super::certificates::PreparedCertificate>,
     ) -> Result<DomainDecision, Failure> {
         human(ctx)?;
         let reach = knowledge::reach(tx.authority(), ctx)?;
@@ -181,6 +182,7 @@ impl SchemaService {
                 ));
             }
         }
+        let certificate = super::certificates::configuration(tx, ctx, input, prepared)?;
         let now = self.clock.now_ms().get();
         let mut row = old.clone().unwrap_or_else(|| StoredSchemaSource {
             configuration_revision: 1,
@@ -255,6 +257,8 @@ impl SchemaService {
         } else {
             tx.schemas().create_schema_source(&row)?;
         }
+        tx.schemas()
+            .set_schema_certificate(&row.connection.id, certificate.as_ref())?;
         event(
             tx,
             ctx,
@@ -318,6 +322,15 @@ impl SchemaService {
     }
 }
 impl CommandHandler for SchemaService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, StorageError> {
+        self.prepare_certificate(ctx, command, env)
+    }
+
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -325,7 +338,12 @@ impl CommandHandler for SchemaService {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let result = match command.input() {
-            OperationInput::Schemas(ops::Input::Configure(input)) => self.configure(tx, ctx, input),
+            OperationInput::Schemas(ops::Input::Configure(input)) => self.configure(
+                tx,
+                ctx,
+                input,
+                command.prepared::<super::certificates::PreparedCertificate>(),
+            ),
             OperationInput::Schemas(ops::Input::RemoveIndex(input)) => {
                 self.remove_index(tx, ctx, input)
             }

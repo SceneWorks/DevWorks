@@ -120,6 +120,10 @@ fn relations(
 macro_rules! reads {
     ($t:ty) => {
         impl SchemaRead for $t {
+            fn schema_certificate(&self, connection:&Id)->Result<Option<StoredSchemaCertificate>,StorageError>{
+                let row:Option<(String,Vec<u8>)>=db(self.conn.query_row("SELECT reference_json,pem FROM schema_certificates WHERE connection_id=?1",[connection.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).optional())?;
+                row.map(|(reference,pem)|Ok(StoredSchemaCertificate{reference:decode(reference)?,pem})).transpose()
+            }
             fn schema_pin(&self,id:&Id)->Result<Option<StoredSchemaReadPin>,StorageError>{pin(self.conn,id)}
             fn schema_active_pin(&self,intent:&str,now:i64)->Result<Option<StoredSchemaReadPin>,StorageError>{
                 db(self.conn.query_row("SELECT body_json FROM schema_read_pins WHERE intent_digest=?1 AND expires_at>?2 ORDER BY expires_at DESC,id LIMIT 1",params![intent,now],|r|r.get::<_,String>(0)).optional())?.map(decode).transpose()
@@ -188,6 +192,38 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl SchemaRepository for Unit<'_> {
+    fn set_schema_certificate(
+        &mut self,
+        connection: &Id,
+        material: Option<&StoredSchemaCertificate>,
+    ) -> Result<(), StorageError> {
+        if let Some(material) = material {
+            let source = source(self.conn, connection)?.ok_or(StorageError::ScopeDenied)?;
+            let selected = source
+                .connection
+                .config
+                .as_ref()
+                .and_then(|c| c.ca_certificate.as_ref());
+            if source.deleted
+                || selected.map(encode).transpose()? != Some(encode(&material.reference)?)
+                || material.pem.is_empty()
+                || material.pem.len() > 1048576
+                || material.reference.byte_length.get() != material.pem.len() as i64
+                || material.reference.sha256.as_str()
+                    != devworks_core::fingerprint::sha256_hex(&material.pem)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            db(self.conn.execute("INSERT INTO schema_certificates(connection_id,reference_json,pem) VALUES(?1,?2,?3) ON CONFLICT(connection_id) DO UPDATE SET reference_json=excluded.reference_json,pem=excluded.pem",params![connection.as_str(),encode(&material.reference)?,material.pem]))?;
+        } else {
+            db(self.conn.execute(
+                "DELETE FROM schema_certificates WHERE connection_id=?1",
+                [connection.as_str()],
+            ))?;
+        }
+        Ok(())
+    }
+
     fn create_schema_pin(&mut self, row: &StoredSchemaReadPin) -> Result<(), StorageError> {
         if row.store_id != self.info.store_id
             || row.restore_epoch != self.info.restore_epoch

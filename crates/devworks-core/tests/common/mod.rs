@@ -3804,6 +3804,9 @@ impl ConventionImportRepository for Unsupported {
 }
 
 impl SchemaRead for Unsupported {
+    fn schema_certificate(&self, _: &Id) -> Result<Option<StoredSchemaCertificate>, StorageError> {
+        nope()
+    }
     fn schema_pin(&self, _: &Id) -> Result<Option<StoredSchemaReadPin>, StorageError> {
         nope()
     }
@@ -3861,6 +3864,13 @@ impl SchemaRead for Unsupported {
 }
 impl SchemaRepository for Unsupported {
     fn prune_schema_views(&mut self, _: u16) -> Result<usize, StorageError> {
+        nope()
+    }
+    fn set_schema_certificate(
+        &mut self,
+        _: &Id,
+        _: Option<&StoredSchemaCertificate>,
+    ) -> Result<(), StorageError> {
         nope()
     }
     fn create_schema_pin(&mut self, _: &StoredSchemaReadPin) -> Result<(), StorageError> {

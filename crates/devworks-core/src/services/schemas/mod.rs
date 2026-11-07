@@ -1,6 +1,7 @@
 //! Shared metadata source owner. Source connections are selected under current project authority;
 //! immutable metadata reads never open the target database or execute caller SQL.
 mod access;
+mod certificates;
 mod commands;
 mod credentials;
 pub mod indexing;

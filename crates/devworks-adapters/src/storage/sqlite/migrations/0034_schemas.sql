@@ -75,3 +75,10 @@ CREATE TABLE schema_read_pins (
 CREATE INDEX schema_read_pin_intent ON schema_read_pins(intent_digest,expires_at,id);
 CREATE INDEX schema_read_pin_expiry ON schema_read_pins(expires_at,id);
 CREATE INDEX schema_read_pin_view ON schema_read_pins(view_id,expires_at);
+
+-- Public certificate copies are configuration-owned, not general artifact read grants.
+CREATE TABLE schema_certificates (
+ connection_id TEXT PRIMARY KEY REFERENCES schema_sources(id),
+ reference_json TEXT NOT NULL CHECK(json_valid(reference_json)),
+ pem BLOB NOT NULL CHECK(length(pem)>0 AND length(pem)<=1048576)
+) STRICT;

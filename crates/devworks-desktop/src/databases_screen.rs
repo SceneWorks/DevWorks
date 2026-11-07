@@ -296,7 +296,7 @@ impl DatabasesScreen {
                     choice(ui,"Database TLS",&mut draft.config,"tls",&["VerifyFull","VerifyCa","LoopbackPlaintext"]);
                     if button(ui,"Choose database CA certificate").clicked(){actions.push(Action::PickCa);}
                     if let Some(path)=&draft.ca_file{ui.label(path.file_name().unwrap_or_default().to_string_lossy());}
-                    if draft.config.get("caCertificate").is_some(){ui.label("An exact CA certificate artifact is attached.");if button(ui,"Remove database CA certificate").clicked(){draft.config.as_object_mut().unwrap().remove("caCertificate");}}
+                    if draft.config.get("caCertificate").is_some(){ui.label("An exact public CA certificate is copied for this connection.");if button(ui,"Remove database CA certificate").clicked(){draft.config.as_object_mut().unwrap().remove("caCertificate");}}
                 }
                 text(ui,"Database display name",&mut draft.config,"displayName");text(ui,"Database environment",&mut draft.config,"environment");
                 lines(ui,"Database catalogs (one per line)",&mut draft.config,"catalogs");lines(ui,"Database schemas (one per line)",&mut draft.config,"schemas");

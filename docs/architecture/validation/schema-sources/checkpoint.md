@@ -181,3 +181,28 @@ DW36 remains incomplete. In particular, the current worker reads CA artifacts un
 principal; a source shared across projects needs narrowly authorized connection-owned certificate
 custody without granting general artifact access. This seam, scheduled sync, remaining metadata
 coverage/fault cases, native-x86 SQLServer CI, reviewed integration and acceptance remain required.
+
+Connection CA custody checkpoint (7 November): configuration now captures a bounded
+public-certificate PEM copy after the configuring actor reads the exact managed
+artifact. The writer rechecks current artifact/version visibility before committing;
+the private connection record retains only that selected immutable material. Metadata
+workers use the connection copy under their original actor and current source/scope
+fences. General artifact access is unchanged. Clearing/removing the configuration
+removes its copy, and an already recorded configuration retry does not reopen a
+subsequently deleted upload. No OS trust store or Keychain is accessed.
+
+Twelve native SQLite/gateway/source cases pass10.36s. New cases exercise a real
+project-B agent indexing a shared connection whose original CA artifact belongs
+privately to project A, exact retry after original-artifact deletion, actor attribution,
+invalid/private-key/oversized refusals with a queued index preserved, and original
+artifact deletion between preparation and the writer commit. The custody reader is
+explicitly recorded and does not establish X.509/TLS validity; the separate actual
+engine TLS qualifications above cover transport. Disabling only the fresh writer
+visibility check makes the race case fail its original SourceChanged assertion0.79s;
+the temporary fault is removed. Strict workspace/all-target checks pass38.76s.
+
+An investigated suspicion that an unrelated refused configuration cancelled its
+accepted index did not reproduce: the gateway savepoint already rolls back all
+handler writes on DomainDecision::Refused. Both original-order controls passed.
+No cancellation-order product change was retained or claimed.
+The composed native Databases UI suite also passes all3 cases14.39s after CA custody.
