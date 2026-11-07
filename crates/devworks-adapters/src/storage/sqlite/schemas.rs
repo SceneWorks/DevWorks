@@ -217,6 +217,33 @@ impl SchemaRepository for Unit<'_> {
         db(self.conn.execute("DELETE FROM schema_read_pins WHERE id IN(SELECT id FROM schema_read_pins WHERE expires_at<=?1 ORDER BY expires_at,id LIMIT ?2)",params![now,limit(n)?]))
     }
 
+    fn prune_schema_views(&mut self, n: u16) -> Result<usize, StorageError> {
+        let budget = limit(n)?;
+        // Expired lease records are removed separately in bounded pages. Any remaining
+        // lease blocks physical deletion, so FK cascades cannot exceed this page budget.
+        let candidate:Option<String>=db(self.conn.query_row(
+            "SELECT v.id FROM schema_views v JOIN schema_sources s ON s.id=v.connection_id WHERE v.sealed=1 AND COALESCE(json_extract(s.body_json,'$.connection.currentViewId'),'')<>v.id AND NOT EXISTS(SELECT 1 FROM schema_read_pins p WHERE p.view_id=v.id) AND (s.deleted=1 OR s.configuration_revision<>v.configuration_revision OR 2<=(SELECT count(*) FROM (SELECT newer.id FROM schema_views newer WHERE newer.connection_id=v.connection_id AND newer.sealed=1 AND newer.source_revision>v.source_revision LIMIT 2))) ORDER BY v.created_at,v.id LIMIT 1",[],|r|r.get(0)).optional())?;
+        let Some(view) = candidate else {
+            return Ok(0);
+        };
+        let relations=db(self.conn.execute("DELETE FROM schema_relations WHERE rowid IN(SELECT rowid FROM schema_relations WHERE view_id=?1 LIMIT ?2)",params![view,budget]))?;
+        let remaining: bool = db(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_relations WHERE view_id=?1)",
+            [&view],
+            |r| r.get(0),
+        ))?;
+        if remaining || relations == budget as usize {
+            return Ok(relations);
+        }
+        let objects=db(self.conn.execute("DELETE FROM schema_objects WHERE rowid IN(SELECT rowid FROM schema_objects WHERE view_id=?1 LIMIT ?2)",params![view,budget-relations as i64]))?;
+        let used = relations + objects;
+        if used == budget as usize {
+            return Ok(used);
+        }
+        let header=db(self.conn.execute("DELETE FROM schema_views WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM schema_objects WHERE view_id=?1)",[view]))?;
+        Ok(used + header)
+    }
+
     fn create_schema_source(&mut self, row: &StoredSchemaSource) -> Result<(), StorageError> {
         row.connection
             .check()

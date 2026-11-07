@@ -48,6 +48,7 @@ async fn connect(
 ) -> Result<Client<Compat<TcpStream>>, MetadataFailure> {
     let mut config = Config::new();
     config.host(&target.host);
+    config.trust_webpki_roots();
     config.port(target.port);
     config.database(database);
     config.authentication(AuthMethod::sql_server(
@@ -103,10 +104,10 @@ pub(super) async fn read(
     let tls = if matches!(target.tls, SchemaTlsMode::LoopbackPlaintext) {
         "LoopbackPlaintext"
     } else {
-        "VerifyFull; platform roots plus explicit CA"
+        "VerifyFull; bundled Mozilla roots plus explicit CA"
     };
     let profile = profile(
-        "tiberius-0.13.0/native-tls",
+        "tiberius-0.13.0/rustls",
         version,
         tls,
         &[

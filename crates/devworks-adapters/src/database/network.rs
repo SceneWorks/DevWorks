@@ -14,6 +14,10 @@ pub struct NetworkMetadataReader;
 impl MetadataReader for NetworkMetadataReader {
     fn read(&self, request: MetadataRequest) -> MetadataFuture {
         Box::pin(async move {
+            // SQLx's VerifyCa verifier uses the process provider even though its client
+            // builder selects ring explicitly. Tiberius also compiles aws-lc; preserve
+            // the app's ring default without replacing any provider already installed.
+            let _ = rustls::crypto::ring::default_provider().install_default();
             let target = Target::parse(&request)?;
             let token = request.cancellation.clone();
             let deadline = request.limits.deadline;

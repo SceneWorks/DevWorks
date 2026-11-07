@@ -3860,6 +3860,9 @@ impl SchemaRead for Unsupported {
     }
 }
 impl SchemaRepository for Unsupported {
+    fn prune_schema_views(&mut self, _: u16) -> Result<usize, StorageError> {
+        nope()
+    }
     fn create_schema_pin(&mut self, _: &StoredSchemaReadPin) -> Result<(), StorageError> {
         nope()
     }

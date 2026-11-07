@@ -25,6 +25,7 @@ CREATE TABLE schema_views (
  UNIQUE(connection_id,operation_id)
 ) STRICT;
 CREATE INDEX schema_views_source ON schema_views(connection_id,id);
+CREATE INDEX schema_views_revision ON schema_views(connection_id,source_revision DESC,id);
 CREATE TABLE schema_objects (
  view_id TEXT NOT NULL REFERENCES schema_views(id) ON DELETE CASCADE,
  id TEXT NOT NULL,

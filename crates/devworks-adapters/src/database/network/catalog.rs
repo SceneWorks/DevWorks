@@ -135,7 +135,7 @@ impl Catalog {
         } else {
             selected_name
         };
-        let node = MetadataObject {
+        let mut node = MetadataObject {
             key: id.clone(),
             parent_key: Some(parent_id.clone()),
             kind: kind.into(),
@@ -149,6 +149,10 @@ impl Catalog {
             .unwrap_or(false)
         {
             self.collector.gap("metadata_definition_byte_limit");
+            node.coverage.state = CoverageState::Partial;
+            node.coverage
+                .gaps
+                .push(Id::new("metadata_definition_byte_limit").expect("static gap"));
         }
         if !self.collector.object(node)? {
             return Ok(false);

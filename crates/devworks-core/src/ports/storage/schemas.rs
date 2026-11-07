@@ -103,6 +103,8 @@ pub trait SchemaRead {
 pub trait SchemaRepository: SchemaRead {
     fn create_schema_pin(&mut self, pin: &StoredSchemaReadPin) -> Result<(), StorageError>;
     fn expire_schema_pins(&mut self, now: i64, limit: u16) -> Result<usize, StorageError>;
+    /// Prune at most limit obsolete metadata rows, preserving current heads, live pins and two newest sealed views.
+    fn prune_schema_views(&mut self, limit: u16) -> Result<usize, StorageError>;
     fn create_schema_source(&mut self, row: &StoredSchemaSource) -> Result<(), StorageError>;
     fn revise_schema_source(
         &mut self,

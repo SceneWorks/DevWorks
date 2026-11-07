@@ -1,0 +1,34 @@
+name: Native SQLServer metadata
+on:
+  pull_request:
+    paths:
+      - 'crates/devworks-adapters/**'
+      - 'crates/devworks-core/src/ports/database.rs'
+      - 'tools/ci/schema_sqlserver_fixture.py'
+      - 'docs/architecture/validation/schema-sources/**'
+      - 'Cargo.lock'
+      - '.github/workflows/schema-metadata.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: schema-metadata-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sqlserver:
+    name: SQLServer16 native x86 metadata and TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: schema-metadata
+      - name: Qualify actual isolated SQLServer without learned inference
+        run: python3 tools/ci/schema_sqlserver_fixture.py

@@ -213,3 +213,22 @@ impl SchemaService {
         Ok(Some(Prepared::new(prepared)))
     }
 }
+
+impl SchemaService {
+    /// Fixed-size local retention pass; no target connection or authority grant is involved.
+    pub fn cleanup_retained_views(&self) -> Result<usize, StorageError> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(0);
+        };
+        let _phase = runtime.closed.enter()?;
+        let (closed, clock) = (runtime.closed.clone(), self.clock.clone());
+        run_write(runtime.store.as_ref(), WriteOptions::default(), move |tx| {
+            if closed.is_closed() {
+                return Err(StorageError::Cancelled);
+            }
+            let pins = tx.schemas().expire_schema_pins(clock.now_ms().get(), 500)?;
+            let rows = tx.schemas().prune_schema_views(500)?;
+            Ok(pins + rows)
+        })
+    }
+}

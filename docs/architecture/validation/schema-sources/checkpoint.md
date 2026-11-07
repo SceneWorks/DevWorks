@@ -142,3 +142,42 @@ required parts of DW36. Earlier paragraphs are historical checkpoints, not curre
 The complete native Databases UI suite passes3/3 in14.33s with pin-based exploration. The full
 create/sync/page/inspect/remove flow still leaves source rows intact;101-source admission and
 password-free draft restart cases remain unchanged.
+
+## Bounded retention and verified TLS checkpoint (2026-11-06)
+
+Native runtime maintenance now expires at most500 lease records and removes at most500 obsolete
+metadata rows per pass. It preserves current source heads, live leases and the two newest sealed
+views; relations precede objects and empty headers. Any remaining lease prevents a cascade from
+escaping the page budget. Native target-file reindex tests prove live old-view retention and
+expiry pruning without target I/O. All nine native schema/storage/worker cases pass8.12s on the
+new dependency composition. Migration34's current checksum is
+624240afaf525442d27d6a76d36e245319e436a224a3f7d48cd9d17f93d18385.
+
+All eleven explicitly dispatched actual-server metadata cases pass0.30s across MariaDB11.4,
+MySQL8.4, PostgreSQL17 and functional-emulated SQLServer16. TLS cases supply an isolated CA in
+memory per connection, accept matching DNS, refuse an unknown CA and hostname mismatch, and
+qualify VerifyCa where supported. SQLServer explicitly refuses VerifyCa and supports VerifyFull.
+No OS trust installation or real credential facility is involved. The fixture script successfully
+recreates its own isolated SQLServer plus certificate setup and runs both native cases0.59s;
+its report explicitly says host arm64/nativeX86 false. The new dedicated CI workflow requires
+an actual x86 host by default. Local emulation is not native-x86 acceptance.
+
+Actual macOS SQLServer TLS initially failed with native-tls/Security Framework. Upstream
+[Tiberius documents this incompatibility](https://github.com/tiberius-rs/tiberius#encryption-tlsssl).
+Its rustls backend with bundled roots plus an explicit CA passes. This introduces Tiberius's
+aws-lc build dependencies; existing app transports retain their own explicit providers. SQLx's
+VerifyCa verifier additionally needs an unambiguous process provider when both providers compile;
+network metadata intake selects ring only if no provider is already installed. All four TLS cases
+pass together, including the VerifyCa path which reproduced a dual-provider panic before this fix.
+
+A separate PostgreSQL metadata_limits fixture reproduces a6000-character default being silently
+truncated while snapshot/object coverage claimed Complete. The regression is RED0.10s before
+explicit truncation flags and per-object gap propagation, GREEN0.11s afterward. Analogous bounded
+PostgreSQL definitions report their truncation. The reader still never queries source rows.
+Strict workspace/all-target Clippy passes16.56s; native Databases UI passes3/3 in14.35s with the
+new retention worker and crypto composition. No learned inference runs.
+
+DW36 remains incomplete. In particular, the current worker reads CA artifacts under the requesting
+principal; a source shared across projects needs narrowly authorized connection-owned certificate
+custody without granting general artifact access. This seam, scheduled sync, remaining metadata
+coverage/fault cases, native-x86 SQLServer CI, reviewed integration and acceptance remain required.

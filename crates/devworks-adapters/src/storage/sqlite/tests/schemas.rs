@@ -1195,6 +1195,20 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
     })
     .unwrap();
     assert!(old.iter().all(|o| !o.qualified_name.0.contains("later")));
+    // Two newer heads make the first view eligible for age retention, but its live
+    // lease still prevents physical pruning. No source reads occur in maintenance.
+    index("pin-index-third");
+    index("pin-index-fourth");
+    for _ in 0..10 {
+        assert!(service.cleanup_retained_views().unwrap() <= 1000);
+    }
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_view(&first.schema_views[0].snapshot_id))
+        .unwrap()
+        .is_some()
+    );
     h.clock.0.store(first.expires_at_ms.get(), Ordering::SeqCst);
     assert!(matches!(
         objects(
@@ -1205,6 +1219,16 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
         ),
         DomainQueryReply::Rejected { .. }
     ));
+    for _ in 0..10 {
+        assert!(service.cleanup_retained_views().unwrap() <= 1000);
+    }
+    assert!(
+        read_snapshot(&*s, &ReadOptions::default(), |r| r
+            .schemas()
+            .schema_view(&first.schema_views[0].snapshot_id))
+        .unwrap()
+        .is_none()
+    );
     let fresh = catalog("schema-owner", json!({"kind":"Workspace"}));
     assert_ne!(current.pin_id, fresh.pin_id);
     assert!(matches!(
@@ -1257,8 +1281,8 @@ fn native_schema_pins_keep_captured_views_but_never_extend_expiry_or_access() {
     ));
     assert_eq!(
         reader.0.load(Ordering::SeqCst),
-        2,
-        "all drill-downs are local immutable reads"
+        4,
+        "all drill-downs and maintenance are local immutable reads"
     );
     assert_eq!(
         target

@@ -28,7 +28,7 @@ sha2.workspace = true
 sqlite-vec = "=0.1.7"
 # Native target metadata readers; SQLite target files reuse the bundled rusqlite above.
 sqlx = { version = "=0.9.0", default-features = false, features = ["mysql-rsa", "runtime-tokio", "tls-rustls-ring-webpki"] }
-tiberius = { version = "=0.13.0", default-features = false, features = ["tds73", "native-tls"] }
+tiberius = { version = "=0.13.0", default-features = false, features = ["tds73", "rustls-webpki-roots"] }
 futures-util = { version = "=0.3.32", default-features = false, features = ["std", "async-await", "sink"] }
 tokio-util = { version = "=0.7.20", default-features = false, features = ["compat"] }
 tokio-postgres = "=0.7.18"

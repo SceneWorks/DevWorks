@@ -185,3 +185,117 @@ fn native_postgres_materialized_view_indexes_keep_view_parent_identity() {
         "metadata contains an orphan parent"
     );
 }
+
+fn qualify_tls(engine: &str, var: &str) {
+    use devworks_core::protocol::records::SchemaTlsMode;
+    let numeric = std::env::var(var).expect("explicit isolated fixture endpoint");
+    let endpoint = numeric.replace("127.0.0.1", "localhost");
+    let ca =
+        std::fs::read(std::env::var("DEVWORKS_METADATA_CA").expect("isolated fixture CA path"))
+            .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mut verified = request(engine, &endpoint);
+        verified.config.tls = Some(SchemaTlsMode::VerifyFull);
+        verified.ca_certificate = Some(ca.clone());
+        let snapshot = NetworkMetadataReader
+            .read(verified)
+            .await
+            .expect("custom per-connection CA and matching DNS identity");
+        assert!(
+            snapshot
+                .objects
+                .iter()
+                .any(|o| o.kind == "Table" && o.metadata.name.0 == "parent")
+        );
+        assert!(!format!("{snapshot:?}").contains("SOURCE_ROW_SENTINEL_NEVER_INDEX"));
+        assert!(snapshot.profile.tls.0.contains("VerifyFull"));
+        let mut unknown = request(engine, &endpoint);
+        unknown.config.tls = Some(SchemaTlsMode::VerifyFull);
+        assert!(
+            NetworkMetadataReader.read(unknown).await.is_err(),
+            "isolated CA must not become a trusted OS root"
+        );
+        let mut mismatch = request(engine, &numeric);
+        mismatch.config.tls = Some(SchemaTlsMode::VerifyFull);
+        mismatch.ca_certificate = Some(ca.clone());
+        assert!(
+            NetworkMetadataReader.read(mismatch).await.is_err(),
+            "a DNS-only fixture certificate must not authorize an IP identity"
+        );
+        let mut chain_only = request(engine, &numeric);
+        chain_only.config.tls = Some(SchemaTlsMode::VerifyCa);
+        chain_only.ca_certificate = Some(ca);
+        if engine == "SqlServer" {
+            assert!(matches!(
+                NetworkMetadataReader.read(chain_only).await,
+                Err(MetadataFailure::UnsupportedProfile)
+            ));
+        } else {
+            assert!(
+                NetworkMetadataReader.read(chain_only).await.is_ok(),
+                "VerifyCa preserves chain validation without DNS identity matching"
+            );
+        }
+    });
+}
+#[test]
+#[ignore = "explicit isolated MariaDB TLS fixture"]
+fn native_mariadb_metadata_tls() {
+    qualify_tls("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated MySQL TLS fixture"]
+fn native_mysql_metadata_tls() {
+    qualify_tls("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL TLS fixture"]
+fn native_postgres_metadata_tls() {
+    qualify_tls("Postgres", "DEVWORKS_METADATA_POSTGRES");
+}
+#[test]
+#[ignore = "explicit isolated SQLServer TLS fixture; x86 qualification is separate"]
+fn native_sql_server_metadata_tls() {
+    qualify_tls("SqlServer", "DEVWORKS_METADATA_SQLSERVER");
+}
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL metadata_limits catalog"]
+fn native_postgres_long_default_reports_partial_object_coverage() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_POSTGRES_LIMITS")
+        .expect("explicit isolated metadata-limits endpoint");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = runtime
+        .block_on(NetworkMetadataReader.read(request("Postgres", &endpoint)))
+        .unwrap();
+    assert!(
+        matches!(snapshot.coverage.state, CoverageState::Partial),
+        "truncated defaults must not claim complete metadata"
+    );
+    let column = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Column" && o.metadata.name.0 == "long_default")
+        .expect("retained bounded default metadata");
+    assert!(
+        matches!(column.coverage.state, CoverageState::Partial),
+        "object coverage must disclose its own truncated field"
+    );
+    assert!(column.metadata.default_value.as_ref().unwrap().0.len() <= 4096);
+    assert!(
+        column
+            .coverage
+            .gaps
+            .iter()
+            .any(|id| id.as_str() == "metadata_definition_byte_limit")
+    );
+}

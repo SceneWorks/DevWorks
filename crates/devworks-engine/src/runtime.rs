@@ -1026,6 +1026,16 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             }
         }));
     }
+    if let Some(service) = &schemas {
+        let service = service.clone();
+        tasks.push(tokio::spawn(async move {
+            while !service.is_stopped() {
+                let current = service.clone();
+                let _ = tokio::task::spawn_blocking(move || current.cleanup_retained_views()).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }));
+    }
     if let Some(worker) = &embedding_probes {
         let worker = worker.clone();
         tasks.push(tokio::spawn(async move {

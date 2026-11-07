@@ -764,4 +764,4 @@ pub const MIGRATION_0033_SHA256: &str =
 
 /// Recorded checksum of database metadata storage migration34.
 pub const MIGRATION_0034_SHA256: &str =
-    "0172c4261c1994bfc3545aeb6061e128d5c22c041daf8468da0f8c050ef8b661";
+    "624240afaf525442d27d6a76d36e245319e436a224a3f7d48cd9d17f93d18385";
