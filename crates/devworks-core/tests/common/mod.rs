@@ -1061,6 +1061,13 @@ impl GrantLedger for Unsupported {
 }
 
 impl ConfigurationRead for Unsupported {
+    fn settings_secret(&self, _: &Id) -> Result<Option<StoredSettingsSecret>, StorageError> {
+        nope()
+    }
+    fn settings_secret_referenced(&self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+
     fn scope_exists(&self, _: &ConfigScope) -> Result<bool, StorageError> {
         nope()
     }
@@ -1099,6 +1106,22 @@ impl ConfigurationRead for Unsupported {
     }
 }
 impl ConfigurationRepository for Unsupported {
+    fn reserve_settings_secret(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish_settings_secret(&mut self, _: &Id) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn retain_settings_secret(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+    fn retire_settings_secret(&mut self, _: &Id, _: i64, _: bool) -> Result<bool, StorageError> {
+        nope()
+    }
+    fn finish_settings_secret_deletion(&mut self, _: &Id) -> Result<(), StorageError> {
+        nope()
+    }
+
     fn append_revision(
         &mut self,
         _: &ConfigScope,

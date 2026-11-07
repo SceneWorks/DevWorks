@@ -208,9 +208,62 @@ fn proposals(
     raw.into_iter().map(proposal_of).collect()
 }
 
+fn settings_handle(handle: &Id) -> Result<(), StorageError> {
+    if devworks_core::settings::validate::is_secret_ref(handle.as_str()) {
+        Ok(())
+    } else {
+        Err(invalid("invalid settings secret handle"))
+    }
+}
+fn settings_secret(
+    conn: &Connection,
+    handle: &Id,
+) -> Result<Option<StoredSettingsSecret>, StorageError> {
+    settings_handle(handle)?;
+    let raw: Option<(String, i64)> = db(conn
+        .query_row(
+            "SELECT state,expires_at FROM settings_secret_handles WHERE handle=?1",
+            [handle.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional())?;
+    raw.map(|(state, expires_at_ms)| {
+        let state = match state.as_str() {
+            "Writing" => SettingsSecretState::Writing,
+            "Ready" => SettingsSecretState::Ready,
+            "Retained" => SettingsSecretState::Retained,
+            "Deleting" => SettingsSecretState::Deleting,
+            "Deleted" => SettingsSecretState::Deleted,
+            _ => return Err(corrupt("invalid settings secret state")),
+        };
+        Ok(StoredSettingsSecret {
+            handle: handle.clone(),
+            state,
+            expires_at_ms,
+        })
+    })
+    .transpose()
+}
+fn settings_secret_referenced(conn: &Connection, handle: &Id) -> Result<bool, StorageError> {
+    settings_handle(handle)?;
+    // Search the retained documents themselves, without a paging horizon or current-scope
+    // restriction. Earlier revisions remain rollback targets; decided proposals also persist.
+    db(conn.query_row("SELECT EXISTS(SELECT 1 FROM configuration_revisions r,json_tree(r.body_json) j WHERE r.namespace='settings' AND j.key='secretRef' AND j.type='text' AND j.atom=?1 UNION ALL SELECT 1 FROM configuration_proposals p,json_tree(p.body_json) j WHERE p.namespace='settings' AND j.key='secretRef' AND j.type='text' AND j.atom=?1)", [handle.as_str()], |r| r.get(0)))
+}
+
 macro_rules! configuration_read {
     ($t:ty) => {
         impl ConfigurationRead for $t {
+            fn settings_secret(
+                &self,
+                handle: &Id,
+            ) -> Result<Option<StoredSettingsSecret>, StorageError> {
+                settings_secret(self.conn, handle)
+            }
+            fn settings_secret_referenced(&self, handle: &Id) -> Result<bool, StorageError> {
+                settings_secret_referenced(self.conn, handle)
+            }
+
             fn scope_exists(&self, scope: &ConfigScope) -> Result<bool, StorageError> {
                 scope_exists(self.conn, scope)
             }
@@ -280,6 +333,89 @@ fn require_actor(conn: &Connection, actor: &ActorId) -> Result<(), StorageError>
 }
 
 impl ConfigurationRepository for Unit<'_> {
+    fn reserve_settings_secret(
+        &mut self,
+        handle: &Id,
+        expires_at_ms: i64,
+    ) -> Result<(), StorageError> {
+        settings_handle(handle)?;
+        if expires_at_ms <= self.now {
+            return Err(invalid("settings secret stage already expired"));
+        }
+        db(self.conn.execute(
+            "INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,'Writing',?2)",
+            params![handle.as_str(), expires_at_ms],
+        ))?;
+        Ok(())
+    }
+    fn publish_settings_secret(&mut self, handle: &Id) -> Result<bool, StorageError> {
+        settings_handle(handle)?;
+        Ok(db(self.conn.execute("UPDATE settings_secret_handles SET state='Ready' WHERE handle=?1 AND state='Writing' AND expires_at>?2", params![handle.as_str(),self.now]))? == 1)
+    }
+    fn retain_settings_secret(&mut self, handle: &Id) -> Result<(), StorageError> {
+        settings_handle(handle)?;
+        match settings_secret(self.conn, handle)? {
+            Some(row) if row.state == SettingsSecretState::Retained => return Ok(()),
+            Some(row)
+                if row.state == SettingsSecretState::Ready && row.expires_at_ms > self.now =>
+            {
+                db(self.conn.execute(
+                    "UPDATE settings_secret_handles SET state='Retained' WHERE handle=?1",
+                    [handle.as_str()],
+                ))?;
+            }
+            None => {
+                db(self.conn.execute("INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,'Retained',?2)", params![handle.as_str(),self.now]))?;
+            }
+            _ => return Err(StorageError::ScopeDenied),
+        }
+        Ok(())
+    }
+    fn retire_settings_secret(
+        &mut self,
+        handle: &Id,
+        legacy_expires_at_ms: i64,
+        abandon: bool,
+    ) -> Result<bool, StorageError> {
+        settings_handle(handle)?;
+        if settings_secret_referenced(self.conn, handle)? {
+            return Ok(false);
+        }
+        let row = match settings_secret(self.conn, handle)? {
+            Some(row) => row,
+            None => {
+                if legacy_expires_at_ms <= self.now {
+                    return Err(invalid("legacy settings stage already expired"));
+                }
+                db(self.conn.execute("INSERT INTO settings_secret_handles(handle,state,expires_at) VALUES(?1,'Ready',?2)", params![handle.as_str(),legacy_expires_at_ms]))?;
+                if !abandon {
+                    return Ok(false);
+                }
+                settings_secret(self.conn, handle)?
+                    .ok_or_else(|| corrupt("settings stage disappeared"))?
+            }
+        };
+        if !abandon
+            && matches!(
+                row.state,
+                SettingsSecretState::Writing | SettingsSecretState::Ready
+            )
+            && row.expires_at_ms > self.now
+        {
+            return Ok(false);
+        }
+        db(self.conn.execute(
+            "UPDATE settings_secret_handles SET state='Deleting' WHERE handle=?1",
+            [handle.as_str()],
+        ))?;
+        Ok(true)
+    }
+    fn finish_settings_secret_deletion(&mut self, handle: &Id) -> Result<(), StorageError> {
+        settings_handle(handle)?;
+        if db(self.conn.execute("UPDATE settings_secret_handles SET state='Deleted' WHERE handle=?1 AND state IN('Deleting','Deleted')", [handle.as_str()]))? != 1 { return Err(StorageError::ScopeDenied); }
+        Ok(())
+    }
+
     fn append_revision(
         &mut self,
         scope: &ConfigScope,

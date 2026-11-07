@@ -420,6 +420,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0034_schemas.sql"),
         rebuilds_tables: false,
     },
+    // Prior writers do not enforce settings credential retirement fences.
+    Migration {
+        version: 35,
+        minimum_reader: 8,
+        minimum_writer: 35,
+        sql: include_str!("migrations/0035_settings_secrets.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -765,3 +773,7 @@ pub const MIGRATION_0033_SHA256: &str =
 /// Recorded checksum of database metadata storage migration34.
 pub const MIGRATION_0034_SHA256: &str =
     "ab4492daa17015c6f409259dc313abede9035c2fa9bf4c412c42746cdbdf151b";
+
+/// Recorded checksum of settings credential custody migration35.
+pub const MIGRATION_0035_SHA256: &str =
+    "6810fcf899c738c2e15e2963b9df3f4525e8899581659e7e1896775d3327c17a";
