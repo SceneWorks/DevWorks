@@ -614,6 +614,17 @@ fn metadata_owner_parts(
     std::sync::Arc<devworks_core::services::schemas::SchemaService>,
     std::sync::Arc<devworks_core::services::artifacts::ArtifactService>,
 ) {
+    metadata_owner_parts_with_clock(h, s, reader, h.clock.clone())
+}
+fn metadata_owner_parts_with_clock(
+    h: &Harness,
+    s: std::sync::Arc<super::SqliteStore>,
+    reader: std::sync::Arc<dyn devworks_core::ports::database::MetadataReader>,
+    clock: std::sync::Arc<dyn devworks_core::ports::Clock>,
+) -> (
+    std::sync::Arc<devworks_core::services::schemas::SchemaService>,
+    std::sync::Arc<devworks_core::services::artifacts::ArtifactService>,
+) {
     let artifacts = std::sync::Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         std::sync::Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
             h.root.0.clone(),
@@ -629,7 +640,7 @@ fn metadata_owner_parts(
     ));
     (
         std::sync::Arc::new(
-            devworks_core::services::schemas::SchemaService::new(h.ids.clone(), h.clock.clone())
+            devworks_core::services::schemas::SchemaService::new(h.ids.clone(), clock)
                 .with_runtime(s, reader, artifacts.clone()),
         ),
         artifacts,
@@ -2015,4 +2026,151 @@ fn native_review7_generic_queue_cancellation_releases_source_without_losing_publ
         ),
         DomainDecision::Accepted { .. }
     ));
+}
+
+#[test]
+fn native_schema_pin_preparation_survives_a_clock_tick_after_writer_admission() {
+    use devworks_core::ports::Clock;
+    use devworks_core::protocol::{
+        Counter,
+        results::{DomainDecision, DomainQueryReply, OperationResult},
+    };
+    use devworks_core::services::schemas::indexing::SchemaOutcome;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    struct TickClock {
+        inner: Arc<super::TestClock>,
+        ticking: AtomicBool,
+    }
+    impl Clock for TickClock {
+        fn now_ms(&self) -> Counter {
+            if self.ticking.load(Ordering::SeqCst) {
+                self.inner.0.fetch_add(1, Ordering::SeqCst);
+            }
+            self.inner.now_ms()
+        }
+    }
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    schema_seed_humans(&h, &store);
+    let path = h.root.0.join("writer-clock.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE current_metadata(id INTEGER PRIMARY KEY);")
+        .unwrap();
+    let clock = Arc::new(TickClock {
+        inner: h.clock.clone(),
+        ticking: AtomicBool::new(false),
+    });
+    let (service, _) = metadata_owner_parts_with_clock(
+        &h,
+        store.clone(),
+        Arc::new(CountingMetadata(AtomicUsize::new(0))),
+        clock.clone(),
+    );
+    let mut config =
+        serde_json::to_value(source("writer-clock", true).connection.config.unwrap()).unwrap();
+    config["endpoint"] = json!(path.to_str().unwrap());
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value: created },
+    } = owner_command(
+        &h,
+        &store,
+        service.clone(),
+        "clock-create",
+        "schemas.configure",
+        json!({"scope":{"kind":"Workspace"},"config":config}),
+    )
+    else {
+        panic!("source creation")
+    };
+    let DomainDecision::Accepted { operation_id } = owner_command(
+        &h,
+        &store,
+        service.clone(),
+        "clock-index",
+        "schemas.index",
+        json!({"connectionId":created.id,"expectedRevision":created.revision}),
+    ) else {
+        panic!("index admission")
+    };
+    let operation = dispatch_metadata(&store, operation_id, false);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .block_on(service.run_metadata(&operation, &Cancellation::new()))
+            .unwrap(),
+        SchemaOutcome::Completed(_)
+    ));
+    clock.ticking.store(true, Ordering::SeqCst);
+    let authority = devworks_core::authority::HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: store.as_ref(),
+        ids: h.ids.as_ref(),
+    };
+    let frame = json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":5,"queryId":"clock-pin","body":{"kind":"schemas.connections","scope":{"kind":"Workspace"},"page":{"limit":100}}});
+    let query = || {
+        gateway
+            .query(
+                &schema_context(&store, "schema-owner"),
+                "schemas.connections",
+                frame.to_string().as_bytes(),
+                service.as_ref(),
+            )
+            .unwrap()
+    };
+    let first = query();
+    let DomainQueryReply::Result {
+        result: OperationResult::SchemasConnections { value },
+        ..
+    } = first
+    else {
+        panic!("new metadata view must remain queryable across a writer-time clock tick: {first:?}")
+    };
+    let first = value
+        .items
+        .0
+        .into_iter()
+        .find(|r| r.id == created.id)
+        .unwrap()
+        .read_view
+        .unwrap();
+    let pin = read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+        r.schemas().schema_pin(&first.pin_id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(pin.expires_at_ms - pin.created_at_ms, GRAPH_PIN_TTL_MS);
+    assert!(pin.created_at_ms <= h.clock.now_ms().get());
+    let repeated = query();
+    let DomainQueryReply::Result {
+        result: OperationResult::SchemasConnections { value },
+        ..
+    } = repeated
+    else {
+        panic!("{repeated:?}")
+    };
+    let repeated = value
+        .items
+        .0
+        .into_iter()
+        .find(|r| r.id == created.id)
+        .unwrap()
+        .read_view
+        .unwrap();
+    assert_eq!(repeated.pin_id, first.pin_id);
+    assert_eq!(
+        repeated.expires_at_ms, first.expires_at_ms,
+        "clock progress must not renew the lease"
+    );
 }

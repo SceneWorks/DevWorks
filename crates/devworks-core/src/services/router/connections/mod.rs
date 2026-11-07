@@ -62,8 +62,8 @@ use crate::ports::secrets::{
 };
 use crate::ports::storage::{
     ApplicationStore, DiscoveredModel, NewEvent, ReadOptions, ReadSnapshot, RouterRead,
-    StorageError, StoredConnection, StoredDecisionModel, StoredRiskAcceptance, StoredRouteModel,
-    WriteOptions, WriteTransaction, read_snapshot, run_write,
+    SettingsSecretState, StorageError, StoredConnection, StoredDecisionModel, StoredRiskAcceptance,
+    StoredRouteModel, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -874,11 +874,8 @@ impl ConnectionService {
         self.delete_unreferenced(std::slice::from_ref(handle));
     }
 
-    /// Writes a settings credential the user entered (for example the web search provider's key,
-    /// `web.searchCredential`) into the secret store and returns the reference the user's
-    /// `settings.save_revision` stores as `{"secretRef": ...}`. The value is stored under the
-    /// reference itself; settings references are owned by settings, so connection
-    /// reconciliation never deletes them.
+    /// Stages a host-entered settings credential for STAGED_TTL_MS. Retained revisions
+    /// and proposals keep it alive; values remain only in this store's SecretStore namespace.
     pub fn stage_setting_secret(&self, value: Secret) -> Result<SecretRef, SecretError> {
         let trimmed = value.expose().trim();
         if trimmed.is_empty() {
@@ -890,8 +887,65 @@ impl ConnectionService {
         bytes.iter_mut().for_each(|b| *b = 0);
         let handle = reference_handle(&reference)
             .ok_or_else(|| SecretError::Failed("unrepresentable reference".into()))?;
-        self.noted(self.secrets.put(&self.key(&handle), &Secret::new(trimmed)))?;
-        Ok(reference)
+        let reserved = handle.clone();
+        let expires = self
+            .now()
+            .checked_add(STAGED_TTL_MS)
+            .ok_or_else(|| SecretError::Failed("settings stage expiry overflow".into()))?;
+        self.publication(move |tx| {
+            tx.configuration()
+                .reserve_settings_secret(&reserved, expires)
+        })
+        .map_err(|_| SecretError::Failed("settings credential intake unavailable".into()))?;
+        if let Err(error) = self.noted(self.secrets.put(&self.key(&handle), &Secret::new(trimmed)))
+        {
+            let _ = self.collect_setting_handle(&handle, true);
+            // Cleanup success does not make the failed intake available. Settings reads
+            // this state to offer its session-only fallback after the completion.
+            return self.noted(Err(error));
+        }
+        let published = handle.clone();
+        if matches!(
+            self.publication(move |tx| tx.configuration().publish_settings_secret(&published)),
+            Ok(true)
+        ) {
+            return Ok(reference);
+        }
+        // Expiry, shutdown or an uncertain writer acknowledgement won. The reference
+        // was never returned; retire it before cleaning a possibly completed external put.
+        let _ = self.collect_setting_handle(&handle, true);
+        Err(SecretError::Failed(
+            "settings credential stage expired or closed".into(),
+        ))
+    }
+
+    fn collect_setting_handle(&self, handle: &Id, abandon: bool) -> Result<bool, SecretError> {
+        let retired = handle.clone();
+        let expires = self
+            .now()
+            .checked_add(STAGED_TTL_MS)
+            .ok_or_else(|| SecretError::Failed("settings stage expiry overflow".into()))?;
+        let ready = run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            if referenced(tx.router())?.contains(retired.as_str()) {
+                return Ok(false);
+            }
+            tx.configuration()
+                .retire_settings_secret(&retired, expires, abandon)
+        })
+        .map_err(|_| SecretError::Failed("settings credential collection unavailable".into()))?;
+        if !ready {
+            return Ok(false);
+        }
+        let deleted = self.noted(self.secrets.delete(&self.key(handle)))?;
+        let finished = handle.clone();
+        run_write(self.store.as_ref(), WriteOptions::default(), move |tx| {
+            tx.configuration()
+                .finish_settings_secret_deletion(&finished)
+        })
+        .map_err(|_| {
+            SecretError::Failed("settings credential collection acknowledgement unavailable".into())
+        })?;
+        Ok(deleted)
     }
 
     /// Attaches the `code#state` value Claude showed to `principal`'s open browser sign-in, for
@@ -1549,8 +1603,13 @@ impl ConnectionService {
             .map_err(|e| SecretError::Failed(format!("{e:?}")))?;
         let mut removed = 0;
         for h in listed {
-            // Settings secret references belong to settings, never to a connection.
-            if refs.contains(h.as_str()) || h.as_str().starts_with(SETTING_SECRET_PREFIX) {
+            if refs.contains(h.as_str()) {
+                continue;
+            }
+            if h.as_str().starts_with(SETTING_SECRET_PREFIX) {
+                if self.collect_setting_handle(&h, false)? {
+                    removed += 1;
+                }
                 continue;
             }
             {
@@ -3516,6 +3575,19 @@ const SETTING_SECRET_PREFIX: &str = "dwsecret-";
 impl SecretResolver for ConnectionService {
     fn resolve(&self, reference: &SecretRef) -> Result<SecretValue, SecretUnavailable> {
         let handle = reference_handle(reference).ok_or(SecretUnavailable::NotFound)?;
+        let custody = self
+            .read(|r| r.configuration().settings_secret(&handle))
+            .map_err(|_| SecretUnavailable::Locked)?;
+        if custody.is_some_and(|row| {
+            matches!(
+                row.state,
+                SettingsSecretState::Writing
+                    | SettingsSecretState::Deleting
+                    | SettingsSecretState::Deleted
+            ) || row.state == SettingsSecretState::Ready && row.expires_at_ms <= self.now()
+        }) {
+            return Err(SecretUnavailable::NotFound);
+        }
         match self.noted(self.secrets.get(&self.key(&handle))) {
             Ok(Some(s)) => Ok(SecretValue::new(s.expose())),
             Ok(None) => Err(SecretUnavailable::NotFound),

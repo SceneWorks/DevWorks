@@ -117,7 +117,27 @@ pub enum ProposalChange {
     },
 }
 
+/// Durable custody of a settings credential handle. Values never enter application storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSecretState {
+    Writing,
+    Ready,
+    Retained,
+    Deleting,
+    Deleted,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredSettingsSecret {
+    pub handle: Id,
+    pub state: SettingsSecretState,
+    pub expires_at_ms: i64,
+}
+
 pub trait ConfigurationRead {
+    fn settings_secret(&self, handle: &Id) -> Result<Option<StoredSettingsSecret>, StorageError>;
+    /// All retained settings revisions and proposals, across scopes, including rollback targets.
+    fn settings_secret_referenced(&self, handle: &Id) -> Result<bool, StorageError>;
+
     /// Whether the scope's owner exists (always true for the workspace).
     fn scope_exists(&self, scope: &ConfigScope) -> Result<bool, StorageError>;
     /// The scope's current stored revision; `None` means it is still at implicit revision 1.
@@ -155,6 +175,27 @@ pub trait ConfigurationRead {
 }
 
 pub trait ConfigurationRepository: ConfigurationRead {
+    /// Reserve a fresh handle before its external write; duplicate identifiers are refused.
+    fn reserve_settings_secret(
+        &mut self,
+        handle: &Id,
+        expires_at_ms: i64,
+    ) -> Result<(), StorageError>;
+    /// Publish only a live Writing stage. False means expiry/retirement won the race.
+    fn publish_settings_secret(&mut self, handle: &Id) -> Result<bool, StorageError>;
+    /// Same writer unit as introducing the reference. Refuse Writing, expired Ready or retired handles.
+    /// Untracked legacy references are registered as Retained.
+    fn retain_settings_secret(&mut self, handle: &Id) -> Result<(), StorageError>;
+    /// Fresh reference check and durable retirement before any external deletion. A legacy orphan
+    /// first receives legacy_expires_at_ms; abandon is only for an unpublished failed intake.
+    fn retire_settings_secret(
+        &mut self,
+        handle: &Id,
+        legacy_expires_at_ms: i64,
+        abandon: bool,
+    ) -> Result<bool, StorageError>;
+    fn finish_settings_secret_deletion(&mut self, handle: &Id) -> Result<(), StorageError>;
+
     /// Appends revision `expected + 1` when the scope is currently at `expected` (1 when nothing
     /// is stored) and makes it current. A different current revision is a `Configuration`
     /// [`StorageError::RevisionConflict`]; an unknown project scope is [`StorageError::NotFound`].

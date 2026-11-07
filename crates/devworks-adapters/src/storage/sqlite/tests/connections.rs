@@ -57,6 +57,7 @@ struct FakeHttp {
 type During = (String, Box<dyn FnOnce() + Send>);
 /// A change to run while one handle is read.
 type HandleHook = (Id, Box<dyn FnOnce() + Send>);
+type KeyHook = Box<dyn FnOnce(&SecretKey) + Send>;
 impl FakeHttp {
     fn during(&self, prefix: &str, f: impl FnOnce() + Send + 'static) {
         *self.during.lock().unwrap() = Some((prefix.to_owned(), Box::new(f)));
@@ -137,6 +138,8 @@ impl HttpTransport for FakeHttp {
 struct Hooked {
     inner: Arc<SessionSecrets>,
     during_get: Mutex<Option<HandleHook>>,
+    during_put: Mutex<Option<KeyHook>>,
+    during_delete: Mutex<Option<KeyHook>>,
 }
 impl Hooked {
     fn during_get(&self, handle: &Id, f: impl FnOnce() + Send + 'static) {
@@ -152,6 +155,12 @@ impl SecretStore for Hooked {
         key: &SecretKey,
         secret: &Secret,
     ) -> Result<(), devworks_core::ports::secrets::SecretError> {
+        let hook = self.during_put.lock().unwrap().take();
+        if let Some(hook) = hook {
+            self.inner.put(key, secret)?;
+            hook(key);
+        }
+        // With a hook, model an external write completing after the interleaved work.
         self.inner.put(key, secret)
     }
     fn get(
@@ -171,6 +180,10 @@ impl SecretStore for Hooked {
         self.inner.get(key)
     }
     fn delete(&self, key: &SecretKey) -> Result<bool, devworks_core::ports::secrets::SecretError> {
+        let hook = self.during_delete.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook(key);
+        }
         self.inner.delete(key)
     }
     fn list(&self, namespace: &str) -> Result<Vec<Id>, devworks_core::ports::secrets::SecretError> {
@@ -246,6 +259,8 @@ impl Cx {
         let hooked = Arc::new(Hooked {
             inner: secrets.clone(),
             during_get: Mutex::new(None),
+            during_put: Mutex::new(None),
+            during_delete: Mutex::new(None),
         });
         let svc = Arc::new(
             ConnectionService::new(
@@ -1380,6 +1395,13 @@ fn settings_secret_references_resolve_from_the_same_store_and_survive_reconcilia
         .unwrap();
     assert!(reference.as_str().starts_with("dwsecret-"));
     assert_eq!(cx.svc.resolve(&reference).unwrap().expose(), "search-key-1");
+    assert!(matches!(
+        recorded(save_settings_credential(
+            &cx,
+            json!({"secretRef":reference.as_str()})
+        )),
+        DomainDecision::Applied { .. }
+    ));
     cx.advance(2 * 60 * 60 * 1000);
     cx.svc.reconcile().unwrap();
     assert_eq!(cx.svc.resolve(&reference).unwrap().expose(), "search-key-1");
@@ -3583,4 +3605,372 @@ fn native_same_account_oauth_refresh_preserves_continuation_but_new_account_fenc
     let changed = cx.row("claude");
     assert_eq!(changed.account_revision, rotated.account_revision + 1);
     assert!(changed.risk.is_none());
+}
+
+fn save_settings_credential(cx: &Cx, credential: Value) -> DomainCommandReply {
+    let revision = cx
+        .read(|r| {
+            r.configuration()
+                .current(&ConfigScope::Workspace, "settings")
+        })
+        .map_or(1, |row| row.revision);
+    let key = format!(
+        "settings-credential-{}",
+        cx.n.fetch_add(1, Ordering::SeqCst)
+    );
+    let schema = devworks_core::settings::catalog::descriptor("web.searchCredential")
+        .unwrap()
+        .schema_ref();
+    cx.command_keyed(&cx.user(), "settings.save_revision", &key,
+        json!({"scope":{"kind":"Workspace"},"expectedRevision":revision.to_string(),"entries":[{"key":"web.searchCredential","value":{"schema":schema,"value":credential}}]}), Some(1))
+}
+
+#[test]
+fn settings_secret_unsaved_stage_expires_across_restart_and_cannot_be_saved_after_collection() {
+    use devworks_core::ports::secrets::{SecretResolver, SecretUnavailable, reference_handle};
+    let cx = Cx::new();
+    let reference = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-unsaved-settings-value"))
+        .unwrap();
+    let handle = reference_handle(&reference).unwrap();
+    cx.advance(29 * 60 * 1000);
+    assert_eq!(cx.svc.reconcile().unwrap(), 0);
+    assert!(cx.secret(&handle).is_some());
+    let cx = cx.restart();
+    cx.advance(60 * 1000);
+    assert_eq!(cx.svc.reconcile().unwrap(), 1);
+    assert!(cx.secret(&handle).is_none());
+    assert_eq!(cx.svc.resolve(&reference), Err(SecretUnavailable::NotFound));
+    assert_eq!(
+        cx.read(|r| r.configuration().settings_secret(&handle))
+            .unwrap()
+            .state,
+        SettingsSecretState::Deleted
+    );
+    refused(save_settings_credential(
+        &cx,
+        json!({"secretRef":reference.as_str()}),
+    ));
+    assert!(
+        cx.read(|r| r
+            .configuration()
+            .current(&ConfigScope::Workspace, "settings"))
+            .is_none()
+    );
+    assert!(
+        !cx.database_text()
+            .contains("fixture-unsaved-settings-value")
+    );
+}
+
+#[test]
+fn settings_secret_replacement_keeps_every_retained_rollback_target_beyond_one_history_page() {
+    use devworks_core::ports::secrets::{SecretResolver, reference_handle};
+    let cx = Cx::new();
+    let first = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-old-settings-value"))
+        .unwrap();
+    let second = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-new-settings-value"))
+        .unwrap();
+    assert!(matches!(
+        recorded(save_settings_credential(
+            &cx,
+            json!({"secretRef":first.as_str()})
+        )),
+        DomainDecision::Applied { .. }
+    ));
+    assert!(matches!(
+        recorded(save_settings_credential(
+            &cx,
+            json!({"secretRef":second.as_str()})
+        )),
+        DomainDecision::Applied { .. }
+    ));
+    cx.write(|tx| {
+        let scope = ConfigScope::Workspace;
+        let current = tx.configuration().current(&scope, "settings")?.unwrap();
+        for expected in current.revision..current.revision + 501 {
+            tx.configuration().append_revision(
+                &scope,
+                "settings",
+                expected,
+                current.schema_version,
+                current.body.clone(),
+            )?;
+        }
+        Ok(())
+    });
+    cx.advance(2 * 60 * 60 * 1000);
+    assert_eq!(cx.svc.reconcile().unwrap(), 0);
+    let user = cx.user();
+    let expected_reference = first.as_str().to_owned();
+    cx.write(move |tx| {
+        let current = tx
+            .configuration()
+            .current(&ConfigScope::Workspace, "settings")?
+            .unwrap();
+        let rolled = devworks_core::settings::service::rollback(
+            tx,
+            &user,
+            &ConfigScope::Workspace,
+            current.revision,
+            2,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?
+        .unwrap();
+        assert_eq!(
+            rolled.body["values"]["web.searchCredential"]["value"]["secretRef"],
+            expected_reference
+        );
+        Ok(())
+    });
+    assert_eq!(
+        cx.svc.resolve(&first).unwrap().expose(),
+        "fixture-old-settings-value"
+    );
+    assert!(cx.secret(&reference_handle(&second).unwrap()).is_some());
+    assert!(!cx.database_text().contains("fixture-old-settings-value"));
+    assert!(!cx.database_text().contains("fixture-new-settings-value"));
+}
+
+#[test]
+fn settings_secret_delete_fence_refuses_concurrent_save_and_retries_failed_external_delete() {
+    use devworks_core::ports::secrets::{SecretResolver, SecretUnavailable, reference_handle};
+    let cx = Arc::new(Cx::new());
+    let reference = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-delete-retry-settings-value"))
+        .unwrap();
+    let handle = reference_handle(&reference).unwrap();
+    let concurrent = cx.clone();
+    let saved_ref = reference.as_str().to_owned();
+    *cx.hooked.during_delete.lock().unwrap() = Some(Box::new(move |_| {
+        refused(save_settings_credential(
+            &concurrent,
+            json!({"secretRef":saved_ref}),
+        ));
+        concurrent.secrets.set_unavailable(Some("fixture locked"));
+    }));
+    cx.advance(30 * 60 * 1000);
+    assert!(cx.svc.reconcile().is_err());
+    cx.secrets.set_unavailable(None);
+    assert!(
+        cx.secret(&handle).is_some(),
+        "failed physical deletion leaves a retryable value"
+    );
+    assert_eq!(
+        cx.read(|r| r.configuration().settings_secret(&handle))
+            .unwrap()
+            .state,
+        SettingsSecretState::Deleting
+    );
+    assert_eq!(cx.svc.resolve(&reference), Err(SecretUnavailable::NotFound));
+    assert_eq!(cx.svc.reconcile().unwrap(), 1);
+    assert!(cx.secret(&handle).is_none());
+    assert!(
+        cx.read(|r| r
+            .configuration()
+            .current(&ConfigScope::Workspace, "settings"))
+            .is_none()
+    );
+}
+
+#[test]
+fn settings_secret_late_put_after_expiry_never_returns_a_live_handle_or_leaks_the_value() {
+    let cx = Arc::new(Cx::new());
+    let interleaved = cx.clone();
+    *cx.hooked.during_put.lock().unwrap() = Some(Box::new(move |_| {
+        interleaved.advance(30 * 60 * 1000);
+        assert_eq!(interleaved.svc.reconcile().unwrap(), 1);
+    }));
+    assert!(
+        cx.svc
+            .stage_setting_secret(Secret::new("fixture-late-put-settings-value"))
+            .is_err()
+    );
+    let ns = cx.store.info().store_id.0.as_str().to_owned();
+    assert!(
+        cx.secrets.list(&ns).unwrap().is_empty(),
+        "late external completion is cleaned after its publication fence fails"
+    );
+    assert!(
+        !cx.database_text()
+            .contains("fixture-late-put-settings-value")
+    );
+}
+
+#[test]
+fn settings_secret_pending_and_decided_proposals_hold_values_but_reconciled_away_reference_is_collected()
+ {
+    use devworks_core::ports::secrets::{SecretResolver, SecretUnavailable, reference_handle};
+    use devworks_core::protocol::records::SettingAssignment;
+    let cx = Cx::new();
+    let first = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-proposal-old-value"))
+        .unwrap();
+    let assignment = |reference: &str| -> SettingAssignment {
+        serde_json::from_value(json!({"key":"web.searchCredential","value":{"schema":devworks_core::settings::catalog::descriptor("web.searchCredential").unwrap().schema_ref(),"value":{"secretRef":reference}}})).unwrap()
+    };
+    let first_entry = assignment(first.as_str());
+    let user = cx.user();
+    let role_store = cx.store.clone();
+    let proposal = cx.write(move |tx| {
+        devworks_core::settings::service::stage_proposal(
+            tx,
+            &user,
+            &devworks_core::authority::HostRoles { store: role_store },
+            &ConfigScope::Workspace,
+            1,
+            &[first_entry],
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    cx.advance(2 * 60 * 60 * 1000);
+    assert_eq!(
+        cx.svc.reconcile().unwrap(),
+        0,
+        "a pending proposal retains its credential"
+    );
+    assert_eq!(
+        cx.svc.resolve(&first).unwrap().expose(),
+        "fixture-proposal-old-value"
+    );
+    let second = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-proposal-new-value"))
+        .unwrap();
+    let second_entry = assignment(second.as_str());
+    let proposal_id = proposal.id.clone();
+    let user = cx.user();
+    cx.write(move |tx| {
+        devworks_core::settings::service::reconcile_proposal(
+            tx,
+            &user,
+            &proposal_id,
+            1,
+            Some(vec![second_entry]),
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    assert_eq!(
+        cx.svc.reconcile().unwrap(),
+        1,
+        "only the no-longer-retained reference is removed"
+    );
+    assert!(cx.secret(&reference_handle(&first).unwrap()).is_none());
+    assert_eq!(cx.svc.resolve(&first), Err(SecretUnavailable::NotFound));
+    assert!(cx.secret(&reference_handle(&second).unwrap()).is_some());
+    let proposal_id = proposal.id;
+    let user = cx.user();
+    cx.write(move |tx| {
+        devworks_core::settings::service::reject_proposal(tx, &user, &proposal_id, 2)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))
+    });
+    cx.advance(2 * 60 * 60 * 1000);
+    assert_eq!(
+        cx.svc.reconcile().unwrap(),
+        0,
+        "a retained decided proposal still protects its full body"
+    );
+    assert_eq!(
+        cx.svc.resolve(&second).unwrap().expose(),
+        "fixture-proposal-new-value"
+    );
+}
+
+#[test]
+fn settings_secret_custody_migration_checksum_is_recorded() {
+    use crate::storage::sqlite::{MIGRATION_0035_SHA256, MIGRATIONS};
+    let migration = MIGRATIONS.iter().find(|m| m.version == 35).unwrap();
+    assert_eq!(
+        devworks_core::fingerprint::sha256_hex(migration.sql.as_bytes()),
+        MIGRATION_0035_SHA256
+    );
+    assert_eq!(migration.minimum_writer, 35);
+}
+
+#[test]
+fn settings_secret_legacy_orphan_receives_grace_and_collection_preserves_other_store_and_published_provider()
+ {
+    use devworks_core::ports::secrets::{SecretRef, SecretResolver, reference_handle};
+    let cx = Cx::new();
+    let orphan = SecretRef::mint(42);
+    let handle = reference_handle(&orphan).unwrap();
+    let ns = cx.store.info().store_id.0.as_str().to_owned();
+    cx.secrets
+        .put(
+            &SecretKey::new(ns, handle.clone()),
+            &Secret::new("fixture-legacy-orphan"),
+        )
+        .unwrap();
+    cx.secrets
+        .put(
+            &SecretKey::new("other-store", handle.clone()),
+            &Secret::new("fixture-other-store"),
+        )
+        .unwrap();
+    let provider = cx.stage("fixture-published-provider");
+    let original_provider_value = cx.secret(&provider).unwrap().expose().to_owned();
+    cx.add(
+        "kept-provider",
+        "OpenRouterChat",
+        OPENROUTER,
+        Some(&provider),
+    );
+    assert_eq!(cx.svc.reconcile().unwrap(), 0);
+    assert_eq!(
+        cx.svc.resolve(&orphan).unwrap().expose(),
+        "fixture-legacy-orphan"
+    );
+    cx.advance(30 * 60 * 1000);
+    assert_eq!(cx.svc.reconcile().unwrap(), 1);
+    assert!(cx.secret(&handle).is_none());
+    assert_eq!(
+        cx.secret(&provider).unwrap().expose(),
+        original_provider_value
+    );
+    assert_eq!(
+        cx.secrets
+            .get(&SecretKey::new("other-store", handle))
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "fixture-other-store"
+    );
+}
+
+#[test]
+fn settings_secret_failed_intake_preserves_fallback_after_successful_cleanup() {
+    let cx = Cx::new();
+    let secrets = cx.secrets.clone();
+    *cx.hooked.during_put.lock().unwrap() = Some(Box::new(move |_| {
+        secrets.set_unavailable(Some("fixture put unavailable"))
+    }));
+    let secrets = cx.secrets.clone();
+    *cx.hooked.during_delete.lock().unwrap() =
+        Some(Box::new(move |_| secrets.set_unavailable(None)));
+    let error = cx
+        .svc
+        .stage_setting_secret(Secret::new("fixture-failed-settings-value"))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        devworks_core::ports::secrets::SecretError::Unavailable(_)
+    ));
+    assert_eq!(
+        cx.svc.secret_store_unavailable().as_deref(),
+        Some("fixture put unavailable")
+    );
+    assert!(
+        cx.secrets
+            .list(cx.store.info().store_id.0.as_str())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!cx.database_text().contains("fixture-failed-settings-value"));
 }

@@ -141,6 +141,10 @@ impl SchemaService {
                 ..Default::default()
             },
             move |tx| {
+                // Storage validates new leases against this transaction's captured
+                // time. A wall-clock tick after admission must not date them ahead
+                // of their writer or extend their fixed retention interval.
+                let created_at_ms = tx.now_ms();
                 let now = clock.now_ms().get();
                 if closed.is_closed()
                     || cancellation
@@ -199,8 +203,8 @@ impl SchemaService {
                             view_id: view.id,
                             view_digest: view.digest,
                             configuration_revision: source.configuration_revision,
-                            created_at_ms: now,
-                            expires_at_ms: now.saturating_add(GRAPH_PIN_TTL_MS),
+                            created_at_ms,
+                            expires_at_ms: created_at_ms.saturating_add(GRAPH_PIN_TTL_MS),
                         };
                         tx.schemas().create_schema_pin(&pin)?;
                         pin
