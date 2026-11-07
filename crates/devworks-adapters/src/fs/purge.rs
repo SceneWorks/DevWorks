@@ -764,7 +764,7 @@ fn remove_native(
     }
     #[repr(C)]
     struct Disposition {
-        delete_file: i32,
+        delete_file: u8,
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -779,6 +779,8 @@ fn remove_native(
     // Microsoft FILE_DISPOSITION_INFO / FileDispositionInfo=4. The same verified
     // DELETE-capable handle is marked; no pathname is reopened for the deletion.
     // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
+    // DeleteFile is a one-byte BOOLEAN, not a four-byte BOOL:
+    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info
     // SAFETY: live owned handle, correct C structure and initialized buffer size.
     if unsafe {
         SetFileInformationByHandle(
