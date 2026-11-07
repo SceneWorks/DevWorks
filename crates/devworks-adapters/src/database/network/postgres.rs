@@ -28,7 +28,7 @@ const QUERIES: &[Query] = &[
 ];
 fn classify(error: tokio_postgres::Error) -> MetadataFailure {
     match error.code().map(|s| s.code()) {
-        Some("28000" | "28P01" | "42501") => MetadataFailure::AccessDenied,
+        Some("28000" | "28P01" | "42501" | "3D000") => MetadataFailure::AccessDenied,
         _ => MetadataFailure::Unavailable,
     }
 }
@@ -219,13 +219,19 @@ pub(super) async fn read(
     target: Target,
 ) -> Result<MetadataSnapshot, MetadataFailure> {
     let database = if target.catalog.is_empty() {
-        "postgres"
+        c.request
+            .config
+            .catalogs
+            .0
+            .first()
+            .map(|name| name.0.clone())
+            .unwrap_or_else(|| "postgres".into())
     } else {
-        &target.catalog
+        target.catalog.clone()
     };
     let discovery = target.catalog.is_empty()
         && (!c.request.test_only || !c.request.config.catalogs.0.is_empty());
-    let (mut c, names, mut profile) = session(c, &target, database, discovery).await?;
+    let (mut c, names, mut profile) = session(c, &target, &database, discovery).await?;
     if discovery {
         for name in names {
             let (next, _, p) = session(c, &target, &name, false).await?;

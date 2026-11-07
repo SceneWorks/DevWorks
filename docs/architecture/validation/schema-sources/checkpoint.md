@@ -505,3 +505,25 @@ cases pass17.60s;7 generic queue cases pass7.38s. Strict workspace/all-target ch
 pass39.20s. Earlier zero-case filters are excluded. No assertions/timeouts were removed
 or extended; source rows remain unread and OS credential/trust stores untouched.
 Fresh changed-head review, CI and acceptance remain required.
+
+## Synthetic constraint namespace and selected PostgreSQL bootstrap
+
+Exact814 review identified two unique issues (the FK finding was posted twice).
+Actual MySQL/MariaDB tables with FK `fk` and quoted UNIQUE `fk:1` reproduce duplicate
+structural keys; a PostgreSQL role allowed into its selected catalog but denied
+CONNECT on unselected postgres reproduces AccessDenied. All3 RED cases fail0.08s.
+
+Synthetic FK-column rows now carry a distinct identity discriminator, applied to
+child identities as well as routine-type identities. Displayed native names and
+column mappings remain unchanged. PostgreSQL server-only discovery bootstraps from
+an explicit selected catalog when available; only discovery without a selection
+uses postgres. Missing catalog SQLSTATE3D000 retains the existing AccessDenied
+classification for selected missing targets.
+
+All49 actual-server cases pass1.02s, including both valid selected probes/indexing
+and existing missing/inaccessible selections. All5 production Engine publication
+cases pass20.05s, including both collision fixtures in complete captures. Strict
+workspace/all-target checks pass17.38s. Source rows remain unread. The isolated
+bootstrap role/permission DDL is retained separately; it grants the original fixture
+reader explicit postgres CONNECT so unrelated fixture qualification remains valid.
+Fresh changed-head automated review and full CI remain required.
