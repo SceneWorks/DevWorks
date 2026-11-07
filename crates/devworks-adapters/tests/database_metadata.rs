@@ -21,11 +21,25 @@ fn qualify(engine: &str, var: &str) {
             .read(request(engine, &endpoint))
             .await
             .expect("real metadata read");
-        assert!(
-            matches!(result.coverage.state, CoverageState::Complete),
-            "{:?}",
-            result.coverage
-        );
+        if matches!(engine, "Postgres" | "MariaDb") {
+            assert!(matches!(result.coverage.state, CoverageState::Partial));
+            assert_eq!(
+                result
+                    .coverage
+                    .gaps
+                    .iter()
+                    .map(|g| g.as_str())
+                    .collect::<Vec<_>>(),
+                ["metadata_definition_unavailable"],
+                "the restricted fixture hides only routine definitions"
+            );
+        } else {
+            assert!(
+                matches!(result.coverage.state, CoverageState::Complete),
+                "{:?}",
+                result.coverage
+            );
+        }
         for name in ["parent", "child", "read_parent"] {
             assert!(
                 result.objects.iter().any(|v| v.metadata.name.0 == name),
@@ -298,4 +312,65 @@ fn native_postgres_long_default_reports_partial_object_coverage() {
             .iter()
             .any(|id| id.as_str() == "metadata_definition_byte_limit")
     );
+}
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL restricted metadata role"]
+fn native_postgres_hidden_routine_definition_reports_partial_not_confirmed_absent() {
+    hidden_definition("Postgres", "DEVWORKS_METADATA_POSTGRES", "postgres");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB restricted metadata role"]
+fn native_mariadb_hidden_routine_definition_reports_partial_not_confirmed_absent() {
+    hidden_definition("MariaDb", "DEVWORKS_METADATA_MARIADB", "root");
+}
+fn hidden_definition(engine: &str, variable: &str, owner_user: &str) {
+    let endpoint = std::env::var(variable).expect("isolated fixture endpoint");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let snapshot = runtime
+        .block_on(NetworkMetadataReader.read(request(engine, &endpoint)))
+        .unwrap();
+    let missing = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Procedure" && o.metadata.definition_sql.is_none())
+        .expect("the explicitly restricted fixture role cannot view the owner routine definition");
+    assert!(
+        matches!(snapshot.coverage.state, CoverageState::Partial),
+        "hidden definition is unavailable, not complete"
+    );
+    assert!(
+        snapshot
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_definition_unavailable")
+    );
+    assert!(matches!(missing.coverage.state, CoverageState::Partial));
+    assert!(
+        missing
+            .coverage
+            .gaps
+            .iter()
+            .any(|g| g.as_str() == "metadata_definition_unavailable")
+    );
+    // The owner sees actual structural definitions, so normal Complete coverage remains meaningful.
+    let mut owner = request(engine, &endpoint);
+    owner.config.username = Some(devworks_core::protocol::support::BoundedText(
+        owner_user.into(),
+    ));
+    owner.password = Some(Secret::new("devworks_metadata_fixture"));
+    let full = runtime.block_on(NetworkMetadataReader.read(owner)).unwrap();
+    assert!(matches!(full.coverage.state, CoverageState::Complete));
+    assert!(
+        full.objects
+            .iter()
+            .filter(|o| o.kind == "Procedure")
+            .all(|o| o.metadata.definition_sql.is_some())
+    );
+    assert!(!format!("{full:?}").contains("SOURCE_ROW_SENTINEL_NEVER_INDEX"));
 }

@@ -133,7 +133,8 @@ impl SchemaService {
                 crate::context::PrincipalKind::Human | crate::context::PrincipalKind::Host
             ),
         };
-        if !access::sees(&source, &visibility)
+        if !(access::sees(&source, &visibility)
+            || super::scheduled::permits(tx, ctx, &source, &scope)?)
             || source
                 .connection
                 .config
@@ -589,7 +590,8 @@ fn current(
         tx.artifacts().project_exists(p)
     })
     .map_err(|_| StorageError::ScopeDenied)?;
-    if !access::sees(&source, &visibility)
+    if !(access::sees(&source, &visibility)
+        || super::scheduled::permits(tx, &ctx, &source, &job.scope)?)
         || source.connection.revision.get() != job.source_revision
         || source.connection.active_operation_id.as_ref() != Some(&op.id.0)
         || source

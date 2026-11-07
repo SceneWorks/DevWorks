@@ -7,6 +7,7 @@ mod credentials;
 pub mod indexing;
 mod pins;
 mod queries;
+pub(crate) mod scheduled;
 
 use crate::ports::{Clock, IdSource};
 use std::sync::Arc;

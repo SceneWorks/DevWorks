@@ -206,3 +206,29 @@ accepted index did not reproduce: the gateway savepoint already rolls back all
 handler writes on DomainDecision::Refused. Both original-order controls passed.
 No cancellation-order product change was retained or claimed.
 The composed native Databases UI suite also passes all3 cases14.39s after CA custody.
+
+Scheduled sync checkpoint: schemas.index is qualified in the existing native job
+catalog. Its additive current-source arguments select a connection; each actual
+run captures its current revision once and durably retains the exact gateway frame
+and invocation. Explicit manual CAS arguments retain their existing meaning. A
+private connection uses a connection/run/scope-bound snapshot of actual human job
+consent, with current source ownership/project access and enabled-state checks.
+The executing actor stays Host, and no general source/artifact/data permission is
+granted. Cancellation follows only the actual accepted child delivery.
+
+Two native runtime cases pass10.67s: actual SQLite target ALTERTABLE between recurring
+runs, exact replay after a lost committed acknowledgment with one read, original
+Host/jobRun attribution, private discovery remaining denied, active child cancellation
+preserving the prior view, queued project-access revocation before target I/O, and
+later authorized execution at a fresh source revision. The complete36-case native
+jobs suite passes130.77s, including prior Help/Conventions/recovery/cancellation
+checks. Workspace/all-target strict checks pass39.83s. No inference is executed.
+
+Actual PostgreSQL restricted-role regression reproduces a hidden routine definition
+with false Complete coverage0.11s. Shared catalog projection now marks a missing
+View/Procedure definition as Partial at both object and snapshot level. MariaDB's
+restricted fixture exposes the same condition; explicit owner credentials prove
+actual definitions and Complete coverage remain available. All13 dispatched native
+network/coverage/TLS cases pass0.36s. No extra source grants are added to make the
+restricted role appear complete. Supported x86 SQLServer CI and final integrated
+review/CI/merge acceptance remain pending.

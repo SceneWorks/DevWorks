@@ -143,6 +143,18 @@ impl Catalog {
             metadata: metadata(name, &self.catalog, Some(schema), details)?,
             coverage: coverage(),
         };
+        if matches!(kind, "View" | "Procedure")
+            && row
+                .get("definition")
+                .and_then(Value::as_str)
+                .is_none_or(|d| d.is_empty())
+        {
+            self.collector.gap("metadata_definition_unavailable");
+            node.coverage.state = CoverageState::Partial;
+            node.coverage
+                .gaps
+                .push(Id::new("metadata_definition_unavailable").expect("static gap"));
+        }
         if row
             .get("truncated")
             .and_then(Value::as_bool)
