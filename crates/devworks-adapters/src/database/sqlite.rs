@@ -167,6 +167,15 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             break;
         }
         c.relationship(&schema_key, &table, "CONTAINS")?;
+        // Rowid-alias INTEGER primary keys have no separate primary-key index. In
+        // particular, SQLite's inline PRIMARY KEY DESC exception does have that index.
+        let indexed_primary: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_index_list(?1,'main') WHERE origin='pk')",
+                [&name],
+                |r| r.get(0),
+            )
+            .map_err(|_| failure(&c))?;
         let mut columns=conn.prepare("SELECT cid,name,type,\"notnull\",substr(dflt_value,1,4096),pk,hidden,length(dflt_value)>4096 FROM pragma_table_xinfo(?1,'main') ORDER BY cid").map_err(|_|failure(&c))?;
         let mut columns = columns.query([&name]).map_err(|_| failure(&c))?;
         let mut primary = Vec::new();
@@ -190,7 +199,14 @@ fn read(request: MetadataRequest) -> Result<MetadataSnapshot, MetadataFailure> {
             let hidden: i64 = column
                 .get(6)
                 .map_err(|_| MetadataFailure::InvalidMetadata)?;
-            let mut details = json!({"ordinal":(ordinal+1).to_string(),"nullable":!column.get::<_,bool>(3).map_err(|_|MetadataFailure::InvalidMetadata)?,"primaryKey":pk>0});
+            let rowid_alias =
+                pk > 0 && data_type.trim().eq_ignore_ascii_case("INTEGER") && !indexed_primary;
+            let not_null = column
+                .get::<_, bool>(3)
+                .map_err(|_| MetadataFailure::InvalidMetadata)?
+                || rowid_alias;
+            let mut details =
+                json!({"ordinal":(ordinal+1).to_string(),"nullable":!not_null,"primaryKey":pk>0});
             if !data_type.is_empty() {
                 details["dataType"] = json!(data_type);
             }
@@ -793,5 +809,50 @@ mod tests {
             4096
         );
         assert!(matches!(column.coverage.state, CoverageState::Partial));
+    }
+    #[test]
+    fn native_sqlite_primary_key_nullability_distinguishes_rowid_aliases() {
+        let target = Target::new(
+            "CREATE TABLE alias_key(id INTEGER PRIMARY KEY); CREATE TABLE int_key(id INT PRIMARY KEY); CREATE TABLE inline_desc(id INTEGER PRIMARY KEY DESC); CREATE TABLE table_desc(id INTEGER,PRIMARY KEY(id DESC)); CREATE TABLE composite(id INTEGER,other INTEGER,PRIMARY KEY(id,other)); CREATE TABLE without_rowid(id TEXT PRIMARY KEY) WITHOUT ROWID; CREATE TABLE strict_key(id TEXT PRIMARY KEY) STRICT;",
+        );
+        let conn = Connection::open(&target.0).unwrap();
+        for table in [
+            "alias_key",
+            "int_key",
+            "inline_desc",
+            "table_desc",
+            "composite",
+        ] {
+            conn.execute(&format!("INSERT INTO {table}(id) VALUES(NULL)"), [])
+                .unwrap();
+        }
+        for table in ["without_rowid", "strict_key"] {
+            assert!(
+                conn.execute(&format!("INSERT INTO {table}(id) VALUES(NULL)"), [])
+                    .is_err()
+            );
+        }
+        drop(conn);
+        let before = std::fs::read(&target.0).unwrap();
+        let snapshot = run(target.request()).unwrap();
+        for (table, nullable) in [
+            ("alias_key", false),
+            ("int_key", true),
+            ("inline_desc", true),
+            ("table_desc", false),
+            ("composite", true),
+            ("without_rowid", false),
+            ("strict_key", false),
+        ] {
+            let name = format!("main.{table}.id");
+            let column = snapshot
+                .objects
+                .iter()
+                .find(|o| o.kind == "Column" && o.qualified_name == name)
+                .unwrap();
+            assert_eq!(column.metadata.nullable, Some(nullable), "{table}");
+            assert!(matches!(column.coverage.state, CoverageState::Complete));
+        }
+        assert_eq!(before, std::fs::read(&target.0).unwrap());
     }
 }

@@ -81,8 +81,8 @@ with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
                         'database_network', 'native_sql_server_production_engine_metadata', '--', '--ignored', '--nocapture'],
                        cwd=ROOT, env=env, check=True)
         print(json.dumps({'host': platform.machine(), 'nativeX86': platform.machine().lower() in ('x86_64','amd64'),
-                          'image': IMAGE, 'adapterCases': 8, 'productionEngineCases': 1,
-                          'cases': 9, 'osTrustChanges': False, 'inference': False}))
+                          'image': IMAGE, 'adapterCases': 9, 'productionEngineCases': 1,
+                          'cases': 10, 'osTrustChanges': False, 'inference': False}))
     finally:
         if started:
             subprocess.run(['docker', 'rm', '--force', name], capture_output=True, check=False)

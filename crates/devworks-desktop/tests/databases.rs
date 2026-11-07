@@ -847,3 +847,266 @@ fn native_database_relationships_refreshes_a_missing_prepared_capture_before_rea
     );
     settle(&mut h);
 }
+
+fn configured_source(
+    backend: &dyn devworks_desktop::backend::Backend,
+    config: serde_json::Value,
+) -> devworks_core::protocol::records::SchemaConnection {
+    use devworks_core::protocol::{
+        CommandReply,
+        results::{DomainDecision, OperationResult},
+    };
+    let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":backend.token("review-source"),"body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},"config":config}}).to_string();
+    let CommandReply::Recorded { receipt, .. } = backend
+        .command("schemas.configure", frame.as_bytes())
+        .unwrap()
+    else {
+        panic!("configure receipt")
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::SchemasConfigure { value },
+    } = receipt.decision
+    else {
+        panic!("configure applied")
+    };
+    value
+}
+#[test]
+fn native_database_review_selecting_a_source_clears_foreign_endpoint_filter() {
+    use devworks_core::protocol::{CommandReply, results::DomainDecision};
+    let _native_case = native_runtime_case();
+    let root = Root::new("source-endpoint-selection");
+    let path = root.file("source.sqlite", b"");
+    rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(id INT,parent_id INT REFERENCES parent(id));").unwrap();
+    let engine = start(&root);
+    let b = engine.backend();
+    let mut ids = Vec::new();
+    for name in ["Source A", "Source B"] {
+        let source = configured_source(
+            &*b,
+            serde_json::json!({"name":name,"engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"File"}),
+        );
+        let frame=serde_json::json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,"requestKey":b.token("review-index"),"body":{"kind":"schemas.index","connectionId":source.id,"expectedRevision":source.revision}}).to_string();
+        assert!(
+            matches!(b.command("schemas.index",frame.as_bytes()).unwrap(),CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Accepted{..}))
+        );
+        ids.push(source.id);
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    step_until(&mut h, "both source views published", |s| {
+        s.databases.connections.len() == 2
+            && s.databases
+                .connections
+                .iter()
+                .all(|c| c.current_view_id.is_some() && c.active_operation_id.is_none())
+    });
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Source A")
+        .click_accesskit();
+    settle(&mut h);
+    let parent = h
+        .state()
+        .databases
+        .objects
+        .iter()
+        .find(|o| {
+            o.metadata.as_ref().is_some_and(|m| m.name.0 == "parent")
+                && matches!(
+                    o.kind,
+                    devworks_core::protocol::records::MetadataObjectKind::Table
+                )
+        })
+        .unwrap()
+        .clone();
+    click(&mut h, Role::Button, "Table main.parent");
+    click(&mut h, Role::Button, "Inspect schema relationships");
+    h.query_all_by_role_and_label(Role::Button, "Inspect relationship target: main.parent")
+        .next()
+        .unwrap()
+        .click_accesskit();
+    settle(&mut h);
+    assert_eq!(
+        h.state().databases.object_id.as_deref(),
+        Some(parent.id.as_str())
+    );
+    h.get_by_role_and_label(Role::Button, "Source B")
+        .click_accesskit();
+    settle(&mut h);
+    let next = h
+        .state()
+        .databases
+        .objects
+        .iter()
+        .find(|o| {
+            o.metadata.as_ref().is_some_and(|m| m.name.0 == "parent")
+                && matches!(
+                    o.kind,
+                    devworks_core::protocol::records::MetadataObjectKind::Table
+                )
+        })
+        .expect("second source's actual parent is visible");
+    assert_ne!(
+        next.id, parent.id,
+        "source identity is part of object identity"
+    );
+    assert_eq!(
+        h.state().databases.selected.as_deref(),
+        Some(ids[1].as_str())
+    );
+    assert!(h.state().databases.error.is_none());
+}
+
+struct PasswordMemory {
+    inner: devworks_core::ports::secrets::SessionSecrets,
+    writes: std::sync::Mutex<Vec<devworks_core::ports::secrets::SecretKey>>,
+}
+impl devworks_core::ports::secrets::SecretStore for PasswordMemory {
+    fn name(&self) -> &'static str {
+        "Controlled password memory"
+    }
+    fn put(
+        &self,
+        key: &devworks_core::ports::secrets::SecretKey,
+        value: &devworks_core::ports::secrets::Secret,
+    ) -> Result<(), devworks_core::ports::secrets::SecretError> {
+        self.inner.put(key, value)?;
+        self.writes.lock().unwrap().push(key.clone());
+        Ok(())
+    }
+    fn get(
+        &self,
+        key: &devworks_core::ports::secrets::SecretKey,
+    ) -> Result<
+        Option<devworks_core::ports::secrets::Secret>,
+        devworks_core::ports::secrets::SecretError,
+    > {
+        self.inner.get(key)
+    }
+    fn delete(
+        &self,
+        key: &devworks_core::ports::secrets::SecretKey,
+    ) -> Result<bool, devworks_core::ports::secrets::SecretError> {
+        self.inner.delete(key)
+    }
+    fn list(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<devworks_core::protocol::Id>, devworks_core::ports::secrets::SecretError> {
+        self.inner.list(namespace)
+    }
+}
+fn corrected_password_save(edit: bool) {
+    use devworks_core::ports::secrets::{Secret, SecretStore};
+    let _native_case = native_runtime_case();
+    let root = Root::new(if edit {
+        "password-retry-edit"
+    } else {
+        "password-retry-create"
+    });
+    let secrets = std::sync::Arc::new(PasswordMemory {
+        inner: devworks_core::ports::secrets::SessionSecrets::new(),
+        writes: Default::default(),
+    });
+    let mut cfg = config(&root.0);
+    cfg.secrets = Some(secrets.clone());
+    let engine = devworks_desktop::host::Engine::start(cfg).unwrap();
+    let b = engine.backend();
+    let old = if edit {
+        let old = b
+            .stage_database_password(Secret::new("controlled-old-password"))
+            .unwrap();
+        configured_source(
+            &*b,
+            serde_json::json!({"name":"Password retry","engine":"MySql","endpoint":"mysql://127.0.0.1:9/unused","credentialRef":old,"catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],"writesEnabled":false,"enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":"SchemaOnly","authentication":"Password","username":"metadata_reader","tls":"LoopbackPlaintext"}),
+        );
+        Some(old)
+    } else {
+        None
+    };
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    if edit {
+        h.get_by_role_and_label(Role::Button, "Edit Password retry")
+            .click_accesskit();
+        settle(&mut h);
+    } else {
+        click(&mut h, Role::Button, "New database source");
+        replace(&mut h, "Database source name", "Password retry");
+        click(&mut h, Role::ComboBox, "Database engine");
+        h.get_by_label("MySql").click_accesskit();
+        settle(&mut h);
+    }
+    replace(&mut h, "Database username", "metadata_reader");
+    replace(&mut h, "Database file or endpoint", "invalid-endpoint");
+    replace(
+        &mut h,
+        "Database password (blank keeps saved password)",
+        "controlled-replacement-password",
+    );
+    h.get_by_role_and_label(Role::Button, "Save database source")
+        .click_accesskit();
+    settle(&mut h);
+    assert!(!h.state().databases.busy && h.state().databases.error.is_some());
+    let key = secrets
+        .writes
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|k| k.namespace.ends_with(":schema-sources"))
+        .unwrap()
+        .clone();
+    let draft = h.state().databases.draft.as_ref().unwrap();
+    assert!(draft.password.is_empty());
+    assert_eq!(
+        draft
+            .config
+            .get("credentialRef")
+            .and_then(serde_json::Value::as_str),
+        Some(key.handle.as_str()),
+        "rejected save retains only the new opaque handle"
+    );
+    if let Some(old) = old {
+        assert_ne!(old, key.handle);
+    }
+    assert!(
+        !h.state()
+            .databases
+            .pending_memory()
+            .to_string()
+            .contains("controlled-replacement-password")
+    );
+    replace(
+        &mut h,
+        "Database file or endpoint",
+        "mysql://127.0.0.1:9/unused",
+    );
+    h.get_by_role_and_label(Role::Button, "Save database source")
+        .click_accesskit();
+    settle(&mut h);
+    assert!(
+        h.state().databases.draft.is_none(),
+        "{:?}",
+        h.state().databases.error
+    );
+    assert_eq!(
+        h.state().databases.connections[0].credential_ref.as_ref(),
+        Some(&key.handle)
+    );
+    assert!(
+        secrets
+            .get(&key)
+            .unwrap()
+            .is_some_and(|v| v.expose() == "controlled-replacement-password")
+    );
+}
+#[test]
+fn native_database_review_rejected_new_source_keeps_staged_password() {
+    corrected_password_save(false);
+}
+#[test]
+fn native_database_review_rejected_edit_keeps_replacement_password() {
+    corrected_password_save(true);
+}

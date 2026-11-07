@@ -54,3 +54,10 @@ DECLARE @metadata_parameters nvarchar(max);
  FROM p OPTION(MAXRECURSION 0);
 EXEC('CREATE PROCEDURE dbo.meta_many_parameters '+@metadata_parameters+' AS RETURN 0');
 GO
+-- No metadata_reader user in this database: explicit selection must fail a probe.
+USE master;
+GO
+CREATE DATABASE metadata_inaccessible;
+GO
+USE metadata_fixture;
+GO
