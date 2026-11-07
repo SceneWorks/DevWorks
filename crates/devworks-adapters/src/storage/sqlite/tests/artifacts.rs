@@ -4664,3 +4664,212 @@ fn a_use_case_cannot_pin_collect_or_write_receipt_reply_records() {
     };
     assert_eq!(versions, vec![receipt_version]);
 }
+
+#[test]
+fn purge_planning_compacts_only_the_validated_published_receipt_and_its_content_lineage() {
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome,
+    };
+    let fx = Fx::new();
+    let saved = fx.saved(
+        "purge-reply-source",
+        "private receipt title",
+        "text/plain",
+        b"private source bytes",
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("purge-reply-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    assert_eq!(claims.len(), 1);
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    let reply = match publisher.publish(fx.store.as_ref(), &claims[0]) {
+        ReplyOutcome::Published(value) => value,
+        other => panic!("native publication: {other:?}"),
+    };
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    for table in [
+        "command_receipts",
+        "receipt_replies",
+        "artifacts",
+        "artifact_versions",
+    ] {
+        assert!(
+            !plan.unresolved.iter().any(|r| r.table == table),
+            "{table}: {:?}",
+            plan.unresolved
+        );
+    }
+    let artifact_key = sha256_hex(
+        serde_json::to_string(&[reply.artifact_id.as_str()])
+            .unwrap()
+            .as_bytes(),
+    );
+    assert!(plan.rows.iter().any(|r| r.table == "artifacts"
+        && r.key_digest == artifact_key
+        && r.action == ProjectPurgeRowAction::Delete));
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "receipt_replies" && r.action == ProjectPurgeRowAction::Delete)
+    );
+    let before =
+        fx.h.raw()
+            .query_row(
+                "SELECT schema_json FROM receipt_replies WHERE artifact_id=?1",
+                [reply.artifact_id.as_str()],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap();
+    let mut malformed: Value = serde_json::from_str(&before).unwrap();
+    malformed["unmappedPrivateCopy"] = json!("unrecognized reply schema");
+    fx.h.raw()
+        .execute(
+            "UPDATE receipt_replies SET schema_json=?1 WHERE artifact_id=?2",
+            rusqlite::params![malformed.to_string(), reply.artifact_id.as_str()],
+        )
+        .unwrap();
+    let held = assess();
+    assert!(held.unresolved.iter().any(|r| r.table == "receipt_replies"));
+    assert!(
+        !serde_json::to_string(&held.unresolved)
+            .unwrap()
+            .contains("unrecognized reply schema")
+    );
+    assert_eq!(
+        fx.artifact(&saved.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.artifact(&reply.artifact_id).state,
+        ArtifactState::Live,
+        "assessment never removes the published private content"
+    );
+}
+
+#[test]
+fn purge_planning_blob_generations_preserve_surviving_versions_and_unproved_pins() {
+    let fx = Fx::new();
+    let private = fx.saved(
+        "purge-private-blob",
+        "private bytes",
+        "text/plain",
+        b"unshared project bytes",
+    );
+    let shared = fx.saved(
+        "purge-shared-blob",
+        "shared bytes",
+        "text/plain",
+        b"same content two owners",
+    );
+    fx.source(
+        "purge-other-blob",
+        "purge-other-blob.bin",
+        b"same content two owners",
+        SourceOrigin::default(),
+    );
+    let other = saved(fx.save(
+        &fx.user(),
+        "project-b",
+        "independent other project",
+        "text/plain",
+        "purge-other-blob",
+        b"same content two owners",
+    ));
+    assert_eq!(shared.artifact.sha256, other.artifact.sha256);
+    let private_digest = hex(&private.artifact.sha256);
+    let shared_digest = hex(&shared.artifact.sha256);
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let decision = |plan: &ProjectPurgePlanning, digest: &str| {
+        let key = sha256_hex(serde_json::to_string(&[digest]).unwrap().as_bytes());
+        plan.rows
+            .iter()
+            .find(|r| r.table == "blobs" && r.key_digest == key)
+            .unwrap()
+            .action
+            .clone()
+    };
+    let before = assess();
+    assert_eq!(
+        decision(&before, &private_digest),
+        ProjectPurgeRowAction::Scrub,
+        "only the selected generation becomes a physical-effect candidate"
+    );
+    assert_eq!(
+        decision(&before, &shared_digest),
+        ProjectPurgeRowAction::Keep
+    );
+    let pinned = private_digest.clone();
+    fx.write(move |tx| tx.artifacts().pin(&id("unknown-backup-holder"), &pinned));
+    let held = assess();
+    assert_ne!(
+        before.digest, held.digest,
+        "new keepers invalidate the reviewed business snapshot"
+    );
+    assert_eq!(
+        decision(&held, &private_digest),
+        ProjectPurgeRowAction::Keep
+    );
+    assert!(
+        held.rows
+            .iter()
+            .any(|r| r.table == "artifact_blob_pins" && r.action == ProjectPurgeRowAction::Keep)
+    );
+    fx.write(|tx| tx.artifacts().release_pins(&id("unknown-backup-holder")));
+    assert_eq!(
+        decision(&assess(), &private_digest),
+        ProjectPurgeRowAction::Scrub
+    );
+    // An unknown legacy source carrying a typed version reference is a hold,
+    // never permission to remove its bytes while its owning format is unresolved.
+    let legacy = json!({"configuration_revision":1,"connection":{"id":"legacy-independent-source","revision":"1","config":{"caCertificate":private.artifact}},"owner_id":"user-a"});
+    fx.h.raw().execute("INSERT INTO schema_sources(id,revision,configuration_revision,owner_id,deleted,body_json) VALUES('legacy-independent-source',1,1,'user-a',0,?1)",[legacy.to_string()]).unwrap();
+    let legacy_plan = assess();
+    assert!(
+        legacy_plan
+            .unresolved
+            .iter()
+            .any(|r| r.table == "artifact_versions")
+    );
+    assert_eq!(
+        decision(&legacy_plan, &private_digest),
+        ProjectPurgeRowAction::Keep,
+        "retention closure must run before byte eligibility"
+    );
+    assert_eq!(
+        fx.artifact(&private.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.artifact(&other.artifact.artifact_id).state,
+        ArtifactState::Live
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row(
+                "SELECT state FROM blobs WHERE digest=?1",
+                [private_digest],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Present",
+        "planning neither claims nor unlinks bytes"
+    );
+}

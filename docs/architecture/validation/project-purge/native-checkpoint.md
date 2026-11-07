@@ -169,6 +169,29 @@ operations; all five native registry/schema cases pass (0.57 seconds). Published
 reply artifacts, independent version keepers and byte eligibility remain explicit
 holds until their complete typed partitions are implemented.
 
+Published receipt partitioning is validated against the actual native reply publisher:
+its exact schema/command/actor/version binding selects the private reply row,
+receipt-retained artifact and content lineage; an altered schema remains unresolved.
+Six native planning cases pass (8.52 seconds), with strict checks (17.35 seconds).
+The replay tombstone retains actor/operation foreign-key identities explicitly.
+
+Current draft cba36ad8 Windows foundation also passes its complete adapter library:
+884 cases, no failures, three intentional ignores (793.15 seconds), before the three
+known registry expectations fail. Those expectations and implementation-register
+generation are corrected in d19c04e7; platform qualification of later classifier
+changes remains pending. PR49 merged as c10d469c with all20 checks green; its exact
+merged tree equals the pre-merge integration tree. DW88 and DW143/144/145 are accepted.
+
+Blob assessment now distinguishes selected unshared generations from surviving live
+versions, independent references and all unproved backup/reader pins. It never
+claims or unlinks a file. A controlled legacy-reference regression reproduced the
+incorrect pre-closure byte decision (1.94 seconds); running byte assessment after
+the finite retention closure corrects it. All seven native planning cases pass
+(12.32 seconds), including shared-content survival, new-pin staleness, pin release,
+unknown independent-reference holds and unchanged live blob state. Workspace/all-
+target strict checks pass (17.22 seconds). The sealed physical executor and its
+reader/generation rechecks are still required before any byte deletion is possible.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

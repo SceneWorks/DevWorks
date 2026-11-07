@@ -126,6 +126,7 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
         "workflow_statuses" | "index_runs" => (&["project_id"], &[]),
         "events" => (&["actor_id", "project_id"], &["root_id", "operation_id"]),
         "operations" => (&[], &["root_id", "assignment_id"]),
+        "command_receipts" => (&["actor_id", "operation_id"], &[]),
         "principal_authority" => (&["actor_id", "project_id", "bound_by"], &[]),
         _ => return None,
     };
@@ -221,7 +222,6 @@ fn content_lineage(edge: &ProjectPurgeReference) -> bool {
 fn content_partitions(
     conn: &Connection,
     project: &ProjectId,
-    snapshot: &devworks_core::ports::storage::ProjectPurgeCandidates,
     rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
     unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
 ) -> Result<(), StorageError> {
@@ -318,6 +318,13 @@ fn content_partitions(
             assign(&row, action.clone(), reason.clone(), rows, unresolved);
         }
     }
+    Ok(())
+}
+fn propagate_content(
+    snapshot: &devworks_core::ports::storage::ProjectPurgeCandidates,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> Result<(), StorageError> {
     // Follow only declared content ownership edges. Memberships and independent
     // referencing records never inherit a deletion from a referenced owner.
     let candidates = snapshot
@@ -396,7 +403,7 @@ pub(in crate::storage::sqlite) fn planning(
             }
         }
     }
-    content_partitions(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    content_partitions(conn, project, &mut rows, &mut unresolved)?;
     // Workspace-created project snapshots are independently attributed receipts.
     // Their recognized result needs explicit compaction; do not relabel the
     // CommandDecided event or silently omit private copied project content.
@@ -423,6 +430,7 @@ pub(in crate::storage::sqlite) fn planning(
     }
     super::receipts::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::leases::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    propagate_content(&snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
         let mut changed = false;
@@ -492,6 +500,9 @@ pub(in crate::storage::sqlite) fn planning(
             break;
         }
     }
+    // Keeper closure can retain a version that was initially owned; byte
+    // eligibility must use those final decisions, never the earlier partition.
+    super::blobs::partition(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     let rows = rows.into_values().collect::<Vec<_>>();
     let unresolved = unresolved.into_values().collect::<Vec<_>>();
     let control_keys = rows

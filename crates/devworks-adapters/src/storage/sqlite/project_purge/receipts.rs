@@ -106,6 +106,48 @@ fn control_receipt(
     }
 }
 
+fn published_reply(
+    conn: &Connection,
+    identity: [&str; 3],
+    receipt: &Receipt<DomainDecision>,
+    op: &str,
+    revision: u32,
+) -> Result<Vec<Key>, StorageError> {
+    let Some(descriptor) = devworks_core::registry::find(op) else {
+        return Ok(vec![]);
+    };
+    let Some(schema) = devworks_core::services::artifacts::replies::reply_schema(
+        descriptor,
+        SchemaRevision(revision),
+    ) else {
+        return Ok(vec![]);
+    };
+    type Published = (String, String, String, String);
+    let raw:Option<Published>=db(conn.query_row("SELECT r.command_id,r.artifact_id,r.version_id,r.schema_json FROM receipt_replies r JOIN artifacts a ON a.id=r.artifact_id JOIN artifact_versions v ON v.id=r.version_id AND v.artifact_id=a.id WHERE r.actor_id=?1 AND r.scope_key=?2 AND r.idempotency_key=?3 AND a.retention='Receipt' AND a.owner_actor_id=r.actor_id AND a.current_version_id=r.version_id AND v.version_no=1 AND v.media_type='application/json' AND NOT EXISTS(SELECT 1 FROM artifact_versions other WHERE other.artifact_id=a.id AND other.id<>v.id)",identity,|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional())?;
+    let Some((command, artifact, version, encoded)) = raw else {
+        return Ok(vec![]);
+    };
+    if command != receipt.command_id.0.as_str()
+        || serde_json::from_str::<Value>(&encoded).ok() != serde_json::to_value(schema).ok()
+    {
+        return Ok(vec![]);
+    }
+    Ok(vec![
+        (
+            "receipt_replies".into(),
+            super::guard::key_digest(&serde_json::to_string(&identity).expect("reply key"))?,
+        ),
+        (
+            "artifacts".into(),
+            super::guard::key_digest(&serde_json::to_string(&[artifact]).expect("artifact key"))?,
+        ),
+        (
+            "artifact_versions".into(),
+            super::guard::key_digest(&serde_json::to_string(&[version]).expect("version key"))?,
+        ),
+    ])
+}
+
 pub(super) fn partition(
     conn: &Connection,
     project: &ProjectId,
@@ -233,6 +275,25 @@ pub(super) fn partition(
             rows,
             unresolved,
         );
+        if !control {
+            for key in published_reply(
+                conn,
+                [&actor, &scope, &key],
+                receipt,
+                &op,
+                body.schema_revision,
+            )? {
+                if let Some(candidate) = candidates.get(&key) {
+                    assign(
+                        candidate,
+                        Action::Delete,
+                        Reason::OwnedLineage,
+                        rows,
+                        unresolved,
+                    );
+                }
+            }
+        }
         if owned {
             if control {
                 // The gateway's exact minimal publication intent is part of control

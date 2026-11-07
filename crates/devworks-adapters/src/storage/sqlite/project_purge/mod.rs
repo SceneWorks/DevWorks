@@ -1,4 +1,5 @@
 //! Durable immutable preparation. Execution and its physical effects share this owner.
+mod blobs;
 pub(super) mod candidates;
 pub(super) mod classification;
 pub(super) mod guard;
