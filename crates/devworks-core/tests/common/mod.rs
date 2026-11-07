@@ -399,6 +399,9 @@ impl ReadSnapshot for MemSnapshot {
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
+    fn github(&self) -> &dyn GithubRead {
+        &self.unsupported
+    }
     fn router(&self) -> &dyn RouterRead {
         &self.unsupported
     }
@@ -515,6 +518,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
+        &mut self.unsupported
+    }
+    fn github(&mut self) -> &mut dyn GithubRepository {
         &mut self.unsupported
     }
     fn router(&mut self) -> &mut dyn RouterRepository {
@@ -3480,6 +3486,248 @@ impl GraphRepository for Unsupported {
         &mut self,
         _: &StoredGraphSourceCapture,
     ) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl GithubRead for Unsupported {
+    fn github_adjudication_owner(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+    ) -> Result<Option<StoredGithubObligationRetirement>, StorageError> {
+        nope()
+    }
+    fn github_related_work(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&ProjectId>,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<GithubWorkLink>, StorageError> {
+        nope()
+    }
+    fn github_obligation_retirements(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&ProjectId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObligationRetirement>, StorageError> {
+        nope()
+    }
+    fn github_repository_by_remote_id(
+        &self,
+        _: &str,
+    ) -> Result<Option<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_repository_binding(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
+        nope()
+    }
+    fn github_repository_binding_history(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubRepositoryBinding>, StorageError> {
+        nope()
+    }
+    fn github_discovered_repository(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_account_repositories(
+        &self,
+        _: &Id,
+        _: Option<&str>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_account(&self) -> Result<Option<StoredGithubAccount>, StorageError> {
+        nope()
+    }
+    fn github_repository(&self, _: &Id) -> Result<Option<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_repositories(
+        &self,
+        _: &GithubScope,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubRepository>, StorageError> {
+        nope()
+    }
+    fn github_observation(
+        &self,
+        _: &Id,
+        _: &GithubScope,
+    ) -> Result<Option<StoredGithubObservation>, StorageError> {
+        nope()
+    }
+    fn github_observations(
+        &self,
+        _: &GithubObservationFilter,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError> {
+        nope()
+    }
+    fn github_poll_cursor(
+        &self,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<StoredGithubPollCursor>, StorageError> {
+        nope()
+    }
+    fn github_issue(
+        &self,
+        _: &GithubIssueKey,
+        _: &GithubScope,
+    ) -> Result<Option<StoredGithubIssueIntake>, StorageError> {
+        nope()
+    }
+    fn github_issues(
+        &self,
+        _: &GithubIntakeFilter,
+        _: Option<&GithubIssueKey>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubIssueIntake>, StorageError> {
+        nope()
+    }
+    fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError> {
+        nope()
+    }
+    fn github_obligation_revision(&self, _: &GithubIssueKey) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn github_work_links(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&ProjectId>,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<GithubWorkLink>, StorageError> {
+        nope()
+    }
+    fn github_resolution(&self, _: &Id) -> Result<Option<StoredGithubResolution>, StorageError> {
+        nope()
+    }
+    fn github_resolutions(
+        &self,
+        _: &GithubIssueKey,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubResolution>, StorageError> {
+        nope()
+    }
+    fn github_resolution_witnesses(
+        &self,
+        _: &Id,
+        _: Option<&ProjectId>,
+        _: Option<&RootId>,
+        _: u16,
+    ) -> Result<Vec<StoredGithubResolutionWitness>, StorageError> {
+        nope()
+    }
+}
+
+impl GithubRepository for Unsupported {
+    fn retire_github_work_link(
+        &mut self,
+        _: &StoredGithubObligationRetirement,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_github_repository_binding(
+        &mut self,
+        _: &StoredGithubRepositoryBinding,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_github_account(
+        &mut self,
+        _: &StoredGithubAccount,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_github_repository(
+        &mut self,
+        _: &StoredGithubRepository,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn append_github_observation(
+        &mut self,
+        _: &StoredGithubObservation,
+    ) -> Result<StoredGithubObservation, StorageError> {
+        nope()
+    }
+    fn put_github_poll_cursor(
+        &mut self,
+        _: &StoredGithubPollCursor,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_github_issue(
+        &mut self,
+        _: &StoredGithubIssueIntake,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn set_github_intake_interval(
+        &mut self,
+        _: i64,
+        _: i64,
+    ) -> Result<GithubIntakeClock, StorageError> {
+        nope()
+    }
+    fn admit_github_issue(
+        &mut self,
+        _: &GithubIssueKey,
+        _: i64,
+        _: i64,
+        _: &OperationId,
+    ) -> Result<Option<GithubAdmission>, StorageError> {
+        nope()
+    }
+    fn link_github_work(
+        &mut self,
+        _: &GithubIssueKey,
+        _: &RootId,
+        _: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_github_resolution(
+        &mut self,
+        _: &StoredGithubResolution,
+    ) -> Result<StoredGithubResolution, StorageError> {
+        nope()
+    }
+    fn insert_github_resolution_witness(
+        &mut self,
+        _: &StoredGithubResolutionWitness,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn seal_github_resolution(
+        &mut self,
+        _: &Id,
+        _: i64,
+    ) -> Result<StoredGithubResolution, StorageError> {
         nope()
     }
 }

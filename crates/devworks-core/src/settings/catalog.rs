@@ -575,8 +575,8 @@ fn build() -> Vec<SettingDescriptor> {
         ),
         setting!(
             "github.syncLinkedIssueFields",
-            "Synchronize linked issue fields",
-            "Two-way synchronization of linked issue fields.",
+            "Receive linked issue updates",
+            "Reflect remote issue updates locally. Keep intermediate execution details local; publish a resolution only after completed work is verified.",
             GitHub,
             INHERITED,
             ValueKind::Bool,

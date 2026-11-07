@@ -1111,6 +1111,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn help(&self) -> &dyn HelpRead {
         self
     }
+    fn github(&self) -> &dyn GithubRead {
+        self
+    }
     fn router(&self) -> &dyn RouterRead {
         self
     }
@@ -1364,6 +1367,9 @@ impl WriteTransaction for Unit<'_> {
         self
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
+        self
+    }
+    fn github(&mut self) -> &mut dyn GithubRepository {
         self
     }
     fn router(&mut self) -> &mut dyn RouterRepository {

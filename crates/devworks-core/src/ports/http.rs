@@ -127,6 +127,33 @@ impl HttpResponse {
     }
 }
 
+/// Optional response metadata for conditional, paginated API exchanges. Values may
+/// contain opaque server data and are deliberately excluded from Debug output.
+#[derive(Clone)]
+pub struct HttpExchange {
+    pub response: HttpResponse,
+    pub headers: Vec<(String, String)>,
+}
+impl HttpExchange {
+    pub fn header_values<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> {
+        self.headers
+            .iter()
+            .filter(move |(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+impl fmt::Debug for HttpExchange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpExchange")
+            .field("response", &self.response)
+            .field("header_count", &self.headers.len())
+            .finish()
+    }
+}
+
+/// Bound retained control metadata independently of the response body's limit.
+pub const MAX_RESPONSE_METADATA_BYTES: usize = 32 * 1024;
+
 /// A transport failure; no response was received. Never carries a URL query, header or body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HttpError {
@@ -152,6 +179,15 @@ impl fmt::Display for HttpError {
 /// Blocking outbound HTTP.
 pub trait HttpTransport: Send + Sync {
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError>;
+
+    /// Transports without response metadata retain their existing behavior. The
+    /// native adapter overrides this for cache, pagination and rate-limit headers.
+    fn send_with_headers(&self, request: &HttpRequest) -> Result<HttpExchange, HttpError> {
+        self.send(request).map(|response| HttpExchange {
+            response,
+            headers: Vec::new(),
+        })
+    }
 }
 
 /// No network at all: every request is unreachable (a composition without HTTP, and tests that
