@@ -527,3 +527,16 @@ workspace/all-target checks pass17.38s. Source rows remain unread. The isolated
 bootstrap role/permission DDL is retained separately; it grants the original fixture
 reader explicit postgres CONNECT so unrelated fixture qualification remains valid.
 Fresh changed-head automated review and full CI remain required.
+
+## Ninth review batch: native constraint namespaces and filtered indexes
+
+MySQL permits a UNIQUE and CHECK constraint to share one name. The real fixture
+reproduced equal identity keys before the fix (0.02s); the native constraint type
+now participates in identity. Type-gated CHECK and key-column joins also keep the
+same-name records from borrowing one another's semantics.
+
+SQLServer's real filtered UNIQUE fixture reproduced an absent predicate (0.06s).
+Index metadata now retains its bounded WHERE predicate and marks unavailable or
+truncated predicates Partial. The explicit native-x86 workflow seeds and checks
+this case; local SQLServer uses emulation and does not establish native-x86 proof.
+All51 real adapter cases pass1.02s and5 production Engine cases pass20.44s.

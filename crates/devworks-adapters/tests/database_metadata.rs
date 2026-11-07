@@ -1255,3 +1255,59 @@ fn native_review8_postgres_bootstraps_from_accessible_selected_catalog() {
         }
     }
 }
+
+#[test]
+#[ignore = "explicit isolated MySQL native constraint namespaces"]
+fn native_review9_mysql_native_constraint_types_have_distinct_identity() {
+    let snapshot = boundary_snapshot(
+        "MySql",
+        "DEVWORKS_METADATA_MYSQL",
+        "meta_constraint_namespaces",
+    );
+    let constraints = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Constraint" && o.metadata.name.0 == "same_name")
+        .collect::<Vec<_>>();
+    assert_eq!(constraints.len(), 2);
+    assert_ne!(constraints[0].key, constraints[1].key);
+    let kinds = constraints
+        .iter()
+        .map(|o| o.metadata.constraint_type.as_ref().unwrap().0.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(kinds, ["CHECK", "UNIQUE"].into_iter().collect());
+    let unique = constraints
+        .iter()
+        .find(|o| o.metadata.constraint_type.as_ref().unwrap().0 == "UNIQUE")
+        .unwrap();
+    assert!(
+        unique.metadata.check_clause.is_none(),
+        "same-name CHECK must not supply UNIQUE's body"
+    );
+    let check = constraints
+        .iter()
+        .find(|o| o.metadata.constraint_type.as_ref().unwrap().0 == "CHECK")
+        .unwrap();
+    assert!(
+        check.metadata.column_names.0.is_empty(),
+        "same-name UNIQUE must not supply CHECK's columns"
+    );
+}
+#[test]
+#[ignore = "explicit isolated SQLServer filtered index"]
+fn native_sql_server_filtered_index_retains_its_predicate() {
+    let snapshot = sql_server_selected("meta_filtered_index");
+    let index = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "meta_filtered_email")
+        .unwrap();
+    assert_eq!(index.metadata.unique, Some(true));
+    let predicate = &index
+        .metadata
+        .definition_sql
+        .as_ref()
+        .expect("filtered-index predicate")
+        .0;
+    assert!(predicate.contains("active") && predicate.contains('1'));
+}
