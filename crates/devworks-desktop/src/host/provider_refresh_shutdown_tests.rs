@@ -157,7 +157,7 @@ pub(super) fn run_case(writer_race: bool) {
         loop {
             // Use Help's real durable cancellation signal. This fixture does not need a
             // completed catalog, and maintenance retains this source-change attempt.
-            run_write(store.as_ref(), WriteOptions::default(), |tx| {
+            let cancelled_failure = run_write(store.as_ref(), WriteOptions::default(), |tx| {
                 let page = tx.queue().deliveries(
                     &DeliveryFilter {
                         consumer: Some("help_docs".into()),
@@ -170,7 +170,18 @@ pub(super) fn run_case(writer_race: bool) {
                     page.next.is_none(),
                     "the fresh fixture has one startup Help generation"
                 );
+                let mut cancelled_failure = false;
                 for entry in page.entries {
+                    if entry.state == QueueState::Failed
+                        && entry.cancel_requested
+                        && entry.last_error.as_deref()
+                            == Some("Help generation was cancelled before catalog publication.")
+                    {
+                        let operation = entry.operation_id.as_ref().expect("Help has an operation");
+                        let operation = tx.operations().operation(operation)?.unwrap();
+                        cancelled_failure = operation.capability == "help.generate_capability_docs"
+                            && operation.state == devworks_core::protocol::OperationState::Failed;
+                    }
                     if !entry.cancel_requested
                         && matches!(entry.state, QueueState::Ready | QueueState::Claimed)
                     {
@@ -182,7 +193,7 @@ pub(super) fn run_case(writer_race: bool) {
                         tx.queue().cancel(&entry.id)?;
                     }
                 }
-                Ok(())
+                Ok(cancelled_failure)
             })
             .unwrap();
             let (help, receipts, bootstrap, drafts) =
@@ -199,7 +210,9 @@ pub(super) fn run_case(writer_race: bool) {
                 pass.as_ref()
                     .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
             });
-            if help.completed + help.cancelled > 0
+            // Dispatch can establish the running generation's cancellation as Failed;
+            // that exact requested outcome is settled just like cancellation before dispatch.
+            if (help.completed + help.cancelled > 0 || cancelled_failure)
                 && help.ready == 0
                 && help.claimed == 0
                 && help.reconciling == 0
