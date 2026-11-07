@@ -155,12 +155,43 @@ pub(super) fn run_case(writer_race: bool) {
         let startup_deadline = std::time::Instant::now() + Duration::from_secs(30);
         let accounting = app.accounting().watch();
         loop {
-            let (help, receipts, bootstrap) =
+            // Use Help's real durable cancellation signal. This fixture does not need a
+            // completed catalog, and maintenance retains this source-change attempt.
+            run_write(store.as_ref(), WriteOptions::default(), |tx| {
+                let page = tx.queue().deliveries(
+                    &DeliveryFilter {
+                        consumer: Some("help_docs".into()),
+                        operation_id: None,
+                    },
+                    None,
+                    500,
+                )?;
+                assert!(
+                    page.next.is_none(),
+                    "the fresh fixture has one startup Help generation"
+                );
+                for entry in page.entries {
+                    if !entry.cancel_requested
+                        && matches!(entry.state, QueueState::Ready | QueueState::Claimed)
+                    {
+                        let operation = entry.operation_id.as_ref().expect("Help has an operation");
+                        assert_eq!(
+                            tx.operations().operation(operation)?.unwrap().capability,
+                            "help.generate_capability_docs"
+                        );
+                        tx.queue().cancel(&entry.id)?;
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            let (help, receipts, bootstrap, drafts) =
                 read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
                     Ok((
                         s.queue().status("help_docs")?,
                         s.queue().status("receipt_replies")?,
                         s.usage().usage_bootstrap()?,
+                        s.help().help_drafts(None, 32)?.len(),
                     ))
                 })
                 .unwrap();
@@ -168,7 +199,7 @@ pub(super) fn run_case(writer_race: bool) {
                 pass.as_ref()
                     .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
             });
-            if help.completed > 0
+            if help.completed + help.cancelled > 0
                 && help.ready == 0
                 && help.claimed == 0
                 && help.reconciling == 0
@@ -176,13 +207,14 @@ pub(super) fn run_case(writer_race: bool) {
                 && receipts.claimed == 0
                 && receipts.reconciling == 0
                 && bootstrap.phase == "Complete"
+                && drafts == 0
                 && accounted
             {
                 break;
             }
             assert!(
                 std::time::Instant::now() < startup_deadline,
-                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; accounted={accounted}"
+                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; accounted={accounted}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
