@@ -505,3 +505,53 @@ cases pass17.60s;7 generic queue cases pass7.38s. Strict workspace/all-target ch
 pass39.20s. Earlier zero-case filters are excluded. No assertions/timeouts were removed
 or extended; source rows remain unread and OS credential/trust stores untouched.
 Fresh changed-head review, CI and acceptance remain required.
+
+## Synthetic constraint namespace and selected PostgreSQL bootstrap
+
+Exact814 review identified two unique issues (the FK finding was posted twice).
+Actual MySQL/MariaDB tables with FK `fk` and quoted UNIQUE `fk:1` reproduce duplicate
+structural keys; a PostgreSQL role allowed into its selected catalog but denied
+CONNECT on unselected postgres reproduces AccessDenied. All3 RED cases fail0.08s.
+
+Synthetic FK-column rows now carry a distinct identity discriminator, applied to
+child identities as well as routine-type identities. Displayed native names and
+column mappings remain unchanged. PostgreSQL server-only discovery bootstraps from
+an explicit selected catalog when available; only discovery without a selection
+uses postgres. Missing catalog SQLSTATE3D000 retains the existing AccessDenied
+classification for selected missing targets.
+
+All49 actual-server cases pass1.02s, including both valid selected probes/indexing
+and existing missing/inaccessible selections. All5 production Engine publication
+cases pass20.05s, including both collision fixtures in complete captures. Strict
+workspace/all-target checks pass17.38s. Source rows remain unread. The isolated
+bootstrap role/permission DDL is retained separately; it grants the original fixture
+reader explicit postgres CONNECT so unrelated fixture qualification remains valid.
+Fresh changed-head automated review and full CI remain required.
+
+## Ninth review batch: native constraint namespaces and filtered indexes
+
+MySQL permits a UNIQUE and CHECK constraint to share one name. The real fixture
+reproduced equal identity keys before the fix (0.02s); the native constraint type
+now participates in identity. Type-gated CHECK and key-column joins also keep the
+same-name records from borrowing one another's semantics.
+
+SQLServer's real filtered UNIQUE fixture reproduced an absent predicate (0.06s).
+Index metadata now retains its bounded WHERE predicate and marks unavailable or
+truncated predicates Partial. The explicit native-x86 workflow seeds and checks
+this case; local SQLServer uses emulation and does not establish native-x86 proof.
+All51 real adapter cases pass1.02s and5 production Engine cases pass20.44s.
+
+## Tenth review batch: unresolved SQLite views and PostgreSQL domain nullability
+
+A fresh metadata connection cannot resolve application-defined SQLite functions.
+The new real-file fixture, including a dependent view, reproduced source-wide
+Unavailable before the fix(0.04s). Fixed catalog-only view introspection now retains
+both view identities and DDL with explicit Partial column coverage, continues the
+ordinary table, and preserves the source file byte-for-byte. Twelve SQLite cases
+pass0.03s. A fixture compilation error used the wrong parent field and was corrected
+before collecting the meaningful RED; it is not regression evidence.
+
+The actual PostgreSQL required-domain fixture reproduced nullable=true before the
+fix(0.09s). Column nullability now includes the domain type's typnotnull flag.
+Required-domain, nullable-domain and explicit-column NOT NULL cases pass; all52 real
+network adapter cases pass1.08s and5 production Engine cases20.09s.

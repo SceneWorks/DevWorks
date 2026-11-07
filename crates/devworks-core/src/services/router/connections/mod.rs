@@ -900,7 +900,9 @@ impl ConnectionService {
         if let Err(error) = self.noted(self.secrets.put(&self.key(&handle), &Secret::new(trimmed)))
         {
             let _ = self.collect_setting_handle(&handle, true);
-            return Err(error);
+            // Cleanup success does not make the failed intake available. Settings reads
+            // this state to offer its session-only fallback after the completion.
+            return self.noted(Err(error));
         }
         let published = handle.clone();
         if matches!(

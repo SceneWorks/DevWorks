@@ -33,3 +33,8 @@ REVOKE CONNECT ON DATABASE metadata_inaccessible FROM PUBLIC;
 
 CREATE TABLE public.meta_include_primary(id INT,payload TEXT,PRIMARY KEY(id) INCLUDE(payload));
 INSERT INTO public.meta_include_primary VALUES(1,NULL);
+
+CREATE DOMAIN public.meta_required_int AS integer NOT NULL;
+CREATE DOMAIN public.meta_optional_int AS integer;
+CREATE TABLE public.meta_domain_nullability(required_value public.meta_required_int, optional_value public.meta_optional_int, column_required public.meta_optional_int NOT NULL);
+GRANT REFERENCES ON public.meta_domain_nullability TO metadata_reader;

@@ -11,7 +11,7 @@ const QUERIES: &[Query] = &[
         sql: r#"SELECT json_build_object('schema',n.nspname,'kind',CASE WHEN c.relkind IN('v','m') THEN 'View' ELSE 'Table' END,'name',c.relname,'definition',CASE WHEN c.relkind IN('v','m') THEN left(pg_catalog.pg_get_viewdef(c.oid,true),65536) END,'truncated',CASE WHEN c.relkind IN('v','m') THEN length(pg_catalog.pg_get_viewdef(c.oid,true))>65536 ELSE false END,'metadata',json_build_object('comment',pg_catalog.obj_description(c.oid,'pg_class'),'extra',CASE c.relkind WHEN 'm' THEN 'MaterializedView' WHEN 'p' THEN 'PartitionedTable' WHEN 'f' THEN 'ForeignTable' END))::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN('r','p','v','m','f') AND left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname"#,
     },
     Query {
-        sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Column','name',a.attname,'parent',c.relname,'parentKind',CASE WHEN c.relkind IN('v','m') THEN 'View' ELSE 'Table' END,'truncated',COALESCE(length(pg_catalog.pg_get_expr(d.adbin,d.adrelid))>4096,false),'metadata',json_build_object('ordinal',a.attnum::text,'dataType',pg_catalog.format_type(a.atttypid,a.atttypmod),'nullable',NOT a.attnotnull,'primaryKey',EXISTS(SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND EXISTS(SELECT 1 FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) WHERE k.ordinality<=i.indnkeyatts AND k.attnum=a.attnum)),'defaultValue',left(pg_catalog.pg_get_expr(d.adbin,d.adrelid),4096),'extra',CASE WHEN a.attgenerated<>'' THEN 'Generated' WHEN a.attidentity<>'' THEN 'Identity' END,'comment',pg_catalog.col_description(c.oid,a.attnum)))::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE a.attnum>0 AND NOT a.attisdropped AND c.relkind IN('r','p','v','m','f') AND left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,a.attnum"#,
+        sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Column','name',a.attname,'parent',c.relname,'parentKind',CASE WHEN c.relkind IN('v','m') THEN 'View' ELSE 'Table' END,'truncated',COALESCE(length(pg_catalog.pg_get_expr(d.adbin,d.adrelid))>4096,false),'metadata',json_build_object('ordinal',a.attnum::text,'dataType',pg_catalog.format_type(a.atttypid,a.atttypmod),'nullable',NOT(a.attnotnull OR (t.typtype='d' AND t.typnotnull)),'primaryKey',EXISTS(SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND EXISTS(SELECT 1 FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) WHERE k.ordinality<=i.indnkeyatts AND k.attnum=a.attnum)),'defaultValue',left(pg_catalog.pg_get_expr(d.adbin,d.adrelid),4096),'extra',CASE WHEN a.attgenerated<>'' THEN 'Generated' WHEN a.attidentity<>'' THEN 'Identity' END,'comment',pg_catalog.col_description(c.oid,a.attnum)))::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_type t ON t.oid=a.atttypid JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE a.attnum>0 AND NOT a.attisdropped AND c.relkind IN('r','p','v','m','f') AND left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,a.attnum"#,
     },
     Query {
         sql: r#"SELECT json_build_object('schema',n.nspname,'kind','Index','name',ic.relname,'parent',c.relname,'expressionColumns',0=ANY(i.indkey),'parentKind',CASE WHEN c.relkind IN('v','m') THEN 'View' ELSE 'Table' END,'definition',left(pg_catalog.pg_get_indexdef(i.indexrelid),65536),'truncated',length(pg_catalog.pg_get_indexdef(i.indexrelid))>65536,'metadata',json_build_object('unique',i.indisunique,'indexType',am.amname,'columnNames',COALESCE((SELECT json_agg(a.attname ORDER BY k.ordinality) FROM pg_catalog.unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum WHERE k.ordinality<=i.indnkeyatts),'[]'::json)))::text FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid JOIN pg_catalog.pg_am am ON am.oid=ic.relam JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE left(n.nspname,3)<>'pg_' AND n.nspname<>'information_schema' AND pg_catalog.has_schema_privilege(n.oid,'USAGE') ORDER BY n.nspname,c.relname,ic.relname"#,
@@ -28,7 +28,7 @@ const QUERIES: &[Query] = &[
 ];
 fn classify(error: tokio_postgres::Error) -> MetadataFailure {
     match error.code().map(|s| s.code()) {
-        Some("28000" | "28P01" | "42501") => MetadataFailure::AccessDenied,
+        Some("28000" | "28P01" | "42501" | "3D000") => MetadataFailure::AccessDenied,
         _ => MetadataFailure::Unavailable,
     }
 }
@@ -219,13 +219,19 @@ pub(super) async fn read(
     target: Target,
 ) -> Result<MetadataSnapshot, MetadataFailure> {
     let database = if target.catalog.is_empty() {
-        "postgres"
+        c.request
+            .config
+            .catalogs
+            .0
+            .first()
+            .map(|name| name.0.clone())
+            .unwrap_or_else(|| "postgres".into())
     } else {
-        &target.catalog
+        target.catalog.clone()
     };
     let discovery = target.catalog.is_empty()
         && (!c.request.test_only || !c.request.config.catalogs.0.is_empty());
-    let (mut c, names, mut profile) = session(c, &target, database, discovery).await?;
+    let (mut c, names, mut profile) = session(c, &target, &database, discovery).await?;
     if discovery {
         for name in names {
             let (next, _, p) = session(c, &target, &name, false).await?;

@@ -1173,3 +1173,163 @@ fn native_review7_postgres_included_column_is_not_a_primary_key() {
         assert_eq!(column.metadata.nullable, Some(nullable), "{name}");
     }
 }
+
+fn synthetic_constraint_identity(engine: &str, variable: &str) {
+    let snapshot = boundary_snapshot(engine, variable, "meta_identity_*");
+    let collisions = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Constraint" && o.metadata.name.0 == "fk:1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        collisions.len(),
+        2,
+        "native UNIQUE and synthetic FK-column records both survive"
+    );
+    assert_ne!(
+        collisions[0].key, collisions[1].key,
+        "source namespace and synthetic namespace are distinct"
+    );
+    assert!(collisions.iter().any(|o| {
+        o.metadata
+            .constraint_type
+            .as_ref()
+            .is_some_and(|t| t.0 == "ForeignKeyColumn")
+    }));
+    assert!(collisions.iter().any(|o| {
+        o.metadata
+            .constraint_type
+            .as_ref()
+            .is_some_and(|t| t.0 == "UNIQUE")
+    }));
+    assert!(
+        snapshot
+            .relationships
+            .iter()
+            .any(|r| r.kind == "REFERENCES")
+    );
+    assert!(
+        snapshot
+            .relationships
+            .iter()
+            .any(|r| r.kind == "FOREIGN_KEY")
+    );
+}
+#[test]
+#[ignore = "explicit isolated MySQL quoted constraint identity fixture"]
+fn native_review8_mysql_synthetic_constraint_identity() {
+    synthetic_constraint_identity("MySql", "DEVWORKS_METADATA_MYSQL");
+}
+#[test]
+#[ignore = "explicit isolated MariaDB quoted constraint identity fixture"]
+fn native_review8_mariadb_synthetic_constraint_identity() {
+    synthetic_constraint_identity("MariaDb", "DEVWORKS_METADATA_MARIADB");
+}
+#[test]
+#[ignore = "explicit isolated PostgreSQL selected-only CONNECT role"]
+fn native_review8_postgres_bootstraps_from_accessible_selected_catalog() {
+    let endpoint = std::env::var("DEVWORKS_METADATA_POSTGRES").unwrap();
+    let server = endpoint.rsplit_once('/').unwrap().0;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for test_only in [true, false] {
+        let mut req = request("Postgres", server);
+        req.config.username =
+            Some(serde_json::from_value(json!("metadata_selected_only")).unwrap());
+        req.config.catalogs = serde_json::from_value(json!(["metadata_fixture"])).unwrap();
+        req.test_only = test_only;
+        let snapshot = runtime
+            .block_on(NetworkMetadataReader.read(req))
+            .expect("configured catalog is accessible without postgres CONNECT");
+        if test_only {
+            assert!(snapshot.objects.is_empty() && snapshot.relationships.is_empty());
+        } else {
+            assert!(
+                snapshot
+                    .objects
+                    .iter()
+                    .any(|o| o.kind == "Table" && o.metadata.name.0 == "parent")
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit isolated MySQL native constraint namespaces"]
+fn native_review9_mysql_native_constraint_types_have_distinct_identity() {
+    let snapshot = boundary_snapshot(
+        "MySql",
+        "DEVWORKS_METADATA_MYSQL",
+        "meta_constraint_namespaces",
+    );
+    let constraints = snapshot
+        .objects
+        .iter()
+        .filter(|o| o.kind == "Constraint" && o.metadata.name.0 == "same_name")
+        .collect::<Vec<_>>();
+    assert_eq!(constraints.len(), 2);
+    assert_ne!(constraints[0].key, constraints[1].key);
+    let kinds = constraints
+        .iter()
+        .map(|o| o.metadata.constraint_type.as_ref().unwrap().0.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(kinds, ["CHECK", "UNIQUE"].into_iter().collect());
+    let unique = constraints
+        .iter()
+        .find(|o| o.metadata.constraint_type.as_ref().unwrap().0 == "UNIQUE")
+        .unwrap();
+    assert!(
+        unique.metadata.check_clause.is_none(),
+        "same-name CHECK must not supply UNIQUE's body"
+    );
+    let check = constraints
+        .iter()
+        .find(|o| o.metadata.constraint_type.as_ref().unwrap().0 == "CHECK")
+        .unwrap();
+    assert!(
+        check.metadata.column_names.0.is_empty(),
+        "same-name UNIQUE must not supply CHECK's columns"
+    );
+}
+#[test]
+#[ignore = "explicit isolated SQLServer filtered index"]
+fn native_sql_server_filtered_index_retains_its_predicate() {
+    let snapshot = sql_server_selected("meta_filtered_index");
+    let index = snapshot
+        .objects
+        .iter()
+        .find(|o| o.kind == "Index" && o.metadata.name.0 == "meta_filtered_email")
+        .unwrap();
+    assert_eq!(index.metadata.unique, Some(true));
+    let predicate = &index
+        .metadata
+        .definition_sql
+        .as_ref()
+        .expect("filtered-index predicate")
+        .0;
+    assert!(predicate.contains("active") && predicate.contains('1'));
+}
+
+#[test]
+#[ignore = "explicit isolated PostgreSQL domain nullability fixture"]
+fn native_review10_postgres_domain_not_null_is_column_not_null() {
+    let snapshot = boundary_snapshot(
+        "Postgres",
+        "DEVWORKS_METADATA_POSTGRES",
+        "meta_domain_nullability",
+    );
+    for (name, nullable) in [
+        ("required_value", false),
+        ("optional_value", true),
+        ("column_required", false),
+    ] {
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column" && o.metadata.name.0 == name)
+            .unwrap();
+        assert_eq!(column.metadata.nullable, Some(nullable), "{name}");
+    }
+}
