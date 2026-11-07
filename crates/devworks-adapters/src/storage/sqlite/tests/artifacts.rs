@@ -5224,3 +5224,114 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
     assert!(!format!("{:?}", after.rows).contains("private"));
     assert_ne!(before.digest, after.digest);
 }
+
+#[test]
+fn purge_planning_staging_scope_comes_from_the_native_journal_and_kept_version_provenance() {
+    let fx = Fx::new();
+    let artifact = fx.saved(
+        "scoped-stage-owner",
+        "private staged title",
+        "text/plain",
+        b"private stage bytes",
+    );
+    let version_id = artifact.artifact.version_id.clone();
+    let stage = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+        let version = s.artifacts().version(&version_id)?.unwrap();
+        let operation_id = devworks_core::protocol::OperationId(
+            serde_json::from_value(version.source["operationId"].clone()).unwrap(),
+        );
+        s.operations().operation(&operation_id)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(stage.root_id.is_none() && stage.assignment_id.is_none());
+    assert_eq!(stage.payload["projectId"], "project-a");
+    let key = sha256_hex(
+        serde_json::to_string(&[stage.id.0.as_str()])
+            .unwrap()
+            .as_bytes(),
+    );
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |s| {
+            s.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let owned = assess();
+    assert!(
+        owned.rows.iter().any(|r| r.table == "operations"
+            && r.key_digest == key
+            && matches!(
+                r.action,
+                ProjectPurgeRowAction::Delete | ProjectPurgeRowAction::Scrub
+            )),
+        "scope journal rows={:?}, unresolved={:?}",
+        owned
+            .rows
+            .iter()
+            .filter(|r| r.table == "operations" && r.key_digest == key)
+            .collect::<Vec<_>>(),
+        owned.unresolved
+    );
+    let artifact_id = artifact.artifact.artifact_id.clone();
+    fx.write(move |tx| {
+        tx.artifacts()
+            .add_share(&artifact_id, &project("project-b"))?;
+        Ok(())
+    });
+    let kept = assess();
+    assert!(
+        kept.snapshot.references.iter().any(|edge| edge.kind
+            == ProjectPurgeReferenceKind::ArtifactVersionOperation
+            && edge.from_table == "artifact_versions"
+            && edge.to_table == "operations"
+            && edge.to_key_digest == key),
+        "the native kept-version provenance is explicit"
+    );
+    assert!(
+        kept.rows.iter().any(|r| r.table == "operations"
+            && r.key_digest == key
+            && r.action == ProjectPurgeRowAction::Scrub
+            && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity),
+        "kept version provenance requires only the staging operation identity: {:?}",
+        kept.unresolved
+    );
+    assert!(
+        !kept
+            .unresolved
+            .iter()
+            .any(|r| r.table == "operations" && r.key_digest == key)
+    );
+    assert_ne!(owned.digest, kept.digest);
+    let mut unknown = stage.payload.clone();
+    unknown["futureOwnership"] = json!({"private": "unrecognized copied content"});
+    fx.write(move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("unknown-stage-payload")),
+                root_id: None,
+                assignment_id: None,
+                capability: STAGE_CAPABILITY.into(),
+                schema_version: 1,
+                args_digest: sha256_hex(unknown.to_string().as_bytes()),
+                payload: unknown,
+            })
+            .map(|_| ())
+    });
+    let unknown = assess();
+    let key = sha256_hex(
+        serde_json::to_string(&["unknown-stage-payload"])
+            .unwrap()
+            .as_bytes(),
+    );
+    assert!(unknown.unresolved.iter().any(|r| r.table == "operations"
+        && r.key_digest == key
+        && r.reason == ProjectPurgeUnresolvedReason::AutomaticSnapshot));
+    assert!(
+        !unknown
+            .rows
+            .iter()
+            .any(|r| r.table == "operations" && r.key_digest == key)
+    );
+}

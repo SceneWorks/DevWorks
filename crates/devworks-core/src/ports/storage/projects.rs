@@ -194,6 +194,7 @@ pub struct ProjectPurgeCandidates {
 pub enum ProjectPurgeReferenceKind {
     ForeignKey,
     ArtifactSubject,
+    ArtifactVersionOperation,
     IndexOverlayRun,
     PackageIntent,
     SearchChunk,

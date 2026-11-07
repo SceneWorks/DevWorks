@@ -456,6 +456,7 @@ pub(in crate::storage::sqlite) fn planning(
     }
     content_partitions(conn, project, &mut rows, &mut unresolved)?;
     super::mixed::session_scope(conn, project, &mut rows, &mut unresolved)?;
+    super::mixed::stage_operations(conn, project, &mut rows, &mut unresolved)?;
     // Workspace-created project snapshots are independently attributed receipts.
     // Their recognized result needs explicit compaction; do not relabel the
     // CommandDecided event or silently omit private copied project content.

@@ -284,3 +284,16 @@ session identities survive minimally; nullable blocker/execution/parent referenc
 are cleared. The planning digest now includes the actual compiled minimal-header
 allowlist and retained/cleared FK policy, so policy changes stale older preparation.
 No logical redaction or deletion is executed by this read-only checkpoint.
+
+Native scope-bound artifact staging journals are now selected from their actual
+closed payload.projectId even though the producer deliberately records no root or
+assignment. A real-save regression proved the journal was omitted before correction
+(1.30 seconds). Evidence staging now records its scope before publication too.
+Typed kept-version provenance retains only the original staging operation identity;
+receipt replay fences can also require that minimal header. Journal fingerprints,
+source metadata and provenance are validated; unknown future fields hold planning.
+All63 native artifact cases pass (53.46 seconds), all17 planning cases pass (24.93
+seconds), the additional closed-shape refusal case passes (1.63 seconds), and strict
+workspace/all-target checks pass (7.60 seconds). Read-only assessment is still not a
+purge permit. Full legacy attribution, native file/client inventory, coordination,
+logical/physical execution and final integrated acceptance remain pending.

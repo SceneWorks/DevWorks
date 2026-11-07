@@ -127,7 +127,8 @@ impl ArtifactService {
                 &evidence.scope,
             )));
         }
-        let payload = json!({"digest": digest, "byteCount": n, "source": evidence.source});
+        let payload = json!({"digest": digest, "byteCount": n,
+            "projectId": evidence.scope.project().map(|p| p.0.as_str()), "source": evidence.source});
         let (staging, published) = self.journal_and_publish(
             &env,
             &mut std::io::Cursor::new(bytes),

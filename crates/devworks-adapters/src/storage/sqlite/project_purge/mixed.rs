@@ -9,6 +9,132 @@ use devworks_core::protocol::ProjectId;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StagePayload {
+    digest: String,
+    byte_count: i64,
+    #[serde(default)]
+    request_digest: Option<String>,
+    project_id: ProjectId,
+    source: serde_json::Value,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VersionStageSource {
+    source: serde_json::Value,
+    operation_id: devworks_core::protocol::OperationId,
+    produced_by: devworks_core::protocol::ActorId,
+    principal_kind: String,
+    #[serde(default)]
+    session_id: Option<devworks_core::protocol::Id>,
+    #[serde(default)]
+    repository_id: Option<devworks_core::protocol::Id>,
+    #[serde(default)]
+    repository_revision: Option<i64>,
+    #[serde(default)]
+    original_name: Option<String>,
+}
+
+pub(super) fn stage_operations(
+    conn: &Connection,
+    project: &ProjectId,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> Result<(), StorageError> {
+    use devworks_core::protocol::support::Check;
+    let selection = super::candidates::selection(project)?;
+    let candidates =
+        selection.rows_where(conn, "operations", "capability='artifacts.stage_file'")?;
+    let sql = selection.sql(
+        "operations",
+        "id,schema_version,args_digest,payload_json",
+        "capability='artifacts.stage_file'",
+    )?;
+    let mut query = db(conn.prepare(&sql))?;
+    let mut records = db(query.query(selection.parameters()))?;
+    while let Some(record) = db(records.next())? {
+        let id: String = db(record.get(0))?;
+        let revision: i64 = db(record.get(1))?;
+        let fingerprint: String = db(record.get(2))?;
+        let body: String = db(record.get(3))?;
+        let key = super::guard::key_digest(&serde_json::to_string(&[&id]).expect("ID key"))?;
+        let payload = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                let canonical_fingerprint =
+                    devworks_core::fingerprint::sha256_hex(value.to_string().as_bytes());
+                serde_json::from_value::<StagePayload>(value)
+                    .ok()
+                    .map(|p| (p, canonical_fingerprint))
+            });
+        let mut valid = payload
+            .as_ref()
+            .is_some_and(|(payload, canonical_fingerprint)| {
+                revision == 1
+                    && payload.project_id == *project
+                    && payload.byte_count >= 0
+                    && payload.source.is_object()
+                    && super::digest(&payload.digest)
+                    && payload
+                        .request_digest
+                        .as_ref()
+                        .is_none_or(|d| super::digest(d))
+                    && fingerprint == *canonical_fingerprint
+            });
+        if let Some((payload, _)) = payload.filter(|_| valid) {
+            let mut versions = db(conn.prepare("SELECT blob_digest,source_json FROM artifact_versions WHERE json_type(source_json,'$.operationId')='text' AND json_extract(source_json,'$.operationId')=?1"))?;
+            let mut versions = db(versions.query([&id]))?;
+            while let Some(version) = db(versions.next())? {
+                let digest: String = db(version.get(0))?;
+                let source: String = db(version.get(1))?;
+                valid &= serde_json::from_str::<VersionStageSource>(&source).is_ok_and(|source| {
+                    source.operation_id.0.as_str() == id
+                        && source.source == payload.source
+                        && source.produced_by.check().is_ok()
+                        && digest == payload.digest
+                        && matches!(
+                            source.principal_kind.as_str(),
+                            "Human" | "Agent" | "Package" | "McpClient" | "Schedule" | "Host"
+                        )
+                        && source.session_id.as_ref().is_none_or(|s| s.check().is_ok())
+                        && source
+                            .repository_id
+                            .as_ref()
+                            .is_none_or(|s| s.check().is_ok())
+                        && source.repository_revision.is_none_or(|r| r >= 1)
+                        && source
+                            .original_name
+                            .as_ref()
+                            .is_none_or(|n| !n.contains('\0'))
+                });
+            }
+        }
+        let candidate = candidates
+            .iter()
+            .find(|r| r.key_digest == key)
+            .ok_or_else(|| {
+                StorageError::InvalidRecord("missing native staging candidate".into())
+            })?;
+        if valid {
+            assign(
+                candidate,
+                Action::Delete,
+                Reason::OwnedProjectRecords,
+                rows,
+                unresolved,
+            );
+        } else {
+            rows.remove(&(candidate.table.clone(), key.clone()));
+            unresolved.insert((candidate.table.clone(), key.clone()), ProjectPurgeUnresolved {
+                table: candidate.table.clone(), key_digest: key,
+                reason: devworks_core::ports::storage::ProjectPurgeUnresolvedReason::AutomaticSnapshot,
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn session_scope(
     conn: &Connection,
     project: &ProjectId,

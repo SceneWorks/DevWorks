@@ -153,6 +153,15 @@ fn typed_references(
             result,
         )?;
     }
+    // Native version provenance names the staging journal even after a version is moved
+    // or shared outside its original project. Scope validation belongs to the classifier.
+    collect(conn, selection, ReferenceSpec {
+        kind: ProjectPurgeReferenceKind::ArtifactVersionOperation,
+        from_table: "artifact_versions".into(), target: "operations".into(),
+        source: "artifact_versions AS src".into(),
+        join: "json_type(src.source_json,'$.operationId')='text' AND json_extract(src.source_json,'$.operationId')=dst.id AND dst.capability='artifacts.stage_file'".into(),
+        from_columns: vec!["source_json".into()], to_columns: vec!["id".into()],
+    }, result)?;
     for (kind, from, target, column) in [
         (
             ProjectPurgeReferenceKind::IndexOverlayRun,
