@@ -1178,8 +1178,8 @@
     {
       "table": "schema_sources",
       "class": "global_schema_sources",
-      "selector": "independent owner; preserve records and content; typed project access/reference cleanup only",
-      "disposition": "preserve_independent"
+      "selector": "retain independent source registration/configuration; scrub only exact typed config.projectAccess(P) edges",
+      "disposition": "mixed_explicit"
     },
     {
       "table": "schema_views",

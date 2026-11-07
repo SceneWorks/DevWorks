@@ -9,6 +9,73 @@ use devworks_core::protocol::ProjectId;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
+pub(super) fn source_access(
+    conn: &Connection,
+    project: &ProjectId,
+    snapshot: &ProjectPurgeCandidates,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> Result<(), StorageError> {
+    use devworks_core::ports::storage::StoredSchemaSource;
+    use devworks_core::protocol::Check;
+    let selection = super::candidates::selection(project)?;
+    let sql = selection.sql(
+        "schema_sources",
+        "id,owner_id,revision,configuration_revision,deleted,body_json",
+        "1=1",
+    )?;
+    let mut statement = db(conn.prepare(&sql))?;
+    let mut records = db(statement.query(selection.parameters()))?;
+    while let Some(record) = db(records.next())? {
+        let (id, owner, revision, configuration, deleted, encoded) = (
+            db(record.get::<_, String>(0))?,
+            db(record.get::<_, String>(1))?,
+            db(record.get::<_, i64>(2))?,
+            db(record.get::<_, i64>(3))?,
+            db(record.get::<_, bool>(4))?,
+            db(record.get::<_, String>(5))?,
+        );
+        let Ok(raw) = serde_json::from_str::<serde_json::Value>(&encoded) else {
+            continue;
+        };
+        let Ok(source) = serde_json::from_value::<StoredSchemaSource>(raw.clone()) else {
+            continue;
+        };
+        if source.connection.check().is_err()
+            || source.connection.id.as_str() != id
+            || source.owner_id.0.as_str() != owner
+            || source.connection.owner_id.as_ref() != Some(&source.owner_id)
+            || source.connection.revision.get() != revision
+            || source.configuration_revision != configuration
+            || source.deleted != deleted
+            || serde_json::to_value(&source).ok() != Some(raw)
+            || !source.connection.config.as_ref().is_some_and(|c| {
+                c.project_access
+                    .as_ref()
+                    .is_some_and(|a| a.0.iter().any(|a| a.project_id == project.0))
+            })
+        {
+            continue;
+        }
+        let key =
+            super::guard::key_digest(&serde_json::to_string(&[id]).expect("source access key"))?;
+        if let Some(candidate) = snapshot
+            .rows
+            .iter()
+            .find(|r| r.table == "schema_sources" && r.key_digest == key)
+        {
+            assign(
+                candidate,
+                Action::Scrub,
+                Reason::ProjectMembership,
+                rows,
+                unresolved,
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn managed_files(
     conn: &Connection,
     project: &ProjectId,

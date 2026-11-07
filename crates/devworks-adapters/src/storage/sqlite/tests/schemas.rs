@@ -2309,3 +2309,95 @@ fn native_schema_pin_preparation_survives_a_clock_tick_after_writer_admission() 
         "clock progress must not renew the lease"
     );
 }
+
+#[test]
+fn purge_planning_shared_source_access_keeps_independent_configuration_and_operation_identity() {
+    let h = Harness::new();
+    let s = h.store();
+    let project = devworks_core::protocol::ProjectId(id("metadata-project"));
+    let p = project.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.projects().insert_project(&StoredProject {
+            id: p,
+            name: "private source project".into(),
+            description: "private project body".into(),
+            lifecycle: DELETED.into(),
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: T0,
+            updated_at_ms: T0,
+            archived_at_ms: Some(T0),
+            deleted_at_ms: Some(T0),
+            archive_epoch: 1,
+            archive_stop_pending: false,
+        })
+    })
+    .unwrap();
+    h.raw().execute_batch("INSERT INTO work_items VALUES('source-purge-work','metadata-project','issue',NULL,NULL,NULL,'private owned work',1,0,1,1,1,'{}');").unwrap();
+    let mut shared = source("independent-shared-source", true);
+    shared.connection.config.as_mut().unwrap().project_access=Some(serde_json::from_value(json!([{"projectId":"metadata-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false},{"projectId":"other-project","metadataEnabled":true,"dataReadEnabled":false,"dataWriteEnabled":false}])).unwrap());
+    shared.connection.active_operation_id = Some(id("source-purge-operation"));
+    let saved = shared.clone();
+    run_write(&s, WriteOptions::default(), move |tx| {
+        tx.operations().record_intent(NewOperation {
+            id: OperationId(id("source-purge-operation")),
+            root_id: Some(devworks_core::protocol::RootId(id("source-purge-work"))),
+            assignment_id: None,
+            capability: "schemas.refresh".into(),
+            schema_version: 5,
+            args_digest: sha256_hex(b"shared-source-operation"),
+            payload: json!({"privateCopy":"owned operation arguments"}),
+        })?;
+        tx.schemas().create_schema_source(&saved)
+    })
+    .unwrap();
+    let assess = || {
+        read_snapshot(&s, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project)
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = assess();
+    assert!(plan.rows.iter().any(|r| r.table == "schema_sources"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::ProjectMembership));
+    assert!(
+        plan.snapshot
+            .references
+            .iter()
+            .any(|r| r.kind == ProjectPurgeReferenceKind::SchemaSourceOperation)
+    );
+    assert!(plan.rows.iter().any(|r| r.table == "operations"
+        && r.action == ProjectPurgeRowAction::Scrub
+        && r.reason == ProjectPurgeRowReason::MinimalDeletedIdentity));
+    assert!(
+        !plan.unresolved.iter().any(|r| r.table == "schema_sources"),
+        "{:?}",
+        plan.unresolved
+    );
+    let stored = read_snapshot(&s, &ReadOptions::default(), |r| {
+        r.schemas().schema_source(&shared.connection.id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(stored).unwrap(),
+        serde_json::to_value(&shared).unwrap(),
+        "assessment preserves both projects' access and the independent source"
+    );
+    let mut unknown = serde_json::to_value(&shared).unwrap();
+    unknown["unknownPrivateCopy"] = json!("unmapped source content");
+    h.raw()
+        .execute(
+            "UPDATE schema_sources SET body_json=?1 WHERE id=?2",
+            rusqlite::params![unknown.to_string(), shared.connection.id.as_str()],
+        )
+        .unwrap();
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "schema_sources")
+    );
+}

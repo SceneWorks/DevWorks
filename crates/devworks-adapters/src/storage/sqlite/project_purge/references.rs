@@ -213,6 +213,20 @@ fn typed_references(
         },
         result,
     )?;
+    collect(
+        conn,
+        selection,
+        ReferenceSpec {
+            kind: ProjectPurgeReferenceKind::SchemaSourceOperation,
+            from_table: "schema_sources".into(),
+            target: "operations".into(),
+            source: "schema_sources AS src".into(),
+            join: "json_extract(src.body_json,'$.connection.activeOperationId')=dst.id".into(),
+            from_columns: vec!["body_json".into()],
+            to_columns: vec!["id".into()],
+        },
+        result,
+    )?;
     Ok(())
 }
 

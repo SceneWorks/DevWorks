@@ -177,7 +177,8 @@
     "operations": "id IN(SELECT id FROM ownedOperations)",
     "os_notification_deliveries": "notification_id IN(SELECT id FROM notifications WHERE project_id=?1)",
     "resources": "id IN(SELECT id FROM ownedProjectResources)",
-    "package_handler_commits": "event_id IN(SELECT id FROM ownedEvents)"
+    "package_handler_commits": "event_id IN(SELECT id FROM ownedEvents)",
+    "schema_sources": "EXISTS(SELECT 1 FROM json_each(body_json,'$.connection.config.projectAccess') AS a WHERE json_extract(a.value,'$.projectId')=?1)"
   },
   "warning": "Candidates include independently shared and cross-owner keepers, receipts and their reply lineage; they are not removal selections. Full typed mixed-owner classification, purge-control receipt exemptions, finite keeper closure and current-generation checks remain mandatory before any deletion permit."
 }

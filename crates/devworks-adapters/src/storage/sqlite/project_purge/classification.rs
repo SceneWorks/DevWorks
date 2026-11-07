@@ -128,6 +128,7 @@ fn scrub_reference(table: &str, columns: &[String]) -> Option<bool> {
         "operations" => (&[], &["root_id", "assignment_id"]),
         "command_receipts" => (&["actor_id", "operation_id"], &[]),
         "project_managed_files" => (&["project_id"], &[]),
+        "schema_sources" => (&["owner_id"], &[]),
         "authority_grants" => (&["actor_id", "issued_by", "revoked_by"], &[]),
         "github_issue_intake" => (
             &["repository_id", "project_id"],
@@ -439,6 +440,7 @@ pub(in crate::storage::sqlite) fn planning(
     super::mixed::grants(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::intake(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     super::mixed::managed_files(conn, project, &snapshot, &mut rows, &mut unresolved)?;
+    super::mixed::source_access(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     propagate_content(&snapshot, &mut rows, &mut unresolved)?;
     // Only retention decisions propagate. A reference can never add a deletion.
     loop {
@@ -453,6 +455,16 @@ pub(in crate::storage::sqlite) fn planning(
                 None => Some(true),
                 Some(row) if row.action == Action::Delete => Some(false),
                 Some(row) if row.action == Action::Keep => Some(true),
+                Some(_)
+                    if edge.from_table == "schema_sources"
+                        && matches!(
+                            edge.kind,
+                            ProjectPurgeReferenceKind::SchemaCertificate
+                                | ProjectPurgeReferenceKind::SchemaSourceOperation
+                        ) =>
+                {
+                    Some(true)
+                }
                 Some(_) if edge.kind == ProjectPurgeReferenceKind::ForeignKey => {
                     scrub_reference(&edge.from_table, &edge.from_columns)
                 }

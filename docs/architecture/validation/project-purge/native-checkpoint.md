@@ -203,6 +203,17 @@ now include compiled anchors and predicates as well as the frozen policy source.
 All eleven native planning cases pass (16.72 seconds), four candidate cases pass
 (5.64 seconds), and workspace/all-target strict checks pass (16.51 seconds).
 
+Global schema sources with exact typed projectAccess(P) edges now participate in
+assessment. Closed stored source bodies and matching header/configuration columns
+are required; the independent registration and other-project configuration remain
+keepers. A typed activeOperationId witness retains only the required operation
+identity through the finite closure. All twelve native planning cases pass
+(17.68 seconds), four candidate cases pass (5.50 seconds), and strict checks pass
+(38.89 seconds). No access edge is changed by this assessment. The purpose-bound
+writer must remove only P's edge, advance source CAS revision, and preserve the
+unchanged metadata configuration revision/view/other-project leases; integrated
+native acceptance of that write is still pending.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

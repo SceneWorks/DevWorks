@@ -198,6 +198,7 @@ pub enum ProjectPurgeReferenceKind {
     PackageIntent,
     SearchChunk,
     SchemaCertificate,
+    SchemaSourceOperation,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct ProjectPurgeReference {
