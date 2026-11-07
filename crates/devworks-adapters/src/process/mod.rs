@@ -59,6 +59,16 @@ impl ProcessHost for NativeProcessHost {
             windows::spawn(spec)
         }
     }
+    fn current_identity(&self) -> Option<NativeIdentity> {
+        #[cfg(unix)]
+        {
+            unix::current_identity()
+        }
+        #[cfg(windows)]
+        {
+            windows::current_identity()
+        }
+    }
     fn probe(&self, identity: &NativeIdentity) -> Probe {
         #[cfg(unix)]
         {

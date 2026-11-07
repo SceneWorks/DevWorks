@@ -1,0 +1,34 @@
+{
+  "scope": "One bounded full monetary reason native DTO/schema delta; global Text unchanged; no full campaign repeated",
+  "baseSource": "acd27c86",
+  "sourceCommit": "ebffaed",
+  "id": "dw21-full-monetary-coverage-reason",
+  "reasonChars": 49662,
+  "reasonSha256": "10721ef6bf1f5b31f690df1b11b2a48762bcbc7decdd97b455ac85310d8d8279",
+  "unknownUnitComponents": 128,
+  "componentNameChars": 128,
+  "schemaPassed": true,
+  "roundTripExact": true,
+  "legacySchemasByteIdentical": 56,
+  "currentDomainFixtureCount": 1587,
+  "currentTotalFixtureCount": 1916,
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "8bb1b3736c18fe9b64af1a4943237cf6a2f08583cde4541b26bfb23e6e8ccf56",
+    "tools/contracts-eval/src/domain_generated.rs": "339d9cc5a6da540a4237bf70de13868777ff8c6209e8c4a632cab6b0a1b1c6b8",
+    "crates/devworks-core/src/protocol/records.rs": "13cca4658e220de85a063572e7c5b838918299eda0b83d036ccaa6068fabf238",
+    "crates/devworks-core/tests/usage_reason_bounds.rs": "81f5570d5eaa4ee855ce692f7bb73840840a3630dd190b4442e641c82021c810",
+    "docs/architecture/contracts/domain-fixtures.json": "915e9176dc40e3b69b527cd108a8e0397f1f3985f4e777345242fe562f0c7082",
+    "docs/architecture/contracts/operation-result.r3.schema.json": "bd5404a30f5a0949bb681e54ef19ae56cdcb6fef040dd427f7d956d4c2571107",
+    "docs/architecture/contracts/manifest.json": "590fd96304a1986747f618dd7d39375093e2abc9f6cc9a110c75c9f41a7865fc"
+  },
+  "probeDtoPassed": true,
+  "productionNative": {
+    "source": "d18dd4633dfc8183de9a22b3cbe9f9b50bf786cb",
+    "testFile": "crates/devworks-core/tests/usage_reason_bounds.rs",
+    "status": "passed",
+    "passed": 1,
+    "failed": 0,
+    "command": "cargo test --locked -p devworks-core --test usage_reason_bounds",
+    "worktree": "Clean detached assembled source with only the new regression test added; no service edits or stubs"
+  }
+}

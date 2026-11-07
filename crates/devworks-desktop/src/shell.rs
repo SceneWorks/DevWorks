@@ -35,6 +35,7 @@ pub mod indexing;
 pub mod jobs;
 pub mod projects;
 mod settings_secrets;
+pub mod usage;
 pub mod work;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
@@ -172,6 +173,7 @@ pub struct Shell {
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
+    pub usage: crate::usage_screen::UsageScreen,
     /// The project the navigation selected; its screens follow it.
     selected_project: Option<String>,
     pub completions: Completions,
@@ -316,6 +318,7 @@ impl Shell {
             projects: projects::ProjectsUi::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
+            usage: crate::usage_screen::UsageScreen::default(),
             selected_project: memory.selected_project.clone(),
             completions: Completions::default(),
             decisions: decisions::DecisionsUi::default(),
@@ -430,6 +433,14 @@ impl Shell {
     fn load_route(&mut self) {
         match self.route {
             Route::Chat => self.ensure_conversation_loaded(),
+            Route::Usage => {
+                self.usage.tab = self.routes.entry(Route::Usage).or_default().tab;
+                self.load_usage();
+                self.load_router_catalog();
+                if !self.projects.list.loaded {
+                    self.load_projects();
+                }
+            }
             Route::Approvals => {
                 self.decisions.tab = self.routes.entry(Route::Approvals).or_default().tab;
                 self.load_approvals();
@@ -1709,6 +1720,9 @@ impl Shell {
         let Some((slot, reply)) = self.apply_work(slot, reply) else {
             return;
         };
+        let Some((slot, reply)) = self.apply_usage(slot, reply) else {
+            return;
+        };
         let Some((slot, reply)) = self.apply_decisions(slot, reply) else {
             return;
         };
@@ -2554,6 +2568,7 @@ impl Shell {
                 }
             }
             (Slot::Configure(n), Reply::Task(Ok(TaskOutput::Prepared { frame }))) => {
+                self.settings.connections.prepared_edit(n, &frame);
                 let label = self
                     .settings
                     .connections
@@ -2569,6 +2584,8 @@ impl Shell {
                 }
             }
             (Slot::Configure(n), Reply::Command(outcome)) => {
+                let unknown = is_unknown(&outcome);
+                let result = ops::configured(outcome);
                 let p = &mut self.settings.connections;
                 let label = p
                     .busy
@@ -2576,10 +2593,11 @@ impl Shell {
                     .find(|(k, _)| *k == n)
                     .map(|(_, label)| label.clone())
                     .unwrap_or_default();
-                if !is_unknown(&outcome) {
+                if !unknown {
                     p.busy.retain(|(k, _)| *k != n);
                 }
-                p.message = Some(match ops::configured(outcome) {
+                p.edit_finished(n, result.is_ok(), unknown);
+                p.message = Some(match result {
                     Ok(true) => (Tone::Good, format!("{label}: done.")),
                     Ok(false) => (Tone::Neutral, format!("{label}: nothing changed.")),
                     Err(e) => (Tone::Bad, format!("{label}: {}", e.describe())),
@@ -2588,17 +2606,38 @@ impl Shell {
                 self.invalidate_routing();
             }
             (Slot::Configure(n), Reply::Task(t)) => {
+                // A task failure before preparation has no router effects. A failed command
+                // worker, however, leaves its exact frame unresolved in the client.
+                let unconfirmed = self
+                    .client
+                    .as_ref()
+                    .is_some_and(|c| c.unconfirmed().iter().any(|u| u.slot == Slot::Configure(n)));
                 let p = &mut self.settings.connections;
+                p.edit_finished(n, false, unconfirmed);
                 let label = p
                     .busy
                     .iter()
-                    .position(|(k, _)| *k == n)
-                    .map(|i| p.busy.remove(i).1)
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, label)| label.clone())
                     .unwrap_or_default();
+                if !unconfirmed {
+                    p.busy.retain(|(k, _)| *k != n);
+                }
                 p.message = Some((
-                    Tone::Bad,
+                    if unconfirmed {
+                        Tone::Attention
+                    } else {
+                        Tone::Bad
+                    },
                     match t {
-                        Err(e) => format!("{label}: {e}"),
+                        Err(e) => format!(
+                            "{label}: {e}{}",
+                            if unconfirmed {
+                                ". The original change is awaiting confirmation."
+                            } else {
+                                ""
+                            }
+                        ),
                         Ok(_) => format!("{label}: unexpected reply."),
                     },
                 ));
@@ -2723,6 +2762,9 @@ impl Shell {
             }
         }
         self.refresh_waiting_first_routes();
+        if self.route == Route::Usage && self.usage.tab == 2 && !self.usage.prices_loading {
+            self.refresh_visible_prices();
+        }
         self.load_completion_notifications();
         if self.route == Route::Approvals
             && !self.pending(&Slot::ApprovalsList)
@@ -2967,6 +3009,7 @@ impl Shell {
 
     fn connection_action(&mut self, action: crate::connections_screen::ConnectionAction) {
         use crate::connections_screen::ConnectionAction as A;
+        let saving_editor = matches!(&action, A::ConfigureEdit { .. });
         match action {
             A::Reload => self.load_connections(),
             A::UseSessionOnly => {
@@ -2990,6 +3033,12 @@ impl Shell {
                 action,
                 key,
                 code,
+            }
+            | A::ConfigureEdit {
+                label,
+                action,
+                key,
+                code,
             } => {
                 if self.online().is_err() {
                     self.settings.connections.message =
@@ -2999,6 +3048,9 @@ impl Shell {
                 let p = &mut self.settings.connections;
                 p.sequence += 1;
                 let n = p.sequence;
+                if saving_editor {
+                    p.preparing_edit(n, &action);
+                }
                 let submitted = self.client.as_mut().is_some_and(|c| {
                     c.task(Slot::Configure(n), &label, move |b| {
                         let mut action = action;
@@ -3021,6 +3073,7 @@ impl Shell {
                 if submitted {
                     self.settings.connections.busy.push((n, label));
                 } else {
+                    self.settings.connections.edit_finished(n, false, false);
                     self.settings.connections.message =
                         Some((Tone::Bad, "The change was not submitted.".into()));
                 }
@@ -3276,6 +3329,9 @@ impl Shell {
                 continue;
             };
             match &slot {
+                Slot::PriceOverride | Slot::PriceRefresh => {
+                    self.restore_price_command(&slot, u.frame())
+                }
                 Slot::WorkPlan(id) => confirming.push(id.clone()),
                 Slot::SessionStart => {
                     self.chat.starting = Some(pending.starting.unwrap_or(StartReason::ForDraft));
@@ -3313,6 +3369,7 @@ impl Shell {
                 Slot::Configure(n) => {
                     let p = &mut self.settings.connections;
                     p.sequence = p.sequence.max(*n);
+                    p.restore_edit(*n, u.frame());
                     p.busy.push((*n, u.label.clone()));
                 }
                 Slot::SettingsSave => {
@@ -4061,6 +4118,7 @@ impl Shell {
                 self.knowledge_actions(actions);
             }
             Route::Approvals => self.approvals_screen(ui),
+            Route::Usage => self.usage_screen(ui),
             Route::Jobs => self.jobs_screen(ui),
             Route::Overview => self.overview_screen(ui),
             Route::Features => self.features_screen(ui),

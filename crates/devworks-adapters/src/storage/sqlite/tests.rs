@@ -56,14 +56,14 @@ impl Drop for TempRoot {
     }
 }
 
-struct Harness {
+pub(super) struct Harness {
     root: TempRoot,
     clock: Arc<TestClock>,
     ids: Arc<TestIds>,
     tune: fn(&mut SqliteConfig),
 }
 impl Harness {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::tuned(|_| {})
     }
     fn tuned(tune: fn(&mut SqliteConfig)) -> Self {
@@ -84,7 +84,7 @@ impl Harness {
         (self.tune)(&mut c);
         c
     }
-    fn store(&self) -> SqliteStore {
+    pub(super) fn store(&self) -> SqliteStore {
         SqliteStore::open(self.config()).expect("open store")
     }
     fn raw(&self) -> Connection {
@@ -125,6 +125,8 @@ mod router;
 mod runs;
 mod sessions;
 mod settings;
+mod usage;
+mod usage_reports;
 mod web;
 mod work;
 

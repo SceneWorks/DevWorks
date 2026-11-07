@@ -86,11 +86,11 @@
     },
     {
       "file": "domain-command-reply.r3.schema.json",
-      "sha256": "eaf54ada24d2660bcb2dc1dabc948f69028169fb9735c675d9d974ae7659c995"
+      "sha256": "90728b988fe9f6caab45cfe17a5e052376e49c6e40f578ee51e766b28874cdec"
     },
     {
       "file": "domain-command-reply.r4.schema.json",
-      "sha256": "3b180d9350c2b3bfb68654f62c28b559e313f4435e73b650f3c3fede890d2743"
+      "sha256": "fecd19e2e5c6ffe832d9423d5e9307e8021c60a8031835501a224a5ab805e867"
     },
     {
       "file": "domain-command-reply.schema.json",
@@ -102,11 +102,11 @@
     },
     {
       "file": "domain-query-reply.r3.schema.json",
-      "sha256": "3664eaff8358120af4542579ea1be3b41195076a6ca66701cf8f2dfb1e9c3fc0"
+      "sha256": "d9a51d4d0eb0f456fe078fc0425d4d221502eaa9fd076bc06bb9a720e6f7e834"
     },
     {
       "file": "domain-query-reply.r4.schema.json",
-      "sha256": "4db004f2d1f8d86b08804ecdc1fed094f4c3caa4e7c0bcdd10a57b7a37def9e2"
+      "sha256": "6748de8e8734197aee658dddcc9a58de8f299e1d8255598bb52befb75d6245dd"
     },
     {
       "file": "domain-query-reply.schema.json",
@@ -118,7 +118,7 @@
     },
     {
       "file": "domain-request.r3.schema.json",
-      "sha256": "ac57af5bca84293bb3450675654493a1b1830f780be694880b1142fdc6a1cf3e"
+      "sha256": "5f4e07846cf843718daa3744c4dff15feb85d48d3903dde21d9fcb7409f91488"
     },
     {
       "file": "domain-request.schema.json",
@@ -170,11 +170,11 @@
     },
     {
       "file": "operation-completion.r3.schema.json",
-      "sha256": "05673d4ce9d1f7d4fefcdcb981570e5ae94d086ff2b89c4c8c57235c0227fd75"
+      "sha256": "734ff5409220b1ed3d92e57038e324e7ca66d27b83448f9bd238f90ed6b15c4e"
     },
     {
       "file": "operation-completion.r4.schema.json",
-      "sha256": "366dbcd5a9889b24b7504a9ff58e0cf73544d64ccf40d34cc749ea2b8711fa24"
+      "sha256": "ec5beab6babfa7d1189c6f375c988f81c2a0a6aecf52d6158f5a8252b9a55b96"
     },
     {
       "file": "operation-completion.schema.json",
@@ -186,11 +186,11 @@
     },
     {
       "file": "operation-result.r3.schema.json",
-      "sha256": "e9d0a4c37886cc68686e6bb5e0e86d94f3de151c7b67300078110eb239c23656"
+      "sha256": "bd5404a30f5a0949bb681e54ef19ae56cdcb6fef040dd427f7d956d4c2571107"
     },
     {
       "file": "operation-result.r4.schema.json",
-      "sha256": "a6850a22e6db27d06d268400ef6ca5983ac4c02ac58cb9789c179fae65b76751"
+      "sha256": "456edb2bba9f03854e37bd04f9ccca9778236236a70b5a1f3a4d536255a3f013"
     },
     {
       "file": "operation-result.schema.json",

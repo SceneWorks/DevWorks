@@ -62,7 +62,7 @@ const QUESTION_TYPES: [&str; 4] = ["choice", "noul", "score", "box"];
 // ---------------------------------------------------------------------------------------------
 // Connections
 
-const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json";
+const CONNECTION_COLUMNS: &str = "id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free";
 
 struct RawConnection {
     id: String,
@@ -90,6 +90,7 @@ struct RawConnection {
     updated_at_ms: i64,
     enabled: bool,
     open_router: Option<String>,
+    local_free: bool,
 }
 fn raw_connection(r: &Row<'_>) -> rusqlite::Result<RawConnection> {
     Ok(RawConnection {
@@ -118,6 +119,7 @@ fn raw_connection(r: &Row<'_>) -> rusqlite::Result<RawConnection> {
         updated_at_ms: r.get(22)?,
         enabled: r.get(23)?,
         open_router: r.get(24)?,
+        local_free: r.get(25)?,
     })
 }
 fn discovered_of(json: &str) -> Result<Vec<DiscoveredModel>, StorageError> {
@@ -174,6 +176,7 @@ fn connection_of(r: RawConnection) -> Result<StoredConnection, StorageError> {
         profile: r.profile,
         endpoint: r.endpoint,
         enabled: r.enabled,
+        local_free: r.local_free,
         open_router: r.open_router,
         credential_ref: r.credential_ref.map(id_of).transpose()?,
         credential_revision: r.credential_revision,
@@ -301,8 +304,8 @@ pub(super) fn put_connection(
         .as_ref()
         .map_or(c.created_at_ms, |p| p.created_at_ms);
     db(conn.execute(
-        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json) \
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?25,?26) \
+        "INSERT INTO router_connections(id,name,profile,endpoint,credential_ref,credential_revision,credential_epoch,lifecycle,state_reason,account_digest,access_expires_at,risk_notice_sha256,risk_binding,risk_restore_epoch,risk_accepted_by,risk_accepted_at,discovered_json,discovered_at,healthy,checked_at,revision,created_at,updated_at,enabled,open_router_json,local_free) \
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?25,?26,?27) \
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, profile=excluded.profile, endpoint=excluded.endpoint, \
          credential_ref=excluded.credential_ref, credential_revision=excluded.credential_revision, \
          credential_epoch=excluded.credential_epoch, lifecycle=excluded.lifecycle, state_reason=excluded.state_reason, \
@@ -312,7 +315,7 @@ pub(super) fn put_connection(
          risk_accepted_at=excluded.risk_accepted_at, discovered_json=excluded.discovered_json, \
          discovered_at=excluded.discovered_at, healthy=excluded.healthy, checked_at=excluded.checked_at, \
          revision=excluded.revision, updated_at=excluded.updated_at, enabled=excluded.enabled, \
-         open_router_json=excluded.open_router_json WHERE revision=?24",
+         open_router_json=excluded.open_router_json, local_free=excluded.local_free WHERE revision=?24",
         params![
             c.id.as_str(),
             c.name,
@@ -340,6 +343,7 @@ pub(super) fn put_connection(
             expected.unwrap_or(0),
             c.enabled,
             c.open_router,
+            c.local_free,
         ],
     ))?;
     connection(conn, &c.id)?.ok_or_else(|| corrupt("connection vanished inside its transaction"))

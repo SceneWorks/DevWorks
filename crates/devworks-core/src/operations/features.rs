@@ -93,17 +93,40 @@ pub struct EditPlanInput {
     pub feature_id: RootId,
     pub expected_revision: Revision,
     pub plan: PlanDraft,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3, "const" = true))]
+    pub clear_budget_proposal: Option<bool>,
 }
 impl Check for EditPlanInput {
     fn check(&self) -> Result<(), String> {
         self.feature_id.check()?;
         self.expected_revision.check()?;
         self.plan.check()?;
+        self.budget.check()?;
+        self.clear_budget_proposal.check()?;
         Ok(())
     }
 }
 impl Revisioned for EditPlanInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.budget = None;
+        }
+        if revision < 3 {
+            self.clear_budget_proposal = None;
+        }
+    }
 }
 
 /// `features.prioritize` Command input.

@@ -536,6 +536,8 @@ pub trait RunRead {
         &self,
         work: &RootId,
     ) -> Result<Option<StoredAssignment>, StorageError>;
+    /// No locally unclosed canonical attempts captured under this managed execution root.
+    fn inference_quiescent(&self, root: &RootId) -> Result<bool, StorageError>;
     /// Shared safe-boundary check, including assignment-owned effects without queue entries.
     fn assignment_handoff_quiescent(&self, assignment: &AssignmentId)
     -> Result<bool, StorageError>;

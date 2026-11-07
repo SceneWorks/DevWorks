@@ -30,6 +30,11 @@ def sample(t):
  if t=='KnowledgeBatch':v['claims']=[sample('ClaimDraft')]
  if t=='EnvironmentEntry':v['value']='fixture'
  if t=='EvalReport':v['outcome']='not_applicable'
+ if t=='UsageReportRange':v['endMs']='1'
+ if t=='UsageQueryContext':v['interval']='day'
+ if t=='UsageAggregatePage':v['context']['reportKind']='AssistantUsage'
+ if t=='UsageFilterOptions':v['context']['reportKind']='Filters'
+ if t=='UsageCostSnapshot':v.update(priceKind='Untracked',priceOrigin='Untracked',untrackedReason='No known tariff',monetaryComplete=False)
  if t=='DecisionQuestion':v['criteria']=[{'name':'yes'},{'name':'no'}]
  if t=='UsageItem':v['amountUsd']='0'
  if t=='ArtifactReadContent':v.update(content='fixture',nextByte='7',truncated=True)
@@ -969,16 +974,147 @@ for kind,source in [('settings',{'kind':'Settings','entries':[sample('SettingAss
  inspected=sample('ApprovalViewRecord');inspected['reviewedSource']=source
  case('dw14-typed-review-'+kind,'operation-result.r3',{'kind':'approvals.inspect','value':inspected})
 case('dw14-typed-review-before3','operation-result',{'kind':'approvals.inspect','value':inspected},False,False)
+# DW21 retained usage reports, nullable attempt coverage, immutable tariffs and feature budgets.
+for kind in TYPES['UsageReportKind']['values']:
+ frame=request('router.usage','Query');frame['schemaRevision']=3;frame['body'].update(reportKind=kind,scope={'kind':'Workspace'},startMs='100',endMs='200',interval=' AUTO ',user=' actor-a ',provider='openai',model='model-a',tool='native/git.status',purpose='Compaction')
+ case('dw21-view-'+kind,'domain-request.r3',frame)
+mutate('dw21-filter-before3','dw21-view-Attempts',['schemaRevision'],1,entry='domain-request')
+mutate('dw21-invalid-interval','dw21-view-Attempts',['body','interval'],'hour',False,True)
+mutate('dw21-invalid-range','dw21-view-Attempts',['body','endMs'],'100',False,True)
+frame=request('router.usage','Query');frame['schemaRevision']=3;frame['body'].update(interval='',user='')
+case('dw21-empty-filter-normalization','domain-request.r3',frame)
+for kind in ['AssistantUsage','AssistantActivity','McpUsage','CodeReviewUsage','RepositoryAnalysisUsage']:
+ page=sample('UsageAggregatePage');page['context']['reportKind']=kind;page['items']=[{'kind':'Total','key':'requestCount','label':'Request Count','value':'2'},{'kind':'SeriesPoint','key':'requestCount','label':'Request Count','bucketStartMs':'100','value':'2'},{'kind':'Breakdown','dimension':'user','key':'actor-a','label':'actor-a','value':'2'}]
+ case('dw21-report-'+kind,'operation-result.r3',{'kind':'router.usage','value':{'kind':'Report','report':page}})
+filters=sample('UsageFilterOptions');filters.update(items=[{'dimension':'user','value':'actor-a'},{'dimension':'provider','value':'openai'}],nextCursor='bound-query-revision-cursor',hasMore=True)
+case('dw21-filter-options','operation-result.r3',{'kind':'router.usage','value':{'kind':'Filters','filters':filters}})
+mutate('dw21-report-page-continuation','dw21-filter-options',['value','filters','hasMore'],False,False,True)
+attempt=sample('UsageAttemptRecord');attempt.update(id='ledger-a',requestId='request-a',attemptId='attempt-a',attemptNumber='1',sourceKind='HostAttempt',sourceId='attempt-a',actorId='actor-a',projectId='project-a',featureId='feature-a',workId='task-a',assignmentId='assignment-a',sessionId='session-a',purpose='Compaction',role='Coordinator',providerId='openai',connectionId='connection-a',modelId='catalog-a',resolvedModelId='upstream-a',state='Completed',outputTokens='10',reasoningTokens='5',unknownTail=False)
+attempt['cost'].update(priceKind='Estimated',priceOrigin='OfficialSnapshot',amountMicroUsd='12',priceSnapshotId='snapshot-a',priceRevision='4',monetaryComplete=False,untrackedReason='Cache input units unavailable')
+page=sample('UsageAttemptPage');page.update(items=[attempt]);page['totals'].update(attempts='1',trackedMicroUsd='12',estimatedMicroUsd='12',monetaryIncompleteAttempts='1')
+case('dw21-partial-known-cost','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':page}})
+# Missing input/cache metrics remain absent; a known subtotal is distinct from full monetary coverage.
+mutate('dw21-nullable-counter-is-not-zero','dw21-partial-known-cost',['value','page','items',0,'inputTokens'],None,True,True)
+legacy_attempt=copy.deepcopy(attempt);legacy_attempt.pop('attemptId');legacy_attempt.pop('attemptNumber');legacy_attempt.pop('actorId');legacy_attempt.pop('requestId',None);legacy_attempt['sourceKind']='LegacySessionUsage';legacy_attempt['sourceId']='legacy-source-session-a-batch-a-1'
+for unknown in ['role','featureId','workId','assignmentId','providerId','connectionId','resolvedModelId']:legacy_attempt.pop(unknown,None)
+legacy_attempt['cost'].pop('priceSnapshotId',None)
+legacy_page=copy.deepcopy(page);legacy_page['items']=[legacy_attempt];legacy_page['coverage']={'state':'Partial','gaps':['legacy-request-identity-unavailable'],'moreGaps':False};legacy_page['totals'].update(attempts='0',trackedMicroUsd='0',estimatedMicroUsd='0',monetaryIncompleteAttempts='0',legacyUsageFacts='1',legacyObservationMicroUsd='12')
+case('dw21-historical-missing-attribution','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':legacy_page}})
+for kind in ['Unknown','Untracked','Free','Reported','Estimated']:
+ observed=copy.deepcopy(attempt);cost=sample('UsageCostSnapshot');cost['priceKind']=kind
+ if kind=='Free':cost.update(priceOrigin='LocalFree',amountMicroUsd='0',monetaryComplete=True);cost.pop('untrackedReason',None)
+ elif kind=='Reported':cost.update(priceOrigin='ProviderReported',currency='EUR',originalAmount='1.2',untrackedReason='No configured currency conversion')
+ elif kind=='Estimated':cost.update(priceOrigin='OfficialSnapshot',amountMicroUsd='80',monetaryComplete=True,subscriptionEquivalent=True);cost.pop('untrackedReason',None)
+ observed['cost']=cost;observed['unknownTail']=kind=='Unknown';p=sample('UsageAttemptPage');p['items']=[observed];p['totals']['attempts']='1'
+ if kind=='Estimated':p['totals'].update(trackedMicroUsd='80',estimatedMicroUsd='80')
+ if kind in ['Unknown','Untracked','Reported']:p['totals']['monetaryIncompleteAttempts']='1'
+ if kind=='Unknown':p['totals']['unknownTailAttempts']='1'
+ if kind=='Free':p['totals']['localFreeAttempts']='1'
+ case('dw21-cost-'+kind,'operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':p}})
+mutate('dw21-unknown-not-complete','dw21-cost-Unknown',['value','page','items',0,'cost','monetaryComplete'],True,False,True)
+mutate('dw21-partial-needs-reason','dw21-cost-Unknown',['value','page','items',0,'cost','untrackedReason'],DELETE,False,True)
+mutate('dw21-total-cannot-invent-cost','dw21-partial-known-cost',['value','page','totals','trackedMicroUsd'],'13',False,True)
+for name in ['router.usage','router.price_status','router.price_override']:
+ legacy=result(name,OPS[name]['result'])
+ case('dw21-legacy-result-at3-'+name,'operation-result.r3',legacy,False,False)
+current=copy.deepcopy(POS['dw21-partial-known-cost']);case('dw21-current-usage-at1','operation-result',current,False,False)
+tariff=sample('PriceTariff');tariff.update(upstreamModelId='gpt-fixture',serviceTier='Standard',contextUpperInclusive='272000',modality='Text',chargeKind='CacheRead',unit='Token',units='1000000',amountUsd='0.1',endpointProfile='OpenAiResponses')
+set_frame=request('router.price_override','Command');set_frame['schemaRevision']=3;set_frame['body'].pop('price');set_frame['body']['change']={'kind':'Set','tariffs':[tariff]}
+case('dw21-set-tariff','domain-request.r3',set_frame)
+clear=copy.deepcopy(set_frame);clear['body']['change']={'kind':'Clear'};case('dw21-clear-override','domain-request.r3',clear)
+mutate('dw21-no-empty-override','dw21-clear-override',['body','change'],DELETE)
+mutate('dw21-no-two-override-actions','dw21-clear-override',['body','price'],sample('PriceInput'))
+mutate('dw21-clear-before3','dw21-clear-override',['schemaRevision'],1,entry='domain-request')
+mutate('dw21-no-forged-override-origin','dw21-set-tariff',['body','change','origin'],'OfficialSnapshot')
+mutate('dw21-invalid-context-tier','dw21-set-tariff',['body','change','tariffs',0,'contextLowerExclusive'],'272000',False,True)
+mutate('dw21-character-unit','dw21-set-tariff',['body','change','tariffs',0,'unit'],'Character',True,True)
+mutate('dw21-explicit-published-zero','dw21-set-tariff',['body','change','tariffs',0,'amountUsd'],'0',True,True)
+view=sample('PriceCatalogView');view.update(catalogRevision='4',items=[{'providerId':'openai','modelId':'model-a','upstreamModelId':'gpt-fixture','origin':'OfficialSnapshot','snapshotId':'snapshot-a','tariff':tariff}],snapshots=[{'id':'snapshot-a','providerId':'openai','revision':'4','sourceUrl':'https://developers.openai.com/api/docs/pricing','sourceDigest':'a'*64,'parserVersion':'fixture-1','fetchedAtMs':'100','verifiedAtMs':'100'}],providers=[{'providerId':'openai','revision':'4','snapshotId':'snapshot-a','stale':True,'nextCheckAtMs':'200','error':'Refresh failed; last good source retained'}],models=[{'modelId':'model-unpriced','revision':'1','priceKind':'Untracked','untrackedReason':'No exact model/context/service mapping'}])
+case('dw21-price-source-history','operation-result.r3',{'kind':'router.price_status','value':view})
+case('dw21-clear-result','operation-result.r3',{'kind':'router.price_override','value':{'kind':'Cleared','modelId':'model-a','revision':'2'}})
+for name in ['features.create','features.edit','projects.create','tasks.sync_plan']:
+ frame=request(name,'Command');frame['schemaRevision']=3
+ if name=='features.create':frame['body']['creation']['budget']={'kind':'Limit','microUsd':'1000000'}
+ elif name=='features.edit':frame['body']['changes']={'budget':{'kind':'Off'}}
+ else:
+  plan=sample('AtomicWorkPlan');plan['features'][0]['budget']={'kind':'Limit','microUsd':'1000000'}
+  frame['body']['initialPlan'if name=='projects.create'else'projectPlan']=plan
+ case('dw21-budget-authoring-'+name,'domain-request.r3',frame)
+for name in ['tasks.edit','issues.edit']:
+ frame=request(name,'Command');frame['schemaRevision']=3;frame['body']['changes']['budget']={'kind':'Off'}
+ case('dw21-no-card-cap-'+name,'domain-request.r3',frame,False,False)
+work=sample('WorkRecord');work['kind']='Feature';work['budget']={'revision':'2','limitMicroUsd':'100','spentMicroUsd':'75','reservedMicroUsd':'10','warning':True,'continueRequired':True,'untrackedAttempts':'1','unknownTailAttempts':'1','accountingReady':False,'monetaryIncompleteAttempts':'1','legacyUsageFacts':'2'}
+case('dw21-budget-coverage','operation-result.r3',{'kind':'features.get','value':work})
+mutate('dw21-no-feature-budget-before3','dw21-budget-coverage',['kind'],'features.get',False,False,entry='operation-result.r2')
+work['kind']='Issue';case('dw21-no-issue-budget','operation-result.r3',{'kind':'issues.get','value':work},False,True)
+
+units=copy.deepcopy(POS['dw21-partial-known-cost']);units['value']['page']['items'][0]['unitQuantities']=[{'modality':'Text','chargeKind':'Input','unit':'Character','quantity':'500'}]
+case('dw21-measured-units','operation-result.r3',units)
+mutate('dw21-duplicate-measured-dimension','dw21-measured-units',['value','page','items',0,'unitQuantities'],units['value']['page']['items'][0]['unitQuantities']*2,False,True)
+mutate('dw21-measured-quantity-bound','dw21-measured-units',['value','page','items',0,'unitQuantities'],[{'modality':'modality-'+str(i),'chargeKind':'Input','unit':'Character','quantity':'0'}for i in range(129)],False,True)
+local=request('router.configure','Command');local['schemaRevision']=3;local['body']['action']['localFree']=True
+case('dw21-explicit-local-billing','domain-request.r3',local)
+mutate('dw21-explicit-billed-connection','dw21-explicit-local-billing',['body','action','localFree'],False,True,True)
+mutate('dw21-local-billing-before3','dw21-explicit-local-billing',['schemaRevision'],2,entry='domain-request.r2')
+mutate('dw21-local-policy-not-caller-authority','dw21-explicit-local-billing',['body','action','human'],True)
+connection=sample('ConnectionRecord');connection['localFree']=False
+case('dw21-inspect-stored-local-policy','operation-result.r3',{'kind':'router.connections','value':{'items':[connection],'hasMore':False}})
+case('dw21-local-metadata-before3','operation-result.r2',{'kind':'router.connections','value':{'items':[connection],'hasMore':False}},False,False)
+observed=copy.deepcopy(POS['dw21-cost-Free']);observed['value']['page']['items'][0]['connectionRevision']='7'
+case('dw21-admitted-local-policy-revision','operation-result.r3',observed)
+# Proposed plan-editor cap changes round-trip separately from effective feature configuration.
+edit_plan=request('features.edit_plan','Command');edit_plan['schemaRevision']=3;edit_plan['body']['budget']={'kind':'Limit','microUsd':'1000000'}
+case('dw21-plan-editor-budget','domain-request.r3',edit_plan)
+withdraw=copy.deepcopy(edit_plan);withdraw['body'].pop('budget');withdraw['body']['clearBudgetProposal']=True
+case('dw21-plan-editor-withdraw-budget','domain-request.r3',withdraw)
+mutate('dw21-withdraw-before3','dw21-plan-editor-withdraw-budget',['schemaRevision'],2,entry='domain-request.r2')
+mutate('dw21-withdraw-null','dw21-plan-editor-withdraw-budget',['body','clearBudgetProposal'],None,False,False)
+mutate('dw21-withdraw-false','dw21-plan-editor-withdraw-budget',['body','clearBudgetProposal'],False,False,False)
+mutate('dw21-withdraw-budget-xor','dw21-plan-editor-withdraw-budget',['body','budget'],{'kind':'Off'},False,True)
+
+mutate('dw21-plan-editor-budget-before3','dw21-plan-editor-budget',['schemaRevision'],2,entry='domain-request.r2')
+pending=sample('WorkRecord');pending['kind']='Feature';pending['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'budget':{'kind':'Off'}}
+case('dw21-reopen-pending-budget','operation-result.r3',{'kind':'features.get','value':pending})
+case('dw21-pending-budget-before3','operation-result.r2',{'kind':'features.get','value':pending},False,False)
+digest_view=sample('WorkRecord');digest_view['kind']='Feature';digest_view['pendingPlan']={'revision':'2','draft':sample('PlanDraft'),'planDigest':'b'*64}
+case('dw21-pending-approval-digest','operation-result.r3',{'kind':'features.get','value':digest_view})
+case('dw21-pending-digest-before3','operation-result.r2',{'kind':'features.get','value':digest_view},False,False)
+# Final retained-report representability: full labels, pre-epoch dates and truthful Clear history.
+long_value='x'*65536
+full_filters=request('router.usage','Query');full_filters['schemaRevision']=3;full_filters['body'].update(startMs='-315619200000',endMs='-283996800000',user=long_value,provider=long_value,model=long_value,tool=long_value)
+case('dw21-full-filter-echo-input','domain-request.r3',full_filters)
+negative_end=request('router.usage','Query');negative_end['schemaRevision']=3;negative_end['body']['endMs']='-1'
+case('dw21-negative-end-default-start','domain-request.r3',negative_end)
+invalid_range=copy.deepcopy(negative_end);invalid_range['body']['startMs']='0'
+case('dw21-invalid-signed-range','domain-request.r3',invalid_range,False,True)
+old_range=copy.deepcopy(negative_end);old_range['schemaRevision']=2
+case('dw21-signed-range-before3','domain-request.r2',old_range,False,False)
+long_page=sample('UsageAggregatePage');long_page['context']['appliedFilters'].update(user=long_value,provider=long_value,model=long_value,tool=long_value);long_page['items']=[{'kind':'SeriesPoint','key':'breakdown-user-stable-opaque-hash','label':long_value,'bucketStartMs':'-259200000','value':'1'},{'kind':'Breakdown','dimension':'user','key':long_value,'label':long_value,'value':'1'}]
+case('dw21-long-labels-negative-week','operation-result.r3',{'kind':'router.usage','value':{'kind':'Report','report':long_page}})
+options=sample('UsageFilterOptions');options['items']=[{'dimension':'user','value':long_value}]
+case('dw21-long-filter-option','operation-result.r3',{'kind':'router.usage','value':{'kind':'Filters','filters':options}})
+resolved=sample('UsageAttemptPage');resolved['context']['range']={'startMs':'-2592000001','endMs':'-1'}
+case('dw21-negative-resolved-default-range','operation-result.r3',{'kind':'router.usage','value':{'kind':'Attempts','page':resolved}})
+price_history=sample('PriceCatalogView');price_history['overrideHistory']=[{'kind':'Set','modelId':'model-a','revision':'2','tariffs':[sample('PriceTariff')],'updatedBy':'actor-a','updatedAtMs':'100'},{'kind':'Cleared','modelId':'model-a','revision':'3','updatedBy':'actor-b','updatedAtMs':'200'}]
+case('dw21-clear-history-actor-time','operation-result.r3',{'kind':'router.price_status','value':price_history})
+# Actual BalanceSummary can join128 unknown dimensions with three128-character names each.
+reason_parts=[' '.join([(str(i)+'m').ljust(128,'m'),'c'*128,'u'*128])for i in range(128)]
+full_reason='; '.join(reason_parts)
+assert 4096<len(full_reason)<=65536
+reason_report=copy.deepcopy(POS['dw21-partial-known-cost']);reason_report['value']['page']['items'][0]['cost']['untrackedReason']=full_reason
+case('dw21-full-monetary-coverage-reason','operation-result.r3',reason_report)
 # Every newly registered domain revision has an admitted input and matching result fixture.
 for name,revisions in REVISIONS.items():
  if 3 not in revisions or name not in OPS:continue
  definition=OPS[name]
  for mode in ([definition['mode']]if definition['mode']!='Hybrid'else['Query','Command']):
-  if not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
+  # Keep the pre-Usage generic forms alongside newer budget-specific coverage.
+  if name in ['features.edit','features.create','features.edit_plan','tasks.sync_plan','projects.create'] or not any(c['typedValid']and c['entry']=='domain-request.r3'and (v:=json.loads(c['raw'])).get('schemaRevision')==3 and v.get('mode')==mode and v.get('body',{}).get('kind')==name for c in CASES):
    frame=request(name,mode);frame['schemaRevision']=3;case('dw13-r3-admission-'+name+'-'+mode,'domain-request.r3',frame)
- if not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
+ if name=='features.get' or not any(c['typedValid']and c['entry']=='operation-result.r3'and json.loads(c['raw']).get('kind')==name for c in CASES):
   output=result(name,definition['result'])
-  if TYPES.get(definition['result'],{}).get('kind')=='versioned':output['value']=selection3
+  if TYPES.get(definition['result'],{}).get('kind')=='versioned':
+   output['value']=selection3 if definition['result']=='AllocationSelection' else sample(TYPES[definition['result']]['current'])
   case('dw13-r3-binding-'+name,'operation-result.r3',output)
 
 # DW89's additive history direction has its own recorded revision-3 admission.

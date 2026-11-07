@@ -900,6 +900,10 @@ fn work_quiesced(
     Ok(true)
 }
 fn quiesced(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
+    if !tx.runs().inference_quiescent(root)? {
+        return Ok(false);
+    }
+
     if tx.runs().live_activation(root)?.is_some()
         || !crate::services::runs::recovery::root_quiesced(tx, root)?
         || !crate::services::runs::recovery::unsettled_processes(tx, root)?.is_empty()

@@ -28,6 +28,138 @@ fn ordered(v: &Value, a: &str, b: &str) -> bool {
     }
 }
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "WorkRecord" {
+        require(
+            v["kind"] == "Feature" || !present(v, "budget"),
+            "only features have spending limits",
+        )?;
+    }
+    if matches!(
+        name,
+        "UsageAttemptPage" | "UsageAggregatePage" | "UsageFilterOptions" | "PriceCatalogView"
+    ) {
+        require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "usage or price page continuation mismatch",
+        )?;
+    }
+    if name == "UsageAttemptPage" {
+        require(
+            v["context"]["reportKind"] == "Attempts",
+            "attempt page requires Attempts selection",
+        )?;
+    }
+    if name == "UsageFilterOptions" {
+        require(
+            v["context"]["reportKind"] == "Filters",
+            "filter page requires Filters selection",
+        )?;
+    }
+    if name == "UsageAggregatePage" {
+        require(
+            !matches!(
+                v["context"]["reportKind"].as_str(),
+                Some("Attempts" | "Filters")
+            ),
+            "aggregate page requires a report selection",
+        )?;
+    }
+    if name == "UsageAttemptRecord"
+        && let Some(quantities) = v["unitQuantities"].as_array()
+    {
+        require(
+            quantities.len() <= 128,
+            "measured usage quantities exceed host bound",
+        )?;
+        let mut dimensions = std::collections::HashSet::new();
+        require(
+            quantities.iter().all(|q| {
+                dimensions.insert((
+                    q["modality"].as_str(),
+                    q["chargeKind"].as_str(),
+                    q["unit"].as_str(),
+                    q["cacheWriteTtlMs"].as_str(),
+                ))
+            }),
+            "duplicate measured usage dimension/TTL",
+        )?;
+    }
+    if name == "UsageReportRange" {
+        let start = v["startMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+        let end = v["endMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+        require(
+            matches!((start, end), (Some(a), Some(b)) if a < b),
+            "usage range requires start before exclusive end",
+        )?;
+    }
+    if name == "UsageQueryContext" {
+        require(
+            matches!(v["interval"].as_str(), Some("day" | "week" | "month")),
+            "usage output interval is normalized",
+        )?;
+    }
+    if name == "PriceTariff"
+        && present(v, "contextLowerExclusive")
+        && present(v, "contextUpperInclusive")
+    {
+        let lower = v["contextLowerExclusive"]
+            .as_str()
+            .and_then(|n| n.parse::<u128>().ok());
+        let upper = v["contextUpperInclusive"]
+            .as_str()
+            .and_then(|n| n.parse::<u128>().ok());
+        require(
+            matches!((lower, upper), (Some(a), Some(b)) if a < b),
+            "tariff context tier is empty",
+        )?;
+    }
+    if name == "UsageCostSnapshot" {
+        require(
+            v["monetaryComplete"] != true || present(v, "amountMicroUsd"),
+            "complete monetary coverage requires a known amount",
+        )?;
+        require(
+            v["monetaryComplete"] == true || present(v, "untrackedReason"),
+            "partial monetary coverage requires its reason",
+        )?;
+        if matches!(v["priceKind"].as_str(), Some("Unknown" | "Untracked")) {
+            require(
+                v["monetaryComplete"] == false,
+                "unknown or untracked cost cannot claim complete coverage",
+            )?;
+        }
+        if v["priceKind"] == "Free" {
+            require(
+                v["amountMicroUsd"] == "0" && v["priceOrigin"] == "LocalFree",
+                "free cost needs deliberate local zero classification",
+            )?;
+        }
+    }
+    if name == "UsageTotals" {
+        let n = |key: &str| {
+            v[key]
+                .as_str()
+                .and_then(|n| n.parse::<u128>().ok())
+                .unwrap_or(0)
+        };
+        require(
+            n("trackedMicroUsd") == n("reportedMicroUsd") + n("estimatedMicroUsd"),
+            "tracked totals sum reported and estimated cost only",
+        )?;
+        for key in [
+            "localFreeAttempts",
+            "untrackedAttempts",
+            "unknownTailAttempts",
+            "incompleteAttempts",
+            "monetaryIncompleteAttempts",
+        ] {
+            require(
+                n(key) <= n("attempts"),
+                "usage coverage exceeds selected attempts",
+            )?;
+        }
+    }
+
     if matches!(
         name,
         "WorkRecord"
@@ -267,6 +399,46 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if op == "features.edit_plan" && present(v, "clearBudgetProposal") {
+        require(
+            v["clearBudgetProposal"] == true && !present(v, "budget"),
+            "clearBudgetProposal must be true and excludes budget",
+        )?;
+    }
+    if op == "router.price_override" {
+        require(
+            present(v, "price") != present(v, "change"),
+            "override requires exactly one legacy price or explicit change",
+        )?;
+    }
+    if op == "router.usage" {
+        if let Some(interval) = v["interval"].as_str() {
+            require(
+                matches!(
+                    interval.trim().to_ascii_lowercase().as_str(),
+                    "" | "auto" | "day" | "week" | "month"
+                ),
+                "usage interval must be auto/day/week/month",
+            )?;
+        }
+        for key in ["user", "provider", "model", "tool"] {
+            require(
+                v[key]
+                    .as_str()
+                    .is_none_or(|s| s.trim().chars().count() <= 65536),
+                "usage filter exceeds its output bound",
+            )?;
+        }
+        if present(v, "startMs") && present(v, "endMs") {
+            let start = v["startMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+            let end = v["endMs"].as_str().and_then(|n| n.parse::<i128>().ok());
+            require(
+                matches!((start, end), (Some(a), Some(b)) if a < b),
+                "usage start must precede exclusive end",
+            )?;
+        }
+    }
+
     if op == "approvals.propose" && v["payload"]["kind"] == "SavedOperation" {
         let saved = &v["payload"];
         require(

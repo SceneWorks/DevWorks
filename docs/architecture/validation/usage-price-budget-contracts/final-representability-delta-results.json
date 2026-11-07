@@ -1,0 +1,139 @@
+{
+  "scope": "Bounded final DW21 report/identity/history DTO and schema delta on assembled source; no full campaign or native service acceptance claimed",
+  "assembledSource": "85e85c25552859fac8c9a28b1eb9f5df8e0d120a",
+  "typeSourceCommits": [
+    "94cc8f3",
+    "c1174cf",
+    "1b70497"
+  ],
+  "cases": [
+    {
+      "id": "dw21-historical-missing-attribution",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 1205,
+      "maxStringChars": 35,
+      "rawSha256": "5777d6f04b83843ad93d0066bcc762111384c342e20eba15ede2c036663d9f6e",
+      "normalizedSha256": "8794c95f0bc5de82438440cb8d2027a50fd73f5938d37f9782fc03540983ff4d"
+    },
+    {
+      "id": "dw21-full-filter-echo-input",
+      "entry": "domain-request.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 262372,
+      "maxStringChars": 65536,
+      "rawSha256": "22e0738f3ef092e2aa8395368c0fd5745f4d8981064acf83903c20aad75dbf36",
+      "normalizedSha256": "cd7f0981b26e50fc7f59bc0268894b21bf32909731a52036ccdd87a4257778df"
+    },
+    {
+      "id": "dw21-negative-end-default-start",
+      "entry": "domain-request.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 146,
+      "maxStringChars": 12,
+      "rawSha256": "1f005392e5052a7e1985e443d96094b06c93d7a0c20c974a79224c845ad2a26b",
+      "normalizedSha256": "0961c583043be80a4238f5ddadfa2aaa4b626909b9a5ce07f7245e0c84ef280c"
+    },
+    {
+      "id": "dw21-invalid-signed-range",
+      "entry": "domain-request.r3",
+      "typedValid": false,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 160,
+      "maxStringChars": 12,
+      "rawSha256": "1fe95649bd5bd2cd150d7e2b5c7e3bf4491de226ada01baca34e952b74edb12e",
+      "normalizedSha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    },
+    {
+      "id": "dw21-signed-range-before3",
+      "entry": "domain-request.r2",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true,
+      "rawBytes": 146,
+      "maxStringChars": 12,
+      "rawSha256": "bb8310e84d315875ea39f9bca39c3d06e28920a1d91bbf9c66a63691b69b4cf5",
+      "normalizedSha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    },
+    {
+      "id": "dw21-long-labels-negative-week",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 459265,
+      "maxStringChars": 65536,
+      "rawSha256": "3d94a8bdd630e5ba11f657046d08ffb76e16cc4c93dbcf1edcf54f701b265545",
+      "normalizedSha256": "dca982d88e234d237190b31d292c7d3bcc38b965c3cfdf40da3b23541f5c754f"
+    },
+    {
+      "id": "dw21-long-filter-option",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 65843,
+      "maxStringChars": 65536,
+      "rawSha256": "417b09e5b4f7b1ec0517f2cfb4856dd8febef73fe1167fe8c09981cd32704779",
+      "normalizedSha256": "21a18f7d029fef47983f31b3afd656f22d9406098235770b7c962bb91df5ecbf"
+    },
+    {
+      "id": "dw21-negative-resolved-default-range",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 617,
+      "maxStringChars": 12,
+      "rawSha256": "6330d9bbf098cdf26201016d447b518c295f8948448503c98809614ad27cdb8b",
+      "normalizedSha256": "0f449022f4324dcf8b874764a233f1fb74a17cdc59db3fc2a53cc4be369c323a"
+    },
+    {
+      "id": "dw21-clear-history-actor-time",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true,
+      "rawBytes": 546,
+      "maxStringChars": 19,
+      "rawSha256": "28fe46617ab99d2ede15d04fed3a86aafc3c9b0120e0601a850c5f318c29f87a",
+      "normalizedSha256": "71532e1285b41100152222030383f81749628f217fb0bfa30a5cd7eace37f829"
+    }
+  ],
+  "allPassed": true,
+  "caseCount": 9,
+  "fullFixtureSet": {
+    "domain": 1586,
+    "total": 1915,
+    "negative": 375
+  },
+  "legacySchemasByteIdentical": 56,
+  "operationModeRevisionBindings": 546,
+  "coverage": [
+    "Missing legacy requestId remains absent with explicitcoverage gap and legacyfact counters",
+    "Full65536-character appliedfilters,SeriesPoint/Breakdown labels andFilterOption value retained withouttruncation",
+    "1960\u21921961 signed query andnegativeend-with-defaultstart remainrepresentable",
+    "Monday bucket beforeepoch andnegative resolvedrange remain signed",
+    "Wrongorder andpre-revision3 endpoints rejected",
+    "Override Set/Cleared immutable actor/time history has no fakeClear tariff"
+  ],
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "1ef948cdf6368ac2ee8599cfc2d968492b5b4c6c9366f8bfaa5bc47c9520b031",
+    "tools/contracts-eval/src/domain_generated.rs": "c5b996be913f78fb04311579bdde57daea2883c8622489280b7a82ae129f7e5d",
+    "tools/contracts-eval/src/domain_rules.rs": "1482af0070caa0c9f1e62c2fe7bbc6bcf98d7185935b8cb6bdfcc506c94792e2",
+    "crates/devworks-core/src/protocol/records.rs": "3a77a65875b59e0e63588adb564ebbc108f4b12b16e48ae6eb1b418db7e45a3c",
+    "crates/devworks-core/src/operations/router.rs": "1794ea863b8be39847c0beea262d7726126169393aaa537c1cee81e3ce62f9a3",
+    "docs/architecture/contracts/domain-fixtures.json": "a00c79338f54f41c77ffbdc230878fb6c26d63a72e480b58968c664f1fd53e63",
+    "docs/architecture/contracts/manifest.json": "9c213c5bf3651d862db67f5002ebd01aa760c219b629568af7f4f3015de6752b",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "3cad78ba53390ac59ccc5ff554ceba98f3a0e16ef0fdb0e4e9c8b28ab38cba97",
+    "docs/architecture/contracts/domain-request.r3.schema.json": "7c50c8d43604a0406707df1c2fca4a5fda43bd11cc8d1b27a2b5edfd8642af06",
+    "docs/architecture/contracts/operation-result.r3.schema.json": "895d3098e1c5667497dc7c17320efaa4c9425107dd90bd3cd2f808a0a4f07ad5"
+  }
+}

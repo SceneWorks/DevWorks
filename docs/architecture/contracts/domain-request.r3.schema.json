@@ -1806,6 +1806,15 @@
         {
           "additionalProperties": false,
           "properties": {
+            "budget": {
+              "$ref": "#/$defs/FeatureBudgetInput",
+              "x-since": 3
+            },
+            "clearBudgetProposal": {
+              "const": true,
+              "type": "boolean",
+              "x-since": 3
+            },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -5399,7 +5408,30 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "kind",
+                "modelId",
+                "expectedRevision",
+                "price"
+              ]
+            },
+            {
+              "required": [
+                "kind",
+                "modelId",
+                "expectedRevision",
+                "change"
+              ],
+              "x-since": 3
+            }
+          ],
           "properties": {
+            "change": {
+              "$ref": "#/$defs/PriceOverrideChange",
+              "x-since": 3
+            },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -5417,8 +5449,7 @@
           "required": [
             "kind",
             "modelId",
-            "expectedRevision",
-            "price"
+            "expectedRevision"
           ],
           "type": "object"
         },
@@ -9340,6 +9371,14 @@
         {
           "additionalProperties": false,
           "properties": {
+            "endMs": {
+              "$ref": "#/$defs/SignedCounter",
+              "x-since": 3
+            },
+            "interval": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
+            },
             "jobRunId": {
               "anyOf": [
                 {
@@ -9354,8 +9393,28 @@
               "const": "router.usage",
               "type": "string"
             },
+            "model": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
+            },
             "page": {
               "$ref": "#/$defs/PageRequest"
+            },
+            "projectId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
+            "provider": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
+            },
+            "purpose": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
+            },
+            "reportKind": {
+              "$ref": "#/$defs/UsageReportKind",
+              "x-since": 3
             },
             "rootId": {
               "anyOf": [
@@ -9367,6 +9426,10 @@
                 }
               ]
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 3
+            },
             "sessionId": {
               "anyOf": [
                 {
@@ -9376,6 +9439,18 @@
                   "type": "null"
                 }
               ]
+            },
+            "startMs": {
+              "$ref": "#/$defs/SignedCounter",
+              "x-since": 3
+            },
+            "tool": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
+            },
+            "user": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 3
             }
           },
           "required": [
@@ -9404,6 +9479,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "includeHistory": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "kind": {
               "const": "router.price_status",
               "type": "string"
@@ -9413,6 +9492,14 @@
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
+            },
+            "providerIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 3
+            },
+            "snapshotIds": {
+              "$ref": "#/$defs/List_Id_0_128",
+              "x-since": 3
             }
           },
           "required": [
@@ -10442,11 +10529,49 @@
       ],
       "type": "object"
     },
+    "FeatureBudgetInput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Off",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Limit",
+              "type": "string"
+            },
+            "microUsd": {
+              "$ref": "#/$defs/Counter"
+            }
+          },
+          "required": [
+            "kind",
+            "microUsd"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "FeatureCreation": {
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
+            "budget": {
+              "$ref": "#/$defs/FeatureBudgetInput",
+              "x-since": 3
+            },
             "description": {
               "$ref": "#/$defs/Text0To65536"
             },
@@ -10555,6 +10680,10 @@
             }
           ]
         },
+        "budget": {
+          "$ref": "#/$defs/FeatureBudgetInput",
+          "x-since": 3
+        },
         "description": {
           "anyOf": [
             {
@@ -10629,6 +10758,10 @@
     "FeaturePlanDraft": {
       "additionalProperties": false,
       "properties": {
+        "budget": {
+          "$ref": "#/$defs/FeatureBudgetInput",
+          "x-since": 3
+        },
         "callerRef": {
           "$ref": "#/$defs/Id"
         },
@@ -11620,6 +11753,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PriceTariff_1_128": {
+      "items": {
+        "$ref": "#/$defs/PriceTariff"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
     "List_ReadinessFinding_0_128": {
       "items": {
         "$ref": "#/$defs/ReadinessFinding"
@@ -12479,6 +12620,17 @@
       "pattern": "^[1-9][0-9]{0,18}$",
       "type": "string"
     },
+    "PriceChargeKind": {
+      "enum": [
+        "Input",
+        "Output",
+        "CacheRead",
+        "CacheWrite",
+        "Request",
+        "Runtime"
+      ],
+      "type": "string"
+    },
     "PriceInput": {
       "additionalProperties": false,
       "properties": {
@@ -12514,6 +12666,146 @@
         "outputUsdPerMillion"
       ],
       "type": "object"
+    },
+    "PriceModality": {
+      "enum": [
+        "Text",
+        "Image",
+        "Audio",
+        "Video",
+        "Any"
+      ],
+      "type": "string"
+    },
+    "PriceOverrideChange": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Set",
+              "type": "string"
+            },
+            "tariffs": {
+              "$ref": "#/$defs/List_PriceTariff_1_128"
+            }
+          },
+          "required": [
+            "kind",
+            "tariffs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Clear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PriceTariff": {
+      "additionalProperties": false,
+      "properties": {
+        "amountUsd": {
+          "$ref": "#/$defs/Money"
+        },
+        "cacheTtlSeconds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PositiveCounter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chargeKind": {
+          "$ref": "#/$defs/PriceChargeKind"
+        },
+        "contextLowerExclusive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextUpperInclusive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpointProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modality": {
+          "$ref": "#/$defs/PriceModality"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "unit": {
+          "$ref": "#/$defs/PriceUnit"
+        },
+        "units": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "upstreamModelId": {
+          "$ref": "#/$defs/Text1To4096"
+        }
+      },
+      "required": [
+        "upstreamModelId",
+        "serviceTier",
+        "modality",
+        "chargeKind",
+        "unit",
+        "units",
+        "amountUsd"
+      ],
+      "type": "object"
+    },
+    "PriceUnit": {
+      "enum": [
+        "Token",
+        "Second",
+        "Image",
+        "Request",
+        "Character"
+      ],
+      "type": "string"
     },
     "Probability": {
       "maximum": 1,
@@ -13179,6 +13471,10 @@
             "kind": {
               "const": "Connection",
               "type": "string"
+            },
+            "localFree": {
+              "type": "boolean",
+              "x-since": 3
             },
             "name": {
               "$ref": "#/$defs/Text1To256"
@@ -13865,6 +14161,18 @@
       "maxLength": 4096,
       "minLength": 1,
       "pattern": "^https?://[^\\s]+$",
+      "type": "string"
+    },
+    "UsageReportKind": {
+      "enum": [
+        "Attempts",
+        "AssistantUsage",
+        "AssistantActivity",
+        "McpUsage",
+        "CodeReviewUsage",
+        "RepositoryAnalysisUsage",
+        "Filters"
+      ],
       "type": "string"
     },
     "ViewSelection": {

@@ -365,6 +365,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0027_decisions.sql"),
         rebuilds_tables: false,
     },
+    // New writers preserve canonical attempt ownership, reservations and historical tariff identity.
+    Migration {
+        version: 28,
+        minimum_reader: 8,
+        minimum_writer: 28,
+        sql: include_str!("migrations/0028_usage.sql"),
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -682,3 +690,7 @@ pub const MIGRATION_0026_SHA256: &str =
 /// Recorded checksum of migration 27.
 pub const MIGRATION_0027_SHA256: &str =
     "dafafed20991660c492ef38f23448111618cecb0b5f061793f266271a75c1c8f";
+
+/// Recorded checksum of migration 28.
+pub const MIGRATION_0028_SHA256: &str =
+    "e7a0aa389a4f71a7e4bd0956bcd862fbddc55d0ee7ba3d3910478e7e44be3d96";

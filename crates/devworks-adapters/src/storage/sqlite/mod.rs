@@ -46,6 +46,7 @@ mod resources;
 mod router;
 mod runs;
 mod sessions;
+mod usage;
 mod work;
 mod writer;
 
@@ -60,7 +61,8 @@ pub use migrations::{
     MIGRATION_0013_SHA256, MIGRATION_0014_SHA256, MIGRATION_0015_SHA256, MIGRATION_0016_SHA256,
     MIGRATION_0017_SHA256, MIGRATION_0018_SHA256, MIGRATION_0019_SHA256, MIGRATION_0020_SHA256,
     MIGRATION_0021_SHA256, MIGRATION_0022_SHA256, MIGRATION_0023_SHA256, MIGRATION_0024_SHA256,
-    MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATION_0027_SHA256, MIGRATIONS, Migration,
+    MIGRATION_0025_SHA256, MIGRATION_0026_SHA256, MIGRATION_0027_SHA256, MIGRATION_0028_SHA256,
+    MIGRATIONS, Migration,
 };
 
 use conn::{Role, db};
@@ -257,6 +259,10 @@ impl SqliteStore {
             previous_shutdown = record_boot(&writer_conn, &config, &boot, now)?;
             (Some(writer_conn), runtime, meta, access, Some(boot))
         };
+        // Pure expected metadata belongs to store boot, before a runtime can schedule its
+        // monitor. Replaying the catalogue after shutdown could otherwise strand Tokio's
+        // blocking-pool destructor. This never validates or substitutes the actual schema.
+        diagnostics::prepare_expected_schema(meta.schema_version);
         let store_id = StoreId(
             Id::new(meta.store_id.clone())
                 .map_err(|_| StorageError::IncompatibleSchema("invalid store identity".into()))?,

@@ -381,6 +381,9 @@ impl ReadSnapshot for MemSnapshot {
     fn browser(&self) -> &dyn BrowserRead {
         &self.unsupported
     }
+    fn usage(&self) -> &dyn UsageRead {
+        &self.unsupported
+    }
     fn decisions(&self) -> &dyn DecisionRead {
         &self.unsupported
     }
@@ -482,6 +485,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn browser(&mut self) -> &mut dyn BrowserRepository {
+        &mut self.unsupported
+    }
+    fn usage(&mut self) -> &mut dyn UsageRepository {
         &mut self.unsupported
     }
     fn decisions(&mut self) -> &mut dyn DecisionRepository {
@@ -1342,6 +1348,13 @@ impl ArtifactRepository for Unsupported {
     }
 }
 impl SessionRead for Unsupported {
+    fn all_usage_facts(
+        &self,
+        _: Option<&SequenceKey>,
+        _: u16,
+    ) -> Result<Vec<UsageFact>, StorageError> {
+        nope()
+    }
     fn last_entry_at_ms(&self, _: &Id) -> Result<Option<i64>, StorageError> {
         nope()
     }
@@ -1566,6 +1579,13 @@ impl ResourceRead for Unsupported {
     }
 }
 impl JobRead for Unsupported {
+    fn usage_history(
+        &self,
+        _: Option<&UsageJobPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredJobUsage>, StorageError> {
+        nope()
+    }
     fn job(&self, _: &Id) -> Result<Option<StoredJob>, StorageError> {
         nope()
     }
@@ -1682,6 +1702,13 @@ impl JobRepository for Unsupported {
     }
 }
 impl RouterRead for Unsupported {
+    fn route_requests(
+        &self,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredRouteRequest>, StorageError> {
+        nope()
+    }
     fn route_model(&self, _: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
         nope()
     }
@@ -2255,6 +2282,9 @@ impl ResourceRepository for Unsupported {
     }
 }
 impl RunRead for Unsupported {
+    fn inference_quiescent(&self, _root: &RootId) -> Result<bool, StorageError> {
+        nope()
+    }
     fn assignment_handoff_quiescent(&self, _: &AssignmentId) -> Result<bool, StorageError> {
         nope()
     }
@@ -2912,6 +2942,191 @@ impl DecisionRepository for Unsupported {
         &mut self,
         _: &StoredNotification,
         _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+}
+
+impl UsageRead for Unsupported {
+    fn inference_attempt(&self, _id: &Id) -> Result<Option<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn inference_attempts(
+        &self,
+        _filter: &UsageAttemptFilter,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredInferenceAttempt>, StorageError> {
+        nope()
+    }
+    fn usage_observation(
+        &self,
+        _attempt: &Id,
+        _key: &str,
+    ) -> Result<Option<StoredUsageObservation>, StorageError> {
+        nope()
+    }
+    fn usage_observations(
+        &self,
+        _attempt: &Id,
+        _after_sequence: Option<i64>,
+        _limit: u16,
+    ) -> Result<Vec<StoredUsageObservation>, StorageError> {
+        nope()
+    }
+    fn attempt_balance(&self, _attempt: &Id) -> Result<Option<StoredAttemptBalance>, StorageError> {
+        nope()
+    }
+    fn feature_budget(&self, _feature: &Id) -> Result<Option<StoredFeatureBudget>, StorageError> {
+        nope()
+    }
+    fn feature_usage_totals(
+        &self,
+        _feature: &Id,
+    ) -> Result<StoredFeatureUsageTotals, StorageError> {
+        nope()
+    }
+    fn usage_origins(
+        &self,
+        _filter: &UsageOriginFilter,
+        _after: Option<&str>,
+        _limit: u16,
+    ) -> Result<Vec<StoredUsageOrigin>, StorageError> {
+        nope()
+    }
+    fn usage_origin(
+        &self,
+        _kind: &str,
+        _id: &str,
+    ) -> Result<Option<StoredUsageOrigin>, StorageError> {
+        nope()
+    }
+    fn usage_changes(
+        &self,
+        _feature: Option<&Id>,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredUsageChange>, StorageError> {
+        nope()
+    }
+    fn usage_bootstrap(&self) -> Result<StoredUsageBootstrap, StorageError> {
+        nope()
+    }
+    fn price_revision(&self) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn price_snapshots(
+        &self,
+        _provider: Option<&str>,
+        _after: Option<&Id>,
+        _limit: u16,
+    ) -> Result<Vec<StoredPriceSnapshot>, StorageError> {
+        nope()
+    }
+    fn price_snapshot(&self, _id: &Id) -> Result<Option<StoredPriceSnapshot>, StorageError> {
+        nope()
+    }
+    fn current_price_snapshot(
+        &self,
+        _provider: &str,
+    ) -> Result<Option<StoredPriceSnapshot>, StorageError> {
+        nope()
+    }
+    fn price_status(&self, _provider: &str) -> Result<Option<StoredPriceStatus>, StorageError> {
+        nope()
+    }
+    fn price_override_history(
+        &self,
+        _model: Option<&Id>,
+        _after: Option<&PriceOverridePosition>,
+        _limit: u16,
+    ) -> Result<Vec<StoredPriceOverride>, StorageError> {
+        nope()
+    }
+    fn price_override(&self, _model: &Id) -> Result<Option<StoredPriceOverride>, StorageError> {
+        nope()
+    }
+    fn price_override_revision(&self, _model: &Id) -> Result<i64, StorageError> {
+        nope()
+    }
+}
+
+impl UsageRepository for Unsupported {
+    fn insert_inference_attempt(
+        &mut self,
+        _attempt: &StoredInferenceAttempt,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_inference_attempt(
+        &mut self,
+        _attempt: &StoredInferenceAttempt,
+        _expected: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_usage_observation(
+        &mut self,
+        _observation: &StoredUsageObservation,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_attempt_balance(
+        &mut self,
+        _balance: &StoredAttemptBalance,
+        _expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn put_feature_budget(
+        &mut self,
+        _budget: &StoredFeatureBudget,
+        _expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn insert_usage_origin(&mut self, _origin: &StoredUsageOrigin) -> Result<(), StorageError> {
+        nope()
+    }
+    fn bind_usage_origin(
+        &mut self,
+        _kind: &str,
+        _id: &str,
+        _attempt: &Id,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn append_usage_change(&mut self, _change: &StoredUsageChange) -> Result<(), StorageError> {
+        nope()
+    }
+    fn update_usage_bootstrap(
+        &mut self,
+        _bootstrap: &StoredUsageBootstrap,
+        _expected: i64,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn advance_price_revision(&mut self, _expected: i64) -> Result<i64, StorageError> {
+        nope()
+    }
+    fn put_price_status(
+        &mut self,
+        _status: &StoredPriceStatus,
+        _expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        nope()
+    }
+    fn publish_price_snapshot(
+        &mut self,
+        _snapshot: &StoredPriceSnapshot,
+        _expected_status_revision: i64,
+    ) -> Result<StoredPriceStatus, StorageError> {
+        nope()
+    }
+    fn put_price_override(
+        &mut self,
+        _override_: &StoredPriceOverride,
+        _expected: i64,
     ) -> Result<(), StorageError> {
         nope()
     }

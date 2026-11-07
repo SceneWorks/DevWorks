@@ -1,0 +1,310 @@
+{
+  "scope": "DW21 plan editor optional proposed budget/authoritative digest native DTO/schema delta only; no service/authority acceptance",
+  "typeSourceCommits": [
+    "a6ac505",
+    "d400adf"
+  ],
+  "cases": [
+    {
+      "id": "dw21-plan-editor-budget",
+      "entry": "domain-request.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true
+    },
+    {
+      "id": "dw21-plan-editor-budget-before3",
+      "entry": "domain-request.r2",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    },
+    {
+      "id": "dw21-reopen-pending-budget",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true
+    },
+    {
+      "id": "dw21-pending-budget-before3",
+      "entry": "operation-result.r2",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    },
+    {
+      "id": "dw21-pending-approval-digest",
+      "entry": "operation-result.r3",
+      "typedValid": true,
+      "schemaValid": true,
+      "passed": true
+    },
+    {
+      "id": "dw21-pending-digest-before3",
+      "entry": "operation-result.r2",
+      "typedValid": false,
+      "schemaValid": false,
+      "passed": true
+    }
+  ],
+  "native": {
+    "allPassed": true,
+    "cases": [
+      {
+        "entry": "domain-request.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw21-plan-editor-budget",
+        "normalized": {
+          "body": {
+            "budget": {
+              "kind": "Limit",
+              "microUsd": "1000000"
+            },
+            "expectedRevision": "1",
+            "featureId": "root-a",
+            "kind": "features.edit_plan",
+            "plan": {
+              "acceptance": [],
+              "acceptanceTests": [],
+              "content": {
+                "artifactId": "artifact-a",
+                "byteLength": "8",
+                "mediaType": "text/plain",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "versionId": "version-a"
+              },
+              "goals": [],
+              "repositoryIds": [],
+              "requirements": []
+            }
+          },
+          "mode": "Command",
+          "protocol": "1.0-draft.1",
+          "requestKey": "request-a",
+          "schemaRevision": 3
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "domain-request.r2",
+        "error": "a member introduced after schema revision 2 is present",
+        "expectedSchemaValid": false,
+        "id": "dw21-plan-editor-budget-before3",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw21-reopen-pending-budget",
+        "normalized": {
+          "kind": "features.get",
+          "value": {
+            "acceptance": [],
+            "attemptCount": "0",
+            "attempts": [],
+            "commentCount": "0",
+            "comments": [],
+            "dependencyIds": [],
+            "dependentIds": [],
+            "description": "Fixture content",
+            "detailCoverage": {
+              "gaps": [],
+              "moreGaps": false,
+              "state": "Complete"
+            },
+            "goals": [],
+            "handoffCount": "0",
+            "handoffs": [],
+            "id": "id-a",
+            "inheritsRequirementIds": [],
+            "kind": "Feature",
+            "links": [],
+            "mergedAwaitingAcceptance": false,
+            "pendingPlan": {
+              "budget": {
+                "kind": "Off"
+              },
+              "draft": {
+                "acceptance": [],
+                "acceptanceTests": [],
+                "content": {
+                  "artifactId": "artifact-a",
+                  "byteLength": "8",
+                  "mediaType": "text/plain",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "versionId": "version-a"
+                },
+                "goals": [],
+                "repositoryIds": [],
+                "requirements": []
+              },
+              "revision": "2"
+            },
+            "priority": 1,
+            "projectId": "project-a",
+            "repositoryIds": [],
+            "requirements": [],
+            "revision": "1",
+            "statusId": "id-a",
+            "title": "fixture",
+            "touches": []
+          }
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "operation-result.r2",
+        "error": "a member introduced after schema revision 2 is present",
+        "expectedSchemaValid": false,
+        "id": "dw21-pending-budget-before3",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      },
+      {
+        "entry": "operation-result.r3",
+        "error": null,
+        "expectedSchemaValid": true,
+        "id": "dw21-pending-approval-digest",
+        "normalized": {
+          "kind": "features.get",
+          "value": {
+            "acceptance": [],
+            "attemptCount": "0",
+            "attempts": [],
+            "commentCount": "0",
+            "comments": [],
+            "dependencyIds": [],
+            "dependentIds": [],
+            "description": "Fixture content",
+            "detailCoverage": {
+              "gaps": [],
+              "moreGaps": false,
+              "state": "Complete"
+            },
+            "goals": [],
+            "handoffCount": "0",
+            "handoffs": [],
+            "id": "id-a",
+            "inheritsRequirementIds": [],
+            "kind": "Feature",
+            "links": [],
+            "mergedAwaitingAcceptance": false,
+            "pendingPlan": {
+              "draft": {
+                "acceptance": [],
+                "acceptanceTests": [],
+                "content": {
+                  "artifactId": "artifact-a",
+                  "byteLength": "8",
+                  "mediaType": "text/plain",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "versionId": "version-a"
+                },
+                "goals": [],
+                "repositoryIds": [],
+                "requirements": []
+              },
+              "planDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "revision": "2"
+            },
+            "priority": 1,
+            "projectId": "project-a",
+            "repositoryIds": [],
+            "requirements": [],
+            "revision": "1",
+            "statusId": "id-a",
+            "title": "fixture",
+            "touches": []
+          }
+        },
+        "passed": true,
+        "typedValid": true
+      },
+      {
+        "entry": "operation-result.r2",
+        "error": "a member introduced after schema revision 2 is present",
+        "expectedSchemaValid": false,
+        "id": "dw21-pending-digest-before3",
+        "normalized": null,
+        "passed": true,
+        "typedValid": false
+      }
+    ],
+    "scope": "DTO shape/range checks only; no gateway, policy, storage, dispatch or platform proof"
+  },
+  "allPassed": true,
+  "caseCount": 6,
+  "currentDomainFixtureCount": 1578,
+  "currentTotalFixtureCount": 1907,
+  "operationModeRevisionBindings": 546,
+  "legacySchemasByteIdentical": 56,
+  "fullBaseline": {
+    "messages": 1905,
+    "source": "schema-model-results.json",
+    "reusedWithoutBroadRepeat": true
+  },
+  "sourceSha256": {
+    "tools/contracts-eval/domain-spec.json": "df3787be72e4cd9d70772b971d4ef8ebef37dd7f1aa1d26f234581c86d7536ce",
+    "tools/contracts-eval/src/domain_generated.rs": "222c79679432b37b2a27f5c7416ee08e465075aed6c6838d47bd1f55ab8e2121",
+    "tools/contracts-eval/src/domain_rules.rs": "fafe02f36a2fe92d47829f7bf9e11daf3a56d38e4ab65c51d05ab9f07a908ac5",
+    "crates/devworks-core/src/protocol/records.rs": "f5ed64f033422e1bc007eaa4b737d60c6631c7129d8462190814eca22efb6413",
+    "crates/devworks-core/src/operations/features.rs": "623945b3966a1e758f219f9bd5b1ae9ee4935166d762b0aeec18427f7cc1eed0",
+    "docs/architecture/contracts/domain-fixtures.json": "66ea1dcd68213a63303aff1163dabf1a384b6eb5e08863107e45b530f583abab",
+    "docs/architecture/contracts/domain-request.r2.schema.json": "3cad78ba53390ac59ccc5ff554ceba98f3a0e16ef0fdb0e4e9c8b28ab38cba97",
+    "docs/architecture/contracts/domain-request.r3.schema.json": "26a56ab80d8c8421094a877a3978bbded210ebf06445616375be97863bd8d3b5",
+    "docs/architecture/contracts/operation-result.r2.schema.json": "e944ac1fd9b104acdd3b546e7b234a2e1153a7d12f9a77bcde8d887f88fcfd20",
+    "docs/architecture/contracts/operation-result.r3.schema.json": "dcf7a83e915fcc708c198cfaacad5628f15c498d9acfd28d566a62bba835e8af"
+  },
+  "fixtures": [
+    {
+      "id": "dw21-plan-editor-budget",
+      "entry": "domain-request.r3",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"budget\":{\"kind\":\"Limit\",\"microUsd\":\"1000000\"}},\"schemaRevision\":3}",
+      "typedValid": true,
+      "schemaValid": true
+    },
+    {
+      "id": "dw21-plan-editor-budget-before3",
+      "entry": "domain-request.r2",
+      "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"features.edit_plan\",\"featureId\":\"root-a\",\"expectedRevision\":\"1\",\"plan\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"budget\":{\"kind\":\"Limit\",\"microUsd\":\"1000000\"}},\"schemaRevision\":2}",
+      "typedValid": false,
+      "schemaValid": false
+    },
+    {
+      "id": "dw21-reopen-pending-budget",
+      "entry": "operation-result.r3",
+      "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"pendingPlan\":{\"revision\":\"2\",\"draft\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"budget\":{\"kind\":\"Off\"}}}}",
+      "typedValid": true,
+      "schemaValid": true
+    },
+    {
+      "id": "dw21-pending-budget-before3",
+      "entry": "operation-result.r2",
+      "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"pendingPlan\":{\"revision\":\"2\",\"draft\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"budget\":{\"kind\":\"Off\"}}}}",
+      "typedValid": false,
+      "schemaValid": false
+    },
+    {
+      "id": "dw21-pending-approval-digest",
+      "entry": "operation-result.r3",
+      "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"pendingPlan\":{\"revision\":\"2\",\"draft\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"planDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}}",
+      "typedValid": true,
+      "schemaValid": true
+    },
+    {
+      "id": "dw21-pending-digest-before3",
+      "entry": "operation-result.r2",
+      "raw": "{\"kind\":\"features.get\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"projectId\":\"project-a\",\"kind\":\"Feature\",\"title\":\"fixture\",\"description\":\"Fixture content\",\"statusId\":\"id-a\",\"priority\":1,\"repositoryIds\":[],\"dependencyIds\":[],\"goals\":[],\"requirements\":[],\"acceptance\":[],\"inheritsRequirementIds\":[],\"touches\":[],\"links\":[],\"comments\":[],\"handoffs\":[],\"attempts\":[],\"mergedAwaitingAcceptance\":false,\"detailCoverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"commentCount\":\"0\",\"handoffCount\":\"0\",\"attemptCount\":\"0\",\"dependentIds\":[],\"pendingPlan\":{\"revision\":\"2\",\"draft\":{\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"acceptance\":[],\"repositoryIds\":[],\"goals\":[],\"requirements\":[],\"acceptanceTests\":[]},\"planDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}}",
+      "typedValid": false,
+      "schemaValid": false
+    }
+  ]
+}

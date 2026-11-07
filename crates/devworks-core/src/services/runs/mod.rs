@@ -1669,6 +1669,26 @@ impl ControlService {
         }
         let control = ensure_control(tx, &root.id)?;
         control_conflict(&control, expected)?;
+        if root.kind == crate::ports::storage::FEATURE {
+            match crate::services::usage::budget::check(tx.usage(), &root.id.0, None)? {
+                Some(crate::services::usage::budget::BudgetBlock::AccountingUnavailable) => {
+                    return Err(refuse(
+                        DomainErrorCode::StorageUnavailable,
+                        "accounting_not_indexed",
+                        Some(root.id.0.clone()),
+                    ));
+                }
+                Some(crate::services::usage::budget::BudgetBlock::Reached) => {
+                    return Err(refuse(
+                        DomainErrorCode::BudgetHold,
+                        "feature_budget",
+                        Some(root.id.0.clone()),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
         let manual: Vec<StoredBlocker> =
             active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
                 .into_iter()
@@ -1756,6 +1776,17 @@ impl ControlService {
                     &unauthorized,
                 ));
             }
+        }
+        // Clearing Continue cannot hand a root to a new owner while an earlier owned
+        // transport is still physically unclosed. Current parallel dispatch is unaffected.
+        if !tx.runs().inference_quiescent(&root.id)? {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "inference_custody",
+                Some(root.id.0.clone()),
+            )
+            .retry(RetryAdvice::RefreshAndNewRequest)
+            .into());
         }
         let mut cleared = Vec::new();
         for b in &clear {

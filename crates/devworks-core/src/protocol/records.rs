@@ -804,6 +804,13 @@ pub struct WorkRecord {
     )]
     #[schemars(with = "WorkInheritanceOrigin", extend("x-since" = 3))]
     pub previous_inheritance: Option<WorkInheritanceOrigin>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetView", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetView>,
 }
 impl Check for WorkRecord {
     fn check(&self) -> Result<(), String> {
@@ -851,6 +858,7 @@ impl Check for WorkRecord {
         self.task_type.check()?;
         self.labels.check()?;
         self.previous_inheritance.check()?;
+        self.budget.check()?;
         crate::protocol::rules::record(
             "WorkRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -885,6 +893,10 @@ impl Revisioned for WorkRecord {
         if revision < 3 {
             self.previous_inheritance = None;
         }
+        if revision < 3 {
+            self.budget = None;
+        }
+        self.pending_plan.retain_revision(revision);
     }
 }
 
@@ -4830,6 +4842,13 @@ pub struct ConnectionRecord {
     )]
     #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
     pub open_router: Option<OpenRouterConstraints>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub local_free: Option<bool>,
 }
 impl Check for ConnectionRecord {
     fn check(&self) -> Result<(), String> {
@@ -4854,6 +4873,7 @@ impl Check for ConnectionRecord {
         self.sign_in.check()?;
         self.enabled.check()?;
         self.open_router.check()?;
+        self.local_free.check()?;
         crate::protocol::rules::record(
             "ConnectionRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -4902,6 +4922,9 @@ impl Revisioned for ConnectionRecord {
         }
         if revision < 2 {
             self.open_router = None;
+        }
+        if revision < 3 {
+            self.local_free = None;
         }
     }
 }
@@ -6616,6 +6639,13 @@ pub enum RouterConfigAction {
         )]
         #[schemars(with = "OpenRouterConstraints", extend("x-since" = 2))]
         open_router: Option<OpenRouterConstraints>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        local_free: Option<bool>,
     },
     Model {
         model: RouteModel,
@@ -6661,6 +6691,7 @@ impl Check for RouterConfigAction {
                 credential_ref,
                 enabled,
                 open_router,
+                local_free,
             } => {
                 connection_id.check()?;
                 expected_revision.check()?;
@@ -6670,6 +6701,7 @@ impl Check for RouterConfigAction {
                 credential_ref.check()?;
                 enabled.check()?;
                 open_router.check()?;
+                local_free.check()?;
             }
             Self::Model {
                 model,
@@ -6732,6 +6764,7 @@ impl Revisioned for RouterConfigAction {
             Self::Connection {
                 enabled,
                 open_router,
+                local_free,
                 ..
             } => {
                 if revision < 2 {
@@ -6739,6 +6772,9 @@ impl Revisioned for RouterConfigAction {
                 }
                 if revision < 2 {
                     *open_router = None;
+                }
+                if revision < 3 {
+                    *local_free = None;
                 }
             }
             Self::Model { model, .. } => {
@@ -7344,6 +7380,13 @@ pub struct FeaturePlanDraft {
     )]
     #[schemars(with = "Items<Label>", extend("x-since" = 3))]
     pub labels: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
 }
 impl Check for FeaturePlanDraft {
     fn check(&self) -> Result<(), String> {
@@ -7356,6 +7399,7 @@ impl Check for FeaturePlanDraft {
         self.plan.check()?;
         self.tasks.check()?;
         self.labels.check()?;
+        self.budget.check()?;
         crate::protocol::rules::record(
             "FeaturePlanDraft",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -7368,6 +7412,9 @@ impl Revisioned for FeaturePlanDraft {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 3 {
             self.labels = None;
+        }
+        if revision < 3 {
+            self.budget = None;
         }
         self.tasks.retain_revision(revision);
     }
@@ -7417,6 +7464,13 @@ pub enum FeatureCreation {
         )]
         #[schemars(with = "Items<Label>", extend("x-since" = 3))]
         labels: Option<Items<Label>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+        budget: Option<FeatureBudgetInput>,
     },
     AtomicPlan {
         plan: AtomicWorkPlan,
@@ -7436,6 +7490,7 @@ impl Check for FeatureCreation {
                 priority,
                 plan,
                 labels,
+                budget,
             } => {
                 title.check()?;
                 description.check()?;
@@ -7444,6 +7499,7 @@ impl Check for FeatureCreation {
                 priority.check()?;
                 plan.check()?;
                 labels.check()?;
+                budget.check()?;
             }
             Self::AtomicPlan { plan } => {
                 plan.check()?;
@@ -7459,9 +7515,12 @@ impl Check for FeatureCreation {
 impl Revisioned for FeatureCreation {
     fn retain_revision(&mut self, revision: u32) {
         match self {
-            Self::Single { labels, .. } => {
+            Self::Single { labels, budget, .. } => {
                 if revision < 3 {
                     *labels = None;
+                }
+                if revision < 3 {
+                    *budget = None;
                 }
             }
             Self::AtomicPlan { plan, .. } => {
@@ -7864,6 +7923,13 @@ pub struct FeaturePatch {
     )]
     #[schemars(with = "Items<Label>", extend("x-since" = 3))]
     pub labels: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
 }
 impl Check for FeaturePatch {
     fn check(&self) -> Result<(), String> {
@@ -7878,6 +7944,7 @@ impl Check for FeaturePatch {
         self.readiness.check()?;
         self.acceptance_evidence.check()?;
         self.labels.check()?;
+        self.budget.check()?;
         crate::protocol::rules::record(
             "FeaturePatch",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -7896,6 +7963,9 @@ impl Revisioned for FeaturePatch {
         }
         if revision < 3 {
             self.labels = None;
+        }
+        if revision < 3 {
+            self.budget = None;
         }
     }
 }
@@ -8260,17 +8330,44 @@ pub struct PendingFeaturePlan {
     pub draft: PlanDraft,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PlanApproval>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "FeatureBudgetInput", extend("x-since" = 3))]
+    pub budget: Option<FeatureBudgetInput>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 3))]
+    pub plan_digest: Option<Digest>,
 }
 impl Check for PendingFeaturePlan {
     fn check(&self) -> Result<(), String> {
         self.revision.check()?;
         self.draft.check()?;
         self.approval.check()?;
+        self.budget.check()?;
+        self.plan_digest.check()?;
         crate::protocol::rules::record(
             "PendingFeaturePlan",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for PendingFeaturePlan {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.budget = None;
+        }
+        if revision < 3 {
+            self.plan_digest = None;
+        }
     }
 }
 
@@ -10919,8 +11016,14 @@ impl Check for NotificationLink {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ApprovalReviewedContent {
-    Settings { entries: Items<SettingAssignment> },
-    FeaturePlan { plan: PlanDraft },
+    Settings {
+        entries: Items<SettingAssignment>,
+    },
+    FeaturePlan {
+        plan: PlanDraft,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<FeatureBudgetInput>,
+    },
 }
 impl Check for ApprovalReviewedContent {
     fn check(&self) -> Result<(), String> {
@@ -10928,10 +11031,1101 @@ impl Check for ApprovalReviewedContent {
             Self::Settings { entries } => {
                 entries.check()?;
             }
-            Self::FeaturePlan { plan } => {
+            Self::FeaturePlan { plan, budget } => {
                 plan.check()?;
+                budget.check()?;
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriceTariff {
+    pub upstream_model_id: Text,
+    pub service_tier: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_lower_exclusive: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_upper_inclusive: Option<Counter>,
+    pub modality: PriceModality,
+    pub charge_kind: PriceChargeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_ttl_seconds: Option<PositiveCounter>,
+    pub unit: PriceUnit,
+    pub units: PositiveCounter,
+    pub amount_usd: Money,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_profile: Option<Label>,
+}
+impl Check for PriceTariff {
+    fn check(&self) -> Result<(), String> {
+        self.upstream_model_id.check()?;
+        self.service_tier.check()?;
+        self.context_lower_exclusive.check()?;
+        self.context_upper_inclusive.check()?;
+        self.modality.check()?;
+        self.charge_kind.check()?;
+        self.cache_ttl_seconds.check()?;
+        self.unit.check()?;
+        self.units.check()?;
+        self.amount_usd.check()?;
+        self.region.check()?;
+        self.endpoint_profile.check()?;
+        crate::protocol::rules::record(
+            "PriceTariff",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriceSourceSnapshot {
+    pub id: Id,
+    pub provider_id: Id,
+    pub revision: Revision,
+    pub source_url: Url,
+    pub source_digest: Digest,
+    pub parser_version: Label,
+    pub fetched_at_ms: Counter,
+    pub verified_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_date: Option<Label>,
+}
+impl Check for PriceSourceSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.provider_id.check()?;
+        self.revision.check()?;
+        self.source_url.check()?;
+        self.source_digest.check()?;
+        self.parser_version.check()?;
+        self.fetched_at_ms.check()?;
+        self.verified_at_ms.check()?;
+        self.effective_date.check()?;
+        crate::protocol::rules::record(
+            "PriceSourceSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderPriceStatus {
+    pub provider_id: Id,
+    pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Id>,
+    pub stale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_checked_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_check_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Text>,
+}
+impl Check for ProviderPriceStatus {
+    fn check(&self) -> Result<(), String> {
+        self.provider_id.check()?;
+        self.revision.check()?;
+        self.snapshot_id.check()?;
+        self.stale.check()?;
+        self.last_checked_at_ms.check()?;
+        self.next_check_at_ms.check()?;
+        self.refresh_operation_id.check()?;
+        self.error.check()?;
+        crate::protocol::rules::record(
+            "ProviderPriceStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriceCatalogEntry {
+    pub provider_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<Id>,
+    pub upstream_model_id: Text,
+    pub origin: PriceOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_revision: Option<Revision>,
+    pub tariff: PriceTariff,
+}
+impl Check for PriceCatalogEntry {
+    fn check(&self) -> Result<(), String> {
+        self.provider_id.check()?;
+        self.model_id.check()?;
+        self.upstream_model_id.check()?;
+        self.origin.check()?;
+        self.snapshot_id.check()?;
+        self.override_revision.check()?;
+        self.tariff.check()?;
+        crate::protocol::rules::record(
+            "PriceCatalogEntry",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriceCatalogView {
+    pub catalog_revision: Revision,
+    pub items: Rows<PriceCatalogEntry>,
+    pub snapshots: Rows<PriceSourceSnapshot>,
+    pub providers: Rows<ProviderPriceStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub coverage: Coverage,
+    pub models: Rows<ModelPriceView>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Rows<PriceOverrideOutcome>", extend("x-since" = 3))]
+    pub override_history: Option<Rows<PriceOverrideOutcome>>,
+}
+impl Check for PriceCatalogView {
+    fn check(&self) -> Result<(), String> {
+        self.catalog_revision.check()?;
+        self.items.check()?;
+        self.snapshots.check()?;
+        self.providers.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.coverage.check()?;
+        self.models.check()?;
+        self.override_history.check()?;
+        crate::protocol::rules::record(
+            "PriceCatalogView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for PriceCatalogView {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.override_history = None;
+        } else {
+            self.override_history.retain_revision(revision);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum PriceCatalogResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<ModelPriceStatus>),
+    #[schemars(extend("x-since" = 3))]
+    Current(PriceCatalogView),
+}
+impl Check for PriceCatalogResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for PriceCatalogResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum PriceOverrideChange {
+    Set { tariffs: NonEmpty<PriceTariff> },
+    Clear {},
+}
+impl Check for PriceOverrideChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Set { tariffs } => {
+                tariffs.check()?;
+            }
+            Self::Clear {} => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum PriceOverrideOutcome {
+    Set {
+        model_id: Id,
+        revision: Revision,
+        tariffs: NonEmpty<PriceTariff>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ActorId", extend("x-since" = 3))]
+        updated_by: Option<ActorId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        updated_at_ms: Option<Counter>,
+    },
+    Cleared {
+        model_id: Id,
+        revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ActorId", extend("x-since" = 3))]
+        updated_by: Option<ActorId>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        updated_at_ms: Option<Counter>,
+    },
+}
+impl Check for PriceOverrideOutcome {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Set {
+                model_id,
+                revision,
+                tariffs,
+                updated_by,
+                updated_at_ms,
+            } => {
+                model_id.check()?;
+                revision.check()?;
+                tariffs.check()?;
+                updated_by.check()?;
+                updated_at_ms.check()?;
+            }
+            Self::Cleared {
+                model_id,
+                revision,
+                updated_by,
+                updated_at_ms,
+            } => {
+                model_id.check()?;
+                revision.check()?;
+                updated_by.check()?;
+                updated_at_ms.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for PriceOverrideOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Set {
+                updated_by,
+                updated_at_ms,
+                ..
+            } => {
+                if revision < 3 {
+                    *updated_by = None;
+                }
+                if revision < 3 {
+                    *updated_at_ms = None;
+                }
+            }
+            Self::Cleared {
+                updated_by,
+                updated_at_ms,
+                ..
+            } => {
+                if revision < 3 {
+                    *updated_by = None;
+                }
+                if revision < 3 {
+                    *updated_at_ms = None;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "PriceRecord", "before": 3}))]
+pub enum PriceOverrideResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(PriceRecord),
+    #[schemars(extend("x-since" = 3))]
+    Current(PriceOverrideOutcome),
+}
+impl Check for PriceOverrideResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for PriceOverrideResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum UsageReportKind {
+    Attempts,
+    AssistantUsage,
+    AssistantActivity,
+    McpUsage,
+    CodeReviewUsage,
+    RepositoryAnalysisUsage,
+    Filters,
+}
+impl Check for UsageReportKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageReportRange {
+    pub start_ms: SignedCounter,
+    pub end_ms: SignedCounter,
+}
+impl Check for UsageReportRange {
+    fn check(&self) -> Result<(), String> {
+        self.start_ms.check()?;
+        self.end_ms.check()?;
+        crate::protocol::rules::record(
+            "UsageReportRange",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageAppliedFilters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DataScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<Label>,
+}
+impl Check for UsageAppliedFilters {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.project_id.check()?;
+        self.root_id.check()?;
+        self.session_id.check()?;
+        self.job_run_id.check()?;
+        self.user.check()?;
+        self.provider.check()?;
+        self.model.check()?;
+        self.tool.check()?;
+        self.purpose.check()?;
+        crate::protocol::rules::record(
+            "UsageAppliedFilters",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageQueryContext {
+    pub report_kind: UsageReportKind,
+    pub range: UsageReportRange,
+    pub interval: Label,
+    pub applied_filters: UsageAppliedFilters,
+    pub read_revision: Revision,
+}
+impl Check for UsageQueryContext {
+    fn check(&self) -> Result<(), String> {
+        self.report_kind.check()?;
+        self.range.check()?;
+        self.interval.check()?;
+        self.applied_filters.check()?;
+        self.read_revision.check()?;
+        crate::protocol::rules::record(
+            "UsageQueryContext",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageCacheDiagnostic {
+    pub kind: Label,
+    pub inferred: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<Revision>,
+}
+impl Check for UsageCacheDiagnostic {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.inferred.check()?;
+        self.detail.check()?;
+        self.source_revision.check()?;
+        crate::protocol::rules::record(
+            "UsageCacheDiagnostic",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageCostSnapshot {
+    pub price_kind: UsageCostKind,
+    pub price_origin: PriceOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_micro_usd: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_amount: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_snapshot_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_revision: Option<Revision>,
+    pub subscription_equivalent: bool,
+    pub incomplete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untracked_reason: Option<Content>,
+    pub tariffs: Rows<PriceTariff>,
+    pub monetary_complete: bool,
+}
+impl Check for UsageCostSnapshot {
+    fn check(&self) -> Result<(), String> {
+        self.price_kind.check()?;
+        self.price_origin.check()?;
+        self.amount_micro_usd.check()?;
+        self.currency.check()?;
+        self.original_amount.check()?;
+        self.classification.check()?;
+        self.price_snapshot_id.check()?;
+        self.price_revision.check()?;
+        self.override_revision.check()?;
+        self.subscription_equivalent.check()?;
+        self.incomplete.check()?;
+        self.untracked_reason.check()?;
+        self.tariffs.check()?;
+        self.monetary_complete.check()?;
+        crate::protocol::rules::record(
+            "UsageCostSnapshot",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageAttemptRecord {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_number: Option<Revision>,
+    pub source_kind: Label,
+    pub source_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_id: Option<AssignmentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    pub purpose: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model_id: Option<Text>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<Counter>,
+    pub state: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_micro_usd: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_micro_usd: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_semantics: Option<Label>,
+    pub cost: UsageCostSnapshot,
+    pub cache_diagnostics: Rows<UsageCacheDiagnostic>,
+    pub unknown_tail: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<Counter>,
+    pub unit_quantities: Rows<UsageMeasuredQuantity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_revision: Option<Revision>,
+}
+impl Check for UsageAttemptRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.request_id.check()?;
+        self.attempt_id.check()?;
+        self.attempt_number.check()?;
+        self.source_kind.check()?;
+        self.source_id.check()?;
+        self.actor_id.check()?;
+        self.project_id.check()?;
+        self.feature_id.check()?;
+        self.work_id.check()?;
+        self.assignment_id.check()?;
+        self.session_id.check()?;
+        self.job_run_id.check()?;
+        self.operation_id.check()?;
+        self.purpose.check()?;
+        self.role.check()?;
+        self.provider_id.check()?;
+        self.connection_id.check()?;
+        self.model_id.check()?;
+        self.resolved_model_id.check()?;
+        self.started_at_ms.check()?;
+        self.finished_at_ms.check()?;
+        self.state.check()?;
+        self.input_tokens.check()?;
+        self.uncached_input_tokens.check()?;
+        self.output_tokens.check()?;
+        self.cache_read_tokens.check()?;
+        self.cache_write_tokens.check()?;
+        self.cache_read_micro_usd.check()?;
+        self.cache_write_micro_usd.check()?;
+        self.input_semantics.check()?;
+        self.cost.check()?;
+        self.cache_diagnostics.check()?;
+        self.unknown_tail.check()?;
+        self.reasoning_tokens.check()?;
+        self.unit_quantities.check()?;
+        self.connection_revision.check()?;
+        crate::protocol::rules::record(
+            "UsageAttemptRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageTotals {
+    pub attempts: Counter,
+    pub tracked_micro_usd: Counter,
+    pub reported_micro_usd: Counter,
+    pub estimated_micro_usd: Counter,
+    pub reserved_micro_usd: Counter,
+    pub local_free_attempts: Counter,
+    pub untracked_attempts: Counter,
+    pub unknown_tail_attempts: Counter,
+    pub incomplete_attempts: Counter,
+    pub monetary_incomplete_attempts: Counter,
+    pub legacy_usage_facts: Counter,
+    pub legacy_untracked_facts: Counter,
+    pub legacy_observation_micro_usd: Counter,
+}
+impl Check for UsageTotals {
+    fn check(&self) -> Result<(), String> {
+        self.attempts.check()?;
+        self.tracked_micro_usd.check()?;
+        self.reported_micro_usd.check()?;
+        self.estimated_micro_usd.check()?;
+        self.reserved_micro_usd.check()?;
+        self.local_free_attempts.check()?;
+        self.untracked_attempts.check()?;
+        self.unknown_tail_attempts.check()?;
+        self.incomplete_attempts.check()?;
+        self.monetary_incomplete_attempts.check()?;
+        self.legacy_usage_facts.check()?;
+        self.legacy_untracked_facts.check()?;
+        self.legacy_observation_micro_usd.check()?;
+        crate::protocol::rules::record(
+            "UsageTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageAttemptPage {
+    pub context: UsageQueryContext,
+    pub items: Rows<UsageAttemptRecord>,
+    pub totals: UsageTotals,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub coverage: Coverage,
+}
+impl Check for UsageAttemptPage {
+    fn check(&self) -> Result<(), String> {
+        self.context.check()?;
+        self.items.check()?;
+        self.totals.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.coverage.check()?;
+        crate::protocol::rules::record(
+            "UsageAttemptPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum UsageReportRow {
+    Total {
+        key: Label,
+        label: Label,
+        value: Counter,
+    },
+    SeriesPoint {
+        key: Label,
+        label: Content,
+        bucket_start_ms: SignedCounter,
+        value: Counter,
+    },
+    Breakdown {
+        dimension: Label,
+        key: Content,
+        label: Content,
+        value: Counter,
+    },
+}
+impl Check for UsageReportRow {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Total { key, label, value } => {
+                key.check()?;
+                label.check()?;
+                value.check()?;
+            }
+            Self::SeriesPoint {
+                key,
+                label,
+                bucket_start_ms,
+                value,
+            } => {
+                key.check()?;
+                label.check()?;
+                bucket_start_ms.check()?;
+                value.check()?;
+            }
+            Self::Breakdown {
+                dimension,
+                key,
+                label,
+                value,
+            } => {
+                dimension.check()?;
+                key.check()?;
+                label.check()?;
+                value.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageAggregatePage {
+    pub context: UsageQueryContext,
+    pub items: Rows<UsageReportRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub coverage: Coverage,
+}
+impl Check for UsageAggregatePage {
+    fn check(&self) -> Result<(), String> {
+        self.context.check()?;
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.coverage.check()?;
+        crate::protocol::rules::record(
+            "UsageAggregatePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageFilterOption {
+    pub dimension: Label,
+    pub value: Content,
+}
+impl Check for UsageFilterOption {
+    fn check(&self) -> Result<(), String> {
+        self.dimension.check()?;
+        self.value.check()?;
+        crate::protocol::rules::record(
+            "UsageFilterOption",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageFilterOptions {
+    pub context: UsageQueryContext,
+    pub items: Rows<UsageFilterOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub coverage: Coverage,
+}
+impl Check for UsageFilterOptions {
+    fn check(&self) -> Result<(), String> {
+        self.context.check()?;
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.coverage.check()?;
+        crate::protocol::rules::record(
+            "UsageFilterOptions",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum UsageQueryResult {
+    Attempts { page: UsageAttemptPage },
+    Report { report: UsageAggregatePage },
+    Filters { filters: UsageFilterOptions },
+}
+impl Check for UsageQueryResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Attempts { page } => {
+                page.check()?;
+            }
+            Self::Report { report } => {
+                report.check()?;
+            }
+            Self::Filters { filters } => {
+                filters.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "UsageReport", "before": 3}))]
+pub enum RouterUsageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(UsageReport),
+    #[schemars(extend("x-since" = 3))]
+    Current(UsageQueryResult),
+}
+impl Check for RouterUsageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for RouterUsageResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum FeatureBudgetInput {
+    Off {},
+    Limit { micro_usd: Counter },
+}
+impl Check for FeatureBudgetInput {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Off {} => {}
+            Self::Limit { micro_usd } => {
+                micro_usd.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FeatureBudgetView {
+    pub revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_micro_usd: Option<Counter>,
+    pub spent_micro_usd: Counter,
+    pub reserved_micro_usd: Counter,
+    pub warning: bool,
+    pub continue_required: bool,
+    pub untracked_attempts: Counter,
+    pub unknown_tail_attempts: Counter,
+    pub accounting_ready: bool,
+    pub monetary_incomplete_attempts: Counter,
+    pub legacy_usage_facts: Counter,
+}
+impl Check for FeatureBudgetView {
+    fn check(&self) -> Result<(), String> {
+        self.revision.check()?;
+        self.limit_micro_usd.check()?;
+        self.spent_micro_usd.check()?;
+        self.reserved_micro_usd.check()?;
+        self.warning.check()?;
+        self.continue_required.check()?;
+        self.untracked_attempts.check()?;
+        self.unknown_tail_attempts.check()?;
+        self.accounting_ready.check()?;
+        self.monetary_incomplete_attempts.check()?;
+        self.legacy_usage_facts.check()?;
+        crate::protocol::rules::record(
+            "FeatureBudgetView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PriceChargeKind {
+    Input,
+    Output,
+    CacheRead,
+    CacheWrite,
+    Request,
+    Runtime,
+}
+impl Check for PriceChargeKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PriceUnit {
+    Token,
+    Second,
+    Image,
+    Request,
+    Character,
+}
+impl Check for PriceUnit {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PriceModality {
+    Text,
+    Image,
+    Audio,
+    Video,
+    Any,
+}
+impl Check for PriceModality {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPriceView {
+    pub model_id: Id,
+    pub revision: Revision,
+    pub price_kind: UsagePriceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untracked_reason: Option<Text>,
+}
+impl Check for ModelPriceView {
+    fn check(&self) -> Result<(), String> {
+        self.model_id.check()?;
+        self.revision.check()?;
+        self.price_kind.check()?;
+        self.snapshot_id.check()?;
+        self.override_revision.check()?;
+        self.untracked_reason.check()?;
+        crate::protocol::rules::record(
+            "ModelPriceView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum UsageCostKind {
+    Reported,
+    Estimated,
+    Free,
+    Untracked,
+    Unknown,
+}
+impl Check for UsageCostKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageMeasuredQuantity {
+    pub modality: Label,
+    pub charge_kind: Label,
+    pub unit: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_ttl_ms: Option<Counter>,
+    pub quantity: Counter,
+}
+impl Check for UsageMeasuredQuantity {
+    fn check(&self) -> Result<(), String> {
+        self.modality.check()?;
+        self.charge_kind.check()?;
+        self.unit.check()?;
+        self.cache_write_ttl_ms.check()?;
+        self.quantity.check()?;
+        crate::protocol::rules::record(
+            "UsageMeasuredQuantity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }

@@ -393,6 +393,12 @@ pub trait SessionRead {
     ) -> Result<Vec<(SequenceKey, StoredUsage)>, StorageError>;
     /// The usage facts of `scope` — its usage observations and completed tool invocations — in
     /// committed-sequence order `(sequence, source, id)` after `after`, at most `limit`.
+    /// Host accounting bootstrap across all project scopes, preserving historical attribution.
+    fn all_usage_facts(
+        &self,
+        after: Option<&SequenceKey>,
+        limit: u16,
+    ) -> Result<Vec<UsageFact>, StorageError>;
     fn usage_facts(
         &self,
         scope: &HistoryScope,

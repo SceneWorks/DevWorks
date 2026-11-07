@@ -170,6 +170,9 @@ pub struct ShutdownReport {
     pub stopped: Vec<StopResult>,
     /// The `Shutdown` reconciliation of resources.
     pub reconciliation: Result<ReconcileReport, StorageError>,
+    /// Actual inference attempts whose local transport closure was not verified. The process
+    /// supervisor alone supplies none; the composed runtime fills this after bounded draining.
+    pub unclosed_inference_attempts: Vec<Id>,
 }
 
 impl ShutdownReport {
@@ -177,7 +180,11 @@ impl ShutdownReport {
     /// failure (the native stops ran regardless).
     pub fn into_result(self) -> Result<Vec<(Id, StopOutcome)>, StorageError> {
         let stopped = all_recorded(self.stopped)?;
-        self.reconciliation.map(|_| stopped)
+        self.reconciliation?;
+        if !self.unclosed_inference_attempts.is_empty() {
+            return Err(StorageError::Busy);
+        }
+        Ok(stopped)
     }
 }
 /// Every outcome when every record was written; otherwise the first failure.
@@ -731,6 +738,7 @@ impl ProcessSupervisor {
         ShutdownReport {
             stopped,
             reconciliation,
+            unclosed_inference_attempts: Vec::new(),
         }
     }
 

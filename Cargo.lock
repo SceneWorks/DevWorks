@@ -900,6 +900,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "semver",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "sqlite-vec",
@@ -936,6 +937,7 @@ name = "devworks-core"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "num-rational",
  "schemars",
  "semver",
  "serde",

@@ -18,6 +18,7 @@ pub mod retrieval;
 pub mod router;
 pub mod secrets;
 pub mod storage;
+pub mod usage;
 pub mod web;
 
 use crate::context::InvocationContext;

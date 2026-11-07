@@ -19,7 +19,7 @@ use devworks_desktop::connections_screen::{
 use devworks_desktop::host::Engine;
 use devworks_desktop::ops;
 use eframe::egui::accesskit::Role;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use std::sync::{Arc, Mutex};
 
 /// OpenRouter's model list, answered only with the right key.
@@ -113,13 +113,22 @@ fn settings_adds_tests_and_routes_an_api_key_connection_without_exposing_the_key
     click(&mut h, Role::Button, "Test connection");
     assert!(has_text(&h, "Test passed"), "{:?}", labels(&h, Role::Label));
     assert!(has_text(&h, "4 models discovered"));
-    assert!(
-        http.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|r| r.url.ends_with("/models"))
-    );
+    // Official price maintenance shares this scripted port with connection discovery.
+    // Public pricing probes stay credential-free and never qualify provider inference.
+    assert!(http.seen.lock().unwrap().iter().all(|r| {
+        r.url.ends_with("/models")
+            || [
+                devworks_core::ports::usage::OfficialPriceProvider::OpenAi,
+                devworks_core::ports::usage::OfficialPriceProvider::Anthropic,
+            ]
+            .into_iter()
+            .any(|provider| {
+                r.url == format!("{}.md", provider.source_url())
+                    && r.method == devworks_core::ports::http::Method::Get
+                    && r.header_value("authorization").is_none()
+                    && r.header_value("x-api-key").is_none()
+            })
+    }));
 
     // The router routes Open Router Auto through it now.
     let a = ops::availability(backend.query(
@@ -207,7 +216,10 @@ fn press(h: &mut egui_kittest::Harness<'_, Panel>, label: &str) -> serde_json::V
     h.get_by_role_and_label(Role::Button, label).click();
     h.run();
     match h.state().actions.as_slice() {
-        [ConnectionAction::Configure { action, .. }] => action.clone(),
+        [
+            ConnectionAction::Configure { action, .. }
+            | ConnectionAction::ConfigureEdit { action, .. },
+        ] => action.clone(),
         other => panic!("{label}: {other:?}"),
     }
 }
@@ -487,8 +499,17 @@ fn an_editor_key_hidden_by_a_profile_change_is_not_sent() {
         h.query_by_role_and_label(Role::TextInput, "Mine key")
             .is_none()
     );
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save connection")
+            .accesskit_node()
+            .is_disabled(),
+        "a concurrent profile edit requires an explicit revision review"
+    );
+    h.get_by_role_and_label(Role::Button, "Review and use current connection revision")
+        .click();
+    h.run();
     match press_any(&mut h, "Save connection") {
-        ConnectionAction::Configure { key, .. } => assert!(key.is_none(), "never staged"),
+        ConnectionAction::ConfigureEdit { key, .. } => assert!(key.is_none(), "never staged"),
         other => panic!("{other:?}"),
     }
 }

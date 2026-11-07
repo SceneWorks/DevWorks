@@ -191,6 +191,8 @@ pub struct Composition {
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
+    pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
     /// Time between periodic artifact collection passes (one runs at boot and one after every
     /// applied `artifacts.delete` regardless). Each pass removes pending blob generations no
@@ -233,6 +235,7 @@ impl RuntimeConfig {
     pub fn new(owner: Id) -> Self {
         Self {
             dispatcher: DispatcherConfig::new(owner),
+            price_refresh: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -330,6 +333,8 @@ pub struct Runtime {
     resources: Arc<ResourceService>,
     housekeeper: Arc<Housekeeper>,
     runs: Arc<RunSupervisor>,
+    usage: Arc<crate::usage::UsageRuntime>,
+    usage_task: Mutex<Option<JoinHandle<()>>>,
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission`.
     stage: std::sync::atomic::AtomicU8,
@@ -347,6 +352,9 @@ pub struct Runtime {
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
     resuming: Mutex<Option<JoinHandle<()>>>,
+    prices: Option<Arc<crate::prices::PriceSupervisor>>,
+    pricing: Mutex<Option<JoinHandle<()>>>,
+    price_service: Arc<devworks_core::services::prices::PriceService>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     notifying: Mutex<Option<JoinHandle<()>>>,
     keep_awake: Arc<KeepAwake>,
@@ -418,6 +426,15 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         indexing,
         config,
     } = composition;
+    let usage = crate::usage::UsageRuntime::with_process_host(
+        store.clone(),
+        runs.service.clone(),
+        use_cases.inference_router(),
+        process_host.clone(),
+    );
+    let use_cases = use_cases.with_usage(Arc::new(
+        devworks_core::services::usage::UsageService::new(ids.clone(), clock.clone()),
+    ));
     for suite in &config.automatic_eval_suites {
         devworks_core::protocol::Check::check(suite)
             .map_err(|e| BootError::Composition(StorageError::InvalidRecord(e)))?;
@@ -491,6 +508,18 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         Some(p) => use_cases.with_packages(p.service.clone()),
         None => use_cases,
     };
+    let price_service = Arc::new(devworks_core::services::prices::PriceService::new(
+        ids.clone(),
+        clock.clone(),
+        config.price_refresh.is_some(),
+    ));
+    let prices = config.price_refresh.as_ref().map(|p| {
+        crate::prices::PriceSupervisor::new(store.clone(), price_service.clone(), p.source.clone())
+    });
+    if let Some(worker) = &prices {
+        consumers.push(worker.consumer());
+    }
+    let use_cases = use_cases.with_prices(price_service.clone());
     let work = Arc::new(
         WorkService::new(ids.clone(), runs.service.clone())
             .with_staged_plans(artifacts.clone())
@@ -747,6 +776,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let housekeeping = tokio::spawn(async move { keeper.run(every).await });
     run_supervisor.set_dispatcher_wakeup(dispatcher.wakeup());
     let supervision = tokio::spawn(run_supervisor.clone().run(every));
+    let usage_task = tokio::spawn(usage.clone().run(Duration::from_secs(1)));
     diag::sources(
         &diagnostics,
         report.clone(),
@@ -804,12 +834,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         admission: admission.clone(),
         dispatcher: dispatcher.clone(),
         runs: run_supervisor.clone(),
+        usage: usage.clone(),
         collector: collector.clone(),
         diagnostics: diagnostics.clone(),
         keep_awake: keep_awake.clone(),
         scheduler: OnceLock::new(),
         evals: evals.clone(),
         resumes: OnceLock::new(),
+        prices: prices.clone(),
         notifications: notifications.clone(),
         indexing: index_supervisor.clone(),
         handle: tokio::runtime::Handle::current(),
@@ -832,6 +864,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let resumes = ResumeDispatcher::new(store.clone(), approvals.clone(), admitter.clone());
     let _ = admitter.resumes.set(Arc::downgrade(&resumes));
     let resuming = tokio::spawn(resumes.clone().run(config.approval_resume_interval));
+    let pricing = prices.as_ref().map(|worker| {
+        tokio::spawn(worker.clone().run(
+            config.price_refresh.as_ref().expect("composed").interval,
+            dispatcher.wakeup(),
+        ))
+    });
     Ok(Runtime {
         store,
         ids,
@@ -843,6 +881,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         resources,
         housekeeper,
         runs: run_supervisor,
+        usage,
+        usage_task: Mutex::new(Some(usage_task)),
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
         admission,
         admitter,
@@ -853,6 +893,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         approvals,
         resumes,
         resuming: Mutex::new(Some(resuming)),
+        prices,
+        pricing: Mutex::new(pricing),
+        price_service,
         notifications,
         notifying: Mutex::new(notifying),
         keep_awake,
@@ -986,6 +1029,11 @@ impl Runtime {
     fn enter(&self, stage: ShutdownStage) {
         self.stage.store(stage as u8, Ordering::SeqCst);
     }
+    /// Canonical native producers and bounded historical accounting over the same router.
+    pub fn accounting(&self) -> &Arc<crate::usage::UsageRuntime> {
+        &self.usage
+    }
+
     /// Run supervision (activation claims, stops, recovery) over the composed control service.
     pub fn runs(&self) -> &Arc<RunSupervisor> {
         &self.runs
@@ -1136,6 +1184,12 @@ impl Runtime {
             None => self.notification_permission(),
         }
     }
+    pub fn price_service(&self) -> &Arc<devworks_core::services::prices::PriceService> {
+        &self.price_service
+    }
+    pub fn price_refreshes(&self) -> Option<&Arc<crate::prices::PriceSupervisor>> {
+        self.prices.as_ref()
+    }
     pub fn approval_resumes(&self) -> &Arc<ResumeDispatcher> {
         &self.resumes
     }
@@ -1176,14 +1230,22 @@ impl Runtime {
         // Schedule admission freezes first: no occurrence is claimed and no run started from
         // here on (runs already dispatching finish or are reconciled at the next boot).
         self.scheduler.stop();
+        self.usage.stop();
         self.evals.stop();
         self.resumes.stop();
+        if let Some(worker) = &self.prices {
+            worker.stop();
+        }
         if let Some(worker) = &self.notifications {
             worker.stop();
         }
         // Preparation/admission/settlement are one drained unit: never orphan a blocking
         // readmission or let its outbox CAS write after shutdown has returned.
         self.resumes.drain().await;
+        let inference_shutdown = self.usage.drain_until(deadline).await;
+        if let Some(worker) = &self.prices {
+            worker.drain_until(deadline).await;
+        }
         if let Some(worker) = &self.notifications {
             worker.drain().await;
         }
@@ -1226,7 +1288,9 @@ impl Runtime {
             &self.scheduling,
             &self.grading,
             &self.resuming,
+            &self.pricing,
             &self.notifying,
+            &self.usage_task,
         ] {
             joining.extend(slot.lock().unwrap_or_else(|p| p.into_inner()).take());
         }
@@ -1276,10 +1340,34 @@ impl Runtime {
         }
         self.scheduler.drain(deadline).await;
         let bound = left();
-        let stopped = self
+        let mut stopped = self
             .housekeeper
             .shutdown(self.shutdown_grace.min(bound), bound)
             .await;
+        match inference_shutdown {
+            Ok(drain) => {
+                stopped.unclosed_inference_attempts = drain.unclosed;
+                if !stopped.unclosed_inference_attempts.is_empty() || drain.pending_preparations > 0
+                {
+                    let service = self.diagnostics.clone();
+                    let ids = stopped.unclosed_inference_attempts.clone();
+                    let _=tokio::task::spawn_blocking(move||{
+                        use devworks_core::services::diagnostics::LogEntry;
+                        use devworks_core::protocol::records::{Severity,DiagnosticOutcome};
+                        let mut entry=LogEntry::new("router.usage","unclosed-inference",Severity::Warning,
+                            format!("{} inference transports were not verified closed before shutdown ({} preparations still settling); custody and reservations remain held.",ids.len(),drain.pending_preparations));
+                        entry.operation=Some("runtime.shutdown".into());entry.stage=Some("shutdown".into());entry.outcome=Some(DiagnosticOutcome::Partial);
+                        entry.target_kind=Some("inference_attempt".into());entry.target_id=ids.first().cloned();
+                        let _=service.log(entry);
+                    }).await;
+                }
+            }
+            Err(error) => {
+                if stopped.reconciliation.is_ok() {
+                    stopped.reconciliation = Err(error);
+                }
+            }
+        }
         // AD20 step 4: final known activation state.
         let _ = self.runs.finish().await;
         self.keep_awake.apply(false);
@@ -1288,6 +1376,10 @@ impl Runtime {
     }
 
     fn stop(&self) {
+        self.usage.stop();
+        if let Some(worker) = &self.prices {
+            worker.stop();
+        }
         if let Some(worker) = &self.notifications {
             worker.stop();
         }
@@ -1394,6 +1486,9 @@ impl Drop for Runtime {
         self.stop();
         self.evals.close();
         self.resumes.close();
+        if let Some(worker) = &self.prices {
+            worker.close();
+        }
         if let Some(worker) = &self.notifications {
             worker.close();
         }
@@ -1419,12 +1514,14 @@ struct Admitter {
     admission: Arc<std::sync::RwLock<bool>>,
     dispatcher: Dispatcher,
     runs: Arc<RunSupervisor>,
+    usage: Arc<crate::usage::UsageRuntime>,
     collector: Arc<Collector>,
     diagnostics: Arc<DiagnosticService>,
     keep_awake: Arc<KeepAwake>,
     scheduler: OnceLock<Weak<Scheduler>>,
     evals: Arc<EvalSupervisor>,
     resumes: OnceLock<Weak<ResumeDispatcher>>,
+    prices: Option<Arc<crate::prices::PriceSupervisor>>,
     notifications: Option<Arc<OsNotificationSupervisor>>,
     indexing: Option<Arc<IndexSupervisor>>,
     /// The Tokio runtime [`boot`] ran on (a project archival's immediate stop is spawned there).
@@ -1484,6 +1581,12 @@ impl Admitter {
         };
         if committed {
             self.dispatcher.wakeup().wake();
+            self.usage.notify();
+            if operation.starts_with("router.")
+                && let Some(worker) = &self.prices
+            {
+                worker.notify();
+            }
             if let Some(worker) = &self.notifications {
                 worker.notify();
             }

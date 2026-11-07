@@ -19,6 +19,7 @@ pub mod knowledge;
 pub mod notifications;
 pub mod packages;
 pub mod power;
+pub mod prices;
 pub mod process;
 pub mod projects;
 pub mod queue;
@@ -26,6 +27,7 @@ pub mod resources;
 pub mod router;
 pub mod runs;
 pub mod sessions;
+pub mod usage;
 pub mod web;
 pub mod work;
 
@@ -66,6 +68,7 @@ pub(crate) fn fault(
 pub struct UseCases {
     queries: BTreeMap<&'static str, Arc<dyn QueryHandler>>,
     commands: BTreeMap<&'static str, Arc<dyn CommandHandler>>,
+    inference_router: Option<Arc<router::InferenceRouter>>,
 }
 
 impl UseCases {
@@ -80,6 +83,13 @@ impl UseCases {
     pub fn with_approvals(mut self, service: Arc<approvals::ApprovalService>) -> Self {
         for op in approvals::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_prices(mut self, service: Arc<prices::PriceService>) -> Self {
+        for operation in prices::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }
@@ -186,9 +196,21 @@ impl UseCases {
     /// Registers the router operations of the slice that resolves tiers, named models and
     /// availability (`InferenceRouter`).
     pub fn with_router(mut self, service: Arc<router::InferenceRouter>) -> Self {
+        self.inference_router = Some(service.clone());
         for op in router::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
+        self
+    }
+
+    /// The same qualified routing owner used by native attempt admission.
+    pub fn inference_router(&self) -> Option<Arc<router::InferenceRouter>> {
+        self.inference_router.clone()
+    }
+
+    /// Canonical usage reports share the native gateway and its authority fences.
+    pub fn with_usage(mut self, service: Arc<usage::UsageService>) -> Self {
+        self.register("router.usage", Some(service), None);
         self
     }
 

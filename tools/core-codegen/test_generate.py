@@ -40,7 +40,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'resources.holders', 'resources.waiters', 'sessions.list', 'sessions.get',
             'sessions.append_message', 'sessions.start', 'sessions.end', 'workspace.diagnostics',
             'workspace.logs', 'workspace.record_diagnostic', 'router.availability', 'router.catalog',
-            'router.route', 'router.pin',
+            'router.route', 'router.pin', 'router.usage', 'router.price_status', 'router.price_override',
             'projects.create', 'workflows.list', 'workflows.create_status', 'workflows.rename_status', 'workflows.order',
             'next_work.claim_project_queue', 'next_work.claim_feature_task',
             'next_work.inspect_claim', 'next_work.release_claim', 'next_work.inspect_queue',
@@ -71,8 +71,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.availability'], {2, 3})
         self.assertEqual(carried['router.route'], {3})
         self.assertEqual(carried['router.pin'], {3})
-        self.assertEqual(carried['router.connections'], {2})
-        self.assertEqual(carried['router.configure'], {2})
+        self.assertEqual(carried['router.connections'], {2, 3})
+        self.assertEqual(carried['router.configure'], {2, 3})
         # Knowledge projections expose independent challenges at revision 3; full source labels are additive.
         self.assertEqual(carried['knowledge.subgraph'], {2, 3})
         self.assertEqual(carried['knowledge.tag'], {2})
@@ -103,7 +103,7 @@ class SchemaRevisionRules(unittest.TestCase):
         catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3})
-        self.assertEqual(generate.introduced_in(configure), {2})
+        self.assertEqual(generate.introduced_in(configure), {2, 3})
 
     def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):
         view = generate.TYPES['ApprovalViewRecord']
@@ -119,6 +119,21 @@ class SchemaRevisionRules(unittest.TestCase):
             self.assertEqual([r['revision'] for r in byname[name]['schemaRevisions']], [3])
         self.assertEqual(byname['approvals.review_queue']['resultValueType'], 'KnowledgeReviewPage')
         self.assertEqual([r['revision'] for r in byname['notifications.settings']['schemaRevisions']], [1])
+
+    def test_nonprojectable_usage_results_refuse_legacy_instead_of_faking_values(self):
+        usage = generate.gen_versioned('RouterUsageResult', generate.TYPES['RouterUsageResult'], generate.TYPES)
+        self.assertIn('Current(UsageQueryResult)', usage)
+        self.assertIn('current result cannot be represented at this revision', usage)
+        self.assertNotIn('*self = Self::Legacy', usage)
+        catalog = generate.TYPES['PriceCatalogResult']
+        self.assertEqual(catalog['legacy'], 'Page<ModelPriceStatus>')
+        self.assertEqual(catalog['earlierName'], 'Page')
+        self.assertNotIn('budget', generate.TYPES['TaskPatch']['fields'])
+        self.assertNotIn('budget', generate.TYPES['IssuePatch']['fields'])
+        self.assertNotIn('budget', generate.TYPES['PlanDraft']['fields'])
+        self.assertEqual(generate.DOMAIN_OPS['features.edit_plan']['since']['budget'], 3)
+        self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['budget'], 3)
+        self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['plan_digest'], 3)
 
     def test_an_operation_can_begin_at_revision_three_without_a_legacy_binding(self):
         operation = next(o for _, o in generate.operations() if o['operation'] == 'next_work.inspect_queue')

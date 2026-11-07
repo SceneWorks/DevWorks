@@ -167,6 +167,8 @@ pub struct StoredConnection {
     pub endpoint: String,
     /// Turned on by the user; a disabled connection keeps its credential and is never routed.
     pub enabled: bool,
+    /// Explicit human-authored billing policy; never inferred from endpoint hostname.
+    pub local_free: bool,
     /// Canonical JSON of the wire `OpenRouterConstraints` (`OpenRouterChat` connections only).
     pub open_router: Option<String>,
     pub credential_ref: Option<Id>,
@@ -244,6 +246,12 @@ pub trait RouterRead {
     fn session_pin(&self, session: &Id) -> Result<Option<StoredPin>, StorageError>;
     /// Every recorded cooldown, expired or not, in model ID order (one per catalog model).
     fn cooldowns(&self) -> Result<Vec<StoredCooldown>, StorageError>;
+    /// Host bootstrap logical request records in exclusive request-ID order.
+    fn route_requests(
+        &self,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredRouteRequest>, StorageError>;
     fn route_request(&self, id: &Id) -> Result<Option<StoredRouteRequest>, StorageError>;
 }
 

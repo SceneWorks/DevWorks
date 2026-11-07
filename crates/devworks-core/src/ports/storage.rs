@@ -87,6 +87,7 @@ mod resources;
 mod router;
 mod runs;
 mod sessions;
+mod usage;
 mod work;
 pub use artifacts::*;
 pub use authority::*;
@@ -105,6 +106,7 @@ pub use resources::*;
 pub use router::*;
 pub use runs::*;
 pub use sessions::*;
+pub use usage::*;
 pub use work::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -506,6 +508,7 @@ pub trait WriteTransaction {
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
+    fn usage(&mut self) -> &mut dyn UsageRepository;
 }
 
 /// Freshness/provenance of one snapshot. Not an authorization token.
@@ -556,6 +559,7 @@ pub trait ReadSnapshot {
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
+    fn usage(&self) -> &dyn UsageRead;
 }
 
 // ---------------------------------------------------------------------------------------------

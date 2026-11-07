@@ -216,6 +216,7 @@ pub mod resources;
 pub mod runs;
 pub mod runtime;
 mod store;
+pub mod usage;
 
 pub use dispatch::{
     AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
@@ -231,3 +232,5 @@ pub use runtime::{
     BootError, BootReport, CollectionPass, Composition, IndexComposition, PackageComposition,
     RunComposition, Runtime, RuntimeConfig, ShutdownStage, boot,
 };
+
+pub mod prices;

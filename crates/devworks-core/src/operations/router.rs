@@ -8,11 +8,12 @@
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
+use crate::protocol::data::DataScope;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision, RootId};
+use crate::protocol::{Counter, Id, ProjectId, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -140,6 +141,83 @@ pub struct UsageInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<Id>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "UsageReportKind", extend("x-since" = 3))]
+    pub report_kind: Option<UsageReportKind>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DataScope", extend("x-since" = 3))]
+    pub scope: Option<DataScope>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 3))]
+    pub project_id: Option<ProjectId>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+    pub start_ms: Option<SignedCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "SignedCounter", extend("x-since" = 3))]
+    pub end_ms: Option<SignedCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub interval: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub user: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub provider: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub model: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 3))]
+    pub tool: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub purpose: Option<Label>,
 }
 impl Check for UsageInput {
     fn check(&self) -> Result<(), String> {
@@ -147,11 +225,56 @@ impl Check for UsageInput {
         self.session_id.check()?;
         self.job_run_id.check()?;
         self.page.check()?;
+        self.report_kind.check()?;
+        self.scope.check()?;
+        self.project_id.check()?;
+        self.start_ms.check()?;
+        self.end_ms.check()?;
+        self.interval.check()?;
+        self.user.check()?;
+        self.provider.check()?;
+        self.model.check()?;
+        self.tool.check()?;
+        self.purpose.check()?;
         Ok(())
     }
 }
 impl Revisioned for UsageInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.report_kind = None;
+        }
+        if revision < 3 {
+            self.scope = None;
+        }
+        if revision < 3 {
+            self.project_id = None;
+        }
+        if revision < 3 {
+            self.start_ms = None;
+        }
+        if revision < 3 {
+            self.end_ms = None;
+        }
+        if revision < 3 {
+            self.interval = None;
+        }
+        if revision < 3 {
+            self.user = None;
+        }
+        if revision < 3 {
+            self.provider = None;
+        }
+        if revision < 3 {
+            self.model = None;
+        }
+        if revision < 3 {
+            self.tool = None;
+        }
+        if revision < 3 {
+            self.purpose = None;
+        }
+    }
 }
 
 /// `router.request_status` Query input.
@@ -176,16 +299,50 @@ impl Revisioned for RequestStatusInput {
 pub struct PriceStatusInput {
     pub model_ids: Items<Id>,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 3))]
+    pub provider_ids: Option<Items<Id>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub include_history: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Id>", extend("x-since" = 3))]
+    pub snapshot_ids: Option<Items<Id>>,
 }
 impl Check for PriceStatusInput {
     fn check(&self) -> Result<(), String> {
         self.model_ids.check()?;
         self.page.check()?;
+        self.provider_ids.check()?;
+        self.include_history.check()?;
+        self.snapshot_ids.check()?;
         Ok(())
     }
 }
 impl Revisioned for PriceStatusInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.provider_ids = None;
+        }
+        if revision < 3 {
+            self.include_history = None;
+        }
+        if revision < 3 {
+            self.snapshot_ids = None;
+        }
+    }
 }
 
 /// `router.price_refresh` Command input.
@@ -209,21 +366,36 @@ impl Revisioned for PriceRefreshInput {
 /// `router.price_override` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["modelId", "expectedRevision", "price"]}, {"required": ["modelId", "expectedRevision", "change"], "x-since": 3}]))]
 pub struct PriceOverrideInput {
     pub model_id: Id,
     pub expected_revision: Revision,
-    pub price: PriceInput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "PriceInput")]
+    pub price: Option<PriceInput>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PriceOverrideChange", extend("x-since" = 3))]
+    pub change: Option<PriceOverrideChange>,
 }
 impl Check for PriceOverrideInput {
     fn check(&self) -> Result<(), String> {
         self.model_id.check()?;
         self.expected_revision.check()?;
         self.price.check()?;
+        self.change.check()?;
         Ok(())
     }
 }
 impl Revisioned for PriceOverrideInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.change = None;
+        }
+    }
 }
 
 /// `router.configure` Command input.

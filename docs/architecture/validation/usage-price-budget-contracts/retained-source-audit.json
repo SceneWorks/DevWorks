@@ -1,0 +1,157 @@
+{
+  "sourceRevision": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "sourceSha256": {
+    "src/CodeGraph.Api/Controllers/AdminReportsController.cs": "42a442ea76e388d992a9957619394624de179081debd605bacbe5f4d4a0b68ad",
+    "src/CodeGraph.Models/Requests/AdminReportRequests.cs": "f8689697fdc49a7a145804877c2240f68c2149de5d91820e932f575df9f2b4dc",
+    "src/CodeGraph.Models/Responses/AdminReportResponses.cs": "61e4e2c3b4b2baf29fc260c8c489bb54c4a8293b5b38f65d2986fe7555c2b442",
+    "src/CodeGraph.Services/AdminReportsService.cs": "76d9bdd96299a8d7b709a0963b42f91c47a48fd4c6deac4d20cded610e58623d",
+    "src/CodeGraph.Data.MariaDb/MySqlAdminReportsStore.cs": "50cb38f3d53127dad177bf668049c8ccea0c83d048bc5409f23e9664124a5ace",
+    "src/CodeGraph.Metrics/Consumers/LlmUsageRecordedConsumer.cs": "402e0ac3834d83c6564559b31fb65200d157d755682bd08c7865d63d06512ca0"
+  },
+  "status": "Read-only frozen source audit; contract mapping does not establish native behavior",
+  "requestFields": [
+    "Start",
+    "End",
+    "Interval",
+    "User",
+    "Provider",
+    "Model",
+    "Tool"
+  ],
+  "responseFields": [
+    "range",
+    "interval",
+    "totals",
+    "series",
+    "breakdowns",
+    "appliedFilters"
+  ],
+  "nativeOperation": "router.usage",
+  "nativeRevision": 3,
+  "views": [
+    {
+      "sourceMethod": "GetAssistantUsage",
+      "reportKind": "AssistantUsage",
+      "metrics": [
+        "totalTokens",
+        "inputTokens",
+        "outputTokens",
+        "runCount",
+        "uniqueChats"
+      ],
+      "breakdownDimensions": [
+        "user",
+        "provider",
+        "model"
+      ],
+      "ignoredFilters": "tool"
+    },
+    {
+      "sourceMethod": "GetAssistantActivity",
+      "reportKind": "AssistantActivity",
+      "metrics": [
+        "runCount",
+        "uniqueChats",
+        "completedRuns",
+        "failedRuns",
+        "cancelledRuns"
+      ],
+      "breakdownDimensions": [
+        "status",
+        "user",
+        "provider",
+        "model"
+      ],
+      "ignoredFilters": "tool"
+    },
+    {
+      "sourceMethod": "GetMcpUsage",
+      "reportKind": "McpUsage",
+      "metrics": [
+        "callCount",
+        "successfulCalls",
+        "failedCalls",
+        "uniqueUsers",
+        "averageDurationMs"
+      ],
+      "breakdownDimensions": [
+        "tool",
+        "user",
+        "status"
+      ],
+      "ignoredFilters": "provider/model"
+    },
+    {
+      "sourceMethod": "GetCodeReviewUsage",
+      "reportKind": "CodeReviewUsage",
+      "metrics": [
+        "totalTokens",
+        "inputTokens",
+        "outputTokens",
+        "requestCount",
+        "uniqueUsers"
+      ],
+      "breakdownDimensions": [
+        "user",
+        "provider",
+        "model"
+      ],
+      "ignoredFilters": "tool"
+    },
+    {
+      "sourceMethod": "GetRepositoryAnalysisUsage",
+      "reportKind": "RepositoryAnalysisUsage",
+      "metrics": [
+        "totalTokens",
+        "inputTokens",
+        "outputTokens",
+        "requestCount",
+        "uniqueUsers"
+      ],
+      "breakdownDimensions": [
+        "user",
+        "provider",
+        "model"
+      ],
+      "ignoredFilters": "tool"
+    }
+  ],
+  "filterDiscovery": {
+    "sourceMethod": "GetFilters",
+    "reportKind": "Filters",
+    "dimensions": [
+      "user",
+      "provider",
+      "model",
+      "tool"
+    ],
+    "rangeApplies": true,
+    "categoricalFiltersApply": false,
+    "ordering": "trimmed nonblank distinct ordinal strings"
+  },
+  "quirks": [
+    "UTC start inclusive, end exclusive; omitted end uses current UTC and omitted start is end minus30days",
+    "Invalid start>=end or unsupported interval raises a typed native invalid-input fault",
+    "Interval trimmed/case-insensitive; blank/auto selects day<=45days,week<=180days,month otherwise; weeks start Monday",
+    "Empty buckets are explicit zero metric points; unavailable native billing/cache metrics remain separate nullable observations",
+    "Breakdowns omit nonpositive values; descending value then ordinal label; blank keys become (unknown)",
+    "Assistant unique chats use per-user chat identity; completed/failed/cancelled status matching is case-insensitive",
+    "MCP average duration rounds like .NET Math.Round (ties to even); blank MCP usernames excluded from uniqueUsers",
+    "Filters union visible LLM usage, assistant runs and MCP invocation data for the selected time range",
+    "Consumer forwards original EventId to recorder; native attempt/event dedupe must be proven by its owner"
+  ],
+  "nativeAdaptation": [
+    "All authorized scope/project/work/session/job filters intersect, never grant caller authority",
+    "Bounded report rows/option rows preserve complete paging with query+read revision binding",
+    "Missing historical actor/attempt/provider identity remains absent; no current-owner enrichment",
+    "Ambiguous old financial observations remain raw fact totals and coverage gaps, separate from canonical spend"
+  ],
+  "fullSourcePathsRead": [
+    "src/CodeGraph.Api/Controllers/AdminReportsController.cs",
+    "src/CodeGraph.Models/Requests/AdminReportRequests.cs",
+    "src/CodeGraph.Models/Responses/AdminReportResponses.cs",
+    "src/CodeGraph.Services/AdminReportsService.cs",
+    "src/CodeGraph.Data.MariaDb/MySqlAdminReportsStore.cs",
+    "src/CodeGraph.Metrics/Consumers/LlmUsageRecordedConsumer.cs"
+  ]
+}

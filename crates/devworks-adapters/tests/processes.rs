@@ -646,7 +646,7 @@ fn an_orphaned_tree_is_verified_by_birth_and_terminated() {
     assert_eq!(NativeProcessHost.probe(&identity), Probe::Alive);
     // A reused pid (different birth) is never treated as the recorded process.
     let mut other = identity.clone();
-    other.birth = "1.000001".into();
+    other.birth = different_birth(&identity.birth);
     other.group = None;
     assert_eq!(NativeProcessHost.probe(&other), Probe::Gone);
     assert_eq!(NativeProcessHost.terminate(&other), Probe::Gone);
@@ -1369,6 +1369,42 @@ fn conflicting_stdin_modes_are_refused_before_spawn() {
     assert!(matches!(NativeProcessHost.spawn(&spec),
         Err(devworks_core::ports::process::ProcessError::Spawn(message))
             if message.contains("mutually exclusive")));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[test]
+fn current_host_identity_is_the_actual_process_and_wrong_birth_is_not_alive() {
+    let _serial = serial();
+    let host = NativeProcessHost;
+    let identity = host.current_identity().expect("native self birth token");
+    assert_eq!(identity.pid, std::process::id());
+    assert!(!identity.birth.is_empty());
+    assert_ne!(identity.birth, "unavailable");
+    assert_eq!(identity.group, None);
+    assert_eq!(host.probe(&identity), Probe::Alive);
+    assert_eq!(host.current_identity(), Some(identity.clone()));
+    let mut reused = identity.clone();
+    reused.birth = different_birth(&identity.birth);
+    assert_eq!(host.probe(&reused), Probe::Gone);
+    let mut unavailable = identity.clone();
+    unavailable.birth = "unavailable".into();
+    assert!(matches!(host.probe(&unavailable), Probe::Unknown(_)));
+    unavailable.birth.clear();
+    assert!(matches!(host.probe(&unavailable), Probe::Unknown(_)));
+    #[cfg(target_os = "linux")]
+    {
+        unavailable.birth = ":12345".into();
+        assert!(matches!(host.probe(&unavailable), Probe::Unknown(_)));
+    }
+    assert_eq!(host.probe(&identity), Probe::Alive);
+}
+
+/// Change a numeric component while retaining the platform's actual captured token shape.
+fn different_birth(birth: &str) -> String {
+    let mut changed = birth.to_owned();
+    let last = changed.pop().expect("native birth digit");
+    changed.push(if last == '0' { '1' } else { '0' });
+    changed
 }
 
 fn privileged_policy_test_context() -> bool {

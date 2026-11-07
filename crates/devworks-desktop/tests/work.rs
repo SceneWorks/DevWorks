@@ -345,6 +345,18 @@ fn a_plan_save_submits_the_form_it_started_from_into_the_project() {
         }];
     }
     settle(&mut h);
+    // The feature accounting summary can put this control below the viewport. Scroll before
+    // closing the upload gate: settling a held request afterwards would wait on the test gate.
+    h.get_by_role_and_label(Role::Button, "Save plan draft")
+        .scroll_to_me();
+    settle(&mut h);
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save plan draft")
+            .rect()
+            .bottom()
+            <= 1000.0,
+        "the save control is in the native viewport"
+    );
     // The plan text is uploading while the user keeps writing.
     gate.close();
     h.get_by_role_and_label(Role::Button, "Save plan draft")

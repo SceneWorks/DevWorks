@@ -749,13 +749,14 @@ mod revision {
         collapse(&mut v);
         if let Some(Value::Object(defs)) = v.get_mut("$defs") {
             for (from, to) in &renames {
-                let reference = format!("#/$defs/{to}");
-                if defs
-                    .get(from)
+                let referenced = defs.get(from)
                     .and_then(|d| d.get("$ref"))
                     .and_then(Value::as_str)
-                    == Some(reference.as_str())
-                    && let Some(original) = defs.get(to).cloned()
+                    .and_then(|r| r.strip_prefix("#/$defs/"));
+                if let Some(referenced) = referenced
+                    && (referenced == to || referenced.strip_prefix(to.as_str())
+                        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())))
+                    && let Some(original) = defs.get(referenced).cloned()
                 {
                     defs.insert(from.clone(), original);
                 }

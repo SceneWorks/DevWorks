@@ -19,6 +19,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[path = "native_runtime_case.rs"]
+mod case_budget;
+
+/// Acquire before a heavy case; retain the permit through every owned fixture and cleanup.
+#[must_use = "hold the case permit until runtime cleanup has finished"]
+pub fn native_runtime_case() -> impl Drop {
+    case_budget::acquire()
+}
+
 pub const T0: i64 = 1_700_000_000_000;
 
 pub struct TestClock(pub AtomicI64);

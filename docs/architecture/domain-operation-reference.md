@@ -30,7 +30,7 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | `features.list` | **Query**<br>`projectId`: `ProjectId`<br>`page`: `PageRequest`<br>`statusIds`: `Items<Id>`<br>`repositoryIds`: `Items<Id>`<br>`text`: `?Text`<br>`detailLevel`: `DetailLevel`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<WorkRecord>` |
 | `features.get` | **Query**<br>`workId`: `Id`<br>`detailLevel`: `DetailLevel`<br>`detailPage`: `?PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
 | `features.create` | **Command**<br>`projectId`: `ProjectId`<br>`creation`: `FeatureCreation`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<WorkRecord>` |
-| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
+| `features.edit_plan` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`plan`: `PlanDraft`<br>`budget`: `?FeatureBudgetInput`<br>`clearBudgetProposal`: `?bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
 | `features.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
 | `features.dependencies` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`replacement`: `DependencyReplacement`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
 | `features.request_plan_approval` | **Command**<br>`featureId`: `RootId`<br>`expectedRevision`: `Revision`<br>`planRevision`: `Revision`<br>`planDigest`: `Digest` | `ProposalRecord` |
@@ -559,16 +559,16 @@ All 359 qualified operations have typed input/result candidates. Existing input 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
 | `router.catalog` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<RouteCatalogModel>` |
-| `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<ConnectionRecord>` |
+| `router.connections` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `Page<ConnectionRecord>` |
 | `router.route` | **Command**<br>`sessionId`: `Id`<br>`expectedContextEpoch`: `Counter`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
 | `router.pin` | **Command**<br>`sessionId`: `Id`<br>`expectedPinRevision`: `Revision`<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteChoice` |
 | `router.availability` | **Query**<br>`intent`: `RouteIntent`<br>`effort`: `EffortName`<br>`requiredCapabilities`: `Items<Label>`<br>`sessionId`: `?Id`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouteAvailability` |
-| `router.usage` | **Query**<br>`rootId`: `?RootId`<br>`sessionId`: `?Id`<br>`jobRunId`: `?Id`<br>`page`: `PageRequest` | `UsageReport` |
+| `router.usage` | **Query**<br>`rootId`: `?RootId`<br>`sessionId`: `?Id`<br>`jobRunId`: `?Id`<br>`page`: `PageRequest`<br>`reportKind`: `?UsageReportKind`<br>`scope`: `?DataScope`<br>`projectId`: `?ProjectId`<br>`startMs`: `?SignedCounter`<br>`endMs`: `?SignedCounter`<br>`interval`: `?Content`<br>`user`: `?Content`<br>`provider`: `?Content`<br>`model`: `?Content`<br>`tool`: `?Content`<br>`purpose`: `?Label`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `RouterUsageResult` |
 | `router.request_status` | **Query**<br>`requestId`: `Id` | `OperationRef` |
-| `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest` | `Page<ModelPriceStatus>` |
+| `router.price_status` | **Query**<br>`modelIds`: `Items<Id>`<br>`page`: `PageRequest`<br>`providerIds`: `?Items<Id>`<br>`includeHistory`: `?bool`<br>`snapshotIds`: `?Items<Id>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `PriceCatalogResult` |
 | `router.price_refresh` | **Command**<br>`providerIds`: `NonEmpty<Id>`<br>`expectedPriceRevision`: `Revision` | `OperationRef` |
-| `router.price_override` | **Command**<br>`modelId`: `Id`<br>`expectedRevision`: `Revision`<br>`price`: `PriceInput` | `PriceRecord` |
-| `router.configure` | **Command**<br>`action`: `RouterConfigAction`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
+| `router.price_override` | **Command**<br>`modelId`: `Id`<br>`expectedRevision`: `Revision`<br>`price`: `?PriceInput`<br>`change`: `?PriceOverrideChange`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `PriceOverrideResult` |
+| `router.configure` | **Command**<br>`action`: `RouterConfigAction`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `MutationSummary` |
 | `router.decision_models` | **Query**<br>`page`: `PageRequest`<br>`includeDisabled`: `bool` | `Page<DecisionModel>` |
 | `router.decide` | **Command**<br>`modelId`: `Id`<br>`expectedModelRevision`: `Revision`<br>`state`: `DynamicJson`<br>`questions`: `NonEmpty<NamedQuestion>`<br>`images`: `Items<MediaRef>`<br>`videos`: `Items<MediaRef>`<br>`timeoutMs`: `PositiveCounter` | `DecisionResult` |
 
@@ -979,6 +979,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `taskType` | `?WorkItemType` · *revision 3+* |
 | `labels` | `?Items<Label>` · *revision 3+* |
 | `previousInheritance` | `?WorkInheritanceOrigin` · *revision 3+* |
+| `budget` | `?FeatureBudgetView` · *revision 3+* |
 
 ### PlanDraft
 
@@ -2083,6 +2084,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `signIn` | `?SignInChallenge` · *revision 2+* |
 | `enabled` | `?bool` · *revision 2+* |
 | `openRouter` | `?OpenRouterConstraints` · *revision 2+* |
+| `localFree` | `?bool` · *revision 3+* |
 
 ### RouteChoice
 
@@ -2510,7 +2512,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 | Kind | Fields |
 | --- | --- |
-| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id`<br>`enabled`: `?bool`<br>`openRouter`: `?OpenRouterConstraints` |
+| `Connection` | `connectionId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`profile`: `EndpointKind`<br>`endpoint`: `Url`<br>`credentialRef`: `?Id`<br>`enabled`: `?bool`<br>`openRouter`: `?OpenRouterConstraints`<br>`localFree`: `?bool` |
 | `Model` | `model`: `RouteModel`<br>`expectedRevision`: `?Revision` |
 | `Tier` | `tier`: `TierName`<br>`expectedRevision`: `Revision`<br>`memberIds`: `Items<Id>` |
 | `DecisionModel` | `model`: `DecisionModel`<br>`expectedRevision`: `?Revision` |
@@ -2718,6 +2720,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `plan` | `PlanDraft` |
 | `tasks` | `PlanItems<TaskPlanEntry>` |
 | `labels` | `?Items<Label>` · *revision 3+* |
+| `budget` | `?FeatureBudgetInput` · *revision 3+* |
 
 ### AtomicWorkPlan
 
@@ -2731,7 +2734,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 
 | Kind | Fields |
 | --- | --- |
-| `Single` | `title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`plan`: `?PlanDraft`<br>`labels`: `?Items<Label>` |
+| `Single` | `title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`plan`: `?PlanDraft`<br>`labels`: `?Items<Label>`<br>`budget`: `?FeatureBudgetInput` |
 | `AtomicPlan` | `plan`: `AtomicWorkPlan` |
 | `StagedPlan` | `artifact`: `ArtifactRef` |
 
@@ -2852,6 +2855,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `readiness` | `?ReadinessChange` · *revision 2+* |
 | `acceptanceEvidence` | `?NonEmpty<AcceptanceCriterion>` · *revision 2+* |
 | `labels` | `?Items<Label>` · *revision 3+* |
+| `budget` | `?FeatureBudgetInput` · *revision 3+* |
 
 ### IssuePatch
 
@@ -2951,6 +2955,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `revision` | `Revision` |
 | `draft` | `PlanDraft` |
 | `approval` | `?PlanApproval` |
+| `budget` | `?FeatureBudgetInput` · *revision 3+* |
+| `planDigest` | `?Digest` · *revision 3+* |
 
 ### GithubIssueIntakeState
 
@@ -3758,7 +3764,341 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | Kind | Fields |
 | --- | --- |
 | `Settings` | `entries`: `Items<SettingAssignment>` |
-| `FeaturePlan` | `plan`: `PlanDraft` |
+| `FeaturePlan` | `plan`: `PlanDraft`<br>`budget`: `?FeatureBudgetInput` |
+
+### PriceTariff
+
+| Field | Type |
+| --- | --- |
+| `upstreamModelId` | `Text` |
+| `serviceTier` | `Label` |
+| `contextLowerExclusive` | `?Counter` |
+| `contextUpperInclusive` | `?Counter` |
+| `modality` | `PriceModality` |
+| `chargeKind` | `PriceChargeKind` |
+| `cacheTtlSeconds` | `?PositiveCounter` |
+| `unit` | `PriceUnit` |
+| `units` | `PositiveCounter` |
+| `amountUsd` | `Money` |
+| `region` | `?Label` |
+| `endpointProfile` | `?Label` |
+
+### PriceSourceSnapshot
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `providerId` | `Id` |
+| `revision` | `Revision` |
+| `sourceUrl` | `Url` |
+| `sourceDigest` | `Digest` |
+| `parserVersion` | `Label` |
+| `fetchedAtMs` | `Counter` |
+| `verifiedAtMs` | `Counter` |
+| `effectiveDate` | `?Label` |
+
+### ProviderPriceStatus
+
+| Field | Type |
+| --- | --- |
+| `providerId` | `Id` |
+| `revision` | `Revision` |
+| `snapshotId` | `?Id` |
+| `stale` | `bool` |
+| `lastCheckedAtMs` | `?Counter` |
+| `nextCheckAtMs` | `?Counter` |
+| `refreshOperationId` | `?OperationId` |
+| `error` | `?Text` |
+
+### PriceCatalogEntry
+
+| Field | Type |
+| --- | --- |
+| `providerId` | `Id` |
+| `modelId` | `?Id` |
+| `upstreamModelId` | `Text` |
+| `origin` | `PriceOrigin` |
+| `snapshotId` | `?Id` |
+| `overrideRevision` | `?Revision` |
+| `tariff` | `PriceTariff` |
+
+### PriceCatalogView
+
+| Field | Type |
+| --- | --- |
+| `catalogRevision` | `Revision` |
+| `items` | `Rows<PriceCatalogEntry>` |
+| `snapshots` | `Rows<PriceSourceSnapshot>` |
+| `providers` | `Rows<ProviderPriceStatus>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `coverage` | `Coverage` |
+| `models` | `Rows<ModelPriceView>` |
+| `overrideHistory` | `?Rows<PriceOverrideOutcome>` · *revision 3+* |
+
+### PriceCatalogResult
+
+Before revision 3: exact legacy `Page<ModelPriceStatus>`. Revision 3 and later: `PriceCatalogView`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### PriceOverrideChange
+
+| Kind | Fields |
+| --- | --- |
+| `Set` | `tariffs`: `NonEmpty<PriceTariff>` |
+| `Clear` | No caller fields |
+
+### PriceOverrideOutcome
+
+| Kind | Fields |
+| --- | --- |
+| `Set` | `modelId`: `Id`<br>`revision`: `Revision`<br>`tariffs`: `NonEmpty<PriceTariff>`<br>`updatedBy`: `?ActorId`<br>`updatedAtMs`: `?Counter` |
+| `Cleared` | `modelId`: `Id`<br>`revision`: `Revision`<br>`updatedBy`: `?ActorId`<br>`updatedAtMs`: `?Counter` |
+
+### PriceOverrideResult
+
+Before revision 3: exact legacy `PriceRecord`. Revision 3 and later: `PriceOverrideOutcome`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### UsageReportKind
+
+`Attempts`, `AssistantUsage`, `AssistantActivity`, `McpUsage`, `CodeReviewUsage`, `RepositoryAnalysisUsage`, `Filters`.
+
+### UsageReportRange
+
+| Field | Type |
+| --- | --- |
+| `startMs` | `SignedCounter` |
+| `endMs` | `SignedCounter` |
+
+### UsageAppliedFilters
+
+| Field | Type |
+| --- | --- |
+| `scope` | `?DataScope` |
+| `projectId` | `?ProjectId` |
+| `rootId` | `?RootId` |
+| `sessionId` | `?Id` |
+| `jobRunId` | `?Id` |
+| `user` | `?Content` |
+| `provider` | `?Content` |
+| `model` | `?Content` |
+| `tool` | `?Content` |
+| `purpose` | `?Label` |
+
+### UsageQueryContext
+
+| Field | Type |
+| --- | --- |
+| `reportKind` | `UsageReportKind` |
+| `range` | `UsageReportRange` |
+| `interval` | `Label` |
+| `appliedFilters` | `UsageAppliedFilters` |
+| `readRevision` | `Revision` |
+
+### UsageCacheDiagnostic
+
+| Field | Type |
+| --- | --- |
+| `kind` | `Label` |
+| `inferred` | `bool` |
+| `detail` | `?Text` |
+| `sourceRevision` | `?Revision` |
+
+### UsageCostSnapshot
+
+| Field | Type |
+| --- | --- |
+| `priceKind` | `UsageCostKind` |
+| `priceOrigin` | `PriceOrigin` |
+| `amountMicroUsd` | `?Counter` |
+| `currency` | `?Label` |
+| `originalAmount` | `?Money` |
+| `classification` | `?Label` |
+| `priceSnapshotId` | `?Id` |
+| `priceRevision` | `?Revision` |
+| `overrideRevision` | `?Revision` |
+| `subscriptionEquivalent` | `bool` |
+| `incomplete` | `bool` |
+| `untrackedReason` | `?Content` |
+| `tariffs` | `Rows<PriceTariff>` |
+| `monetaryComplete` | `bool` |
+
+### UsageAttemptRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `requestId` | `?Id` |
+| `attemptId` | `?Id` |
+| `attemptNumber` | `?Revision` |
+| `sourceKind` | `Label` |
+| `sourceId` | `Id` |
+| `actorId` | `?ActorId` |
+| `projectId` | `?ProjectId` |
+| `featureId` | `?RootId` |
+| `workId` | `?Id` |
+| `assignmentId` | `?AssignmentId` |
+| `sessionId` | `?Id` |
+| `jobRunId` | `?Id` |
+| `operationId` | `?OperationId` |
+| `purpose` | `Label` |
+| `role` | `?Label` |
+| `providerId` | `?Id` |
+| `connectionId` | `?Id` |
+| `modelId` | `?Id` |
+| `resolvedModelId` | `?Text` |
+| `startedAtMs` | `?Counter` |
+| `finishedAtMs` | `?Counter` |
+| `state` | `Label` |
+| `inputTokens` | `?Counter` |
+| `uncachedInputTokens` | `?Counter` |
+| `outputTokens` | `?Counter` |
+| `cacheReadTokens` | `?Counter` |
+| `cacheWriteTokens` | `?Counter` |
+| `cacheReadMicroUsd` | `?Counter` |
+| `cacheWriteMicroUsd` | `?Counter` |
+| `inputSemantics` | `?Label` |
+| `cost` | `UsageCostSnapshot` |
+| `cacheDiagnostics` | `Rows<UsageCacheDiagnostic>` |
+| `unknownTail` | `bool` |
+| `reasoningTokens` | `?Counter` |
+| `unitQuantities` | `Rows<UsageMeasuredQuantity>` |
+| `connectionRevision` | `?Revision` |
+
+### UsageTotals
+
+| Field | Type |
+| --- | --- |
+| `attempts` | `Counter` |
+| `trackedMicroUsd` | `Counter` |
+| `reportedMicroUsd` | `Counter` |
+| `estimatedMicroUsd` | `Counter` |
+| `reservedMicroUsd` | `Counter` |
+| `localFreeAttempts` | `Counter` |
+| `untrackedAttempts` | `Counter` |
+| `unknownTailAttempts` | `Counter` |
+| `incompleteAttempts` | `Counter` |
+| `monetaryIncompleteAttempts` | `Counter` |
+| `legacyUsageFacts` | `Counter` |
+| `legacyUntrackedFacts` | `Counter` |
+| `legacyObservationMicroUsd` | `Counter` |
+
+### UsageAttemptPage
+
+| Field | Type |
+| --- | --- |
+| `context` | `UsageQueryContext` |
+| `items` | `Rows<UsageAttemptRecord>` |
+| `totals` | `UsageTotals` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `coverage` | `Coverage` |
+
+### UsageReportRow
+
+| Kind | Fields |
+| --- | --- |
+| `Total` | `key`: `Label`<br>`label`: `Label`<br>`value`: `Counter` |
+| `SeriesPoint` | `key`: `Label`<br>`label`: `Content`<br>`bucketStartMs`: `SignedCounter`<br>`value`: `Counter` |
+| `Breakdown` | `dimension`: `Label`<br>`key`: `Content`<br>`label`: `Content`<br>`value`: `Counter` |
+
+### UsageAggregatePage
+
+| Field | Type |
+| --- | --- |
+| `context` | `UsageQueryContext` |
+| `items` | `Rows<UsageReportRow>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `coverage` | `Coverage` |
+
+### UsageFilterOption
+
+| Field | Type |
+| --- | --- |
+| `dimension` | `Label` |
+| `value` | `Content` |
+
+### UsageFilterOptions
+
+| Field | Type |
+| --- | --- |
+| `context` | `UsageQueryContext` |
+| `items` | `Rows<UsageFilterOption>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `coverage` | `Coverage` |
+
+### UsageQueryResult
+
+| Kind | Fields |
+| --- | --- |
+| `Attempts` | `page`: `UsageAttemptPage` |
+| `Report` | `report`: `UsageAggregatePage` |
+| `Filters` | `filters`: `UsageFilterOptions` |
+
+### RouterUsageResult
+
+Before revision 3: exact legacy `UsageReport`. Revision 3 and later: `UsageQueryResult`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### FeatureBudgetInput
+
+| Kind | Fields |
+| --- | --- |
+| `Off` | No caller fields |
+| `Limit` | `microUsd`: `Counter` |
+
+### FeatureBudgetView
+
+| Field | Type |
+| --- | --- |
+| `revision` | `Revision` |
+| `limitMicroUsd` | `?Counter` |
+| `spentMicroUsd` | `Counter` |
+| `reservedMicroUsd` | `Counter` |
+| `warning` | `bool` |
+| `continueRequired` | `bool` |
+| `untrackedAttempts` | `Counter` |
+| `unknownTailAttempts` | `Counter` |
+| `accountingReady` | `bool` |
+| `monetaryIncompleteAttempts` | `Counter` |
+| `legacyUsageFacts` | `Counter` |
+
+### PriceChargeKind
+
+`Input`, `Output`, `CacheRead`, `CacheWrite`, `Request`, `Runtime`.
+
+### PriceUnit
+
+`Token`, `Second`, `Image`, `Request`, `Character`.
+
+### PriceModality
+
+`Text`, `Image`, `Audio`, `Video`, `Any`.
+
+### ModelPriceView
+
+| Field | Type |
+| --- | --- |
+| `modelId` | `Id` |
+| `revision` | `Revision` |
+| `priceKind` | `UsagePriceKind` |
+| `snapshotId` | `?Id` |
+| `overrideRevision` | `?Revision` |
+| `untrackedReason` | `?Text` |
+
+### UsageCostKind
+
+`Reported`, `Estimated`, `Free`, `Untracked`, `Unknown`.
+
+### UsageMeasuredQuantity
+
+| Field | Type |
+| --- | --- |
+| `modality` | `Label` |
+| `chargeKind` | `Label` |
+| `unit` | `Label` |
+| `cacheWriteTtlMs` | `?Counter` |
+| `quantity` | `Counter` |
 
 ## Machine sources
 

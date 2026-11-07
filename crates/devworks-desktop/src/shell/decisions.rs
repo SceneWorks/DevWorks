@@ -107,7 +107,7 @@ fn required_approval_text(
     p: &ApprovalViewRecord,
 ) -> Option<devworks_core::protocol::provider::ArtifactRef> {
     match &p.reviewed_source {
-        Some(ApprovalReviewedContent::FeaturePlan { plan }) => Some(plan.content.clone()),
+        Some(ApprovalReviewedContent::FeaturePlan { plan, .. }) => Some(plan.content.clone()),
         _ if package_source_attachment(p) => None,
         _ => p.artifact.clone(),
     }
@@ -1215,7 +1215,10 @@ fn approval_detail(ui: &mut Ui, d: &mut DecisionsUi, actions: &mut Vec<Action>, 
                     ui.push_id(i, |ui| json_view(ui, &format!("Setting {}", i + 1), entry));
                 }
             }
-            ApprovalReviewedContent::FeaturePlan { plan } => {
+            ApprovalReviewedContent::FeaturePlan { plan, budget } => {
+                if let Some(budget) = budget {
+                    crate::usage_screen::budget_choice(ui, budget);
+                }
                 ui.label("Exact proposed plan");
                 json_view(ui, "Plan artifact identity", &plan.content);
                 json_view(ui, "Repositories", &plan.repository_ids);

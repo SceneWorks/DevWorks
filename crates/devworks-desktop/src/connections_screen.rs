@@ -47,13 +47,21 @@ pub enum ConnectionAction {
         key: Option<Secret>,
         code: Option<(Id, Secret)>,
     },
+    /// A save from the open editor. Its captured draft is settled only by this command.
+    ConfigureEdit {
+        label: String,
+        action: Value,
+        key: Option<Secret>,
+        code: Option<(Id, Secret)>,
+    },
     /// The user's explicit choice to keep credentials for this session only.
     UseSessionOnly,
 }
 
 /// Per-connection editing state.
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq)]
 struct Edit {
+    revision: String,
     name: String,
     endpoint: String,
     /// A replacement key being typed (cleared when submitted).
@@ -61,6 +69,8 @@ struct Edit {
     /// A pasted `code#state` (cleared when submitted).
     code: String,
     notice_read: bool,
+    local_free: bool,
+    local_free_changed: bool,
     open: bool,
     /// OpenRouter constraints: comma-separated model patterns, the cost tier index into
     /// [`COST_TIERS`] and the provider-routing object as JSON.
@@ -69,6 +79,14 @@ struct Edit {
     cost_tier: usize,
     provider: String,
     constraints_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct PendingEdit {
+    id: String,
+    draft: Edit,
+    request_key: Option<String>,
+    frame: Option<Vec<u8>>,
 }
 
 /// One catalog row's editable fields.
@@ -102,6 +120,8 @@ pub struct ConnectionsPanel {
     /// (from the host).
     pub secret_store: Option<SecretStoreStatus>,
     edits: BTreeMap<String, Edit>,
+    pending_edits: BTreeMap<u64, PendingEdit>,
+    refused_edits: BTreeMap<String, PendingEdit>,
     models: BTreeMap<String, ModelEdit>,
     /// The stored values each draft started from (a draft equal to its base is untouched).
     model_bases: BTreeMap<String, ModelEdit>,
@@ -109,6 +129,7 @@ pub struct ConnectionsPanel {
     add_name: String,
     add_endpoint: String,
     add_key: String,
+    add_local_free: bool,
     new_model: NewModel,
 }
 
@@ -169,8 +190,14 @@ impl ConnectionsPanel {
     pub fn loaded(&mut self, records: Vec<ConnectionRecord>) {
         for r in &records {
             let e = self.edits.entry(r.id.as_str().to_owned()).or_default();
+            if e.open && !e.local_free_changed {
+                e.local_free = r.local_free.unwrap_or(false);
+            }
             if !e.open {
+                e.revision = r.revision.as_str().into();
                 e.name = r.name.0.clone();
+                e.local_free = r.local_free.unwrap_or(false);
+                e.local_free_changed = false;
                 e.endpoint = r.endpoint.as_ref().map(|u| u.0.clone()).unwrap_or_default();
                 let o = r.open_router.as_ref();
                 e.allowed = o.map(|o| joined(&o.allowed_models.0)).unwrap_or_default();
@@ -187,11 +214,116 @@ impl ConnectionsPanel {
             }
         }
         self.edits
-            .retain(|k, _| records.iter().any(|r| r.id.as_str() == k));
+            .retain(|k, e| e.open || records.iter().any(|r| r.id.as_str() == k));
         self.records = records;
         self.loaded = true;
         self.loading = false;
         self.error = None;
+    }
+    pub fn preparing_edit(&mut self, sequence: u64, action: &Value) {
+        if action["kind"] != "Connection" {
+            return;
+        }
+        let Some(id) = action["connectionId"].as_str() else {
+            return;
+        };
+        if let Some(edit) = self.edits.get(id).filter(|edit| edit.open) {
+            self.pending_edits.insert(
+                sequence,
+                PendingEdit {
+                    id: id.into(),
+                    draft: edit.clone(),
+                    request_key: None,
+                    frame: None,
+                },
+            );
+        }
+    }
+    pub fn prepared_edit(&mut self, sequence: u64, frame: &[u8]) {
+        if let Some(pending) = self.pending_edits.get_mut(&sequence) {
+            pending.frame = Some(frame.to_vec());
+            pending.request_key = serde_json::from_slice::<Value>(frame)
+                .ok()
+                .and_then(|v| v["requestKey"].as_str().map(str::to_owned));
+        }
+    }
+    pub fn edit_finished(&mut self, sequence: u64, successful: bool, unknown: bool) {
+        if unknown {
+            return;
+        }
+        if let Some(pending) = self.pending_edits.remove(&sequence) {
+            if successful {
+                self.refused_edits.remove(&pending.id);
+                if let Some(edit) = self.edits.get_mut(&pending.id)
+                    && *edit == pending.draft
+                {
+                    edit.open = false;
+                }
+            } else {
+                self.refused_edits.insert(pending.id.clone(), pending);
+            }
+        }
+    }
+    /// Reconstruct only the non-secret edit from the client's original unresolved frame.
+    /// The client retains and confirms those exact bytes and their original schema revision.
+    pub fn restore_edit(&mut self, sequence: u64, frame: &[u8]) {
+        let Ok(v) = serde_json::from_slice::<Value>(frame) else {
+            return;
+        };
+        let action = &v["body"]["action"];
+        if action["kind"] != "Connection" {
+            return;
+        }
+        let Some(id) = action["connectionId"].as_str() else {
+            return;
+        };
+        let mut edit = Edit {
+            open: true,
+            name: action["name"].as_str().unwrap_or_default().into(),
+            endpoint: action["endpoint"].as_str().unwrap_or_default().into(),
+            revision: action["expectedRevision"]
+                .as_str()
+                .unwrap_or_default()
+                .into(),
+            local_free: action["localFree"].as_bool().unwrap_or(false),
+            local_free_changed: action["localFree"].is_boolean(),
+            ..Edit::default()
+        };
+        if let Some(c) = action.get("openRouter") {
+            edit.allowed = c["allowedModels"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            edit.excluded = c["excludedModels"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            edit.cost_tier = c["costTier"]
+                .as_str()
+                .and_then(|tier| COST_TIERS.iter().position(|t| *t == tier))
+                .unwrap_or(0);
+            edit.provider = c.get("provider").map(Value::to_string).unwrap_or_default();
+        }
+        self.edits.insert(id.into(), edit.clone());
+        self.pending_edits.insert(
+            sequence,
+            PendingEdit {
+                id: id.into(),
+                draft: edit,
+                request_key: v["requestKey"].as_str().map(str::to_owned),
+                frame: Some(frame.to_vec()),
+            },
+        );
     }
     /// Replaces the catalog (a complete load), keeping unsaved row edits.
     pub fn catalog_loaded(&mut self, models: Vec<RouteCatalogModel>) {
@@ -301,6 +433,50 @@ impl ConnectionsPanel {
                 for r in &records {
                     self.connection_ui(ui, r, now_ms, &mut scroll_actions);
                     ui.add_space(10.0);
+                }
+                if self.loaded {
+                    for (id, edit) in &mut self.edits {
+                        if edit.open && !self.records.iter().any(|r| r.id.as_str() == id) {
+                            ui.push_id(("missing-connection-edit", id), |ui| {
+                                ui.group(|ui| {
+                                    ui.strong("Captured edit for a connection no longer listed");
+                                    ui.label(format!(
+                                        "{} · captured revision {}",
+                                        id, edit.revision
+                                    ));
+                                    ui.label(format!(
+                                        "Name: {} · endpoint: {}",
+                                        edit.name, edit.endpoint
+                                    ));
+                                    if edit.local_free_changed {
+                                        ui.label(format!(
+                                            "Proposed local/free policy: {}",
+                                            if edit.local_free { "On" } else { "Off" }
+                                        ));
+                                    }
+                                    let pending = self.pending_edits.values().find(|p| p.id == *id);
+                                    if let Some(pending) = pending {
+                                        ui.label(format!(
+                                            "Awaiting the original submitted change {}",
+                                            pending
+                                                .request_key
+                                                .as_deref()
+                                                .unwrap_or("being prepared")
+                                        ));
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            pending.is_none(),
+                                            egui::Button::new("Close retained connection draft"),
+                                        )
+                                        .clicked()
+                                    {
+                                        edit.open = false;
+                                    }
+                                });
+                            });
+                        }
+                    }
                 }
                 widgets::divider(ui);
                 self.add_ui(ui, &mut scroll_actions);
@@ -434,11 +610,18 @@ impl ConnectionsPanel {
                     }
                 }
                 let e = self.edits.entry(id.clone()).or_default();
+                let awaiting = self.pending_edits.values().any(|pending| pending.id == id);
                 if ui
-                    .button(if e.open { "Close editor" } else { "Edit" })
+                    .add_enabled(
+                        !awaiting,
+                        egui::Button::new(if e.open { "Close editor" } else { "Edit" }),
+                    )
                     .clicked()
                 {
                     e.open = !e.open;
+                    if e.open {
+                        e.revision = revision.clone();
+                    }
                 }
                 let enabled = r.enabled != Some(false);
                 if ui
@@ -589,7 +772,77 @@ impl ConnectionsPanel {
         revision: &str,
         actions: &mut Vec<ConnectionAction>,
     ) {
+        if let Some(refused) = self.refused_edits.get(id) {
+            ui.collapsing("Last refused connection edit", |ui| {
+                ui.label(format!(
+                    "Submitted change {} · captured revision {}",
+                    refused.request_key.as_deref().unwrap_or("not admitted"),
+                    refused.draft.revision
+                ));
+                ui.label(format!(
+                    "Name: {} · endpoint: {}",
+                    refused.draft.name, refused.draft.endpoint
+                ));
+                ui.label(if refused.draft.local_free_changed {
+                    if refused.draft.local_free {
+                        "Proposed local/free policy: On"
+                    } else {
+                        "Proposed local/free policy: Off"
+                    }
+                } else {
+                    "Local/free policy: preserved"
+                });
+                if refused.frame.is_some() {
+                    widgets::caption(ui, "The original submitted change is retained.");
+                }
+            });
+        }
+        let pending = self.pending_edits.values().find(|pending| pending.id == id);
+        let awaiting = pending.is_some();
+        if let Some(pending) = pending {
+            widgets::caption(
+                ui,
+                format!(
+                    "Awaiting confirmation for connection edit {}. The exact submitted change is retained; a second save is unavailable.",
+                    pending.request_key.as_deref().unwrap_or("being prepared")
+                ),
+            );
+        }
         let e = self.edits.entry(id.to_owned()).or_default();
+        let stale = e.revision != revision;
+        if stale {
+            ui.colored_label(
+                crate::theme::AMBER,
+                "The stored connection changed. Your captured draft is preserved.",
+            );
+            ui.label(format!(
+                "Stored revision {} · name: {} · endpoint: {} · local/free policy: {}",
+                revision,
+                r.name.0,
+                r.endpoint.as_ref().map_or("Not recorded", |u| u.0.as_str()),
+                match r.local_free {
+                    Some(true) => "On",
+                    Some(false) => "Off",
+                    None => "Not recorded",
+                }
+            ));
+            if ui
+                .add_enabled(
+                    !awaiting,
+                    egui::Button::new("Review and use current connection revision"),
+                )
+                .clicked()
+            {
+                e.revision = revision.into();
+                if !e.local_free_changed {
+                    e.local_free = r.local_free.unwrap_or(false);
+                }
+            }
+        }
+        widgets::caption(
+            ui,
+            format!("Editing captured connection revision {}", e.revision),
+        );
         field(
             ui,
             "Name",
@@ -612,6 +865,15 @@ impl ConnectionsPanel {
             };
             field(ui, shown, &format!("{} key", r.name.0), &mut e.key, true);
         }
+        let local_free = ui.checkbox(
+            &mut e.local_free,
+            format!("Local or free endpoint · {}", r.name.0),
+        );
+        e.local_free_changed |= local_free.changed();
+        widgets::caption(
+            ui,
+            "Explicit cost classification for this connection; requests remain attributed.",
+        );
         let open_router = p.name == "OpenRouterChat";
         if open_router {
             ui.label(RichText::new("OpenRouter constraints").strong());
@@ -665,10 +927,19 @@ impl ConnectionsPanel {
             "Changing the endpoint's host drops the stored credential: a key is never sent to \
              another origin.",
         );
-        if ui.button("Save connection").clicked() {
+        if ui
+            .add_enabled(
+                !awaiting && e.revision == revision,
+                egui::Button::new("Save connection"),
+            )
+            .clicked()
+        {
             let mut action = json!({"kind": "Connection", "connectionId": id,
-                "expectedRevision": revision, "name": e.name.trim(), "profile": p.name,
+                "expectedRevision": e.revision, "name": e.name.trim(), "profile": p.name,
                 "endpoint": e.endpoint.trim()});
+            if e.local_free_changed {
+                action["localFree"] = json!(e.local_free);
+            }
             if open_router {
                 match constraints_of_edit(e) {
                     Ok(c) => {
@@ -682,13 +953,12 @@ impl ConnectionsPanel {
                 }
             }
             let key = submitted_key(p, &mut e.key);
-            actions.push(ConnectionAction::Configure {
+            actions.push(ConnectionAction::ConfigureEdit {
                 label: "Saving the connection".into(),
                 action,
                 key,
                 code: None,
             });
-            e.open = false;
         }
     }
 
@@ -741,6 +1011,11 @@ impl ConnectionsPanel {
                  never to API credits.",
             ),
         }
+        ui.checkbox(&mut self.add_local_free, "Local or free new connection");
+        widgets::caption(
+            ui,
+            "Explicit cost classification for this connection; requests remain attributed.",
+        );
         let ready = !self.add_name.trim().is_empty() && !self.add_endpoint.trim().is_empty();
         if ui
             .add_enabled(ready, egui::Button::new(ADD_LABEL))
@@ -751,7 +1026,7 @@ impl ConnectionsPanel {
             actions.push(ConnectionAction::Configure {
                 label: "Adding the connection".into(),
                 action: json!({"kind": "Connection", "name": self.add_name.trim(),
-                    "profile": p.name, "endpoint": self.add_endpoint.trim()}),
+                    "profile": p.name, "endpoint": self.add_endpoint.trim(),"localFree":self.add_local_free}),
                 key,
                 code: None,
             });

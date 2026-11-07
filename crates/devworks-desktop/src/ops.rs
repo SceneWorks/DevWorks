@@ -1139,9 +1139,9 @@ pub fn job_changed(outcome: CommandOutcome) -> Result<JobChange, Failure> {
 // ---------------------------------------------------------------------------------------------
 // Provider connections (DW-18)
 
-/// `router.connections`, `router.catalog` and `router.configure` revision 2: connection
-/// lifecycle, health, discovery and sign-in challenges; model context windows and bindings.
-pub const ROUTER_CONNECTIONS_REVISION: u64 = 2;
+/// Current connection/configure revision 3 includes explicit local/free billing policy.
+/// Earlier saved command frames keep their original schema and exact bytes.
+pub const ROUTER_CONNECTIONS_REVISION: u64 = 3;
 
 pub fn router_connections(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     let mut page = json!({"limit": PAGE_LIMIT});

@@ -3786,3 +3786,9 @@ fn legacy_plan_approval_can_be_re_requested_with_a_new_exact_snapshot() {
     };
     assert_eq!(again.id, fresh.id);
 }
+
+#[path = "work/budget_withdrawal.rs"]
+mod budget_withdrawal;
+
+#[path = "work/budget_readiness.rs"]
+mod budget_readiness;
