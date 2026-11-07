@@ -33,7 +33,9 @@ struct Search {
     preparation: Option<(String, OperationRef)>,
     earlier: Vec<SearchContext>,
 }
-fn checked<T: DeserializeOwned + Serialize>(value: &Value) -> Result<T, MemoryPurgeFault> {
+pub(super) fn checked<T: DeserializeOwned + Serialize>(
+    value: &Value,
+) -> Result<T, MemoryPurgeFault> {
     let typed: T =
         serde_json::from_value(value.clone()).map_err(|_| MemoryPurgeFault::UnknownShape)?;
     let encoded = serde_json::to_value(&typed).map_err(|_| MemoryPurgeFault::UnknownShape)?;
@@ -51,6 +53,7 @@ pub struct ScopedProjection {
     /// A pipeline can be preparing bytes before its original command frame is available.
     pub active_convention_pipelines: Vec<String>,
     pub active_plan_saves: Vec<String>,
+    pub active_database_batch: bool,
 }
 
 pub fn project_scoped_editors(
@@ -64,6 +67,7 @@ pub fn project_scoped_editors(
         convention_operations: vec![],
         active_convention_pipelines: vec![],
         active_plan_saves: vec![],
+        active_database_batch: false,
         sessions,
     };
     if !memory.pending.conventions.is_null() {
@@ -102,7 +106,7 @@ pub fn project_scoped_editors(
             if search.scope != owned {
                 continue;
             }
-            for request in search.recovery.iter().chain(search.last.iter()) {
+            if let Some(request) = &search.recovery {
                 result.convention_frames.push(request.frame.clone());
             }
             for earlier in &search.earlier {
@@ -154,6 +158,7 @@ pub fn project_scoped_editors(
         }
     }
     result.sessions.after.pending.plans = surviving;
+    result.active_database_batch = super::database::partition(&mut result.sessions.after, scope)?;
     Ok(result)
 }
 

@@ -9,8 +9,78 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+mod database;
 mod scoped;
 pub use scoped::project_scoped_editors;
+
+/// Hash only the typed removed projection and independently surviving byte keepers.
+/// A control frame or unrelated draft edit does not alter the reviewed ownership witness.
+pub fn scoped_witness(
+    memory: &Memory,
+    scope: &ProjectPurgeClientScope,
+) -> Result<(scoped::ScopedProjection, String), MemoryPurgeFault> {
+    let partition = project_scoped_editors(memory, scope)?;
+    let before = serde_json::to_value(memory).map_err(|_| MemoryPurgeFault::UnknownShape)?;
+    let after = serde_json::to_value(&partition.sessions.after)
+        .map_err(|_| MemoryPurgeFault::UnknownShape)?;
+    let references = partition
+        .sessions
+        .surviving_references
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|_| MemoryPurgeFault::UnknownShape)?;
+    let digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&serde_json::json!({
+        "removed":removed(&before,&after),"keepers":references,"paths":partition.sessions.surviving_paths,
+    })).map_err(|_|MemoryPurgeFault::UnknownShape)?);
+    Ok((partition, digest))
+}
+fn removed(before: &Value, after: &Value) -> Value {
+    if before == after {
+        return Value::Null;
+    }
+    match (before, after) {
+        (Value::Object(before), Value::Object(after)) => {
+            let values = before
+                .iter()
+                .filter_map(|(key, value)| {
+                    let diff = after
+                        .get(key)
+                        .map_or_else(|| value.clone(), |other| removed(value, other));
+                    (!diff.is_null()).then(|| (key.clone(), diff))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(values)
+            }
+        }
+        (Value::Array(before), Value::Array(after)) => {
+            let mut counts = std::collections::BTreeMap::<String, usize>::new();
+            for value in after {
+                *counts.entry(value.to_string()).or_default() += 1;
+            }
+            let diff = before
+                .iter()
+                .filter(|value| match counts.get_mut(&value.to_string()) {
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        false
+                    }
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if diff.is_empty() {
+                Value::Null
+            } else {
+                Value::Array(diff)
+            }
+        }
+        _ => before.clone(),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemoryPurgeFault {
@@ -235,6 +305,42 @@ mod tests {
             decode(&serde_json::to_vec(&value).unwrap()),
             Err(MemoryPurgeFault::UnsupportedVersion)
         ));
+    }
+    #[test]
+    fn scoped_witness_changes_with_owned_text_or_a_file_keeper_but_not_unrelated_text() {
+        let mut memory = Memory::default();
+        memory.drafts.insert(
+            "p-session".into(),
+            DraftMemory {
+                text: "owned private draft".into(),
+                ..Default::default()
+            },
+        );
+        memory.drafts.insert(
+            "new".into(),
+            DraftMemory {
+                text: "independent Home draft".into(),
+                ..Default::default()
+            },
+        );
+        let (_, reviewed) = scoped_witness(&memory, &scope()).unwrap();
+        memory.drafts.get_mut("new").unwrap().text = "unrelated edit".into();
+        assert_eq!(scoped_witness(&memory, &scope()).unwrap().1, reviewed);
+        memory.drafts.get_mut("p-session").unwrap().text = "changed owned draft".into();
+        assert_ne!(scoped_witness(&memory, &scope()).unwrap().1, reviewed);
+        memory.drafts.get_mut("p-session").unwrap().text = "owned private draft".into();
+        memory
+            .drafts
+            .get_mut("new")
+            .unwrap()
+            .uploads
+            .push(PendingUpload {
+                name: "picked keeper".into(),
+                media_type: "image/png".into(),
+                path: PathBuf::from("staging-ui/shared.png"),
+                owned: false,
+            });
+        assert_ne!(scoped_witness(&memory, &scope()).unwrap().1, reviewed);
     }
     #[test]
     fn session_partition_keeps_home_other_project_and_surviving_picked_paths() {

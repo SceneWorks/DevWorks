@@ -364,6 +364,9 @@ macro_rules! project_reads {
     ($t:ty) => {
         impl ProjectRead for $t {
             fn purge_inventory(&self,project:&ProjectId)->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read(self.conn,project)}
+            fn purge_fenced(&self,project:&ProjectId)->Result<bool,StorageError> {db(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM project_purge_manifests WHERE project_id=?1 AND phase IN('RemovingBytes','Held','Complete'))",[project.0.as_str()],|r|r.get(0)))}
+            fn purge_pending_effects(&self,limit:u16)->Result<Vec<devworks_core::ports::project_purge::PurgeEffect>,StorageError> {super::project_purge::effects::pending(self.conn,limit)}
+            fn purge_blob_claim_reserved(&self,digest:&str,generation:&str,owner:&str)->Result<bool,StorageError> {super::project_purge::effects::reserved(self.conn,digest,generation,owner)}
             fn purge_inventory_with_client_keepers(&self,project:&ProjectId,keepers:&[devworks_core::protocol::provider::ArtifactRef])->Result<Option<ProjectPurgeInventory>,StorageError> {super::project_purge::inventory::read_with_client_keepers(self.conn,project,keepers)}
             fn purge_planning(&self,project:&ProjectId)->Result<Option<ProjectPurgePlanning>,StorageError> {super::project_purge::classification::planning(self.conn,project)}
             fn purge_candidates(&self,project:&ProjectId)->Result<Option<ProjectPurgeCandidates>,StorageError> {super::project_purge::candidates::snapshot(self.conn,project)}
@@ -534,6 +537,37 @@ fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 }
 
 impl ProjectRepository for Unit<'_> {
+    fn apply_project_purge(
+        &mut self,
+        permit: &devworks_core::services::projects::purge::PurgePermit,
+    ) -> Result<devworks_core::protocol::records::ProjectPurgeManifest, StorageError> {
+        let operation = devworks_core::protocol::OperationId(
+            self.ids.next_id(devworks_core::ports::IdKind::Operation),
+        );
+        super::project_purge::logical::apply(self.conn, self.info, self.now, operation, permit)
+    }
+    fn claim_purge_effect(
+        &mut self,
+        manifest: &Id,
+        effect: &str,
+        owner: &Id,
+        until: i64,
+    ) -> Result<Option<devworks_core::ports::project_purge::PurgeEffect>, StorageError> {
+        super::project_purge::effects::claim(
+            self.conn, self.info, self.now, manifest, effect, owner, until,
+        )
+    }
+    fn settle_purge_effect(
+        &mut self,
+        manifest: &Id,
+        effect: &str,
+        owner: &Id,
+        outcome: Result<(), devworks_core::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), StorageError> {
+        super::project_purge::effects::settle(
+            self.conn, self.info, self.now, manifest, effect, owner, outcome,
+        )
+    }
     fn begin_project_managed_file_write(
         &mut self,
         project: &ProjectId,

@@ -78,6 +78,7 @@ pub struct HostArtifactSources {
     ids: Arc<dyn IdSource>,
     /// One map per kind: an ID registered as one kind never resolves as another.
     handles: Mutex<HashMap<Kind, HashMap<String, Handle>>>,
+    store: Option<Arc<dyn devworks_core::ports::storage::ApplicationStore>>,
 }
 
 /// A read root bound to the directory identity observed at registration.
@@ -99,6 +100,36 @@ impl HostArtifactSources {
             clock,
             ids,
             handles: Mutex::new(HashMap::new()),
+            store: None,
+        }
+    }
+    pub fn with_store(
+        mut self,
+        store: Arc<dyn devworks_core::ports::storage::ApplicationStore>,
+    ) -> Self {
+        self.store = Some(store);
+        self
+    }
+    fn project_open(&self, project: Option<&ProjectId>) -> bool {
+        let (Some(project), Some(store)) = (project, self.store.as_ref()) else {
+            return true;
+        };
+        devworks_core::ports::storage::read_snapshot(
+            &**store,
+            &devworks_core::ports::storage::ReadOptions::default(),
+            |read| read.projects().purge_fenced(project),
+        )
+        .is_ok_and(|fenced| !fenced)
+    }
+    /// Revokes handles only. Uploaded inputs and Git work-output files are never removed.
+    pub fn revoke_project(&self, project: &ProjectId) {
+        for map in self
+            .handles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values_mut()
+        {
+            map.retain(|_, h| h.project.as_ref() != Some(project));
         }
     }
 
@@ -111,6 +142,9 @@ impl HostArtifactSources {
 
     /// Registers a handle, refusing a duplicate ID of the same kind, and evicts expired ones.
     fn insert(&self, kind: Kind, id: &Id, handle: Handle) -> Result<(), IssueRefusal> {
+        if !self.project_open(handle.project.as_ref()) {
+            return Err(IssueRefusal::Invalid("project content was purged"));
+        }
         let now = self.clock.now_ms().get();
         let mut all = self.handles.lock().unwrap_or_else(|p| p.into_inner());
         let map = all.entry(kind).or_default();
@@ -289,6 +323,12 @@ impl ArtifactSources for HostArtifactSources {
         source: &ArtifactSource,
         project: Option<&ProjectId>,
     ) -> Result<ResolvedSource, SourceRefusal> {
+        if !self.project_open(project) {
+            if let Some(project) = project {
+                self.revoke_project(project);
+            }
+            return Err(SourceRefusal::PermissionDenied);
+        }
         let (kind, id) = match source {
             ArtifactSource::Upload { ticket_id } => (Kind::Upload, ticket_id),
             ArtifactSource::Attachment { attachment_id } => (Kind::Attachment, attachment_id),

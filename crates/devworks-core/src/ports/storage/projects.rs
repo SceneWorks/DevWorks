@@ -248,7 +248,8 @@ impl ProjectPurgePlanning {
 
 /// Native transient identities for client cleanup; never supplied by a caller or persisted
 /// as private source keys in an audit. Shared artifacts keep their independent references.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectPurgeClientScope {
     pub project_id: ProjectId,
     pub session_ids: Vec<Id>,
@@ -266,7 +267,7 @@ pub struct ProjectPurgeInventory {
     pub removing_files: crate::ports::project_purge::PurgeFileSelection,
     pub kept_files: crate::ports::project_purge::PurgeFileSelection,
     pub client: ProjectPurgeClientScope,
-    pub unsettled_staging: Vec<crate::protocol::OperationId>,
+    pub unsettled_operations: Vec<crate::protocol::OperationId>,
 }
 
 #[derive(Clone, Debug)]
@@ -347,6 +348,23 @@ pub struct ProjectManagedFileRecovery {
 }
 
 pub trait ProjectRead {
+    fn purge_fenced(&self, _project: &ProjectId) -> Result<bool, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_pending_effects(
+        &self,
+        _limit: u16,
+    ) -> Result<Vec<crate::ports::project_purge::PurgeEffect>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn purge_blob_claim_reserved(
+        &self,
+        _digest: &str,
+        _generation: &str,
+        _owner: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
     fn purge_inventory_with_client_keepers(
         &self,
         _project: &ProjectId,
@@ -438,6 +456,30 @@ pub trait ProjectRead {
 }
 
 pub trait ProjectRepository: ProjectRead {
+    fn apply_project_purge(
+        &mut self,
+        _permit: &crate::services::projects::purge::PurgePermit,
+    ) -> Result<crate::protocol::records::ProjectPurgeManifest, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn claim_purge_effect(
+        &mut self,
+        _manifest: &Id,
+        _effect: &str,
+        _owner: &Id,
+        _lease_until: i64,
+    ) -> Result<Option<crate::ports::project_purge::PurgeEffect>, StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
+    fn settle_purge_effect(
+        &mut self,
+        _manifest: &Id,
+        _effect: &str,
+        _owner: &Id,
+        _outcome: Result<(), crate::ports::project_purge::PurgeFileFault>,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
     fn reserve_project_managed_file(
         &mut self,
         file: &ProjectManagedFileReservation,

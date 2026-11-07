@@ -5430,7 +5430,7 @@ fn purge_inventory_materializes_exact_file_and_client_owners_without_deleting_sh
             .deleted_artifact_ids
             .contains(&artifact.artifact.artifact_id)
     );
-    assert!(owned.unsettled_staging.is_empty());
+    assert!(owned.unsettled_operations.is_empty());
     let staging = PurgeFileOwner::ArtifactStaging {
         operation_id: stage.id.clone().0,
     };
@@ -5486,7 +5486,7 @@ fn purge_inventory_materializes_exact_file_and_client_owners_without_deleting_sh
     });
     let active = inventory();
     assert_eq!(
-        active.unsettled_staging,
+        active.unsettled_operations,
         vec![devworks_core::protocol::OperationId(id(
             "inventory-inflight-stage"
         ))]

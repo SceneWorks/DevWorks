@@ -790,6 +790,12 @@ impl ArtifactService {
                     let Some(from) = b.claim_owner.as_deref() else {
                         continue;
                     };
+                    if tx
+                        .projects()
+                        .purge_blob_claim_reserved(&b.digest, &b.generation, from)?
+                    {
+                        continue;
+                    }
                     if from != me
                         && tx
                             .artifacts()

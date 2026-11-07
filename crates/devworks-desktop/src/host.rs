@@ -222,7 +222,9 @@ async fn compose(
 ) -> Result<Host, StartError> {
     let store: Arc<dyn ApplicationStore> = sqlite.clone();
     let id_source: Arc<dyn IdSource> = ids.clone();
-    let sources = Arc::new(HostArtifactSources::new(clock.clone(), id_source.clone()));
+    let sources = Arc::new(
+        HostArtifactSources::new(clock.clone(), id_source.clone()).with_store(store.clone()),
+    );
     let artifact_files = Arc::new(
         NativeArtifactFiles::new(config.data_root.clone(), config.data_root.join("cache"))
             .with_store(store.clone()),

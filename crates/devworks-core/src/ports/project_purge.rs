@@ -99,4 +99,33 @@ pub trait ProjectPurgeClient: Send + Sync {
         &self,
         scope: &crate::ports::storage::ProjectPurgeClientScope,
     ) -> Result<PurgeClientSnapshot, PurgeFileFault>;
+
+    /// Execute the exact durable client intent after logical commit. Surviving scopes and
+    /// original receipt fences remain intact; failure leaves the original intent held.
+    fn remove_reviewed(
+        &self,
+        _scope: &crate::ports::storage::ProjectPurgeClientScope,
+        _digest: &str,
+    ) -> Result<(), PurgeFileFault> {
+        Err(PurgeFileFault::Unsupported)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum PurgeEffectIntent {
+    File {
+        witness: PurgeFileWitness,
+    },
+    Client {
+        scope: crate::ports::storage::ProjectPurgeClientScope,
+        digest: String,
+    },
+}
+#[derive(Clone, Debug)]
+pub struct PurgeEffect {
+    pub manifest_id: Id,
+    pub id: String,
+    pub intent: PurgeEffectIntent,
+    pub lease_owner: Option<Id>,
 }

@@ -3,11 +3,14 @@ mod blobs;
 pub(super) mod candidates;
 pub(super) mod classification;
 mod client_keepers;
+pub(super) mod effects;
 pub(super) mod guard;
 pub(super) mod inventory;
 mod leases;
+pub(super) mod logical;
 mod mixed;
 mod receipts;
+mod redaction;
 mod references;
 mod schema;
 #[cfg(test)]
@@ -114,11 +117,29 @@ pub(super) fn manifest(
     project: &ProjectId,
     id: &Id,
 ) -> Result<Option<StoredProjectPurge>, StorageError> {
-    let raw:Option<(String,String,String,i64,i64,String,String)>=db(conn.query_row(
-        "SELECT body_json,actor_id,store_id,restore_epoch,scope_revision,policy_digest,witness_digest FROM project_purge_manifests WHERE id=?1 AND project_id=?2",
-        params![id.as_str(),project.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional())?;
-    let Some((body, actor, store, restore_epoch, scope_revision, policy_digest, witness_digest)) =
-        raw
+    type ManifestRaw = (
+        String,
+        String,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        Option<String>,
+    );
+    let raw:Option<ManifestRaw>=db(conn.query_row(
+        "SELECT body_json,actor_id,store_id,restore_epoch,scope_revision,policy_digest,witness_digest,operation_id FROM project_purge_manifests WHERE id=?1 AND project_id=?2",
+        params![id.as_str(),project.0.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional())?;
+    let Some((
+        body,
+        actor,
+        store,
+        restore_epoch,
+        scope_revision,
+        policy_digest,
+        witness_digest,
+        operation,
+    )) = raw
     else {
         return Ok(None);
     };
@@ -127,7 +148,10 @@ pub(super) fn manifest(
     manifest
         .check()
         .map_err(|_| invalid("stored purge manifest shape"))?;
-    if manifest.id != *id || manifest.project_id != *project {
+    if manifest.id != *id
+        || manifest.project_id != *project
+        || manifest.operation_id.as_ref().map(|o| o.0.as_str()) != operation.as_deref()
+    {
         return Err(invalid("stored purge manifest identity"));
     }
     let mut stmt = db(conn.prepare(

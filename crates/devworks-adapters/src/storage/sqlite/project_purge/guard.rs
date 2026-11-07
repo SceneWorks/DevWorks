@@ -72,16 +72,13 @@ pub(crate) fn register(conn: &Connection, writer: bool) -> Result<(), StorageErr
     ))
 }
 
-#[cfg(test)]
 struct Reset;
-#[cfg(test)]
 impl Drop for Reset {
     fn drop(&mut self) {
         ACTIVE.with(|slot| *slot.borrow_mut() = None);
     }
 }
 
-#[cfg(test)]
 pub(super) fn with_guard<T>(
     conn: &Connection,
     rows: BTreeSet<Permit>,

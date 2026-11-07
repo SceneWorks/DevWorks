@@ -872,7 +872,14 @@ impl ArtifactRepository for Unit<'_> {
     }
 
     fn pin(&mut self, holder: &Id, digest: &str) -> Result<(), StorageError> {
-        if blob(self.conn, digest)?.is_none() {
+        let existing = blob(self.conn, digest)?;
+        if let Some(b) = &existing
+            && let Some(owner) = &b.claim_owner
+            && super::project_purge::effects::reserved(self.conn, digest, &b.generation, owner)?
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if existing.is_none() {
             return Err(StorageError::NotFound {
                 kind: "blob",
                 id: digest.to_owned(),

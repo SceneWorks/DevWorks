@@ -170,7 +170,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
     let store_id = StoreId(Id::new(store).map_err(|_| invalid())?);
     let mut removing = BTreeMap::new();
     let mut kept = BTreeMap::new();
-    let mut unsettled_staging = Vec::new();
+    let mut unsettled_operations = Vec::new();
     let mut client = ProjectPurgeClientScope {
         project_id: project.clone(),
         session_ids: Vec::new(),
@@ -204,14 +204,14 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
     )? {
         let operation = id(&values[0])?;
         if row.reason != Reason::PurgeControlAudit {
-            client.operation_ids.push(operation.clone())
-        }
-        if text(&values[1])? == devworks_core::ports::storage::STAGE_CAPABILITY {
+            client.operation_ids.push(operation.clone());
             let state: OperationState =
                 serde_json::from_value(values[2].clone()).map_err(|_| invalid())?;
             if !is_terminal(state) {
-                unsettled_staging.push(OperationId(operation.clone()))
+                unsettled_operations.push(OperationId(operation.clone()));
             }
+        }
+        if text(&values[1])? == devworks_core::ports::storage::STAGE_CAPABILITY {
             // A replay fence/kept version can require the operation header while its
             // unshared temporary bytes still belong to P and must be removed.
             let set = if row.reason == Reason::PurgeControlAudit {
@@ -303,7 +303,7 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         .deleted_artifact_ids
         .sort_by(|a, b| a.as_str().cmp(b.as_str()));
     client.deleted_artifact_ids.dedup();
-    unsettled_staging.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+    unsettled_operations.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
     kept_reference_versions(conn, &selection, &planning, &mut kept)?;
     if removing.keys().any(|key| kept.contains_key(key)) {
         return Err(invalid());
@@ -325,6 +325,6 @@ pub(in crate::storage::sqlite) fn read_with_client_keepers(
         removing_files,
         kept_files,
         client,
-        unsettled_staging,
+        unsettled_operations,
     }))
 }

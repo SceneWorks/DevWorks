@@ -19,6 +19,85 @@ pub struct PurgeCoordinator {
     client: Arc<dyn ProjectPurgeClient>,
 }
 
+/// Executes only effects already committed by the logical owner. Restarts claim those
+/// original bodies; this worker cannot prepare a manifest or mint a Human permit.
+pub struct PurgeWorker {
+    store: Arc<dyn crate::ports::storage::ApplicationStore>,
+    ids: Arc<dyn IdSource>,
+    files: Arc<dyn ProjectPurgeFiles>,
+    client: Arc<dyn ProjectPurgeClient>,
+}
+impl PurgeWorker {
+    pub fn new(
+        store: Arc<dyn crate::ports::storage::ApplicationStore>,
+        ids: Arc<dyn IdSource>,
+        files: Arc<dyn ProjectPurgeFiles>,
+        client: Arc<dyn ProjectPurgeClient>,
+    ) -> Self {
+        Self {
+            store,
+            ids,
+            files,
+            client,
+        }
+    }
+    pub fn step(&self, stopped: &mut dyn FnMut() -> bool) -> Result<usize, StorageError> {
+        use crate::ports::storage::{ReadOptions, WriteOptions, read_snapshot, run_write};
+        let mut pending = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            read.projects().purge_pending_effects(32)
+        })?;
+        pending.sort_by_key(|e| match &e.intent {
+            crate::ports::project_purge::PurgeEffectIntent::File { witness } => (
+                if witness.directory { 1 } else { 0 },
+                std::cmp::Reverse(witness.relative_entry.matches('/').count()),
+            ),
+            crate::ports::project_purge::PurgeEffectIntent::Client { .. } => {
+                (2, std::cmp::Reverse(0))
+            }
+        });
+        let mut settled = 0;
+        for effect in pending {
+            if stopped() {
+                break;
+            }
+            let owner = self.ids.next_id(IdKind::Operation);
+            let (manifest, id, claim) =
+                (effect.manifest_id.clone(), effect.id.clone(), owner.clone());
+            let admitted = run_write(&*self.store, WriteOptions::default(), move |tx| {
+                let until = tx
+                    .now_ms()
+                    .checked_add(30_000)
+                    .ok_or_else(|| StorageError::InvalidRecord("purge lease overflow".into()))?;
+                tx.projects()
+                    .claim_purge_effect(&manifest, &id, &claim, until)
+            })?;
+            let Some(admitted) = admitted else {
+                continue;
+            };
+            let outcome = if stopped() {
+                Err(PurgeFileFault::Cancelled)
+            } else {
+                match &admitted.intent {
+                    crate::ports::project_purge::PurgeEffectIntent::File { witness } => {
+                        self.files.remove_reviewed(witness, stopped)
+                    }
+                    crate::ports::project_purge::PurgeEffectIntent::Client { scope, digest } => {
+                        self.client.remove_reviewed(scope, digest)
+                    }
+                }
+            };
+            let manifest = admitted.manifest_id;
+            let id = admitted.id;
+            run_write(&*self.store, WriteOptions::default(), move |tx| {
+                tx.projects()
+                    .settle_purge_effect(&manifest, &id, &owner, outcome)
+            })?;
+            settled += 1;
+        }
+        Ok(settled)
+    }
+}
+
 /// Its fields and constructor are private to this confirmation owner. A generic authority
 /// grant or a wire input can never construct this storage capability.
 pub struct PurgePermit {
@@ -91,7 +170,7 @@ impl PurgeCoordinator {
             .purge_inventory(project)?
             .ok_or_else(|| not_found("project", &project.0))?;
         if !inventory.planning.is_resolved()
-            || !inventory.unsettled_staging.is_empty()
+            || !inventory.unsettled_operations.is_empty()
             || !ProjectService::activity(tx, project)?.is_empty()
         {
             return Err(file_fault(PurgeFileFault::InUse));
@@ -141,6 +220,9 @@ impl PurgeCoordinator {
             ));
         }
         let before = visible_project(tx.projects(), ctx, project)?;
+        if tx.projects().purge_fenced(project)? {
+            return Err(conflict("project_purge_already_committed", &project.0));
+        }
         revision_conflict(&before, expected)?;
         if before.lifecycle != DELETED || before.archive_stop_pending {
             return Err(conflict(
@@ -523,7 +605,7 @@ mod tests {
                     operation_ids: vec![],
                     deleted_artifact_ids: vec![],
                 },
-                unsettled_staging: vec![],
+                unsettled_operations: vec![],
             },
             removing: files.clone(),
             kept: files,

@@ -14,7 +14,7 @@ use devworks_core::protocol::{
     results::{DomainDecision, OperationResult},
 };
 use devworks_core::registry::SchemaRevision;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value as SqlValue};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,6 +28,57 @@ struct Envelope {
     receipt: Option<Receipt<DomainDecision>>,
     #[serde(default)]
     purged: Option<PurgedReceiptOutcome>,
+}
+
+pub(super) fn compact(
+    conn: &Connection,
+    predicate: &str,
+    keys: &[SqlValue],
+    purge: &devworks_core::protocol::Id,
+) -> Result<(), StorageError> {
+    use devworks_core::protocol::records::PurgedDecisionKind;
+    let encoded: String = db(conn.query_row(
+        &format!("SELECT result_json FROM command_receipts WHERE {predicate}"),
+        params_from_iter(keys.iter()),
+        |r| r.get(0),
+    ))?;
+    let body: Envelope = serde_json::from_str(&encoded)
+        .map_err(|_| StorageError::InvalidRecord("purge receipt body".into()))?;
+    if body.purged.is_some() {
+        return Ok(());
+    }
+    let receipt = body.receipt.ok_or(StorageError::ScopeDenied)?;
+    let (decision, fault) = match &receipt.decision {
+        DomainDecision::Applied { .. } => (PurgedDecisionKind::Applied, None),
+        DomainDecision::NoChange { .. } => (PurgedDecisionKind::NoChange, None),
+        DomainDecision::Accepted { .. } => (PurgedDecisionKind::Accepted, None),
+        DomainDecision::Refused { fault } => (PurgedDecisionKind::Refused, Some(fault.code)),
+    };
+    let purged = PurgedReceiptOutcome {
+        command_id: receipt.command_id,
+        committed_sequence: receipt.committed_sequence,
+        accepted_at_ms: receipt.accepted_at_ms,
+        request_digest: receipt
+            .request_digest
+            .try_into()
+            .map_err(|_| StorageError::ScopeDenied)?,
+        operation_id: receipt.operation_id,
+        original_decision: decision,
+        original_fault_code: fault,
+        purge_id: purge.clone(),
+    };
+    purged.check().map_err(|_| StorageError::ScopeDenied)?;
+    let mut bindings = keys.to_vec();
+    let parameter = bindings.len() + 1;
+    bindings.push(SqlValue::Text(serde_json::json!({"contract":body.contract,"schemaRevision":body.schema_revision,"purged":purged}).to_string()));
+    if db(conn.execute(
+        &format!("UPDATE command_receipts SET result_json=?{parameter} WHERE {predicate}"),
+        params_from_iter(bindings.iter()),
+    ))? != 1
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(())
 }
 fn current_valid(
     receipt: &Receipt<DomainDecision>,

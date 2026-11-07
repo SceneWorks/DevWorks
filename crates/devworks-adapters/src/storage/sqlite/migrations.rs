@@ -444,6 +444,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0037_client_staging_custody.sql"),
         rebuilds_tables: true,
     },
+    Migration {
+        version: 38,
+        minimum_reader: 38,
+        minimum_writer: 38,
+        sql: include_str!("migrations/0038_purge_effect_leases.sql"),
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

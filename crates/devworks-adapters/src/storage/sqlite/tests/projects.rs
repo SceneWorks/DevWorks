@@ -33,6 +33,33 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 struct PurgeOwners(std::sync::Mutex<(String, bool)>);
+
+#[test]
+fn purge_inventory_holds_any_unsettled_owned_operation_not_only_staging() {
+    let fx = Fx::new();
+    let p = fx.create("owned effect", &[]);
+    fx.seed_roots(&p.id, &["pending-owned-work"]);
+    fx.write(|tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: devworks_core::protocol::OperationId(id("pending-owned-effect")),
+                root_id: Some(RootId(id("pending-owned-work"))),
+                assignment_id: None,
+                capability: "process.spawn".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"neverDispatched":true}),
+            })
+            .map(|_| ())
+    });
+    let inventory = fx.read(|s| s.projects().purge_inventory(&p.id)).unwrap();
+    assert_eq!(
+        inventory.unsettled_operations,
+        vec![devworks_core::protocol::OperationId(id(
+            "pending-owned-effect"
+        ))]
+    );
+}
 impl devworks_core::ports::project_purge::ProjectPurgeClient for PurgeOwners {
     fn inspect(
         &self,
@@ -48,6 +75,17 @@ impl devworks_core::ports::project_purge::ProjectPurgeClient for PurgeOwners {
             pending: state.1,
             removing_drafts: 0,
         })
+    }
+    fn remove_reviewed(
+        &self,
+        _: &ProjectPurgeClientScope,
+        digest: &str,
+    ) -> Result<(), devworks_core::ports::project_purge::PurgeFileFault> {
+        let state = self.0.lock().unwrap();
+        if state.0 != digest || state.1 {
+            return Err(devworks_core::ports::project_purge::PurgeFileFault::Changed);
+        }
+        Ok(())
     }
 }
 impl devworks_core::ports::project_purge::ProjectPurgeFiles for PurgeOwners {
@@ -84,6 +122,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     use devworks_core::services::projects::purge::PurgeCoordinator;
     let fx = Fx::new();
     let active = fx.create("private purge preview", &["repo-1"]);
+    let survivor = fx.create("independent project", &["repo-1"]);
     fx.bind_agents(&active.id);
     let archived = project_of(applied(fx.lifecycle(
         &fx.user(),
@@ -123,6 +162,27 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     let ingress = HostIngress::new(&*fx.store);
     assert!(ingress.project_purge_context(&agent, &input).is_none());
     let user = fx.user();
+    use devworks_core::ports::files::ArtifactSources;
+    let sources =
+        crate::fs::sources::HostArtifactSources::new(fx.h.clock.clone(), fx.h.ids.clone())
+            .with_store(fx.store.clone());
+    let picked = fx.h.root.0.join("independent-picked-input.txt");
+    std::fs::write(&picked, b"user input stays byte exact").unwrap();
+    let owner_context = user
+        .clone()
+        .with_lineage(Some(deleted.id.clone()), None, None);
+    let survivor_context = user
+        .clone()
+        .with_lineage(Some(survivor.id.clone()), None, None);
+    let owner_ticket = sources
+        .mint_upload(&owner_context, &picked, 60_000)
+        .unwrap();
+    let survivor_ticket = sources
+        .mint_upload(&survivor_context, &picked, 60_000)
+        .unwrap();
+    let workspace_ticket = sources
+        .mint_workspace_upload(&user, &picked, 60_000)
+        .unwrap();
     let sealed = ingress.project_purge_context(&user, &input).unwrap();
     let (s, ctx, i) = (service.clone(), user.clone(), input.clone());
     assert!(
@@ -166,7 +226,7 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     });
     assert_ne!(first.entries.items.0[0].id, next.entries.items.0[0].id);
     owners.0.lock().unwrap().0 = "b".repeat(64);
-    let (s, ctx, i) = (service, sealed, input);
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
     assert!(
         run_write(&*fx.store, WriteOptions::default(), move |tx| s
             .authorize(tx, &ctx, &i)
@@ -177,6 +237,128 @@ fn purge_preparation_and_permit_bind_native_rows_client_and_exact_human_confirma
     assert_eq!(
         fx.get(&user, &deleted.id).unwrap().name.0.as_str(),
         "private purge preview"
+    );
+    owners.0.lock().unwrap().0 = "a".repeat(64);
+    let repository = serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap();
+    let (s, ctx, i) = (service.clone(), sealed.clone(), input.clone());
+    let rolled_back: Result<(), StorageError> =
+        run_write(&*fx.store, WriteOptions::default(), move |tx| {
+            let permit = s
+                .authorize(tx, &ctx, &i)
+                .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+            tx.projects().apply_project_purge(&permit)?;
+            Err(StorageError::Cancelled)
+        });
+    assert!(matches!(rolled_back, Err(StorageError::Cancelled)));
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0,
+        "private purge preview"
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM project_purge_effects", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let source = devworks_core::protocol::data::ArtifactSource::Upload {
+        ticket_id: owner_ticket.clone(),
+    };
+    assert!(
+        sources
+            .resolve(&owner_context, &source, Some(&deleted.id))
+            .is_ok(),
+        "rollback preserves the original source authority"
+    );
+    let (s, ctx, i) = (service, sealed, input);
+    let committed = fx.write(move |tx| {
+        let permit = s
+            .authorize(tx, &ctx, &i)
+            .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        tx.projects().apply_project_purge(&permit)
+    });
+    assert!(matches!(
+        committed.phase,
+        devworks_core::protocol::records::PurgePhase::RemovingBytes
+    ));
+    assert_eq!(committed.pending_effects.get(), 1);
+    assert!(committed.operation_id.is_some());
+    assert_eq!(
+        fx.get(&user, &deleted.id).unwrap().name.0,
+        "Deleted project"
+    );
+    assert_eq!(
+        serde_json::to_value(fx.repo(&user, "repo-1").unwrap()).unwrap(),
+        repository
+    );
+    let remaining = fx.h.raw().query_row("SELECT count(*) FROM command_receipts WHERE result_json LIKE '%private purge preview%'",[],|r|r.get::<_,i64>(0)).unwrap();
+    assert_eq!(remaining, 0);
+    assert!(
+        sources
+            .resolve(&owner_context, &source, Some(&deleted.id))
+            .is_err()
+    );
+    assert!(
+        sources
+            .mint_upload(&owner_context, &picked, 60_000)
+            .is_err()
+    );
+    assert!(
+        sources
+            .resolve(
+                &survivor_context,
+                &devworks_core::protocol::data::ArtifactSource::Upload {
+                    ticket_id: survivor_ticket
+                },
+                Some(&survivor.id)
+            )
+            .is_ok()
+    );
+    assert!(
+        sources
+            .resolve(
+                &user,
+                &devworks_core::protocol::data::ArtifactSource::Upload {
+                    ticket_id: workspace_ticket
+                },
+                None
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        std::fs::read(&picked).unwrap(),
+        b"user input stays byte exact"
+    );
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    let worker = devworks_core::services::projects::purge::PurgeWorker::new(
+        fx.store.clone(),
+        fx.h.ids.clone(),
+        owners.clone(),
+        owners,
+    );
+    assert_eq!(worker.step(&mut || false).unwrap(), 1);
+    let finished = fx
+        .read(|s| s.projects().purge_manifest(&deleted.id, &manifest.id))
+        .unwrap();
+    assert!(matches!(
+        finished.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+    assert_eq!(finished.manifest.pending_effects.get(), 0);
+    let operation = finished.manifest.operation_id.unwrap();
+    assert_eq!(
+        fx.read(|s| s.operations().operation(&operation))
+            .unwrap()
+            .state,
+        devworks_core::protocol::OperationState::ObservedComplete
     );
 }
 
@@ -2085,6 +2267,157 @@ fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
 }
 
 #[test]
+fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bodies() {
+    use devworks_core::ports::project_purge::{PurgeEffectIntent, PurgeFileFault};
+    let h = Harness::new();
+    let store = h.store();
+    let mut prepared = purge_storage_fixture(&store);
+    let copy = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&copy)
+    })
+    .unwrap();
+    let scope = ProjectPurgeClientScope {
+        project_id: project("purge-a"),
+        session_ids: vec![id("owned-session")],
+        conversation_ids: vec![],
+        work_ids: vec![],
+        operation_ids: vec![],
+        deleted_artifact_ids: vec![],
+    };
+    let owner_digest = devworks_core::fingerprint::sha256_hex(&serde_json::to_vec(&scope).unwrap());
+    let body = serde_json::to_string(&PurgeEffectIntent::Client {
+        scope,
+        digest: "a".repeat(64),
+    })
+    .unwrap();
+    let effect = devworks_core::fingerprint::sha256_hex(body.as_bytes());
+    prepared.manifest.phase = devworks_core::protocol::records::PurgePhase::RemovingBytes;
+    let operation = devworks_core::protocol::OperationId(id("purge-operation"));
+    let op = operation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.operations()
+            .record_intent(NewOperation {
+                id: op,
+                root_id: None,
+                assignment_id: None,
+                capability: "projects.purge".into(),
+                schema_version: 1,
+                args_digest: "a".repeat(64),
+                payload: json!({"manifestId":"purge-manifest"}),
+            })
+            .map(|_| ())
+    })
+    .unwrap();
+    prepared.manifest.operation_id = Some(operation);
+    prepared.manifest.pending_effects = Counter::new(1).unwrap();
+    h.raw()
+        .execute(
+            "UPDATE project_purge_manifests SET phase='RemovingBytes',operation_id='purge-operation',body_json=?1",
+            [serde_json::to_string(&prepared.manifest).unwrap()],
+        )
+        .unwrap();
+    h.raw().execute("INSERT INTO project_purge_effects(manifest_id,id,kind,owner_digest,body_json,byte_count,state) VALUES('purge-manifest',?1,'Client',?2,?3,0,'Pending')",rusqlite::params![effect,owner_digest,body]).unwrap();
+    let claim = |store: &SqliteStore, owner: &str| {
+        let effect = effect.clone();
+        let owner = id(owner);
+        run_write(store, WriteOptions::default(), move |tx| {
+            let until = tx.now_ms() + 10_000;
+            tx.projects()
+                .claim_purge_effect(&id("purge-manifest"), &effect, &owner, until)
+        })
+        .unwrap()
+    };
+    assert!(claim(&store, "owner-a").is_some());
+    assert!(claim(&store, "owner-b").is_none());
+    let stale = effect.clone();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .settle_purge_effect(
+                &id("purge-manifest"),
+                &stale,
+                &id("owner-b"),
+                Ok(())
+            ))
+        .is_err()
+    );
+    let failed = effect.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().settle_purge_effect(
+            &id("purge-manifest"),
+            &failed,
+            &id("owner-a"),
+            Err(PurgeFileFault::Io),
+        )
+    })
+    .unwrap();
+    let held = read_snapshot(&store, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        held.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Held
+    ));
+    assert_eq!(held.manifest.pending_effects.get(), 1);
+    assert!(
+        claim(&store, "owner-b").is_none(),
+        "the held retry respects its backoff"
+    );
+    h.clock.0.fetch_add(1000, Ordering::SeqCst);
+    assert!(claim(&store, "owner-b").is_some());
+    drop(store);
+    let reopened = h.store();
+    assert!(
+        claim(&reopened, "owner-c").is_some(),
+        "restart adopts the original intent, not a new effect"
+    );
+    let stale = effect.clone();
+    assert!(
+        run_write(&reopened, WriteOptions::default(), move |tx| tx
+            .projects()
+            .settle_purge_effect(
+                &id("purge-manifest"),
+                &stale,
+                &id("owner-b"),
+                Ok(())
+            ))
+        .is_err()
+    );
+    let done = effect.clone();
+    run_write(&reopened, WriteOptions::default(), move |tx| {
+        tx.projects()
+            .settle_purge_effect(&id("purge-manifest"), &done, &id("owner-c"), Ok(()))
+    })
+    .unwrap();
+    let complete = read_snapshot(&reopened, &ReadOptions::default(), |s| {
+        s.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(matches!(
+        complete.manifest.phase,
+        devworks_core::protocol::records::PurgePhase::Complete
+    ));
+    assert_eq!(complete.manifest.pending_effects.get(), 0);
+    assert_eq!(complete.manifest.digest, prepared.manifest.digest);
+    assert!(complete.manifest.error_code.is_none());
+    let forgotten: Option<String> = h
+        .raw()
+        .query_row(
+            "SELECT body_json FROM project_purge_effects WHERE id=?1",
+            [effect],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(forgotten.is_none());
+}
+
+#[test]
 fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
     let h = Harness::new();
     let store = h.store();
@@ -2904,7 +3237,7 @@ fn purge_migrations_refuse_an_older_reader_before_changing_the_store() {
     let boot_count = super::boots(&h);
     match SqliteStore::open_with(h.config(), &through(35)) {
         Err(StorageError::IncompatibleSchema(message)) => {
-            assert!(message.contains("reader version 37"))
+            assert!(message.contains("reader version 38"))
         }
         _ => panic!("an older reader must not interpret compact purge identities"),
     }
