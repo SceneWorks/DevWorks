@@ -117,18 +117,35 @@ fn table_rows(
     Ok(output)
 }
 
-pub(in crate::storage::sqlite) fn snapshot(
-    conn: &Connection,
-    project: &ProjectId,
-) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
-    super::schema::verify(conn)?;
-    if !db(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-        [project.0.as_str()],
-        |row| row.get::<_, bool>(0),
-    ))? {
-        return Ok(None);
+pub(super) struct Selection {
+    project: ProjectId,
+    anchors: String,
+    scope_digest: String,
+    predicates: serde_json::Map<String, Value>,
+}
+impl Selection {
+    pub(super) fn rows_where(
+        &self,
+        conn: &Connection,
+        table: &str,
+        condition: &str,
+    ) -> Result<Vec<ProjectPurgeCandidate>, StorageError> {
+        let predicate = self
+            .predicates
+            .get(table)
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("unmapped purge partition table"))?;
+        table_rows(
+            conn,
+            table,
+            &format!("({predicate}) AND ({condition})"),
+            &self.anchors,
+            &self.project,
+            &self.scope_digest,
+        )
     }
+}
+pub(super) fn selection(project: &ProjectId) -> Result<Selection, StorageError> {
     let policy: Value =
         serde_json::from_str(POLICY).map_err(|_| invalid("purge candidate policy"))?;
     let anchors = policy["anchors"]
@@ -166,6 +183,32 @@ pub(in crate::storage::sqlite) fn snapshot(
         "project_managed_files".into(),
         Value::String("project_id=?1 AND state<>'Removed'".into()),
     );
+    Ok(Selection {
+        project: project.clone(),
+        anchors,
+        scope_digest,
+        predicates,
+    })
+}
+
+pub(in crate::storage::sqlite) fn snapshot(
+    conn: &Connection,
+    project: &ProjectId,
+) -> Result<Option<ProjectPurgeCandidates>, StorageError> {
+    super::schema::verify(conn)?;
+    if !db(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+        [project.0.as_str()],
+        |row| row.get::<_, bool>(0),
+    ))? {
+        return Ok(None);
+    }
+    let Selection {
+        anchors,
+        scope_digest,
+        predicates,
+        ..
+    } = selection(project)?;
     let mut rows = Vec::new();
     for (table, predicate) in &predicates {
         rows.extend(table_rows(

@@ -2,7 +2,7 @@
 //! unknown partitions out of any reviewed preparation or execution permit.
 use super::super::conn::db;
 use devworks_core::ports::storage::{
-    ProjectPurgeCandidate, ProjectPurgePlanning, ProjectPurgeReferenceKind,
+    ProjectPurgeCandidate, ProjectPurgePlanning, ProjectPurgeReference, ProjectPurgeReferenceKind,
     ProjectPurgeRowAction as Action, ProjectPurgeRowReason as Reason, ProjectPurgeRowWitness,
     ProjectPurgeUnresolved, ProjectPurgeUnresolvedReason as Unresolved, StorageError,
 };
@@ -90,7 +90,7 @@ fn initial(
         | "knowledge_tags"
         | "knowledge_shares"
         | "knowledge_links" => return Err(Unresolved::LegacySharing),
-        "work_dependencies" => return Err(Unresolved::MixedOwnership),
+        "work_dependencies" | "search_fts" => return Err(Unresolved::MixedOwnership),
         "operations" => return Ok((Action::Delete, Reason::OwnedLineage)),
         "browser_observations" | "os_notification_deliveries" => {
             return Ok((Action::Delete, Reason::OwnedLineage));
@@ -174,6 +174,190 @@ fn unresolved_keys(
     Ok(())
 }
 
+fn assign(
+    candidate: &ProjectPurgeCandidate,
+    action: Action,
+    reason: Reason,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> bool {
+    let key = (candidate.table.clone(), candidate.key_digest.clone());
+    if rows.get(&key).is_some_and(|row| {
+        row.action == action && row.reason == reason && row.row_digest == candidate.row_digest
+    }) && !unresolved.contains_key(&key)
+    {
+        return false;
+    }
+    unresolved.remove(&key);
+    rows.insert(
+        key,
+        ProjectPurgeRowWitness {
+            table: candidate.table.clone(),
+            key_digest: candidate.key_digest.clone(),
+            row_digest: candidate.row_digest.clone(),
+            action,
+            reason,
+        },
+    );
+    true
+}
+fn content_lineage(edge: &ProjectPurgeReference) -> bool {
+    if edge.kind == ProjectPurgeReferenceKind::SearchChunk {
+        return edge.from_table == "search_fts" && edge.to_table == "search_chunks";
+    }
+    if edge.kind != ProjectPurgeReferenceKind::ForeignKey {
+        return false;
+    }
+    let column = match (edge.from_table.as_str(), edge.to_table.as_str()) {
+        ("artifact_versions" | "artifact_tags" | "documents", "artifacts") => "artifact_id",
+        ("artifact_links" | "extractions", "artifact_versions") => "artifact_version_id",
+        ("search_chunks", "artifact_versions") => "source_version_id",
+        ("chunk_vectors", "search_chunks") => "chunk_id",
+        ("knowledge_revisions" | "knowledge_tags", "knowledge_entries") => "entry_id",
+        _ => return false,
+    };
+    edge.from_columns.len() == 1 && edge.from_columns[0] == column
+}
+fn content_partitions(
+    conn: &Connection,
+    project: &ProjectId,
+    snapshot: &devworks_core::ports::storage::ProjectPurgeCandidates,
+    rows: &mut BTreeMap<Key, ProjectPurgeRowWitness>,
+    unresolved: &mut BTreeMap<Key, ProjectPurgeUnresolved>,
+) -> Result<(), StorageError> {
+    let selection = super::candidates::selection(project)?;
+    for (table, condition, action, reason) in [
+        (
+            "artifacts",
+            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 AND NOT EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=artifacts.id AND s.project_id<>?1)",
+            Action::Delete,
+            Reason::OwnedProjectRecords,
+        ),
+        (
+            "artifacts",
+            "retention='Explicit' AND scope_kind='Project' AND current_project_id=?1 AND EXISTS(SELECT 1 FROM artifact_shares s WHERE s.artifact_id=artifacts.id AND s.project_id<>?1)",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
+            "artifacts",
+            "retention='Explicit' AND (scope_kind='Workspace' OR current_project_id<>?1)",
+            Action::Keep,
+            Reason::IndependentPublication,
+        ),
+        (
+            "knowledge_entries",
+            "scope_kind='Project' AND project_id=?1 AND NOT EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=knowledge_entries.id AND s.project_id<>?1)",
+            Action::Delete,
+            Reason::OwnedProjectRecords,
+        ),
+        (
+            "knowledge_entries",
+            "scope_kind='Project' AND project_id=?1 AND EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=knowledge_entries.id AND s.project_id<>?1)",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
+            "knowledge_entries",
+            "scope_kind='Workspace' OR project_id<>?1",
+            Action::Keep,
+            Reason::IndependentPublication,
+        ),
+        (
+            "artifact_shares",
+            "project_id=?1",
+            Action::Delete,
+            Reason::ProjectMembership,
+        ),
+        (
+            "artifact_shares",
+            "project_id<>?1",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
+            "knowledge_shares",
+            "project_id=?1",
+            Action::Delete,
+            Reason::ProjectMembership,
+        ),
+        (
+            "knowledge_shares",
+            "project_id<>?1",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
+            "work_dependencies",
+            "work_id IN(SELECT id FROM ownedWork)",
+            Action::Delete,
+            Reason::OwnedLineage,
+        ),
+        (
+            "work_dependencies",
+            "work_id NOT IN(SELECT id FROM ownedWork)",
+            Action::Keep,
+            Reason::IndependentPublication,
+        ),
+    ] {
+        for row in selection.rows_where(conn, table, condition)? {
+            assign(&row, action.clone(), reason.clone(), rows, unresolved);
+        }
+    }
+    let removed_knowledge = "SELECT k.id FROM knowledge_entries k WHERE k.scope_kind='Project' AND k.project_id=?1 AND NOT EXISTS(SELECT 1 FROM knowledge_shares s WHERE s.entry_id=k.id AND s.project_id<>?1)";
+    let removed_link = format!("from_id IN({removed_knowledge}) OR to_id IN({removed_knowledge})");
+    for (condition, action, reason) in [
+        (removed_link.clone(), Action::Delete, Reason::OwnedLineage),
+        (
+            format!("NOT({removed_link})"),
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+    ] {
+        for row in selection.rows_where(conn, "knowledge_links", &condition)? {
+            assign(&row, action.clone(), reason.clone(), rows, unresolved);
+        }
+    }
+    // Follow only declared content ownership edges. Memberships and independent
+    // referencing records never inherit a deletion from a referenced owner.
+    let candidates = snapshot
+        .rows
+        .iter()
+        .map(|row| ((row.table.clone(), row.key_digest.clone()), row))
+        .collect::<BTreeMap<_, _>>();
+    loop {
+        let mut changed = false;
+        for edge in snapshot
+            .references
+            .iter()
+            .filter(|edge| content_lineage(edge))
+        {
+            let Some(parent) = rows
+                .get(&(edge.to_table.clone(), edge.to_key_digest.clone()))
+                .cloned()
+            else {
+                continue;
+            };
+            let reason = match parent.action {
+                Action::Keep => parent.reason,
+                Action::Delete => Reason::OwnedLineage,
+                Action::Scrub => continue,
+            };
+            let Some(child) = candidates
+                .get(&(edge.from_table.clone(), edge.from_key_digest.clone()))
+                .copied()
+            else {
+                continue;
+            };
+            changed |= assign(child, parent.action, reason, rows, unresolved);
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
+}
+
 pub(in crate::storage::sqlite) fn planning(
     conn: &Connection,
     project: &ProjectId,
@@ -212,6 +396,7 @@ pub(in crate::storage::sqlite) fn planning(
             }
         }
     }
+    content_partitions(conn, project, &snapshot, &mut rows, &mut unresolved)?;
     // Workspace-created project snapshots are independently attributed receipts.
     // Their recognized result needs explicit compaction; do not relabel the
     // CommandDecided event or silently omit private copied project content.

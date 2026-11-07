@@ -127,6 +127,28 @@ canonical unsupported-adapter fixture's new read-port method. Mixed content,
 receipt-control, typed lease and managed-byte partitions are still explicit holds;
 this assessment is not an execution permit or full ownership qualification.
 
+Current-scope/shared content partitioning now resolves explicit artifacts and legacy
+knowledge plus their declared content lineage. Five native candidate/reference
+cases pass (6.91 seconds), two direct planning cases pass (1.59 seconds), and strict
+checks pass (17.11 seconds). Cases distinguish moved-in ownership from moved-to-
+workspace independence, current-project membership removal from surviving shares,
+private/shared revisions and tags, knowledge edges and a changed keeper decision.
+Receipt artifacts, leases, independent version keepers and byte eligibility still
+hold planning until their complete typed rules are implemented.
+
+Windows managed-file support qualification is now available at published checkpoint
+6531d9d7: CI 42357701451, job 128359319277, passes the all-seven-class/source-
+preservation case, replacement/forged-binding refusal, published transient content
+identity and project-preview fence/workspace preservation cases. The complete
+native adapter library passes 882 cases with three intentional ignores. Its later
+foundation failure is limited to the revision-6 corpus expectation guards. The
+native corpus is now independently audited against accepted main: 31 new fixture
+bodies, none removed, and six generated ID labels changed with identical bodies.
+All seven recorded-fixture cases and 602 revision/mode admissions pass (0.27 seconds),
+with strict checks (0.61 seconds); every CommandReply fixture bridge applies the
+existing negotiated-revision validator, preserving the negative revision-5 purged
+reply case. This platform support evidence does not complete DW-83 acceptance.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

@@ -2110,6 +2110,7 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
         super::super::conn::db(c.execute_batch(
             "INSERT INTO artifacts(id,title,revision,scope_revision,origin_project_id,current_project_id,scope_kind,owner_actor_id) VALUES
              ('owned-private','private sentinel',1,1,'purge-a','purge-a','Project',NULL),
+             ('moved-in','currently owned sentinel',1,1,'purge-b','purge-a','Project',NULL),
              ('shared-out','shared sentinel',1,1,'purge-a','purge-a','Project',NULL),
              ('moved-workspace','independent workspace sentinel',1,1,'purge-a',NULL,'Workspace','purge-human'),
              ('shared-in','other project sentinel',1,1,'purge-b','purge-b','Project',NULL),
@@ -2119,7 +2120,10 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
              ('knowledge-owned','purge-a','fact','Project',1,'Active','{\"private\":\"sentinel\"}',1),
              ('knowledge-shared','purge-a','fact','Project',1,'Active','{\"shared\":\"sentinel\"}',1),
              ('knowledge-other','purge-b','fact','Project',1,'Active','{}',1);
-             INSERT INTO knowledge_shares VALUES('knowledge-shared','purge-b');"
+             INSERT INTO knowledge_shares VALUES('knowledge-shared','purge-b');
+             INSERT INTO knowledge_revisions VALUES('knowledge-owned',1,'purge-human','{}'),('knowledge-shared',1,'purge-human','{}');
+             INSERT INTO knowledge_tags VALUES('knowledge-owned','owned-private-tag'),('knowledge-shared','shared-tag');
+             INSERT INTO knowledge_links VALUES('knowledge-owned','knowledge-shared','supports','{}'),('knowledge-shared','knowledge-other','supports','{}');"
         ))
     }).unwrap();
     let snapshot = || {
@@ -2131,7 +2135,7 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
     };
     let before = snapshot();
     let count = |table: &str| before.rows.iter().filter(|r| r.table == table).count();
-    assert_eq!(count("artifacts"), 4);
+    assert_eq!(count("artifacts"), 5);
     assert_eq!(count("artifact_shares"), 2);
     for edge in before
         .references
@@ -2160,6 +2164,105 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
             .unwrap()
             .contains("sentinel")
     );
+    let planning = || {
+        read_snapshot(&store, &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("purge-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    let plan = planning();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    for (table, key, action) in [
+        (
+            "artifacts",
+            json!(["owned-private"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifacts",
+            json!(["moved-in"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifacts",
+            json!(["shared-out"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifacts",
+            json!(["moved-workspace"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifacts",
+            json!(["shared-in"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "artifact_shares",
+            json!(["shared-in", "purge-a"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "artifact_shares",
+            json!(["shared-out", "purge-b"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_entries",
+            json!(["knowledge-owned"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_entries",
+            json!(["knowledge-shared"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_revisions",
+            json!(["knowledge-owned", 1]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_revisions",
+            json!(["knowledge-shared", 1]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_tags",
+            json!(["knowledge-owned", "owned-private-tag"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_tags",
+            json!(["knowledge-shared", "shared-tag"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+        (
+            "knowledge_links",
+            json!(["knowledge-owned", "knowledge-shared", "supports"]),
+            ProjectPurgeRowAction::Delete,
+        ),
+        (
+            "knowledge_links",
+            json!(["knowledge-shared", "knowledge-other", "supports"]),
+            ProjectPurgeRowAction::Keep,
+        ),
+    ] {
+        let digest = devworks_core::fingerprint::sha256_hex(key.to_string().as_bytes());
+        assert!(
+            plan.rows
+                .iter()
+                .any(|r| r.table == table && r.key_digest == digest && r.action == action),
+            "{table} {key}: {action:?}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&plan.rows)
+            .unwrap()
+            .contains("owned-private-tag")
+    );
     h.raw()
         .execute(
             "UPDATE artifacts SET title='unrelated changed' WHERE id='unrelated'",
@@ -2173,6 +2276,15 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
             [],
         )
         .unwrap();
+    let changed = planning();
+    let shared_key =
+        devworks_core::fingerprint::sha256_hex(json!(["shared-out"]).to_string().as_bytes());
+    assert!(
+        changed.rows.iter().any(|r| r.table == "artifacts"
+            && r.key_digest == shared_key
+            && r.action == ProjectPurgeRowAction::Delete),
+        "removing a keeper changes the exact content decision"
+    );
     assert_ne!(
         snapshot().digest,
         before.digest,
@@ -2182,7 +2294,7 @@ fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it
         h.raw()
             .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         h.raw()
