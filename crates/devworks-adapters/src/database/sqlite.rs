@@ -32,13 +32,14 @@ fn object(
     if let Some(definition) = definition {
         details["definitionSql"] = json!(definition);
     }
+    let (metadata, coverage) = metadata(name, "main", Some("main"), details)?;
     Ok(MetadataObject {
         key: key(&["main", kind, parent.unwrap_or(""), name]),
         parent_key: parent.map(str::to_owned),
         kind: kind.into(),
         qualified_name: qualified,
-        metadata: metadata(name, "main", Some("main"), details)?,
-        coverage: coverage(),
+        metadata,
+        coverage,
     })
 }
 fn partial(c: &mut Collector, node: &mut MetadataObject, reason: &str) {
@@ -709,5 +710,88 @@ mod tests {
             std::fs::read(&target.0).unwrap(),
             b"ordinary text is not a SQLite database"
         );
+    }
+    #[test]
+    fn native_sqlite_long_names_keep_raw_identity_and_bound_display_as_partial() {
+        let name = format!("table_{}", "x".repeat(5000));
+        let target = Target::new(&format!("CREATE TABLE {name}(id INT);"));
+        let before = std::fs::read(&target.0).unwrap();
+        let snapshot = run(target.request()).unwrap();
+        let table = snapshot.objects.iter().find(|o| o.kind == "Table").unwrap();
+        assert_eq!(table.metadata.name.0.chars().count(), 256);
+        assert_eq!(table.qualified_name.chars().count(), 4096);
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column")
+            .unwrap();
+        assert_eq!(column.parent_key.as_ref(), Some(&table.key));
+        assert!(matches!(table.coverage.state, CoverageState::Partial));
+        assert!(matches!(snapshot.coverage.state, CoverageState::Partial));
+        assert_eq!(before, std::fs::read(&target.0).unwrap());
+    }
+    #[test]
+    fn native_sqlite_large_index_lists_keep_every_column_but_bound_index_metadata() {
+        let names = (0..129).map(|n| format!("c{n}")).collect::<Vec<_>>();
+        let columns = names
+            .iter()
+            .map(|n| format!("{n} INT"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let target = Target::new(&format!(
+            "CREATE TABLE wider({columns}); CREATE INDEX wider_all ON wider({});",
+            names.join(",")
+        ));
+        let snapshot = run(target.request()).unwrap();
+        assert_eq!(
+            snapshot
+                .objects
+                .iter()
+                .filter(|o| o.kind == "Column")
+                .count(),
+            129
+        );
+        let index = snapshot.objects.iter().find(|o| o.kind == "Index").unwrap();
+        assert_eq!(index.metadata.column_names.0.len(), 128);
+        assert!(
+            index
+                .metadata
+                .definition_sql
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("c128")
+        );
+        assert!(matches!(index.coverage.state, CoverageState::Partial));
+        assert!(
+            index
+                .coverage
+                .gaps
+                .iter()
+                .any(|g| g.as_str() == "metadata_item_limit")
+        );
+    }
+    #[test]
+    fn native_sqlite_long_declared_type_is_bounded_partial_metadata() {
+        let declaration = format!("declared_{}", "x".repeat(5000));
+        let target = Target::new(&format!("CREATE TABLE typed(value {declaration});"));
+        let snapshot = run(target.request()).unwrap();
+        let column = snapshot
+            .objects
+            .iter()
+            .find(|o| o.kind == "Column")
+            .unwrap();
+        assert_eq!(
+            column
+                .metadata
+                .data_type
+                .as_ref()
+                .unwrap()
+                .0
+                .chars()
+                .count(),
+            4096
+        );
+        assert!(matches!(column.coverage.state, CoverageState::Partial));
     }
 }

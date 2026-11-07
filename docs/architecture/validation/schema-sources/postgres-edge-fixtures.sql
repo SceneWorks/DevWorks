@@ -13,3 +13,18 @@ BEGIN
   || quote_literal(repeat('界',50000)) || '::text AS metadata_only';
 END
 $metadata_fixture$;
+CREATE TABLE public.meta_expression_parent(id INT);
+DO $metadata_fixture$
+BEGIN
+ EXECUTE 'CREATE INDEX meta_expression_index ON public.meta_expression_parent ((' || 'id' || repeat('+1',120) || '))';
+END
+$metadata_fixture$;
+GRANT REFERENCES ON public.meta_expression_parent TO metadata_reader;
+CREATE TABLE public.meta_long_comment(id INT);
+DO $metadata_fixture$
+BEGIN
+ EXECUTE 'COMMENT ON TABLE public.meta_long_comment IS ' || quote_literal(repeat('c',70000));
+ EXECUTE 'CREATE TYPE public.meta_large_enum AS ENUM (' ||
+  (SELECT string_agg(quote_literal('label_'||lpad(g::text,4,'0')||'_'||repeat('x',30)),',') FROM generate_series(1,2000) g) || ')';
+END
+$metadata_fixture$;

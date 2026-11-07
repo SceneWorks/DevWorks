@@ -48,3 +48,9 @@ GO
 EXEC sys.sp_addextendedproperty @name=N'MS_Description',@value=N'column description',@level0type=N'SCHEMA',@level0name=N'dbo',@level1type=N'TABLE',@level1name=N'parent',@level2type=N'COLUMN',@level2name=N'id';
 EXEC sys.sp_addextendedproperty @name=N'MS_Description',@value=N'index description',@level0type=N'SCHEMA',@level0name=N'dbo',@level1type=N'TABLE',@level1name=N'parent',@level2type=N'INDEX',@level2name=N'parent_pk';
 GO
+DECLARE @metadata_parameters nvarchar(max);
+;WITH p(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM p WHERE n<129)
+ SELECT @metadata_parameters=STRING_AGG(CONVERT(nvarchar(max),'@p'+CONVERT(varchar(10),n)+' int'),',') WITHIN GROUP(ORDER BY n)
+ FROM p OPTION(MAXRECURSION 0);
+EXEC('CREATE PROCEDURE dbo.meta_many_parameters '+@metadata_parameters+' AS RETURN 0');
+GO

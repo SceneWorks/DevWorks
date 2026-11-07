@@ -4,6 +4,7 @@ use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct DatabasesScreen {
+    pub tab: usize,
     pub generated_key: Option<devworks_core::ports::secrets::Secret>,
     pub focus_object: bool,
     pub project: Option<String>,
@@ -37,8 +38,13 @@ pub struct DatabasesScreen {
     pub batch_failures: usize,
     pub read_sequence: u64,
     pub read_loading: bool,
-    pub pending_object_read: Option<(String, bool)>,
+    pub pending_read: Option<(String, ReadIntent)>,
     pub relation_ids: Vec<String>,
+}
+#[derive(Clone)]
+pub enum ReadIntent {
+    Objects(bool),
+    Relationships { ids: Vec<String>, append: bool },
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Draft {
@@ -232,11 +238,66 @@ impl DatabasesScreen {
     pub fn ui(
         &mut self,
         ui: &mut Ui,
+        availability: Result<(), &str>,
+        projects: &[(String, String)],
+        actions: &mut Vec<Action>,
+    ) {
+        let mut state = (self, actions);
+        crate::widgets::with_right_sidebar(
+            ui,
+            crate::theme::SIDEBAR,
+            &mut state,
+            |ui, state| {
+                let tab = state.0.tab;
+                let (_, selected) = crate::widgets::pane(
+                    ui,
+                    crate::widgets::Header {
+                        title: "Databases",
+                        summary: "Manage connections and explore read-only structural metadata.",
+                        tabs: &["Schema", "Relationships", "Access"],
+                        tab,
+                    },
+                    state,
+                    |_, _| {},
+                    |ui, state, tab| {
+                        state.0.tab = tab;
+                        egui::ScrollArea::vertical()
+                            .id_salt(("database-main", state.0.project.clone(), tab))
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if let Err(reason) = availability {
+                                    crate::widgets::state_block(
+                                        ui,
+                                        &crate::widgets::ViewState::Offline {
+                                            reason: reason.to_owned(),
+                                        },
+                                    );
+                                }
+                                state.0.main_ui(ui, availability.is_ok(), projects, state.1);
+                            });
+                    },
+                );
+                state.0.tab = selected;
+            },
+            |ui, state| {
+                crate::widgets::secondary_pane(ui, "Database sources", |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("database-sources", state.0.project.clone()))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            state.0.sources_ui(ui, availability.is_ok(), state.1)
+                        });
+                });
+            },
+        );
+    }
+    fn main_ui(
+        &mut self,
+        ui: &mut Ui,
         online: bool,
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
     ) {
-        ui.heading("Databases");
         ui.label(self.project.as_ref().map_or_else(
             || "Workspace database sources".to_owned(),
             |id| {
@@ -270,47 +331,12 @@ impl DatabasesScreen {
         if let Some(notice) = &self.notice {
             ui.label(notice);
         }
-        ui.scope_builder(
-            egui::UiBuilder::new().scope_id(ui.make_persistent_id("database-toolbar")),
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(
-                            online && !self.loading,
-                            egui::Button::new("Refresh databases"),
-                        )
-                        .clicked()
-                    {
-                        actions.push(Action::Refresh);
-                    }
-                    if ui
-                        .add_enabled(
-                            online && !self.busy,
-                            egui::Button::new("New database source"),
-                        )
-                        .clicked()
-                    {
-                        actions.push(Action::New);
-                    }
-                    if ui
-                        .add_enabled(
-                            online && !self.busy && !self.connections.is_empty(),
-                            egui::Button::new("Sync all enabled sources"),
-                        )
-                        .clicked()
-                    {
-                        actions.push(Action::SyncAll);
-                    }
-                    if button(ui, "Confirm database outcome").clicked() {
-                        actions.push(Action::ConfirmOutcome);
-                    }
-                })
-            },
-        );
         if !online {
             ui.label("Database operations are unavailable while offline or closing.");
         }
-        if let Some(draft) = &mut self.draft {
+        if self.tab == 2
+            && let Some(draft) = &mut self.draft
+        {
             ui.separator();
             ui.heading(if draft.id.is_some() {
                 "Edit database source"
@@ -346,44 +372,6 @@ impl DatabasesScreen {
                     actions.push(Action::CancelDraft);
                 }
             });
-        }
-        ui.separator();
-        if self.loading {
-            ui.spinner();
-        } else if self.loaded && self.connections.is_empty() {
-            ui.label("No database sources are visible in this scope.");
-        }
-        for source in &self.connections {
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .scope_id(ui.make_persistent_id(("database-source", source.id.as_str()))),
-                |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .selectable_label(
-                                self.selected.as_deref() == Some(source.id.as_str()),
-                                &source.name.0,
-                            )
-                            .clicked()
-                        {
-                            actions.push(Action::Select(source.id.as_str().into()));
-                        }
-                        ui.label(format!("{:?} · {:?}", source.engine, source.state));
-                        if ui
-                            .add_enabled(
-                                !self.busy,
-                                egui::Button::new(format!("Edit {}", source.name.0)),
-                            )
-                            .clicked()
-                        {
-                            actions.push(Action::Edit(source.id.as_str().into()));
-                        }
-                    })
-                },
-            );
-        }
-        if self.next.is_some() && button(ui, "More database sources").clicked() {
-            actions.push(Action::More);
         }
         let Some(source) = self.source().cloned() else {
             return;
@@ -474,162 +462,223 @@ impl DatabasesScreen {
                 },
             );
         }
-        ui.separator();
-        field(ui, "Find schema objects", &mut self.filter, false);
-        let mut kind = json!({"kind":self.kind});
-        choice(
-            ui,
-            "Schema object kind",
-            &mut kind,
-            "kind",
-            &[
-                "",
-                "Catalog",
-                "Schema",
-                "Table",
-                "Column",
-                "Index",
-                "Constraint",
-                "View",
-                "Procedure",
-                "Type",
-                "GraphEntity",
-                "GraphEdge",
-            ],
-        );
-        self.kind = kind["kind"].as_str().unwrap_or("").into();
-        ui.horizontal(|ui| {
-            if button_enabled(ui, "Search schema objects", online && !self.read_loading).clicked() {
-                actions.push(Action::Objects(false));
-            }
-            if self.parent.is_some() && button(ui, "All schema objects").clicked() {
-                self.parent = None;
-                actions.push(Action::Objects(false));
-            }
-        });
-        if self.read_loading {
-            ui.spinner();
-        }
-        for object in &self.objects {
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .scope_id(ui.make_persistent_id(("schema-object", object.id.as_str()))),
-                |ui| {
-                    if ui
-                        .button(format!("{:?} {}", object.kind, object.qualified_name.0))
-                        .clicked()
-                    {
-                        actions.push(Action::Inspect(object.clone()));
-                    }
-                },
-            );
-        }
-        if self.object_next.is_some()
-            && ui
-                .scope_builder(
-                    egui::UiBuilder::new().scope_id(ui.make_persistent_id("schema-object-paging")),
-                    |ui| {
-                        ui.add_enabled(!self.read_loading, egui::Button::new("More schema objects"))
-                            .clicked()
-                    },
-                )
-                .inner
-        {
-            actions.push(Action::Objects(true));
-        }
-        if let Some(object) = &self.selected_object {
+        if self.tab == 2 {
             ui.separator();
-            let heading = ui.heading(&object.qualified_name.0);
-            if self.focus_object {
-                heading.scroll_to_me(Some(egui::Align::TOP));
-                self.focus_object = false;
-            }
-            let coverage = &object.coverage;
-            ui.label(format!("Object coverage: {:?}", coverage.state));
-            for gap in &coverage.gaps {
-                ui.label(format!("Object coverage gap: {}", gap.as_str()));
-            }
-            if let Some(m) = &object.metadata {
-                ui.label(&m.name.0);
-                for (label, value) in [
-                    ("Type", m.data_type.as_ref().map(|v| v.0.as_str())),
-                    ("Comment", m.comment.as_ref().map(|v| v.0.as_str())),
-                    ("Default", m.default_value.as_ref().map(|v| v.0.as_str())),
-                    ("Column key", m.column_key.as_ref().map(|v| v.0.as_str())),
-                    ("Extra", m.extra.as_ref().map(|v| v.0.as_str())),
-                    ("Index type", m.index_type.as_ref().map(|v| v.0.as_str())),
-                    (
-                        "Constraint",
-                        m.constraint_type.as_ref().map(|v| v.0.as_str()),
-                    ),
-                    (
-                        "Referenced table",
-                        m.referenced_table.as_ref().map(|v| v.0.as_str()),
-                    ),
-                    ("Check", m.check_clause.as_ref().map(|v| v.0.as_str())),
-                    (
-                        "Routine type",
-                        m.routine_type.as_ref().map(|v| v.0.as_str()),
-                    ),
-                ] {
-                    if let Some(value) = value {
-                        ui.label(format!("{label}: {value}"));
-                    }
-                }
-                if let Some(nullable) = m.nullable {
-                    ui.label(format!("Nullable: {nullable}"));
-                }
-                if let Some(primary) = m.primary_key {
-                    ui.label(format!("Primary key: {primary}"));
-                }
-                if let Some(unique) = m.unique {
-                    ui.label(format!("Unique: {unique}"));
-                }
-                if let Some(ordinal) = &m.ordinal {
-                    ui.label(format!("Ordinal: {}", ordinal.get()));
-                }
-                if !m.referenced_columns.0.is_empty() {
+            ui.heading("Saved source access");
+            if let Some(config) = &source.config {
+                ui.label(format!("Authentication: {:?}", config.authentication));
+                ui.label(format!(
+                    "Workspace exposure: {}",
+                    config.workspace_exposed.unwrap_or(false)
+                ));
+                ui.label(format!("Tool access: {:?}", config.exposure_mode));
+                ui.label(format!(
+                    "Separately authorized writes: {}",
+                    config.writes_enabled
+                ));
+                for access in config
+                    .project_access
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|v| &v.0)
+                {
+                    let name = projects
+                        .iter()
+                        .find(|p| p.0 == access.project_id.as_str())
+                        .map_or(access.project_id.as_str(), |p| p.1.as_str());
                     ui.label(format!(
-                        "Referenced columns: {}",
-                        m.referenced_columns
-                            .0
-                            .iter()
-                            .map(|v| v.0.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "{name}: metadata {}, read {}, write {}",
+                        access.metadata_enabled,
+                        access.data_read_enabled,
+                        access.data_write_enabled
                     ));
                 }
-                if !m.column_names.0.is_empty() {
-                    ui.label(format!(
-                        "Columns: {}",
-                        m.column_names
-                            .0
-                            .iter()
-                            .map(|n| n.0.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                if button_enabled(ui, "Edit selected database access", online && !self.busy)
+                    .clicked()
+                {
+                    actions.push(Action::Edit(source.id.as_str().into()));
                 }
-                if let Some(sql) = &m.definition_sql {
-                    egui::CollapsingHeader::new("Structural definition").show(ui, |ui| {
-                        ui.add(egui::Label::new(&sql.0).selectable(true).wrap());
-                    });
-                }
-                for parameter in &m.parameters.0 {
-                    ui.label(format!(
-                        "{} {} {}",
-                        parameter.mode.0, parameter.name.0, parameter.data_type.0
-                    ));
-                }
+            } else {
+                ui.label("This source is shared. Its owner controls its saved connection and access settings.");
             }
+            return;
+        }
+        if self.tab == 0 {
+            ui.separator();
+            field(ui, "Find schema objects", &mut self.filter, false);
+            let mut kind = json!({"kind":self.kind});
+            choice(
+                ui,
+                "Schema object kind",
+                &mut kind,
+                "kind",
+                &[
+                    "",
+                    "Catalog",
+                    "Schema",
+                    "Table",
+                    "Column",
+                    "Index",
+                    "Constraint",
+                    "View",
+                    "Procedure",
+                    "Type",
+                    "GraphEntity",
+                    "GraphEdge",
+                ],
+            );
+            self.kind = kind["kind"].as_str().unwrap_or("").into();
             ui.horizontal(|ui| {
-                if button(ui, "Inspect schema children").clicked() {
-                    actions.push(Action::Children(object.id.as_str().into()));
+                if button_enabled(ui, "Search schema objects", online && !self.read_loading)
+                    .clicked()
+                {
+                    actions.push(Action::Objects(false));
                 }
-                if button(ui, "Inspect schema relationships").clicked() {
-                    actions.push(Action::Relations(vec![object.id.as_str().into()], false));
+                if self.parent.is_some() && button(ui, "All schema objects").clicked() {
+                    self.parent = None;
+                    actions.push(Action::Objects(false));
                 }
             });
+            if self.read_loading {
+                ui.spinner();
+            }
+            for object in &self.objects {
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .scope_id(ui.make_persistent_id(("schema-object", object.id.as_str()))),
+                    |ui| {
+                        if ui
+                            .button(format!("{:?} {}", object.kind, object.qualified_name.0))
+                            .clicked()
+                        {
+                            actions.push(Action::Inspect(object.clone()));
+                        }
+                    },
+                );
+            }
+            if self.object_next.is_some()
+                && ui
+                    .scope_builder(
+                        egui::UiBuilder::new()
+                            .scope_id(ui.make_persistent_id("schema-object-paging")),
+                        |ui| {
+                            ui.add_enabled(
+                                !self.read_loading,
+                                egui::Button::new("More schema objects"),
+                            )
+                            .clicked()
+                        },
+                    )
+                    .inner
+            {
+                actions.push(Action::Objects(true));
+            }
+            if let Some(object) = &self.selected_object {
+                ui.separator();
+                let heading = ui.heading(&object.qualified_name.0);
+                if self.focus_object {
+                    heading.scroll_to_me(Some(egui::Align::TOP));
+                    self.focus_object = false;
+                }
+                let coverage = &object.coverage;
+                ui.label(format!("Object coverage: {:?}", coverage.state));
+                for gap in &coverage.gaps {
+                    ui.label(format!("Object coverage gap: {}", gap.as_str()));
+                }
+                if let Some(m) = &object.metadata {
+                    ui.label(&m.name.0);
+                    for (label, value) in [
+                        ("Type", m.data_type.as_ref().map(|v| v.0.as_str())),
+                        ("Comment", m.comment.as_ref().map(|v| v.0.as_str())),
+                        ("Default", m.default_value.as_ref().map(|v| v.0.as_str())),
+                        ("Column key", m.column_key.as_ref().map(|v| v.0.as_str())),
+                        ("Extra", m.extra.as_ref().map(|v| v.0.as_str())),
+                        ("Index type", m.index_type.as_ref().map(|v| v.0.as_str())),
+                        (
+                            "Constraint",
+                            m.constraint_type.as_ref().map(|v| v.0.as_str()),
+                        ),
+                        (
+                            "Referenced table",
+                            m.referenced_table.as_ref().map(|v| v.0.as_str()),
+                        ),
+                        ("Check", m.check_clause.as_ref().map(|v| v.0.as_str())),
+                        (
+                            "Routine type",
+                            m.routine_type.as_ref().map(|v| v.0.as_str()),
+                        ),
+                    ] {
+                        if let Some(value) = value {
+                            ui.label(format!("{label}: {value}"));
+                        }
+                    }
+                    if let Some(nullable) = m.nullable {
+                        ui.label(format!("Nullable: {nullable}"));
+                    }
+                    if let Some(primary) = m.primary_key {
+                        ui.label(format!("Primary key: {primary}"));
+                    }
+                    if let Some(unique) = m.unique {
+                        ui.label(format!("Unique: {unique}"));
+                    }
+                    if let Some(ordinal) = &m.ordinal {
+                        ui.label(format!("Ordinal: {}", ordinal.get()));
+                    }
+                    if !m.referenced_columns.0.is_empty() {
+                        ui.label(format!(
+                            "Referenced columns: {}",
+                            m.referenced_columns
+                                .0
+                                .iter()
+                                .map(|v| v.0.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    if !m.column_names.0.is_empty() {
+                        ui.label(format!(
+                            "Columns: {}",
+                            m.column_names
+                                .0
+                                .iter()
+                                .map(|n| n.0.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    if let Some(sql) = &m.definition_sql {
+                        egui::CollapsingHeader::new("Structural definition").show(ui, |ui| {
+                            ui.add(egui::Label::new(&sql.0).selectable(true).wrap());
+                        });
+                    }
+                    for parameter in &m.parameters.0 {
+                        ui.label(format!(
+                            "{} {} {}",
+                            parameter.mode.0, parameter.name.0, parameter.data_type.0
+                        ));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if button(ui, "Inspect schema children").clicked() {
+                        actions.push(Action::Children(object.id.as_str().into()));
+                    }
+                    if button(ui, "Inspect schema relationships").clicked() {
+                        actions.push(Action::Relations(vec![object.id.as_str().into()], false));
+                    }
+                });
+            }
+        }
+        if self.tab != 1 {
+            return;
+        }
+        if button_enabled(
+            ui,
+            "Load database relationships",
+            online && !self.read_loading && source.current_view_id.is_some(),
+        )
+        .clicked()
+        {
+            actions.push(Action::Relations(Vec::new(), false));
         }
         for relation in &self.relations {
             ui.horizontal_wrapped(|ui| {
@@ -661,6 +710,86 @@ impl DatabasesScreen {
         }
     }
 }
+impl DatabasesScreen {
+    fn sources_ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<Action>) {
+        ui.scope_builder(
+            egui::UiBuilder::new().scope_id(ui.make_persistent_id("database-toolbar")),
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            online && !self.loading,
+                            egui::Button::new("Refresh databases"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Refresh);
+                    }
+                    if ui
+                        .add_enabled(
+                            online && !self.busy,
+                            egui::Button::new("New database source"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::New);
+                    }
+                    if ui
+                        .add_enabled(
+                            online && !self.busy && !self.connections.is_empty(),
+                            egui::Button::new("Sync all enabled sources"),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::SyncAll);
+                    }
+                    if button(ui, "Confirm database outcome").clicked() {
+                        actions.push(Action::ConfirmOutcome);
+                    }
+                })
+            },
+        );
+        ui.separator();
+        if self.loading {
+            ui.spinner();
+        } else if self.loaded && self.connections.is_empty() {
+            ui.label("No database sources are visible in this scope.");
+        }
+        for source in &self.connections {
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .scope_id(ui.make_persistent_id(("database-source", source.id.as_str()))),
+                |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .selectable_label(
+                                self.selected.as_deref() == Some(source.id.as_str()),
+                                &source.name.0,
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::Select(source.id.as_str().into()));
+                        }
+                        ui.label(format!("{:?} · {:?}", source.engine, source.state));
+                        if ui
+                            .add_enabled(
+                                !self.busy,
+                                egui::Button::new(format!("Edit {}", source.name.0)),
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::Edit(source.id.as_str().into()));
+                        }
+                    })
+                },
+            );
+        }
+        if self.next.is_some() && button(ui, "More database sources").clicked() {
+            actions.push(Action::More);
+        }
+    }
+}
+
 pub fn scope(project: Option<&str>) -> Value {
     project.map_or_else(
         || json!({"kind":"Workspace"}),
@@ -677,7 +806,7 @@ impl DatabasesScreen {
         {
             return Value::Null;
         }
-        json!({"draft":self.draft,"batchActive":self.batch_active,"batchScanning":self.batch_scanning,"remaining":self.batch_remaining,"batchScope":self.batch_scope,"submitted":self.batch_submitted,"failures":self.batch_failures})
+        json!({"draft":self.draft,"batchActive":self.batch_active,"batchScanning":self.batch_scanning,"remaining":self.batch_remaining,"batchScope":self.batch_scope,"submitted":self.batch_submitted,"failures":self.batch_failures,"tab":self.tab})
     }
     pub fn restore_pending(&mut self, value: &Value) {
         self.batch_active = value["batchActive"].as_bool().unwrap_or(false);
@@ -685,6 +814,10 @@ impl DatabasesScreen {
         self.draft = serde_json::from_value(value["draft"].clone())
             .ok()
             .flatten();
+        self.tab = value["tab"]
+            .as_u64()
+            .filter(|v| *v <= 2)
+            .map_or(if self.draft.is_some() { 2 } else { 0 }, |v| v as usize);
         self.batch_remaining =
             serde_json::from_value(value["remaining"].clone()).unwrap_or_default();
         self.batch_scope = serde_json::from_value(value["batchScope"].clone()).unwrap_or_default();

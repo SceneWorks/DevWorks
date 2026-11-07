@@ -16,13 +16,14 @@ pub(super) struct Catalog {
 impl Catalog {
     pub fn new(mut collector: Collector, catalog: String) -> Result<Self, MetadataFailure> {
         let root = key(&[&catalog, "Catalog"]);
+        let (metadata, coverage) = metadata(&catalog, &catalog, None, json!({}))?;
         let node = MetadataObject {
             key: root,
             parent_key: None,
             kind: "Catalog".into(),
             qualified_name: catalog.clone(),
-            metadata: metadata(&catalog, &catalog, None, json!({}))?,
-            coverage: coverage(),
+            metadata,
+            coverage,
         };
         collector.object(node)?;
         Ok(Self {
@@ -40,13 +41,14 @@ impl Catalog {
         }
         let root = self.root();
         let id = key(&[&self.catalog, name, "Schema"]);
+        let (metadata, coverage) = metadata(name, &self.catalog, Some(name), json!({}))?;
         let node = MetadataObject {
             key: id.clone(),
             parent_key: Some(root.clone()),
             kind: "Schema".into(),
             qualified_name: format!("{}.{}", self.catalog, name),
-            metadata: metadata(name, &self.catalog, Some(name), json!({}))?,
-            coverage: coverage(),
+            metadata,
+            coverage,
         };
         if self.collector.object(node)? {
             self.collector.relationship(&root, &id, "CONTAINS")?;
@@ -142,13 +144,14 @@ impl Catalog {
         } else {
             selected_name
         };
+        let (metadata, coverage) = metadata(name, &self.catalog, Some(schema), details)?;
         let mut node = MetadataObject {
             key: id.clone(),
             parent_key: Some(parent_id.clone()),
             kind: kind.into(),
             qualified_name: qualified,
-            metadata: metadata(name, &self.catalog, Some(schema), details)?,
-            coverage: coverage(),
+            metadata,
+            coverage,
         };
         let missing_check = kind == "Constraint"
             && node
@@ -180,6 +183,14 @@ impl Catalog {
             node.coverage
                 .gaps
                 .push(Id::new("metadata_definition_byte_limit").expect("static gap"));
+        }
+        if row.get("expressionColumns").and_then(Value::as_bool) == Some(true) {
+            let reason = "metadata_expression_index_columns";
+            self.collector.gap(reason);
+            node.coverage.state = CoverageState::Partial;
+            node.coverage
+                .gaps
+                .push(Id::new(reason).expect("static gap"));
         }
         if !self.collector.object(node)? {
             return Ok(false);
