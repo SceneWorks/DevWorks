@@ -149,6 +149,88 @@ pub(super) fn run_case(writer_race: bool) {
         let app = engine.host.runtime.clone();
         let store = app.store().clone();
         let info = store.info();
+        // This fixture measures the provider tail against an exact whole-store stamp.
+        // Settle the independent real startup owners before applying its 30 ms shutdown
+        // budget; an already-admitted queue settlement may otherwise outlive that budget.
+        let startup_deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let accounting = app.accounting().watch();
+        loop {
+            // Use Help's real durable cancellation signal. This fixture does not need a
+            // completed catalog, and maintenance retains this source-change attempt.
+            let cancelled_failure = run_write(store.as_ref(), WriteOptions::default(), |tx| {
+                let page = tx.queue().deliveries(
+                    &DeliveryFilter {
+                        consumer: Some("help_docs".into()),
+                        operation_id: None,
+                    },
+                    None,
+                    500,
+                )?;
+                assert!(
+                    page.next.is_none(),
+                    "the fresh fixture has one startup Help generation"
+                );
+                let mut cancelled_failure = false;
+                for entry in page.entries {
+                    if entry.state == QueueState::Failed
+                        && entry.cancel_requested
+                        && entry.last_error.as_deref()
+                            == Some("Help generation was cancelled before catalog publication.")
+                    {
+                        let operation = entry.operation_id.as_ref().expect("Help has an operation");
+                        let operation = tx.operations().operation(operation)?.unwrap();
+                        cancelled_failure = operation.capability == "help.generate_capability_docs"
+                            && operation.state == devworks_core::protocol::OperationState::Failed;
+                    }
+                    if !entry.cancel_requested
+                        && matches!(entry.state, QueueState::Ready | QueueState::Claimed)
+                    {
+                        let operation = entry.operation_id.as_ref().expect("Help has an operation");
+                        assert_eq!(
+                            tx.operations().operation(operation)?.unwrap().capability,
+                            "help.generate_capability_docs"
+                        );
+                        tx.queue().cancel(&entry.id)?;
+                    }
+                }
+                Ok(cancelled_failure)
+            })
+            .unwrap();
+            let (help, receipts, bootstrap, drafts) =
+                read_snapshot(store.as_ref(), &ReadOptions::default(), |s| {
+                    Ok((
+                        s.queue().status("help_docs")?,
+                        s.queue().status("receipt_replies")?,
+                        s.usage().usage_bootstrap()?,
+                        s.help().help_drafts(None, 32)?.len(),
+                    ))
+                })
+                .unwrap();
+            let accounted = accounting.borrow().as_ref().is_some_and(|pass| {
+                pass.as_ref()
+                    .is_ok_and(|p| p.indexing_complete && p.recovery_complete && !p.recovery_more)
+            });
+            // Dispatch can establish the running generation's cancellation as Failed;
+            // that exact requested outcome is settled just like cancellation before dispatch.
+            if (help.completed + help.cancelled > 0 || cancelled_failure)
+                && help.ready == 0
+                && help.claimed == 0
+                && help.reconciling == 0
+                && receipts.ready == 0
+                && receipts.claimed == 0
+                && receipts.reconciling == 0
+                && bootstrap.phase == "Complete"
+                && drafts == 0
+                && accounted
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < startup_deadline,
+                "independent startup owners did not settle: Help={help:?}; receipts={receipts:?}; bootstrap={bootstrap:?}; drafts={drafts}; accounted={accounted}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         secrets
             .put(
                 &SecretKey::new(info.store_id.0.as_str(), id("shutdown-auth")),
