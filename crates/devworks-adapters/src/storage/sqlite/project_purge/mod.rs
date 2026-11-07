@@ -435,6 +435,8 @@ pub(super) fn managed_recovery(
         let writing = state == "Writing";
         let mut boot_id = None;
         let file_identity;
+        let store_id;
+        let restore_epoch;
         let root = if writing {
             let reserved: ProjectManagedFileReservation =
                 serde_json::from_str(&body).map_err(|_| invalid("managed recovery reservation"))?;
@@ -447,6 +449,8 @@ pub(super) fn managed_recovery(
             }
             boot_id = reserved.boot_id;
             file_identity = reserved.created_identity;
+            store_id = reserved.store_id;
+            restore_epoch = reserved.restore_epoch;
             reserved.root
         } else {
             let witness: devworks_core::ports::project_purge::PurgeFileWitness =
@@ -455,6 +459,8 @@ pub(super) fn managed_recovery(
                 return Err(invalid("managed recovery path"));
             }
             file_identity = Some(witness.identity);
+            store_id = witness.store_id;
+            restore_epoch = witness.restore_epoch;
             witness.root
         };
         Ok(ProjectManagedFileRecovery {
@@ -463,6 +469,8 @@ pub(super) fn managed_recovery(
             relative_path: path,
             root,
             file_identity,
+            store_id,
+            restore_epoch,
             writing,
             boot_id,
         })

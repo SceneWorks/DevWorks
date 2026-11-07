@@ -100,6 +100,10 @@ pub trait Backend: Send + Sync {
     fn token(&self, prefix: &str) -> String;
     /// A directory for files the UI materializes before attaching them (pasted images).
     fn scratch_dir(&self) -> PathBuf;
+    /// Stage native paste bytes under the stored session's scope before exposing a path.
+    fn stage_pasted_image(&self, _session: Option<&Id>, _png: &[u8]) -> Result<PathBuf, String> {
+        Err("pasted-image custody is not available here".into())
+    }
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;

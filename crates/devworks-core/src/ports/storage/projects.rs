@@ -316,6 +316,8 @@ pub struct ProjectManagedFileRecovery {
     pub relative_path: String,
     pub root: crate::authority::destructive::FileIdentity,
     pub file_identity: Option<crate::authority::destructive::FileIdentity>,
+    pub store_id: crate::protocol::StoreId,
+    pub restore_epoch: i64,
     pub writing: bool,
     pub boot_id: Option<Id>,
 }

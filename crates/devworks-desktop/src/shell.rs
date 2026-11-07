@@ -1537,8 +1537,17 @@ impl Shell {
     /// temporary file removed once the artifact service holds its copy.
     pub fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
         let Some(b) = self.backend() else { return };
-        let name = format!("{}.png", b.token("pasted-image"));
-        match attachments::materialize_paste(image, &b.scratch_dir(), &name) {
+        let session = self
+            .chat
+            .selected
+            .as_deref()
+            .map(devworks_core::protocol::Id::new)
+            .transpose();
+        let result = session.map_err(|e| e.to_string()).and_then(|session| {
+            let png = attachments::encode_paste(image)?;
+            b.stage_pasted_image(session.as_ref(), &png)
+        });
+        match result {
             Ok(path) => self.attach_files(vec![(path, true)]),
             Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
         }

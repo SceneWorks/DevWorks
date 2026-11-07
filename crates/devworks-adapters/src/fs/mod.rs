@@ -23,6 +23,7 @@ use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
 
 pub mod artifacts;
+pub mod client_paste;
 pub mod purge;
 pub mod sources;
 #[cfg(unix)]

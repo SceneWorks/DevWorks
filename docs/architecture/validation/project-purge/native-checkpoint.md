@@ -249,3 +249,16 @@ legacy mapping. The missing-conversation regression failed before correction
 (1.11 seconds); all 15 planning cases pass (21.61 seconds), and strict
 workspace/all-target checks pass (16.90 seconds). This remains read-only
 classification; the destructive executor and client coordination are pending.
+
+Native pasted-image staging now derives ownership from the stored session. It
+reserves before create-new, binds the native file identity before private bytes,
+and publishes the exact witness before returning a path. Home/new composer files
+remain independent; ambiguous legacy session scope refuses creation. Boot recovery
+settles only prior-boot incomplete writes, with store/restore/root/file identity
+checks; live drafts are not swept. Four native custody/recovery cases pass (2.91
+seconds), the two original paste/relaunch UI cases pass (7.54 seconds), and strict
+workspace/all-target checks pass (16.64 seconds). Recovery's macOS path-alias
+regression was corrected by using the same verified canonical root as inventory.
+Replacement identities and colliding independent files survive. Full client keeper
+coordination remains pending, including the newly discovered project-owned feature
+plan/decision Markdown and convention text/portable-manifest staging producers.

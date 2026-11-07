@@ -461,6 +461,17 @@ async fn compose(
     };
     // Recovery and every required consumer start here, before any request below is admitted.
     let runtime = boot(composition).await.map_err(StartError::Boot)?;
+    // A previous boot cannot still be producing a paste. Live draft files require the
+    // client keeper snapshot; this owner only reconciles incomplete reserved writes.
+    if let Err(error) = devworks_adapters::fs::client_paste::NativeClientPasteFiles::new(
+        config.data_root.join("staging-ui"),
+        store.clone(),
+    )
+    .recover_abandoned()
+    {
+        // Its durable Writing row continues to hold purge preparation on uncertainty.
+        eprintln!("Pasted-image recovery remains held: {error}");
+    }
     // Host bookkeeping after recovery: the local user is the human principal of the UI.
     let user = ActorId(Id::new(USER_ACTOR).expect("valid actor"));
     let (registered, name) = (user.clone(), config.user_name.clone());
@@ -831,6 +842,13 @@ impl Backend for DesktopBackend {
     }
     fn scratch_dir(&self) -> PathBuf {
         self.host.data_root.join("staging-ui")
+    }
+    fn stage_pasted_image(&self, session: Option<&Id>, png: &[u8]) -> Result<PathBuf, String> {
+        devworks_adapters::fs::client_paste::NativeClientPasteFiles::new(
+            self.scratch_dir(),
+            self.host.runtime.store().clone(),
+        )
+        .write(session, &self.host.ids.next_id(IdKind::Artifact), png)
     }
     fn refresh_packages(&self) -> Result<(), String> {
         let host = self

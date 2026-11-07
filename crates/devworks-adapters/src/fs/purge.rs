@@ -634,7 +634,7 @@ fn verify_open_content(
 }
 
 #[cfg(unix)]
-fn remove_native(
+pub(super) fn remove_native(
     root: &Path,
     w: &PurgeFileWitness,
     stopped: &mut dyn FnMut() -> bool,
@@ -700,7 +700,7 @@ fn remove_native(
 }
 
 #[cfg(windows)]
-fn remove_native(
+pub(super) fn remove_native(
     root: &Path,
     w: &PurgeFileWitness,
     stopped: &mut dyn FnMut() -> bool,
@@ -798,7 +798,7 @@ fn remove_native(
     Ok(())
 }
 #[cfg(not(any(unix, windows)))]
-fn remove_native(
+pub(super) fn remove_native(
     _root: &Path,
     _w: &PurgeFileWitness,
     _stopped: &mut dyn FnMut() -> bool,

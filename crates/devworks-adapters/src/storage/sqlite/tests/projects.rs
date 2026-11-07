@@ -2781,6 +2781,264 @@ fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileRes
         created_at_ms: T0,
     }
 }
+
+#[test]
+fn client_paste_custody_uses_stored_session_scope_and_preserves_independent_files() {
+    use crate::fs::client_paste::NativeClientPasteFiles;
+    let fx = Fx::new();
+    let p = fx.create("paste project", &[]);
+    let project_id = p.id.clone();
+    fx.write(move |tx| {
+        for (name, scope) in [
+            ("project-paste-session", Some(project_id)),
+            ("home-paste-session", None),
+        ] {
+            tx.sessions().insert_session(&StoredSession {
+                id: id(name),
+                conversation_id: id(&format!("{name}-conversation")),
+                agent_id: actor("user-a"),
+                project_id: scope,
+                root_id: None,
+                title: "private session".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor("user-a"),
+                created_at_ms: T0,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+        }
+        Ok(())
+    });
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientPasteFiles::new(root.clone(), fx.store.clone());
+    let path = files
+        .write(
+            Some(&id("project-paste-session")),
+            &id("owned-paste"),
+            b"private PNG bytes",
+        )
+        .unwrap();
+    let stored = read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+        r.projects().project_managed_file(&p.id, &id("owned-paste"))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(stored.kind, "ClientPaste");
+    assert_eq!(stored.witness.byte_count, 17);
+    assert_eq!(
+        stored.witness.identity,
+        crate::fs::identity_at(&path, &std::fs::metadata(&path).unwrap()).unwrap()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"private PNG bytes");
+    assert!(
+        files
+            .write(
+                Some(&id("project-paste-session")),
+                &id("owned-paste"),
+                b"replacement"
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"private PNG bytes");
+    for (session, name) in [
+        (Some(id("home-paste-session")), "home-paste"),
+        (None, "new-paste"),
+    ] {
+        let path = files
+            .write(session.as_ref(), &id(name), b"independent PNG")
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"independent PNG");
+    }
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT COUNT(*) FROM project_managed_files", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        files
+            .write(
+                Some(&id("missing-session")),
+                &id("missing-paste"),
+                b"must not appear"
+            )
+            .is_err()
+    );
+    assert!(!root.join("missing-paste.png").exists());
+    let collision = root.join("independent-collision.png");
+    std::fs::write(&collision, b"independent input").unwrap();
+    assert!(
+        files
+            .write(
+                Some(&id("project-paste-session")),
+                &id("independent-collision"),
+                b"replacement"
+            )
+            .is_err()
+    );
+    assert_eq!(std::fs::read(collision).unwrap(), b"independent input");
+    assert!(
+        !read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().pending_project_managed_writes(&p.id)
+        })
+        .unwrap()
+    );
+}
+
+#[test]
+fn client_paste_refuses_ambiguous_legacy_session_scope_before_creating_bytes() {
+    use crate::fs::client_paste::NativeClientPasteFiles;
+    let fx = Fx::new();
+    let p = fx.create("legacy paste project", &[]);
+    fx.seed_roots(&p.id, &["legacy-paste-root"]);
+    fx.write(|tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: id("legacy-paste-session"),
+            conversation_id: id("legacy-paste-conversation"),
+            agent_id: actor("user-a"),
+            project_id: None,
+            root_id: Some(RootId(id("legacy-paste-root"))),
+            title: "legacy session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor("user-a"),
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })
+    });
+    let root = fx.h.root.0.join("staging-ui");
+    let files = NativeClientPasteFiles::new(root.clone(), fx.store.clone());
+    assert!(
+        files
+            .write(
+                Some(&id("legacy-paste-session")),
+                &id("legacy-paste"),
+                b"private bytes"
+            )
+            .is_err()
+    );
+    assert!(!root.join("legacy-paste.png").exists());
+    assert_eq!(
+        fx.h.raw()
+            .query_row("SELECT COUNT(*) FROM project_managed_files", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn client_paste_recovers_only_previous_boot_incomplete_identity_bound_writes() {
+    use crate::fs::client_paste::NativeClientPasteFiles;
+    use std::io::Write;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("staging-ui");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut reservation = managed_reservation(store.as_ref(), "interrupted-paste");
+    reservation.kind = "ClientPaste".into();
+    reservation.relative_path = "interrupted-paste.png".into();
+    reservation.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reservation)
+    })
+    .unwrap();
+    let path = root.join("interrupted-paste.png");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    let identity = crate::fs::identity_for_file(&file).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().begin_project_managed_file_write(
+            &project("purge-a"),
+            &id("interrupted-paste"),
+            identity,
+        )
+    })
+    .unwrap();
+    file.write_all(b"interrupted private PNG").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let files = NativeClientPasteFiles::new(root.clone(), store.clone());
+    let independent = files
+        .write(None, &id("workspace-paste"), b"workspace PNG")
+        .unwrap();
+    files.recover_abandoned().unwrap();
+    assert!(
+        path.exists(),
+        "current-boot writing is never mistaken for an abandoned producer"
+    );
+    drop(files);
+    drop(store);
+    let store = Arc::new(h.store());
+    let files = NativeClientPasteFiles::new(root, store.clone());
+    files.recover_abandoned().unwrap();
+    assert!(!path.exists());
+    assert_eq!(std::fs::read(independent).unwrap(), b"workspace PNG");
+    assert!(
+        !read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects()
+                .pending_project_managed_writes(&project("purge-a"))
+        })
+        .unwrap()
+    );
+    files.recover_abandoned().unwrap();
+}
+
+#[test]
+fn client_paste_recovery_holds_a_replaced_file_without_deleting_either_identity() {
+    use crate::fs::client_paste::NativeClientPasteFiles;
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    purge_storage_fixture(store.as_ref());
+    let root = h.root.0.join("staging-ui");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut reserved = managed_reservation(store.as_ref(), "replaced-paste");
+    reserved.kind = "ClientPaste".into();
+    reserved.relative_path = "replaced-paste.png".into();
+    reserved.root = crate::fs::identity_at(&root, &std::fs::metadata(&root).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&reserved)
+    })
+    .unwrap();
+    let path = root.join("replaced-paste.png");
+    std::fs::write(&path, b"original private bytes").unwrap();
+    let identity = crate::fs::identity_at(&path, &std::fs::metadata(&path).unwrap()).unwrap();
+    run_write(store.as_ref(), WriteOptions::default(), move |tx| {
+        tx.projects().begin_project_managed_file_write(
+            &project("purge-a"),
+            &id("replaced-paste"),
+            identity,
+        )
+    })
+    .unwrap();
+    let moved = h.root.0.join("retained-original");
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::write(&path, b"independent replacement").unwrap();
+    drop(store);
+    let store = Arc::new(h.store());
+    let files = NativeClientPasteFiles::new(root, store.clone());
+    assert!(files.recover_abandoned().is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"independent replacement");
+    assert_eq!(std::fs::read(moved).unwrap(), b"original private bytes");
+    assert!(
+        read_snapshot(store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects()
+                .pending_project_managed_writes(&project("purge-a"))
+        })
+        .unwrap()
+    );
+}
 fn managed_publication(r: &ProjectManagedFileReservation) -> StoredProjectManagedFile {
     StoredProjectManagedFile {
         id: r.id.clone(),
