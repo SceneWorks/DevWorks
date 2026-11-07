@@ -1065,6 +1065,7 @@ fn export_staging_attribution_survives_restart_and_normal_owner_reconciles_compl
         kind: "DiagnosticExport".into(),
         relative_path: "missing-write.jsonl".into(),
         root: actual.witness.root,
+        created_identity: None,
         store_id: info.store_id,
         restore_epoch: info.restore_epoch,
         boot_id: info.boot_id,

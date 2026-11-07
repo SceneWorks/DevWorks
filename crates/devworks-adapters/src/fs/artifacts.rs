@@ -876,6 +876,7 @@ impl ArtifactFiles for NativeArtifactFiles {
                 kind: "Preview".into(),
                 relative_path,
                 root,
+                created_identity: None,
                 store_id: info.store_id,
                 restore_epoch: info.restore_epoch,
                 boot_id: info.boot_id,

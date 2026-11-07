@@ -258,6 +258,7 @@ impl ExportStaging for DiagnosticExports {
                     .ok_or_else(|| ExportRefused::Io("managed file name unavailable".into()))?
                     .into(),
                 root,
+                created_identity: None,
                 store_id: info.store_id,
                 restore_epoch: info.restore_epoch,
                 boot_id: info.boot_id,

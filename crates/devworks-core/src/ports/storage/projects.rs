@@ -288,6 +288,9 @@ pub struct ProjectManagedFileReservation {
     pub kind: String,
     pub relative_path: String,
     pub root: crate::authority::destructive::FileIdentity,
+    /// Bound after create-new and before private bytes; absent on older reservations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_identity: Option<crate::authority::destructive::FileIdentity>,
     pub store_id: crate::protocol::StoreId,
     pub restore_epoch: i64,
     pub boot_id: Option<Id>,
@@ -312,6 +315,7 @@ pub struct ProjectManagedFileRecovery {
     pub project_id: ProjectId,
     pub relative_path: String,
     pub root: crate::authority::destructive::FileIdentity,
+    pub file_identity: Option<crate::authority::destructive::FileIdentity>,
     pub writing: bool,
     pub boot_id: Option<Id>,
 }
@@ -399,6 +403,16 @@ pub trait ProjectRepository: ProjectRead {
         &mut self,
         file: &ProjectManagedFileReservation,
     ) -> Result<(), StorageError>;
+
+    /// Current-boot owner binds its create-new handle before writing private bytes.
+    fn begin_project_managed_file_write(
+        &mut self,
+        _project: &ProjectId,
+        _id: &Id,
+        _identity: crate::authority::destructive::FileIdentity,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::ScopeDenied)
+    }
 
     fn register_project_managed_file(
         &mut self,

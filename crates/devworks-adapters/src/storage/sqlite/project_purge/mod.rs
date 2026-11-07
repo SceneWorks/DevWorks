@@ -235,6 +235,12 @@ pub(super) fn register_managed_file(
     let reserved: ProjectManagedFileReservation =
         serde_json::from_str(&reservation.ok_or(StorageError::ScopeDenied)?)
             .map_err(|_| invalid("managed file reservation"))?;
+    if reserved
+        .created_identity
+        .is_some_and(|id| id != file.witness.identity)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
     if reserved.id != file.id
         || reserved.project_id != file.project_id
         || reserved.kind != file.kind
@@ -325,7 +331,8 @@ pub(super) fn reserve_managed_file(
     store: &StoreInfo,
     file: &ProjectManagedFileReservation,
 ) -> Result<(), StorageError> {
-    if file.store_id != store.store_id
+    if file.created_identity.is_some()
+        || file.store_id != store.store_id
         || file.boot_id != store.boot_id
         || file.boot_id.is_none()
         || file.restore_epoch != store.restore_epoch
@@ -349,6 +356,46 @@ pub(super) fn reserve_managed_file(
     managed_scope_open(conn, &file.project_id)?;
     let body = serde_json::to_string(file).map_err(|_| invalid("managed file reservation JSON"))?;
     db(conn.execute("INSERT INTO project_managed_files(id,project_id,kind,relative_path,identity_json,byte_count,state,created_at) VALUES(?1,?2,?3,?4,?5,0,'Writing',?6)",params![file.id.as_str(),file.project_id.0.as_str(),file.kind,file.relative_path,body,file.created_at_ms]))?;
+    Ok(())
+}
+
+pub(super) fn begin_managed_write(
+    conn: &Connection,
+    store: &StoreInfo,
+    project: &ProjectId,
+    id: &Id,
+    identity: devworks_core::authority::destructive::FileIdentity,
+) -> Result<(), StorageError> {
+    managed_scope_open(conn, project)?;
+    let raw:Option<String>=db(conn.query_row("SELECT identity_json FROM project_managed_files WHERE id=?1 AND project_id=?2 AND state='Writing'",params![id.as_str(),project.0.as_str()],|r|r.get(0)).optional())?;
+    let Some(raw) = raw else {
+        return Err(StorageError::ScopeDenied);
+    };
+    let mut reservation: ProjectManagedFileReservation =
+        serde_json::from_str(&raw).map_err(|_| invalid("managed write reservation"))?;
+    if reservation.id != *id
+        || reservation.project_id != *project
+        || reservation.store_id != store.store_id
+        || reservation.restore_epoch != store.restore_epoch
+        || reservation.boot_id != store.boot_id
+        || store.boot_id.is_none()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    if let Some(existing) = reservation.created_identity {
+        return if existing == identity {
+            Ok(())
+        } else {
+            Err(StorageError::ScopeDenied)
+        };
+    }
+    reservation.created_identity = Some(identity);
+    let encoded =
+        serde_json::to_string(&reservation).map_err(|_| invalid("managed write identity"))?;
+    let changed=db(conn.execute("UPDATE project_managed_files SET identity_json=?3 WHERE id=?1 AND project_id=?2 AND state='Writing' AND identity_json=?4",params![id.as_str(),project.0.as_str(),encoded,raw]))?;
+    if changed != 1 {
+        return Err(StorageError::Busy);
+    }
     Ok(())
 }
 
@@ -387,6 +434,7 @@ pub(super) fn managed_recovery(
             ProjectId(Id::new(project).map_err(|_| invalid("managed recovery project"))?);
         let writing = state == "Writing";
         let mut boot_id = None;
+        let file_identity;
         let root = if writing {
             let reserved: ProjectManagedFileReservation =
                 serde_json::from_str(&body).map_err(|_| invalid("managed recovery reservation"))?;
@@ -398,6 +446,7 @@ pub(super) fn managed_recovery(
                 return Err(invalid("managed recovery binding"));
             }
             boot_id = reserved.boot_id;
+            file_identity = reserved.created_identity;
             reserved.root
         } else {
             let witness: devworks_core::ports::project_purge::PurgeFileWitness =
@@ -405,6 +454,7 @@ pub(super) fn managed_recovery(
             if witness.relative_entry != path {
                 return Err(invalid("managed recovery path"));
             }
+            file_identity = Some(witness.identity);
             witness.root
         };
         Ok(ProjectManagedFileRecovery {
@@ -412,6 +462,7 @@ pub(super) fn managed_recovery(
             project_id,
             relative_path: path,
             root,
+            file_identity,
             writing,
             boot_id,
         })

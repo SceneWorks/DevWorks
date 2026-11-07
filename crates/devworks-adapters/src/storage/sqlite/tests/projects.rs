@@ -2774,6 +2774,7 @@ fn managed_reservation(store: &SqliteStore, name: &str) -> ProjectManagedFileRes
         kind: "DiagnosticExport".into(),
         relative_path: format!("{name}.jsonl"),
         root: devworks_core::authority::destructive::FileIdentity { volume: 1, file: 2 },
+        created_identity: None,
         store_id: info.store_id,
         restore_epoch: info.restore_epoch,
         boot_id: info.boot_id,
@@ -3635,5 +3636,87 @@ fn purge_planning_managed_metadata_holds_writing_and_forged_owners_before_native
         assess().rows.iter().any(
             |r| r.table == "project_managed_files" && r.action == ProjectPurgeRowAction::Delete
         )
+    );
+}
+
+#[test]
+fn managed_created_identity_is_single_bind_current_boot_and_survives_restart_before_bytes() {
+    use devworks_core::authority::destructive::FileIdentity;
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    let reservation = managed_reservation(&store, "bound-before-private-bytes");
+    let saved = reservation.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().reserve_project_managed_file(&saved)
+    })
+    .unwrap();
+    let identity = FileIdentity { volume: 1, file: 3 };
+    for _ in 0..2 {
+        run_write(&store, WriteOptions::default(), move |tx| {
+            tx.projects().begin_project_managed_file_write(
+                &project("purge-a"),
+                &id("bound-before-private-bytes"),
+                identity,
+            )
+        })
+        .unwrap();
+    }
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), |tx| tx
+            .projects()
+            .begin_project_managed_file_write(
+                &project("purge-a"),
+                &id("bound-before-private-bytes"),
+                FileIdentity { volume: 1, file: 4 }
+            )),
+        Err(StorageError::ScopeDenied)
+    ));
+    let mut wrong = managed_publication(&reservation);
+    wrong.witness.identity = FileIdentity { volume: 1, file: 4 };
+    assert!(matches!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .register_project_managed_file(&wrong)),
+        Err(StorageError::ScopeDenied)
+    ));
+    let recovery = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(recovery.len(), 1);
+    assert!(recovery[0].writing);
+    assert_eq!(recovery[0].file_identity, Some(identity));
+    drop(store);
+    let reopened = h.store();
+    let recovery = read_snapshot(&reopened, &ReadOptions::default(), |r| {
+        r.projects()
+            .managed_file_recovery("DiagnosticExport", None, 500)
+    })
+    .unwrap();
+    assert_eq!(
+        recovery[0].file_identity,
+        Some(identity),
+        "the actual create-new identity survives a crash before publication"
+    );
+    assert!(
+        matches!(
+            run_write(&reopened, WriteOptions::default(), move |tx| tx
+                .projects()
+                .begin_project_managed_file_write(
+                    &project("purge-a"),
+                    &id("bound-before-private-bytes"),
+                    identity
+                )),
+            Err(StorageError::ScopeDenied)
+        ),
+        "another boot cannot continue the previous write"
+    );
+    assert!(
+        read_snapshot(&reopened, &ReadOptions::default(), |r| r
+            .projects()
+            .pending_project_managed_writes(&project("purge-a")))
+        .unwrap()
     );
 }

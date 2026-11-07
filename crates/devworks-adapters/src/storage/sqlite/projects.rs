@@ -532,6 +532,14 @@ fn repository_exists(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
 }
 
 impl ProjectRepository for Unit<'_> {
+    fn begin_project_managed_file_write(
+        &mut self,
+        project: &ProjectId,
+        id: &Id,
+        identity: devworks_core::authority::destructive::FileIdentity,
+    ) -> Result<(), StorageError> {
+        super::project_purge::begin_managed_write(self.conn, self.info, project, id, identity)
+    }
     fn reserve_project_managed_file(
         &mut self,
         file: &ProjectManagedFileReservation,

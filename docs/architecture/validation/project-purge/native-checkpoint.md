@@ -224,6 +224,14 @@ binding and validating the real deleted-project publication scope resolves it.
 All thirteen native planning cases pass (19.51 seconds), with strict checks
 (15.94 seconds). This does not route prepare/purge or grant any execution permit.
 
+Managed staging has a current-boot, single-bind created-identity seam between
+create-new and private byte writes. Publication must match the bound handle identity;
+recovery returns it across reopen, while another boot cannot continue the original
+write. Older reservations remain readable with no created identity. Four native
+managed cases pass (2.46 seconds), with strict checks (7.25 seconds). Session-bound
+paste production and its normal-owner recovery still need to use this seam before
+client state is complete.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view
