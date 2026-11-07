@@ -1930,7 +1930,7 @@ fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
     let mut prepared=StoredProjectPurge {
         manifest:serde_json::from_value(json!({"id":"purge-manifest","projectId":"purge-a","revision":"1","projectRevision":"1","digest":"a".repeat(64),"phase":"Prepared","recordCount":"2","managedByteCount":"0","keptRecordCount":"1","keptByteCount":"0","pendingEffects":"0","createdAtMs":T0.to_string()})).unwrap(),
         actor_id:actor("purge-human"),store_id:info.store_id,restore_epoch:info.restore_epoch,scope_revision:2,policy_digest:"b".repeat(64),witness_digest:"c".repeat(64),
-        entries:vec![serde_json::from_value(json!({"id":"d".repeat(64),"kind":"RecordClass","recordClass":"work_items","disposition":"Remove","recordCount":"2","byteCount":"0","reason":"OwnedProjectRecords"})).unwrap()]
+        entries:vec![serde_json::from_value(json!({"id":"d".repeat(64),"kind":"RecordClass","recordClass":"work_items","disposition":"Remove","recordCount":"2","byteCount":"0","reason":"OwnedProjectRecords"})).unwrap()],rows:vec![]
     };
     prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
     prepared
@@ -1979,6 +1979,81 @@ fn purge_manifest_storage_survives_restart_and_requires_its_exact_project() {
             .insert_purge_manifest(&expected))
         .is_err(),
         "a reviewed ID cannot be replaced"
+    );
+}
+
+#[test]
+fn purge_row_witnesses_survive_restart_bind_the_review_and_refuse_duplicates_atomically() {
+    let h = Harness::new();
+    let store = h.store();
+    let mut prepared = purge_storage_fixture(&store);
+    let private_key = "private source locator that must never be copied to audit";
+    prepared.rows = vec![
+        ProjectPurgeRowWitness {
+            table: "work_items".into(),
+            key_digest: devworks_core::fingerprint::sha256_hex(private_key.as_bytes()),
+            row_digest: "e".repeat(64),
+            action: ProjectPurgeRowAction::Delete,
+            reason: ProjectPurgeRowReason::OwnedProjectRecords,
+        },
+        ProjectPurgeRowWitness {
+            table: "projects".into(),
+            key_digest: "f".repeat(64),
+            row_digest: "d".repeat(64),
+            action: ProjectPurgeRowAction::Scrub,
+            reason: ProjectPurgeRowReason::MinimalDeletedIdentity,
+        },
+    ];
+    prepared.manifest.digest = project_purge_digest(&prepared).try_into().unwrap();
+    let mut duplicate = prepared.clone();
+    duplicate.rows.push(duplicate.rows[0].clone());
+    duplicate.manifest.digest = project_purge_digest(&duplicate).try_into().unwrap();
+    assert!(
+        run_write(&store, WriteOptions::default(), move |tx| tx
+            .projects()
+            .insert_purge_manifest(&duplicate))
+        .is_err()
+    );
+    assert_eq!(
+        h.raw()
+            .query_row("SELECT count(*) FROM project_purge_manifests", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let expected = prepared.clone();
+    run_write(&store, WriteOptions::default(), move |tx| {
+        tx.projects().insert_purge_manifest(&prepared)
+    })
+    .unwrap();
+    let raw = h.raw();
+    let text:String=raw.query_row("SELECT group_concat(table_name||key_digest||row_digest||action||reason) FROM project_purge_rows",[],|r|r.get(0)).unwrap();
+    assert!(!text.contains(private_key));
+    drop(raw);
+    drop(store);
+    let store = h.store();
+    let found = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest"))
+    })
+    .unwrap()
+    .unwrap();
+    let mut expected_rows = expected.rows.clone();
+    expected_rows.sort_by(|a, b| (&a.table, &a.key_digest).cmp(&(&b.table, &b.key_digest)));
+    assert_eq!(found.rows, expected_rows);
+    assert_eq!(found.manifest.digest, expected.manifest.digest);
+    h.raw()
+        .execute(
+            "UPDATE project_purge_rows SET action='Keep' WHERE table_name='work_items'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        read_snapshot(&store, &ReadOptions::default(), |r| r
+            .projects()
+            .purge_manifest(&project("purge-a"), &id("purge-manifest")))
+        .is_err(),
+        "a changed row decision invalidates the reviewed manifest"
     );
 }
 

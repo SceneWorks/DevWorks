@@ -139,8 +139,41 @@ pub struct ProjectPosition {
     pub id: ProjectId,
 }
 
-/// Durable reviewed purge intent. Private source keys are never copied here.
+/// The exact native action covered by a reviewed row witness.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProjectPurgeRowAction {
+    Delete,
+    Scrub,
+    Keep,
+}
+
+/// Fixed audit vocabulary: no project-authored text is accepted as a row reason.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProjectPurgeRowReason {
+    OwnedProjectRecords,
+    OwnedLineage,
+    ProjectMembership,
+    MinimalDeletedIdentity,
+    SharedContent,
+    IndependentPublication,
+    RevokedAuthority,
+    ReceiptReplayFence,
+    PurgeControlAudit,
+    ScopedReadLease,
+    DerivedContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectPurgeRowWitness {
+    pub table: String,
+    pub key_digest: String,
+    pub row_digest: String,
+    pub action: ProjectPurgeRowAction,
+    pub reason: ProjectPurgeRowReason,
+}
+
 #[derive(Clone, Debug)]
+/// Durable reviewed purge intent. Private source keys are never copied here.
 pub struct StoredProjectPurge {
     pub manifest: crate::protocol::records::ProjectPurgeManifest,
     pub actor_id: crate::protocol::ActorId,
@@ -150,12 +183,15 @@ pub struct StoredProjectPurge {
     pub policy_digest: String,
     pub witness_digest: String,
     pub entries: Vec<crate::protocol::records::ProjectPurgeEntry>,
+    pub rows: Vec<ProjectPurgeRowWitness>,
 }
 
 /// Content identity remains stable while execution status advances. The native producer
 /// and storage fence use this same encoding; no secret or caller-minted authority is involved.
 pub fn project_purge_digest(p: &StoredProjectPurge) -> String {
     let m = &p.manifest;
+    let mut rows = p.rows.iter().collect::<Vec<_>>();
+    rows.sort_by(|a, b| (&a.table, &a.key_digest).cmp(&(&b.table, &b.key_digest)));
     crate::fingerprint::sha256_hex(
         serde_json::to_string(&serde_json::json!({
             "manifestId":m.id,"projectId":m.project_id,"projectRevision":m.project_revision,
@@ -163,7 +199,7 @@ pub fn project_purge_digest(p: &StoredProjectPurge) -> String {
             "actorId":p.actor_id,"policyDigest":p.policy_digest,"witnessDigest":p.witness_digest,
             "recordCount":m.record_count,"managedByteCount":m.managed_byte_count,
             "keptRecordCount":m.kept_record_count,"keptByteCount":m.kept_byte_count,
-            "createdAtMs":m.created_at_ms,"entries":p.entries
+            "createdAtMs":m.created_at_ms,"entries":p.entries,"rows":rows
         }))
         .expect("purge digest values are JSON")
         .as_bytes(),

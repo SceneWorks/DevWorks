@@ -63,6 +63,14 @@ all leases intact. All 116 candidate SQL predicates resolve without mutation
 (0.74 seconds); final assembled strict checks pass (42.07 seconds). These candidates
 still require the complete ownership/keeper classifier before deletion authority.
 
+Durable row witnesses now round-trip with each preparation. They contain only an
+actual table name, key/content digests and fixed action/reason enums. The immutable
+manifest digest includes the canonical sorted row set. Duplicate witnesses refuse
+atomically; changing a persisted row decision invalidates a prepared manifest.
+All 31 project-storage cases pass (26.52 seconds), with strict workspace/all-target
+checks (42.28 seconds). This persists review evidence; it does not enable the row
+guard or execute the unimplemented logical purge.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view

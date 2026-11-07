@@ -71,11 +71,31 @@ pub(super) fn insert_manifest(
             return Err(invalid("duplicate purge manifest entry"));
         }
     }
+    let mut selected = std::collections::BTreeSet::new();
+    for row in &stored.rows {
+        let known: bool = db(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=?1 AND type='table')",
+            [&row.table],
+            |r| r.get(0),
+        ))?;
+        if !known
+            || !digest(&row.key_digest)
+            || !digest(&row.row_digest)
+            || !selected.insert((&row.table, &row.key_digest))
+        {
+            return Err(invalid("invalid or duplicate purge row witness"));
+        }
+    }
     // A preparation never replaces a reviewed ID, even with identical content.
     db(conn.execute("INSERT INTO project_purge_manifests(id,project_id,revision,phase,project_revision,scope_revision,store_id,restore_epoch,actor_id,content_digest,policy_digest,witness_digest,body_json,created_at) VALUES(?1,?2,1,'Prepared',?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![m.id.as_str(),m.project_id.0.as_str(),m.project_revision.get(),stored.scope_revision,stored.store_id.0.as_str(),stored.restore_epoch,stored.actor_id.0.as_str(),m.digest.as_str(),stored.policy_digest,stored.witness_digest,serde_json::to_string(m).map_err(|_|invalid("purge manifest JSON"))?,m.created_at_ms.get()]))?;
     for (ordinal, entry) in stored.entries.iter().enumerate() {
         let ordinal = i64::try_from(ordinal).map_err(|_| invalid("purge entry count overflow"))?;
         db(conn.execute("INSERT INTO project_purge_entries(manifest_id,ordinal,entry_digest,body_json) VALUES(?1,?2,?3,?4)",params![m.id.as_str(),ordinal,entry.id.as_str(),serde_json::to_string(entry).map_err(|_|invalid("purge entry JSON"))?]))?;
+    }
+    for row in &stored.rows {
+        let action = serde_json::to_value(&row.action).map_err(|_| invalid("purge row action"))?;
+        let reason = serde_json::to_value(&row.reason).map_err(|_| invalid("purge row reason"))?;
+        db(conn.execute("INSERT INTO project_purge_rows(manifest_id,table_name,key_digest,row_digest,action,reason) VALUES(?1,?2,?3,?4,?5,?6)",params![m.id.as_str(),row.table,row.key_digest,row.row_digest,action.as_str().ok_or_else(||invalid("purge row action"))?,reason.as_str().ok_or_else(||invalid("purge row reason"))?]))?;
     }
     Ok(())
 }
@@ -127,6 +147,7 @@ pub(super) fn manifest(
         policy_digest,
         witness_digest,
         entries,
+        rows: row_witnesses(conn, id)?,
     };
     if matches!(stored.manifest.phase, PurgePhase::Prepared)
         && stored.manifest.digest.as_str() != project_purge_digest(&stored)
@@ -134,6 +155,38 @@ pub(super) fn manifest(
         return Err(invalid("stored purge preparation content changed"));
     }
     Ok(Some(stored))
+}
+
+fn row_witnesses(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Vec<devworks_core::ports::storage::ProjectPurgeRowWitness>, StorageError> {
+    let mut statement=db(conn.prepare("SELECT table_name,key_digest,row_digest,action,reason FROM project_purge_rows WHERE manifest_id=?1 ORDER BY table_name,key_digest"))?;
+    db(statement.query_map([id.as_str()], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+        ))
+    }))?
+    .map(|row| {
+        let (table, key_digest, row_digest, action, reason) = db(row)?;
+        if !digest(&key_digest) || !digest(&row_digest) {
+            return Err(invalid("stored purge row digest"));
+        }
+        Ok(devworks_core::ports::storage::ProjectPurgeRowWitness {
+            table,
+            key_digest,
+            row_digest,
+            action: serde_json::from_value(serde_json::Value::String(action))
+                .map_err(|_| invalid("stored purge row action"))?,
+            reason: serde_json::from_value(serde_json::Value::String(reason))
+                .map_err(|_| invalid("stored purge row reason"))?,
+        })
+    })
+    .collect()
 }
 
 pub(super) fn register_managed_file(
