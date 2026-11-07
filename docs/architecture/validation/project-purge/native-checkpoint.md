@@ -149,6 +149,11 @@ with strict checks (0.61 seconds); every CommandReply fixture bridge applies the
 existing negotiated-revision validator, preserving the negative revision-5 purged
 reply case. This platform support evidence does not complete DW-83 acceptance.
 
+DW-145 is now composed: all 20 native usage cases pass (85.13 seconds), with
+workspace/all-target strict checks (5.92 seconds). The controlled real-runtime hint
+regression retains the original native pointer gesture and verifies that the current
+history-enabled response supersedes older retained-catalog replies.
+
 Remaining full scope: executable coverage of every schema table and mixed owner,
 typed minimal-identity keepers, atomic logical purge and durable exact physical
 effects/retry, source/upload handle revocation, complete client paste/draft/view
