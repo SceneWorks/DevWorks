@@ -355,7 +355,9 @@ immutable guard and atomically compacts selected receipts, substitutes finite
 minimal headers and records original physical/client intents. Native rollback leaves
 records and effects unchanged. Durable effects have bounded current-boot leases,
 reject stale owners, survive restart and retain their original body on failure.
-Settlement forgets that body; Complete requires zero unsettled effects. The ordinary
+Settlement forgets file bodies, including paths. The client effect retains only its
+validated opaque identity sets and digest to fence stale autosaves after restart;
+no draft text or paths are in that client scope. Complete requires zero unsettled effects. The ordinary
 artifact collector cannot adopt an active purge blob claim. Project source handles
 are fenced without changing picked inputs; shared repository registrations remain.
 

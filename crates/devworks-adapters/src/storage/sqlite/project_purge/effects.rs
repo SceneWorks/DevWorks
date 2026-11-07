@@ -333,7 +333,7 @@ pub(in crate::storage::sqlite) fn settle(
             return Err(StorageError::ScopeDenied);
         }
     }
-    let n = db(conn.execute("UPDATE project_purge_effects SET state=?6,body_json=CASE WHEN ?7 IS NULL THEN NULL ELSE body_json END,error_code=?7,lease_owner=NULL,lease_boot_id=NULL,lease_until=?8 WHERE manifest_id=?1 AND id=?2 AND lease_owner=?3 AND lease_boot_id=?4 AND lease_until>?5",params![manifest.as_str(),id,owner.as_str(),boot.as_str(),now,if code.is_none(){"Removed"}else{"Held"},code,code.map(|_|now.saturating_add(1000))]))?;
+    let n = db(conn.execute("UPDATE project_purge_effects SET state=?6,body_json=CASE WHEN ?7 IS NULL AND kind<>'Client' THEN NULL ELSE body_json END,error_code=?7,lease_owner=NULL,lease_boot_id=NULL,lease_until=?8 WHERE manifest_id=?1 AND id=?2 AND lease_owner=?3 AND lease_boot_id=?4 AND lease_until>?5",params![manifest.as_str(),id,owner.as_str(),boot.as_str(),now,if code.is_none(){"Removed"}else{"Held"},code,code.map(|_|now.saturating_add(1000))]))?;
     if n != 1 {
         return Err(StorageError::ScopeDenied);
     }

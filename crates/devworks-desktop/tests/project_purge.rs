@@ -41,6 +41,12 @@ fn assert_no_private_records(root: &Root) {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .unwrap();
+    let retained_file_bodies: i64 = db.query_row("SELECT count(*) FROM project_purge_effects WHERE kind='File' AND state='Removed' AND body_json IS NOT NULL", [], |r| r.get(0)).unwrap();
+    assert_eq!(
+        retained_file_bodies, 0,
+        "settled file paths must be forgotten"
+    );
+
     let tables=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
     for table in tables {
         let quoted = table.replace('"', "\"\"");

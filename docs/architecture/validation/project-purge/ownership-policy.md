@@ -17,8 +17,10 @@ Frozen ownership principles (the companion documents settle the detailed decisio
 1. Derive ownership from a record's declared current project/scope and its actual
    owned-parent lineage. A reference to the project is not sufficient ownership.
 2. Delete private owned content. Retain only necessary opaque deleted identities
-   for surviving cross-scope references, plus a minimal deletion audit. Preserve
-   independently authored other-scope history; redact automatically copied private
+   for surviving cross-scope references, plus a minimal deletion audit. The minimal
+   client audit retains reviewed opaque record IDs and a digest so
+   stale autosaves remain fenced across restarts; it contains no draft text or paths.
+   Preserve independently authored other-scope history; redact automatically copied private
    project snapshots without rewriting other scopes' authored prose.
 3. Retain shared artifact content under its existing exact access rules; never
    broaden access or silently substitute a different owner. Delete managed bytes

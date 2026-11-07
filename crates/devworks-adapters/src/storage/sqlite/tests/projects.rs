@@ -2276,7 +2276,7 @@ fn purge_storage_fixture(store: &SqliteStore) -> StoredProjectPurge {
 }
 
 #[test]
-fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bodies() {
+fn purge_effect_leases_survive_restart_reject_stale_owners_and_retain_only_client_identities() {
     use devworks_core::ports::project_purge::{PurgeEffectIntent, PurgeFileFault};
     let h = Harness::new();
     let store = h.store();
@@ -2465,7 +2465,27 @@ fn purge_effect_leases_survive_restart_reject_stale_owners_and_forget_settled_bo
             |r| r.get(0),
         )
         .unwrap();
-    assert!(forgotten.is_none());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&forgotten.unwrap()).unwrap(),
+        serde_json::to_value(&intent).unwrap()
+    );
+    let PurgeEffectIntent::Client { scope, digest } = intent else {
+        panic!("client fixture")
+    };
+    assert_eq!(
+        read_snapshot(&reopened, &ReadOptions::default(), |s| s
+            .projects()
+            .purge_client_fence(&scope.project_id, &digest))
+        .unwrap(),
+        Some(scope.clone())
+    );
+    assert!(
+        read_snapshot(&reopened, &ReadOptions::default(), |s| s
+            .projects()
+            .purge_client_fence(&scope.project_id, &"b".repeat(64)))
+        .unwrap()
+        .is_none()
+    );
 }
 
 #[test]
